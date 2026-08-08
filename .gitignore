@@ -1,6 +1,12 @@
 .syl/
 node_modules/
 
+# Agent worktrees live inside the repo. Never track them: committing a
+# worktree's contents is how adj-204 broke the entire Adjutant fleet — a
+# node_modules symlink pointing into a peer worktree got committed to main,
+# and every fresh checkout recreated it broken.
+worktrees/
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
