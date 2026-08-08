@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "ping": "tsx src/cli/ping.ts"
+    "ping": "tsx src/cli/ping.ts",
+    "when": "tsx src/cli/when.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
