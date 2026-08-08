@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 
+import { resolveClaudeBinFromProcess } from "./claude-bin.js";
+
 import {
   assertSubscriptionAuth,
   buildUserFrame,
@@ -83,7 +85,8 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
   if (options.permissionMode) args.push("--permission-mode", options.permissionMode);
   if (options.resume) args.push("--resume", options.resume);
 
-  const child = spawn(options.claudeBin ?? "claude", args, {
+  const claudeBin = options.claudeBin ?? resolveClaudeBinFromProcess();
+  const child = spawn(claudeBin, args, {
     cwd: options.cwd ?? process.cwd(),
     env,
     stdio: ["pipe", "pipe", "pipe"],

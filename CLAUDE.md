@@ -88,3 +88,8 @@ to add is about *additional* surfaces and blocks nothing.
 - Backend runs on port **4201**. Read it from `.mcp.json`; do not assume 3001.
 - The shell has `noclobber` set — a plain `>` fails if the file exists. Use `>|`.
 - `--verbose` is mandatory alongside `--output-format stream-json` in `-p` mode.
+- The `claude` binary is resolved by `src/claude-bin.ts`, not by trusting `PATH`.
+  Claude Code installs to `~/.local/bin`, which shell profiles add for
+  interactive use — so the same machine resolves under zsh and throws `ENOENT`
+  under bash. Override with `CLAUDE_BIN=/full/path/to/claude` if resolution ever
+  fails; the error message lists everything it searched.
