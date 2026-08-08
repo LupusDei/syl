@@ -249,10 +249,31 @@ Measured, same question, before and after:
 
 Roughly 13x fewer turns and 8x cheaper. **Still worth doing:** the surface is
 89 tools even with strict config, so one `ToolSearch` still fires. Constraining
-`--allowedTools` to what Syl actually needs is the remaining win, and it also
+the tool surface to what Syl actually needs is the remaining win, and it also
 bounds what `bypassPermissions` can reach — handing a personal assistant
 unrestricted Bash to silence a permission prompt is not a good trade, so treat
-the allowlist as the real fix rather than an optimisation.
+this as the real fix rather than an optimisation.
+
+**Correction (2026-08-08): this section originally named `--allowedTools`, and
+that is the wrong flag.** Verified against `claude --help` on 2.1.226, they are
+different mechanisms and the difference is a security boundary:
+
+- `--allowedTools` — "list of tool names to allow". It *pre-approves* names from
+  whatever is already on the surface. It suppresses prompts; it does not remove
+  capability.
+- `--tools` — "the list of available tools from the built-in set. Use `""` to
+  disable all tools". It sets what exists at all.
+
+So a turn that must be *incapable* of acting — the shape required for reading
+untrusted web content, per the Connections proposal — needs `--tools ""`, not an
+allowlist. An allowlisted turn still holds the tools; it has merely agreed in
+advance about which ones it may use, which is worthless against a prompt
+injection that convinces it to use an allowed one.
+
+Related hazard in current code: `runTurn` defaults to
+`--permission-mode bypassPermissions`. Correct for a headless turn nobody can
+approve, and dangerous the moment fetched content enters a prompt. That default
+must change before the first article is ingested.
 
 **`--verbose` is mandatory** with `--output-format stream-json` in `-p` mode. The
 CLI errors out without it, and the message is easy to miss.
