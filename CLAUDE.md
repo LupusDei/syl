@@ -88,6 +88,12 @@ to add is about *additional* surfaces and blocks nothing.
 - Backend runs on port **4201**. Read it from `.mcp.json`; do not assume 3001.
 - The shell has `noclobber` set — a plain `>` fails if the file exists. Use `>|`.
 - `--verbose` is mandatory alongside `--output-format stream-json` in `-p` mode.
+- Headless sessions are pre-authorised (`--permission-mode bypassPermissions`)
+  and MCP-scoped (`--strict-mcp-config`). Without both, the CLI default asks for
+  approval nobody can give and the model thrashes across every ambient MCP
+  server — measured at 44 turns and $0.39 for one question that should cost 3
+  turns and $0.05. Constraining `--allowedTools` is the outstanding follow-up;
+  it also bounds what `bypassPermissions` can reach.
 - The `claude` binary is resolved by `src/claude-bin.ts`, not by trusting `PATH`.
   Claude Code installs to `~/.local/bin`, which shell profiles add for
   interactive use — so the same machine resolves under zsh and throws `ENOENT`

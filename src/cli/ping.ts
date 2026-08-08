@@ -35,6 +35,9 @@ async function main(): Promise<void> {
     ...(soul ? { soul } : {}),
     turnOptions: {
       model: "claude-haiku-4-5",
+      // Only Syl's own MCP config; otherwise the session inherits every
+      // ambient server and the model thrashes on tool discovery.
+      mcpConfig: join(root, ".mcp.json"),
       onEvent: (event) => {
         if (event.kind === "tool_use") console.log(`  [tool] ${event.name}`);
       },

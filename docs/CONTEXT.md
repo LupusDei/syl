@@ -223,6 +223,37 @@ long payloads (the init frame especially) intermittently — the kind of bug tha
 only shows up under load. `createLineDecoder` buffers; there is a test for the
 split-mid-object case.
 
+**Headless sessions must be pre-authorised, and their tool surface constrained.**
+Two separate problems, both seen on the Commander's first real prompt: 44 turns,
+$0.39, ~45 consecutive `ToolSearch` calls, and no useful answer — just "these
+tools need your permission to access."
+
+*Permissions:* the CLI's default permission mode asks for interactive approval.
+In `-p` mode there is nobody to ask, so every MCP call is denied. The assistant
+then spends its turns discovering it cannot act. `runTurn` now defaults to
+`--permission-mode bypassPermissions`. Unattended means pre-authorised; there is
+no third option.
+
+*Tool surface:* without `--strict-mcp-config` the session inherits every MCP
+server the user happens to have configured — Vercel, Google Drive, Calendar,
+Gmail — plus their tools. With deferred loading the model burns turn after turn
+searching a surface it does not need. `runTurn` now passes `--strict-mcp-config`
+whenever `mcpConfig` is set, so Syl sees only its own server.
+
+Measured, same question, before and after:
+
+| | turns | cost | outcome |
+|---|---|---|---|
+| default | 44 | $0.392 | denied, no answer |
+| pre-authorised + strict | 3 | $0.051 | correct answer |
+
+Roughly 13x fewer turns and 8x cheaper. **Still worth doing:** the surface is
+89 tools even with strict config, so one `ToolSearch` still fires. Constraining
+`--allowedTools` to what Syl actually needs is the remaining win, and it also
+bounds what `bypassPermissions` can reach — handing a personal assistant
+unrestricted Bash to silence a permission prompt is not a good trade, so treat
+the allowlist as the real fix rather than an optimisation.
+
 **`--verbose` is mandatory** with `--output-format stream-json` in `-p` mode. The
 CLI errors out without it, and the message is easy to miss.
 

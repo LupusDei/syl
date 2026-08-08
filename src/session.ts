@@ -42,8 +42,23 @@ export interface TurnOptions {
   readonly resume?: string;
   /** Override the `claude` binary path. */
   readonly claudeBin?: string;
-  /** Claude Code permission mode. */
+  /**
+   * Claude Code permission mode. Defaults to `bypassPermissions`.
+   *
+   * The CLI default requires interactive approval, and in `-p` mode there is
+   * nobody to approve — so every MCP call is denied and the assistant burns
+   * turns discovering it cannot act. Unattended means pre-authorised.
+   */
   readonly permissionMode?: string;
+  /**
+   * Ignore ambient MCP configuration and use only `mcpConfig`. Defaults to true
+   * when `mcpConfig` is set.
+   *
+   * Without it the session inherits every MCP server the user happens to have
+   * configured, and the model burns dozens of turns searching a tool surface
+   * it does not need.
+   */
+  readonly strictMcpConfig?: boolean;
   /**
    * Fail fast if the CLI resolved an API key instead of the claude.ai login.
    * Defaults to true — this harness exists to stay on subscription rails.
@@ -82,7 +97,8 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
   if (options.model) args.push("--model", options.model);
   if (options.systemPrompt) args.push("--append-system-prompt", options.systemPrompt);
   if (options.mcpConfig) args.push("--mcp-config", options.mcpConfig);
-  if (options.permissionMode) args.push("--permission-mode", options.permissionMode);
+  if (options.mcpConfig && options.strictMcpConfig !== false) args.push("--strict-mcp-config");
+  args.push("--permission-mode", options.permissionMode ?? "bypassPermissions");
   if (options.resume) args.push("--resume", options.resume);
 
   const claudeBin = options.claudeBin ?? resolveClaudeBinFromProcess();
