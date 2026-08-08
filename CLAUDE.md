@@ -92,8 +92,18 @@ to add is about *additional* surfaces and blocks nothing.
   and MCP-scoped (`--strict-mcp-config`). Without both, the CLI default asks for
   approval nobody can give and the model thrashes across every ambient MCP
   server — measured at 44 turns and $0.39 for one question that should cost 3
-  turns and $0.05. Constraining `--allowedTools` is the outstanding follow-up;
+  turns and $0.05. Constraining the tool surface is the outstanding follow-up;
   it also bounds what `bypassPermissions` can reach.
+- **`--tools` and `--allowedTools` are different mechanisms, and the difference
+  is a security boundary.** `--allowedTools` pre-approves names from whatever is
+  already available; `--tools` sets *what is available at all* (`--tools ""`
+  disables every built-in tool). To make a turn incapable of acting — which is
+  what reading untrusted content requires — you need `--tools`, not
+  `--allowedTools`. Verified against `claude --help` on 2.1.226.
+- `runTurn` defaults to `--permission-mode bypassPermissions`. That is correct
+  for a headless turn nobody can approve, and **actively dangerous the moment
+  untrusted text enters a prompt**. Any turn that reads fetched content must
+  drop to a no-tools shape first.
 - The `claude` binary is resolved by `src/claude-bin.ts`, not by trusting `PATH`.
   Claude Code installs to `~/.local/bin`, which shell profiles add for
   interactive use — so the same machine resolves under zsh and throws `ENOENT`
