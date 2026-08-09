@@ -437,6 +437,20 @@ export function sessionStoreFor(config: SylConfig): ReturnType<typeof memorySess
 /** What `bootstrap` may be told that the configuration cannot say. */
 export interface BootstrapOptions {
   /**
+   * Where a turn's life gets written down.
+   *
+   * Omitted, the service was a BLACK BOX: it logged startup and failures and
+   * nothing in between. The Commander asked her a question from his phone,
+   * watched the logs, and saw no message arrive, no turn begin, and no tool
+   * run — because none of that was ever written. `ConversationService` took an
+   * optional `log` and `bootstrap` never passed one.
+   *
+   * An assistant that acts on your machine with a pre-authorised session is
+   * exactly the thing you must be able to watch. "It is working, trust me" is
+   * not a property; it is the absence of one.
+   */
+  readonly logger?: Logger;
+  /**
    * The clock every store runs on. Omit for the real one.
    *
    * `syl-md5`: `bootstrap` took no clock, so `startLiveService` could not use
@@ -507,13 +521,55 @@ export function bootstrap(
   // conversation; anything that reads fetched content goes through
   // `runReaderTurn` instead and never comes near this object.
   const soul = options.soul ?? readSoul();
+  const log = options.logger;
+
+  // What she is DOING, as it happens.
+  //
+  // The harness already emits an event per step of a turn; nothing was
+  // listening. So a turn that took nine seconds and called three tools looked,
+  // from the logs, exactly like a turn that never happened. Tool calls matter
+  // most: this session runs pre-authorised, so `turn.tool` is the record of
+  // what she actually did on the machine — and the only way to notice her
+  // reaching for something she should not.
+  //
+  // A caller-supplied `onEvent` still wins; this composes rather than replaces,
+  // because tests pass their own and would otherwise lose it.
+  const observe = (event: Parameters<NonNullable<TurnOptions["onEvent"]>>[0]): void => {
+    options.turn?.onEvent?.(event);
+    if (log === undefined) return;
+    if (event.kind === "tool_use") log.info("turn.tool", { tool: event.name });
+    else if (event.kind === "init") log.info("turn.start", { sessionId: event.sessionId });
+    else if (event.kind === "api_error") log.error("turn.api_error", { message: event.message });
+    else if (event.kind === "result") {
+      log.log(event.isError ? "error" : "info", "turn.done", {
+        turns: event.numTurns,
+        costUsd: event.costUsd,
+        isError: event.isError,
+      });
+    }
+  };
+
   const agent = new SylAgent({
     store: sessionStoreFor(config),
     ...(soul === undefined ? {} : { soul }),
-    ...(options.turn === undefined ? {} : { turnOptions: options.turn }),
+    turnOptions: { ...(options.turn ?? {}), onEvent: observe },
     ...(options.runner === undefined ? {} : { runner: options.runner }),
   });
-  const chat = new ConversationService({ messages, agent, presence });
+  const chat = new ConversationService({
+    messages,
+    agent,
+    presence,
+    // Was omitted entirely, so the only thing that ever reached a file was a
+    // failure — and only via a default that writes to stderr.
+    ...(log === undefined
+      ? {}
+      : {
+          log: (line: string, error?: unknown) => {
+            if (error === undefined) log.info("chat", { message: line });
+            else log.error("chat", { message: line, error: String(error) });
+          },
+        }),
+  });
 
   // Intake, wired end to end: the store the migration now creates, the queue
   // that is `ArticleIntake`'s long-missing scheduler, and the ladder itself.
@@ -826,7 +882,7 @@ export async function main(options: { readonly logger?: Logger } = {}): Promise<
     },
   });
 
-  const syl = await startSyl(config);
+  const syl = await startSyl(config, { logger });
 
   close = async () => {
     await syl.close();
