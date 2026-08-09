@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { SylConfig } from "../../src/config.js";
+import { loadQuietHours, type SylConfig } from "../../src/config.js";
 import {
   API_BASE_PATH,
   bootstrap,
@@ -138,6 +138,9 @@ export async function startLiveService(
     databasePath,
     credentialSource: "none",
     subscriptionRails: true,
+    // Through the same validator `loadConfig` uses, so the harness cannot be
+    // handed a window production would have refused to start on.
+    quietHours: loadQuietHours(process.env),
   };
 
   let database: SylDatabase;

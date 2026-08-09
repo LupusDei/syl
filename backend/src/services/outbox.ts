@@ -7,6 +7,10 @@ import type {
   DeliveryState,
 } from "@syl/shared";
 
+import {
+  DEFAULT_QUIET_HOURS as DEFAULT_QUIET_HOURS_SETTING,
+  loadQuietHours,
+} from "../config.js";
 import { deferPastQuietHours, type QuietHours } from "../harness/schedule.js";
 import { instant, systemClock, type Clock } from "./clock.js";
 import { newId } from "./id.js";
@@ -75,30 +79,26 @@ export interface QuietHoursPolicy {
 /**
  * The default quiet window, and the Commander's zone.
  *
- * An IANA zone, never a fixed UTC offset. An offset is a property of an
- * instant rather than of a place, and one that reaches storage survives
- * exactly one daylight-saving boundary before moving every window by an hour.
+ * Defined in `config.ts`, because the environment is that module's business,
+ * and re-exported here because this is where every caller looks for it.
  */
-export const DEFAULT_QUIET_HOURS: QuietHoursPolicy = {
-  quiet: { start: "22:00", end: "08:00" },
-  tz: "America/Chicago",
-};
+export const DEFAULT_QUIET_HOURS: QuietHoursPolicy = DEFAULT_QUIET_HOURS_SETTING;
 
-/** Read the quiet window from an environment, falling back to the default. */
-export function quietHoursFromEnv(env: NodeJS.ProcessEnv): QuietHoursPolicy {
-  const read = (name: string): string | undefined => {
-    const trimmed = env[name]?.trim() ?? "";
-    return trimmed === "" ? undefined : trimmed;
-  };
-
-  return {
-    quiet: {
-      start: read("SYL_QUIET_START") ?? DEFAULT_QUIET_HOURS.quiet.start,
-      end: read("SYL_QUIET_END") ?? DEFAULT_QUIET_HOURS.quiet.end,
-    },
-    tz: read("SYL_TZ") ?? DEFAULT_QUIET_HOURS.tz,
-  };
-}
+/**
+ * Read the quiet window from an environment, falling back to the default —
+ * and **refuse an unusable one** rather than storing it.
+ *
+ * This used to return whatever the environment said. The values were first
+ * parsed at the first deferral, which happens inside the reminder-delivery
+ * handler: a typo in `SYL_QUIET_START` therefore started cleanly and then
+ * threw once a minute, five failures opened a circuit breaker nothing can
+ * close, and reminder delivery ended permanently (`syl-085`). The check is at
+ * boot now, in `loadQuietHours`, so nothing downstream of this call can be
+ * handed a window it cannot parse.
+ *
+ * @throws {ConfigError} if the window or the zone cannot be used.
+ */
+export const quietHoursFromEnv: (env: NodeJS.ProcessEnv) => QuietHoursPolicy = loadQuietHours;
 
 /** What to put in the outbox. */
 export interface EnqueueDelivery {

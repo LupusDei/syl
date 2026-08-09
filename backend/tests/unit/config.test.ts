@@ -5,10 +5,15 @@ import {
   DEFAULT_DATABASE_PATH,
   DEFAULT_HOST,
   DEFAULT_PORT,
+  DEFAULT_QUIET_HOURS,
   SERVICE_VERSION,
+  isIanaTimeZone,
   loadConfig,
+  loadQuietHours,
   resolveCredentialSource,
 } from "../../src/config.js";
+import { ReminderService } from "../../src/services/reminder-service.js";
+import { testDatabase } from "../helpers/service.js";
 
 /**
  * `loadConfig` is deliberately a pure function of an environment object rather
@@ -57,6 +62,7 @@ describe("loadConfig", () => {
         databasePath: DEFAULT_DATABASE_PATH,
         credentialSource: "none",
         subscriptionRails: true,
+        quietHours: DEFAULT_QUIET_HOURS,
       });
     });
 
@@ -193,6 +199,128 @@ describe("loadConfig", () => {
 
       expect(config.port).toBe(DEFAULT_PORT);
       expect(config.nodeEnv).toBe("development");
+    });
+  });
+});
+
+/**
+ * `syl-085` — the quiet window is configuration, and configuration is checked
+ * at boot.
+ *
+ * The failure this closes is not "a bad value is accepted". It is that a bad
+ * value was accepted here and first parsed inside the reminder-delivery
+ * handler, where a throw is recorded as a job failure and five of those open a
+ * circuit breaker nothing closes. A misconfigured service must refuse to start
+ * rather than start happily and die silently, hours later, in the dark.
+ */
+describe("quiet hours", () => {
+  describe("isIanaTimeZone", () => {
+    it("should accept a zone that names a place", () => {
+      expect(isIanaTimeZone("America/Chicago")).toBe(true);
+      expect(isIanaTimeZone("Europe/London")).toBe(true);
+      expect(isIanaTimeZone("UTC")).toBe(true);
+    });
+
+    it("should refuse a bare UTC offset, however well-formed", () => {
+      // Constraint 5. An offset is a property of an instant, not of a place —
+      // and `Intl` accepts several of these, which is exactly why the `Intl`
+      // check alone is not the whole rule.
+      expect(isIanaTimeZone("-06:00")).toBe(false);
+      expect(isIanaTimeZone("+05:30")).toBe(false);
+    });
+
+    it("should refuse a zone no runtime knows", () => {
+      expect(isIanaTimeZone("Mars/Olympus")).toBe(false);
+      expect(isIanaTimeZone("")).toBe(false);
+    });
+
+    it("should agree with ReminderService about every string it is given", () => {
+      // The defect was one rule in two places: `assertTimezone` refused
+      // "-06:00" for a reminder while `SYL_TZ` took it without a word. The
+      // same value must not be valid in one half of the service and invalid in
+      // the other, so this asserts the two agree rather than asserting each
+      // separately and hoping.
+      const db = testDatabase();
+      try {
+        const reminders = new ReminderService({ db: db.handle });
+
+        for (const tz of ["America/Chicago", "UTC", "-06:00", "+05:30", "Mars/Olympus"]) {
+          let reminderAccepts = true;
+          try {
+            reminders.create({ text: "Probe.", wallTime: "09:00", tz, date: "2099-01-01" });
+          } catch {
+            reminderAccepts = false;
+          }
+          expect([tz, isIanaTimeZone(tz)]).toEqual([tz, reminderAccepts]);
+        }
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe("loadQuietHours", () => {
+    it("should fall back to 22:00–08:00 in the Commander's zone", () => {
+      expect(loadQuietHours({})).toEqual(DEFAULT_QUIET_HOURS);
+    });
+
+    it("should read a well-formed window from the environment", () => {
+      expect(
+        loadQuietHours({
+          SYL_QUIET_START: "21:30",
+          SYL_QUIET_END: "06:15",
+          SYL_TZ: "Europe/London",
+        }),
+      ).toEqual({ quiet: { start: "21:30", end: "06:15" }, tz: "Europe/London" });
+    });
+
+    it("should refuse a wall time that is not 24-hour HH:MM", () => {
+      expect(() => loadQuietHours({ SYL_QUIET_START: "25:00" })).toThrow(ConfigError);
+      expect(() => loadQuietHours({ SYL_QUIET_START: "9:00" })).toThrow(ConfigError);
+      expect(() => loadQuietHours({ SYL_QUIET_END: "22:60" })).toThrow(ConfigError);
+      expect(() => loadQuietHours({ SYL_QUIET_END: "10pm" })).toThrow(ConfigError);
+    });
+
+    it("should refuse a timezone that is not an IANA zone", () => {
+      expect(() => loadQuietHours({ SYL_TZ: "-06:00" })).toThrow(ConfigError);
+    });
+
+    it("should treat a blank variable as unset rather than as a bad value", () => {
+      expect(loadQuietHours({ SYL_QUIET_START: "  ", SYL_TZ: "" })).toEqual(DEFAULT_QUIET_HOURS);
+    });
+  });
+
+  describe("loadConfig", () => {
+    it("should carry the validated window onto the config", () => {
+      expect(loadConfig({ SYL_QUIET_START: "23:00" }).quietHours).toEqual({
+        quiet: { start: "23:00", end: "08:00" },
+        tz: "America/Chicago",
+      });
+    });
+
+    it("should refuse to start on a malformed window, naming the variable", () => {
+      let thrown: unknown;
+      try {
+        loadConfig({ SYL_QUIET_START: "25:00" });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(ConfigError);
+      // The operator reading this is looking at an environment, not at a
+      // source file, so the message has to name the variable.
+      expect((thrown as ConfigError).problems.join("\n")).toMatch(/SYL_QUIET_START/u);
+    });
+
+    it("should report a bad port and a bad window in one throw", () => {
+      let thrown: unknown;
+      try {
+        loadConfig({ PORT: "nope", SYL_QUIET_START: "25:00", SYL_TZ: "-06:00" });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect((thrown as ConfigError).problems).toHaveLength(3);
     });
   });
 });

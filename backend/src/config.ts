@@ -1,5 +1,7 @@
 import { createRequire } from "node:module";
 
+import type { QuietHours } from "./harness/schedule.js";
+
 /**
  * Service configuration, read from the environment once at boot.
  *
@@ -7,6 +9,16 @@ import { createRequire } from "node:module";
  * of `process.env`. That is what makes every validation branch testable without
  * mutating globals, and it keeps the "where does this value come from" answer
  * to a single call site in `main`.
+ *
+ * **Everything the environment supplies is checked here, at boot, and nowhere
+ * else.** A value that is only parsed at first use is a value whose typo is
+ * discovered by the failure it causes — and for the quiet-hours window that
+ * first use is inside the reminder-delivery handler, five minutes after a
+ * clean-looking start, where a throw is recorded as a job failure and five of
+ * those open a circuit breaker that never closes. One typo in
+ * `SYL_QUIET_START` ended all reminder delivery, permanently, with nothing but
+ * a stack trace on stderr to say why (`syl-085`). A misconfigured service must
+ * refuse to start.
  */
 
 /** The environments the service knows how to be. */
@@ -53,6 +65,26 @@ const manifest = requireFromHere("../package.json") as { readonly version?: unkn
 export const SERVICE_VERSION: string =
   typeof manifest.version === "string" ? manifest.version : "0.0.0";
 
+/**
+ * A quiet window and the zone it is expressed in.
+ *
+ * Structurally identical to `QuietHoursPolicy` in `services/outbox.ts`, and
+ * declared here rather than imported from there because this module is the one
+ * that decides whether a policy is usable at all. Config may not depend on the
+ * store it configures.
+ */
+export interface QuietHoursSetting {
+  readonly quiet: QuietHours;
+  /** An IANA zone name. Never a fixed UTC offset. */
+  readonly tz: string;
+}
+
+/** The environment variables that describe the quiet window. */
+export const QUIET_HOURS_ENV_VARS = ["SYL_QUIET_START", "SYL_QUIET_END", "SYL_TZ"] as const;
+
+/** 24-hour `HH:MM`. The same grammar `harness/schedule.ts` parses. */
+const WALL_TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
 export interface SylConfig {
   /** Interface to bind. Loopback unless deliberately widened. */
   readonly host: string;
@@ -73,6 +105,14 @@ export interface SylConfig {
   readonly credentialSource: string;
   /** `credentialSource === "none"`. The billing constraint, as a boolean. */
   readonly subscriptionRails: boolean;
+  /**
+   * When the outbox holds a delivery back, and the zone that window is read in.
+   *
+   * Validated here so that everything downstream — `Outbox`, the delivery
+   * handler, `deferPastQuietHours` — is handed a window it is guaranteed to be
+   * able to parse.
+   */
+  readonly quietHours: QuietHoursSetting;
 }
 
 /** Thrown when the environment cannot produce a usable configuration. */
@@ -120,6 +160,99 @@ export function resolveCredentialSource(env: NodeJS.ProcessEnv): string {
     if (read(env, name) !== undefined) return name;
   }
   return "none";
+}
+
+/**
+ * The default quiet window, and the Commander's zone.
+ *
+ * An IANA zone, never a fixed UTC offset. An offset is a property of an
+ * instant rather than of a place, and one that reaches storage survives
+ * exactly one daylight-saving boundary before moving every window by an hour.
+ */
+export const DEFAULT_QUIET_HOURS: QuietHoursSetting = {
+  quiet: { start: "22:00", end: "08:00" },
+  tz: "America/Chicago",
+};
+
+/**
+ * Whether a string names a place rather than an offset.
+ *
+ * Two checks, because either alone lets the wrong thing through. `Intl` throws
+ * on a name it does not know — but it *accepts* `"-06:00"` in some runtimes,
+ * and an offset is a property of an instant rather than of a place: one that
+ * reaches storage is correct until the next daylight-saving boundary and an
+ * hour wrong forever after. This is the same rule `ReminderService` applies to
+ * a reminder's `tz`; a value the two disagree about is a value that is valid
+ * in one half of the service and invalid in the other, which is the defect
+ * `syl-085` recorded.
+ */
+export function isIanaTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+  } catch {
+    return false;
+  }
+  return tz.includes("/") || tz === "UTC";
+}
+
+/** Everything wrong with a quiet-hours setting, in the words an operator needs. */
+export function quietHoursProblems(setting: QuietHoursSetting): readonly string[] {
+  const problems: string[] = [];
+
+  for (const [name, value] of [
+    ["SYL_QUIET_START", setting.quiet.start],
+    ["SYL_QUIET_END", setting.quiet.end],
+  ] as const) {
+    if (!WALL_TIME.test(value)) {
+      problems.push(`${name} must be a 24-hour HH:MM wall time (e.g. "22:00"), got "${value}".`);
+    }
+  }
+
+  if (!isIanaTimeZone(setting.tz)) {
+    problems.push(
+      `SYL_TZ must be an IANA zone naming a place (e.g. "America/Chicago"), got "${setting.tz}". ` +
+        `An offset is a property of an instant, not of a place, and drifts an hour at every ` +
+        `daylight-saving boundary.`,
+    );
+  }
+
+  return problems;
+}
+
+/**
+ * Check a quiet-hours setting, or refuse it.
+ *
+ * @throws {ConfigError} if the window or the zone cannot be used.
+ */
+export function assertQuietHours<T extends QuietHoursSetting>(setting: T): T {
+  const problems = quietHoursProblems(setting);
+  if (problems.length > 0) throw new ConfigError(problems);
+  return setting;
+}
+
+/** The quiet window an environment describes, unchecked. */
+export function readQuietHours(env: NodeJS.ProcessEnv): QuietHoursSetting {
+  return {
+    quiet: {
+      start: read(env, "SYL_QUIET_START") ?? DEFAULT_QUIET_HOURS.quiet.start,
+      end: read(env, "SYL_QUIET_END") ?? DEFAULT_QUIET_HOURS.quiet.end,
+    },
+    tz: read(env, "SYL_TZ") ?? DEFAULT_QUIET_HOURS.tz,
+  };
+}
+
+/**
+ * The quiet window an environment describes, checked.
+ *
+ * Re-exported from `services/outbox.ts` as `quietHoursFromEnv`, which is where
+ * every caller reaches it. It lives here because the environment is this
+ * module's business and because a store must not be the thing that decides
+ * whether its own configuration is usable.
+ *
+ * @throws {ConfigError} if the window or the zone cannot be used.
+ */
+export function loadQuietHours(env: NodeJS.ProcessEnv): QuietHoursSetting {
+  return assertQuietHours(readQuietHours(env));
 }
 
 /** Parse a port, or push a human-readable problem and fall back to the default. */
@@ -177,6 +310,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SylConfig {
   }
   const host = trimmedHost === "" ? DEFAULT_HOST : trimmedHost;
 
+  // Collected rather than thrown, so a start that is wrong about both the port
+  // and the quiet window says so once instead of twice.
+  const quietHours = readQuietHours(env);
+  problems.push(...quietHoursProblems(quietHours));
+
   if (problems.length > 0) throw new ConfigError(problems);
 
   const credentialSource = resolveCredentialSource(env);
@@ -189,5 +327,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SylConfig {
     databasePath: read(env, "SYL_DB_PATH") ?? DEFAULT_DATABASE_PATH,
     credentialSource,
     subscriptionRails: credentialSource === "none",
+    quietHours,
   };
 }

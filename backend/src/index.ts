@@ -25,7 +25,7 @@ import { DeviceTokenService } from "./services/device-token-service.js";
 import { IdempotencyStore } from "./services/idempotency.js";
 import { JobStore } from "./services/job-store.js";
 import { MessageStore } from "./services/message-store.js";
-import { Outbox, quietHoursFromEnv } from "./services/outbox.js";
+import { Outbox } from "./services/outbox.js";
 import { ReminderService } from "./services/reminder-service.js";
 import { SylSocketServer, WS_PATH } from "./services/ws-server.js";
 
@@ -272,7 +272,10 @@ export function bootstrap(config: SylConfig): {
   const messages = new MessageStore({ db: database.handle });
   const devices = new DeviceTokenService({ db: database.handle });
   const idempotency = new IdempotencyStore({ db: database.handle });
-  const outbox = new Outbox({ db: database.handle, quietHours: quietHoursFromEnv(process.env) });
+  // From the config, not from `process.env`. `loadConfig` has already refused
+  // an unusable window, so nothing here can hand the outbox a quiet window
+  // that throws the first time the delivery handler defers something.
+  const outbox = new Outbox({ db: database.handle, quietHours: config.quietHours });
   const reminders = new ReminderService({ db: database.handle });
   const jobs = new JobStore({ db: database.handle });
 

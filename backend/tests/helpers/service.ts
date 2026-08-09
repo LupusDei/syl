@@ -1,4 +1,4 @@
-import type { SylConfig } from "../../src/config.js";
+import { DEFAULT_QUIET_HOURS, type SylConfig } from "../../src/config.js";
 import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api-key-service.js";
 import { fixedClock, type Clock } from "../../src/services/clock.js";
 import { IN_MEMORY, openDatabase, type SylDatabase } from "../../src/services/database.js";
@@ -62,6 +62,7 @@ export function testConfig(overrides: Partial<SylConfig> = {}): SylConfig {
     databasePath: IN_MEMORY,
     credentialSource: "none",
     subscriptionRails: true,
+    quietHours: DEFAULT_QUIET_HOURS,
     ...overrides,
   };
 }
