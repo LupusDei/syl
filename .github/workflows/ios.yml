@@ -61,6 +61,14 @@ jobs:
       # host, no simulator), then the live-backend phase, then `xcodebuild test` (the
       # app target, on a simulator). Running any one alone leaves the rest unexecuted
       # and nothing says so.
+      # The launchd plists are linted with Apple's own `plutil`, which does not
+      # exist on the ubuntu runner `verify` uses — so these tests skip there.
+      # This is the only job on a macOS runner, which makes it the only place
+      # they can run at all. Without this line the skip would be silent and
+      # nothing would validate the files launchd reads at boot.
+      - name: Backend tests that require macOS
+        run: npx vitest run --root backend tests/unit/launchd.test.ts
+
       - name: Run every phase of the suite
         run: ios/scripts/test.sh
 

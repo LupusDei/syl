@@ -73,20 +73,28 @@ final class FourTrapsTests: XCTestCase {
 
     // MARK: - Trap 2 — `.iso8601` cannot parse the fractional seconds every instant carries
 
-    func testShouldFailWithFoundationsISO8601StrategyOnAContractInstant() throws {
+    func testShouldDecodeAContractInstantRegardlessOfWhatFoundationDoes() throws {
         let data = try fixture("http/reminder.commitment.json")
 
-        let builtIn = JSONDecoder()
-        builtIn.dateDecodingStrategy = .iso8601
-
-        XCTAssertThrowsError(
-            try builtIn.decode(Envelope<Reminder>.self, from: data),
-            """
-            .iso8601 does not parse fractional seconds. If this ever stops throwing, \
-            Foundation changed and the custom strategy can be revisited — until then \
-            it is the reason every timestamp decodes at all.
-            """
-        )
+        // This asserted that Foundation's `.iso8601` THROWS on fractional seconds,
+        // and told the future what it would mean if that ever changed:
+        //
+        //   "If this ever stops throwing, Foundation changed and the custom
+        //    strategy can be revisited — until then it is the reason every
+        //    timestamp decodes at all."
+        //
+        // It changed. The test went red on a CI runner while still passing on the
+        // developer's macOS 15.6.1 — so Foundation's behaviour now DIFFERS BY OS
+        // VERSION. That is a stronger reason to keep our own strategy than the
+        // original one: a decoder whose behaviour depends on which macOS the
+        // machine happens to run is not a decoder we can build a contract on.
+        //
+        // So the assertion now covers OUR code rather than Foundation's. Testing
+        // third-party behaviour is explicitly against this project's testing rules,
+        // and this is why: the assertion was true, well-reasoned, and became a
+        // build failure caused by someone else's release notes.
+        let decoded = try SylJSON.decoder().decode(Envelope<Reminder>.self, from: data)
+        XCTAssertNotNil(decoded.data, "the contract decoder must handle fractional seconds on every OS")
     }
 
     func testShouldRoundTripAnInstantToTheSameStringItCameFrom() throws {
