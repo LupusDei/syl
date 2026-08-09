@@ -4,12 +4,21 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 *.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
-*.xcworkspace/xcshareddata/swiftpm/
+*.xcworkspace/xcshareddata/swiftpm/configuration/
 
 # Swift Package Manager
 .build/
 .swiftpm/
 Package.resolved
+
+# ...except the app's, which is a lockfile and must be committed.
+#
+# These rules were written when SylKit — a local package with no dependencies — was
+# the only one here, and for that case a resolved file says nothing. The app now
+# depends on GRDB, and an untracked lockfile means CI resolves to whatever the newest
+# 7.x happens to be on the day it runs. A build that cannot be reproduced from the
+# commit is not a build anyone can debug.
+!Syl.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
 # macOS
 .DS_Store

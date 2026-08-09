@@ -149,6 +149,37 @@ Deliberately absent: `UIBackgroundModes = remote-notification`. Syl never makes 
 reminder depend on a silent push — they are throttled, dropped in Low Power Mode, and
 Apple's own guidance is that you may receive none at all.
 
+## The local-first store
+
+`Core/Store` is the one genuinely new build here — Adjutant has no client database and
+shows a spinner on every cold start. Defensible for a dashboard on WiFi watching a
+server that is usually up; wrong for a phone-first assistant on cellular talking to a
+home Mac that reboots. **Something checked a dozen times a day cannot open on a
+spinner.**
+
+GRDB, and it is the app target's only external dependency. `SylKit` still has none and
+must not gain any.
+
+- **Rows are the contract model as JSON, with the columns queries need beside them.**
+  A column per field would duplicate `openapi.yaml` in a third place and make every
+  additive contract change a migration. The payload's shape is already pinned by the
+  contract gate, so the extra schema would buy no safety.
+- **The outbox stores intents, not HTTP requests**, so a queued action survives a
+  relaunch and a server that was down when he acted. `idempotencyKey` is `UNIQUE` in
+  the schema: queueing the same intent twice is a no-op at the database level rather
+  than a rule anyone has to remember, and the key is minted once and reused across
+  every retry. A key regenerated per attempt is the same as having none.
+- **Optimistic send is one transaction.** A pending bubble with no outbox row is a
+  message that will never be sent; an outbox row with no bubble is a message he cannot
+  see he sent. The pending row's id *is* the `clientId` — there is no server id yet,
+  and inventing one would mean two ids to reconcile instead of one.
+- **Sync pushes before it pulls.** Pulling first races: a page fetched before the push
+  lands describes a world without his last message in it.
+- The engine stops at the first *recoverable* push failure to preserve order, and
+  abandons only what can never succeed. An expired token is **not** in that category —
+  the intent is fine, the token is not, and discarding his message because a token
+  expired would be the worst possible response.
+
 ## Not built yet
 
 The local store, the app UI and the TestFlight pipeline are separate beads under

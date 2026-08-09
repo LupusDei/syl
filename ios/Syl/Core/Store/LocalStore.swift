@@ -1,0 +1,284 @@
+import Foundation
+import GRDB
+import SylKit
+
+/// Reads and writes the device's copy of Syl.
+///
+/// Everything the UI renders comes from here. Nothing in this type waits on the
+/// network — that is the definition of local-first, and it is what makes a cold launch
+/// show his conversation rather than a spinner.
+struct LocalStore: Sendable {
+    let database: SylDatabase
+
+    init(database: SylDatabase) {
+        self.database = database
+    }
+
+    // MARK: - Conversations
+
+    func upsert(_ conversation: Conversation) throws {
+        try database.queue.write { db in
+            try ConversationRecord(conversation).save(db)
+        }
+    }
+
+    func conversation(id: SylID) throws -> Conversation? {
+        try database.queue.read { db in
+            try ConversationRecord.fetchOne(db, key: id)?.model()
+        }
+    }
+
+    // MARK: - Messages
+
+    /// History, oldest first — which is the order a chat view renders in, so the read
+    /// does the sorting rather than every caller.
+    func messages(conversationId: SylID, limit: Int = 200) throws -> [Message] {
+        try database.queue.read { db in
+            try MessageRecord
+                .filter(Column("conversationId") == conversationId)
+                .order(Column("createdAt"), Column("seq"))
+                .limit(limit)
+                .fetchAll(db)
+                .map { try $0.model() }
+        }
+    }
+
+    /// The highest conversation sequence held for a thread. **Not** the frame-stream
+    /// sequence — that lives in `SyncStateRecord.lastFrameSeq` and is a different
+    /// number in a different space.
+    func highestMessageSeq(conversationId: SylID) throws -> Int {
+        try database.queue.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT COALESCE(MAX(seq), 0) FROM message WHERE conversationId = ?",
+                arguments: [conversationId]
+            ) ?? 0
+        }
+    }
+
+    func upsert(_ messages: [Message]) throws {
+        guard !messages.isEmpty else { return }
+        try database.queue.write { db in
+            for message in messages {
+                try MessageRecord(message).save(db)
+            }
+        }
+    }
+
+    /// Which of these ids the device already holds. The sync engine uses it to skip
+    /// re-decoding a page it has already seen.
+    func knownMessageIds(_ ids: [SylID]) throws -> Set<SylID> {
+        guard !ids.isEmpty else { return [] }
+        return try database.queue.read { db in
+            try Set(
+                String.fetchAll(
+                    db,
+                    sql: """
+                        SELECT id FROM message WHERE id IN (\(ids.map { _ in "?" }.joined(separator: ",")))
+                        """,
+                    arguments: StatementArguments(ids)
+                )
+            )
+        }
+    }
+
+    // MARK: - Optimistic send
+
+    /// Renders the bubble immediately and queues the intent, in one transaction.
+    ///
+    /// One transaction because the two halves are the same fact. A pending bubble with
+    /// no outbox row is a message that will never be sent; an outbox row with no bubble
+    /// is a message he cannot see he sent.
+    ///
+    /// The pending row's id **is** the `clientId`. There is no server id yet, and
+    /// inventing one would mean two ids to reconcile instead of one.
+    func enqueueSend(
+        conversationId: SylID,
+        clientId: String,
+        idempotencyKey: String,
+        text: String,
+        now: Date
+    ) throws -> Message {
+        let optimistic = Message(
+            id: clientId,
+            conversationId: conversationId,
+            clientId: clientId,
+            role: .user,
+            text: text,
+            createdAt: now,
+            // Zero: the server has not given this message a position in the
+            // conversation yet, and pretending otherwise would sort it wrongly.
+            seq: 0
+        )
+
+        try database.queue.write { db in
+            try MessageRecord(optimistic, pending: true).save(db)
+
+            let body = SendMessageRequest(
+                clientId: clientId,
+                text: text,
+                conversationId: conversationId
+            )
+            var outboxRow = OutboxRecord(
+                idempotencyKey: idempotencyKey,
+                kind: .sendMessage,
+                targetId: conversationId,
+                payload: try SylJSON.encoder().encode(body),
+                createdAt: now
+            )
+            // The unique index makes a repeat a no-op; catching it here keeps a double
+            // tap from failing the whole transaction and losing the bubble.
+            if try OutboxRecord
+                .filter(Column("idempotencyKey") == idempotencyKey)
+                .fetchCount(db) == 0
+            {
+                try outboxRow.insert(db)
+            }
+        }
+
+        return optimistic
+    }
+
+    /// Swaps the optimistic row for the server's copy.
+    ///
+    /// Matched on `clientId`, which is the only thing the two have in common — the ids
+    /// differ by construction. Without it every retry looks like a fresh send and the
+    /// bubble either duplicates or hangs pending forever.
+    ///
+    /// Returns false when there was no pending row: the confirmation arrived on a
+    /// device that never sent it, or after a reinstall.
+    @discardableResult
+    func reconcile(_ confirmation: DeliveryConfirmation) throws -> Bool {
+        try database.queue.write { db in
+            guard let pending = try MessageRecord
+                .filter(Column("clientId") == confirmation.clientId)
+                .filter(Column("pending") == true)
+                .fetchOne(db)
+            else {
+                return false
+            }
+
+            var message = try pending.model()
+            message = Message(
+                id: confirmation.serverId,
+                conversationId: message.conversationId,
+                clientId: confirmation.clientId,
+                role: message.role,
+                text: message.text,
+                createdAt: message.createdAt,
+                seq: confirmation.seq
+            )
+
+            // The primary key changes, so this is a delete and an insert rather than an
+            // update. Same transaction, so the bubble never blinks out.
+            try MessageRecord.deleteOne(db, key: pending.id)
+            try MessageRecord(message, pending: false).save(db)
+            return true
+        }
+    }
+
+    func pendingMessages() throws -> [Message] {
+        try database.queue.read { db in
+            try MessageRecord
+                .filter(Column("pending") == true)
+                .order(Column("createdAt"))
+                .fetchAll(db)
+                .map { try $0.model() }
+        }
+    }
+
+    // MARK: - Reminders and to-dos
+
+    func upsert(_ reminders: [Reminder]) throws {
+        guard !reminders.isEmpty else { return }
+        try database.queue.write { db in
+            for reminder in reminders {
+                try ReminderRecord(reminder).save(db)
+            }
+        }
+    }
+
+    /// What is coming, soonest first. The agenda's ordering is the server's business;
+    /// this is the "what's due" list the app opens on.
+    func upcomingReminders(after instant: Date, limit: Int = 50) throws -> [Reminder] {
+        try database.queue.read { db in
+            try ReminderRecord
+                .filter(Column("nextFireAt") >= instant)
+                .filter(!["completed", "cancelled"].contains(Column("deliveryState")))
+                .order(Column("nextFireAt"))
+                .limit(limit)
+                .fetchAll(db)
+                .map { try $0.model() }
+        }
+    }
+
+    func reminder(id: SylID) throws -> Reminder? {
+        try database.queue.read { db in
+            try ReminderRecord.fetchOne(db, key: id)?.model()
+        }
+    }
+
+    func upsert(_ todos: [Todo]) throws {
+        guard !todos.isEmpty else { return }
+        try database.queue.write { db in
+            for todo in todos {
+                try TodoRecord(todo).save(db)
+            }
+        }
+    }
+
+    func openTodos(limit: Int = 100) throws -> [Todo] {
+        try database.queue.read { db in
+            try TodoRecord
+                .filter(Column("status") == TodoStatus.open.rawValue)
+                // Pinned first — the one durable bit of "this one matters".
+                .order(Column("pinned").desc, Column("dueAt"), Column("updatedAt").desc)
+                .limit(limit)
+                .fetchAll(db)
+                .map { try $0.model() }
+        }
+    }
+
+    // MARK: - Deletes
+
+    func delete(type: SyncResourceType, id: SylID) throws {
+        guard let table = Self.tableName(for: type) else { return }
+        _ = try database.queue.write { db in
+            try db.execute(sql: "DELETE FROM \(table) WHERE id = ?", arguments: [id])
+        }
+    }
+
+    /// Only the types the device stores. A change for a resource the app does not keep
+    /// locally — a job, a run — is skipped rather than treated as an error: the admin
+    /// surface reads those live, and the phone has no use for them.
+    static func tableName(for type: SyncResourceType) -> String? {
+        switch type {
+        case .conversation: return "conversation"
+        case .message: return "message"
+        case .reminder: return "reminder"
+        case .todo: return "todo"
+        case .goal, .device, .delivery, .job, .run: return nil
+        }
+    }
+
+    // MARK: - Sync position
+
+    func syncState() throws -> SyncStateRecord {
+        try database.queue.read { db in
+            try SyncStateRecord.fetchOne(db, key: SyncStateRecord.singletonID)
+                ?? SyncStateRecord()
+        }
+    }
+
+    func setCursor(_ cursor: String?) throws {
+        var state = try syncState()
+        state.cursor = cursor
+        try database.queue.write { db in try state.save(db) }
+    }
+
+    func setLastFrameSeq(_ seq: Int) throws {
+        var state = try syncState()
+        state.lastFrameSeq = seq
+        try database.queue.write { db in try state.save(db) }
+    }
+}

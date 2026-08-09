@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0000000000000000000000D5 /* SylKit in Frameworks */ = {isa = PBXBuildFile; productRef = 0000000000000000000000D4 /* SylKit */; };
 		0000000000000000000000D7 /* SylKit in Frameworks */ = {isa = PBXBuildFile; productRef = 0000000000000000000000D6 /* SylKit */; };
+		0000000000000000000000E1 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 0000000000000000000000E0 /* GRDB */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -45,6 +46,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0000000000000000000000D5 /* SylKit in Frameworks */,
+				0000000000000000000000E1 /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -98,6 +100,7 @@
 			name = Syl;
 			packageProductDependencies = (
 				0000000000000000000000D4 /* SylKit */,
+				0000000000000000000000E0 /* GRDB */,
 			);
 			productName = Syl;
 			productReference = 0000000000000000000000A8 /* Syl.app */;
@@ -157,6 +160,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				0000000000000000000000D3 /* XCLocalSwiftPackageReference "SylKit" */,
+				0000000000000000000000DF /* XCRemoteSwiftPackageReference "GRDB.swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 0000000000000000000000A2 /* Products */;
@@ -416,6 +420,17 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		0000000000000000000000DF /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 7.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		0000000000000000000000D4 /* SylKit */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -424,6 +439,11 @@
 		0000000000000000000000D6 /* SylKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = SylKit;
+		};
+		0000000000000000000000E0 /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0000000000000000000000DF /* XCRemoteSwiftPackageReference "GRDB.swift" */;
+			productName = GRDB;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
