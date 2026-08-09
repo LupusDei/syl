@@ -314,6 +314,53 @@ final class WebSocketClientTests: XCTestCase {
         await client.stop()
     }
 
+    // MARK: - The address it opens
+
+    func testShouldOpenTheSocketOnWsRatherThanTheBaseURLScheme() async throws {
+        // `syl-w40`. The client is configured with the same `http` base the REST API
+        // uses; what it must hand the connector is `ws`. Handing `URLSession` the
+        // `http` one does not fail the connection — it aborts the process.
+        let socket = FakeSocket()
+        let connector = FakeConnector(sockets: [socket])
+        let client = makeClient(connector: connector)
+
+        await client.start()
+        await socket.push(challenge())
+        await socket.push(connected(lastSeq: 0))
+        try await eventually { await client.connectionState == .connected }
+
+        let urls = await connector.urls
+        XCTAssertEqual(urls.map(\.absoluteString), ["ws://syl.test/api/v1/ws"])
+        await client.stop()
+    }
+
+    func testShouldReportAServerAddressThatCannotCarryASocketInsteadOfOpeningOne() async throws {
+        // Nothing retried, nothing opened, and a reason the app can show. The
+        // alternative — reaching `URLSession` with it — is a dead process.
+        let connector = FakeConnector(sockets: [FakeSocket()])
+        let client = makeClient(connector: connector, baseURL: "file:///tmp/api/v1")
+        let events = await client.events()
+
+        await client.start()
+
+        var reported: ApiError?
+        for await event in events {
+            if case .error(let error, let fatal) = event {
+                XCTAssertTrue(fatal, "no retry can fix an address")
+                reported = error
+                break
+            }
+        }
+        XCTAssertEqual(reported?.code, .validationFailed)
+        XCTAssertTrue(reported?.message.contains("file") == true, "\(reported as Any)")
+
+        let attempts = await connector.urls
+        XCTAssertEqual(attempts, [], "the socket must not be opened at all")
+        let state = await client.connectionState
+        XCTAssertEqual(state, .offline, "the app stays usable over HTTP")
+        await client.stop()
+    }
+
     // MARK: - Keepalive bookkeeping
 
     func testShouldTolerateOneMissedPongAndGiveUpAfterTwo() {
@@ -359,6 +406,7 @@ final class WebSocketClientTests: XCTestCase {
     private func makeClient(
         socket: FakeSocket? = nil,
         connector: FakeConnector? = nil,
+        baseURL: String = "http://syl.test/api/v1",
         lastSeq: Int = 0,
         serverEpoch: String? = nil,
         clock: MutableClock? = nil
@@ -366,7 +414,7 @@ final class WebSocketClientTests: XCTestCase {
         let connector = connector ?? FakeConnector(sockets: [socket ?? FakeSocket()])
         let clock = clock ?? MutableClock(start: Date())
         return WebSocketClient(
-            configuration: ServerConfiguration(baseURL: URL(string: "http://syl.test/api/v1")!),
+            configuration: ServerConfiguration(baseURL: URL(string: baseURL)!),
             connector: connector,
             tokenProvider: StaticTokenProvider(token),
             lastSeq: lastSeq,
@@ -576,16 +624,20 @@ actor FakeConnector: WebSocketConnecting {
 
     private var sockets: [FakeSocket]
     private(set) var connectionCount = 0
+    /// Every URL the client asked for, in order. Recorded because the scheme it builds
+    /// is not cosmetic: an `http` one aborts the process at `URLSession` (`syl-w40`).
+    private(set) var urls: [URL] = []
 
     init(sockets: [FakeSocket]) {
         self.sockets = sockets
     }
 
     nonisolated func connect(to url: URL) async throws -> any WebSocketConnection {
-        try await take()
+        try await take(url)
     }
 
-    private func take() throws -> any WebSocketConnection {
+    private func take(_ url: URL) throws -> any WebSocketConnection {
+        urls.append(url)
         guard !sockets.isEmpty else { throw Exhausted() }
         connectionCount += 1
         return sockets.removeFirst()

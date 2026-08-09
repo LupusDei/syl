@@ -24,7 +24,13 @@ public actor WebSocketClient {
         }
     }
 
-    private let url: URL
+    /// The socket endpoint, or the reason this configuration has none.
+    ///
+    /// Kept as a `Result` rather than thrown from `init` so that a server URL the app
+    /// cannot open a socket on is an offline state with a stated reason, exactly like
+    /// an unreachable tailnet — not a failure at construction that every call site has
+    /// to have an answer for.
+    private let socketURL: Result<URL, SocketURLError>
     private let connector: any WebSocketConnecting
     private let tokenProvider: TokenProviding
     private let reconnectPolicy: RetryPolicy
@@ -69,8 +75,15 @@ public actor WebSocketClient {
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         // `/ws` hangs off the same versioned base as the REST API, same origin and
-        // same token.
-        self.url = configuration.baseURL.appendingPathComponent("ws")
+        // same token — but **not** the same scheme. `socketURL()` maps `http` to `ws`
+        // and `https` to `wss`; handing `URLSession` an `http` socket URL aborts the
+        // process rather than failing (`syl-w40`).
+        self.socketURL = Result { try configuration.socketURL() }
+            .mapError { error in
+                // `socketURL()` throws nothing else. Mapping rather than force-casting
+                // keeps a future third case from becoming a crash of its own.
+                error as? SocketURLError ?? .malformedServerURL(configuration.baseURL)
+            }
         self.connector = connector
         self.tokenProvider = tokenProvider
         self.lastSeq = lastSeq
@@ -210,6 +223,33 @@ public actor WebSocketClient {
     }
 
     private func connectAndPump() async -> PumpOutcome {
+        // Before the token, deliberately. A server URL a socket cannot be opened on is
+        // wrong whether or not the app is paired, and the pairing bug that used to
+        // return `.unauthenticated` first is exactly what hid `syl-w40` until pairing
+        // started working.
+        let url: URL
+        switch socketURL {
+        case .success(let resolved):
+            url = resolved
+        case .failure(let error):
+            // Not a disconnection: no retry can make this configuration work, so a
+            // reconnect loop would be a loop against a wall. Say why, and stop.
+            continuation?.yield(
+                .error(
+                    ApiError(
+                        code: .validationFailed,
+                        message: "Syl's address cannot carry a socket — \(error)",
+                        retryable: false
+                    ),
+                    fatal: true
+                )
+            )
+            // The socket is not coming up and the rest of the app still works over
+            // HTTP, which is what `offline` means to everything that reads it.
+            set(.offline)
+            return .stopped
+        }
+
         guard let token = await tokenProvider.token() else {
             set(.unauthenticated)
             return .stopped

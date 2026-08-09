@@ -19,6 +19,67 @@ public protocol WebSocketConnecting: Sendable {
     func connect(to url: URL) async throws -> any WebSocketConnection
 }
 
+/// Why a server URL cannot be turned into a socket URL.
+///
+/// A Swift error rather than whatever `URLSession` does about it, which is the whole
+/// point — see `URLSessionWebSocketConnector.connect`.
+public enum SocketURLError: Error, Equatable, CustomStringConvertible {
+    /// A scheme that is not `http`, `https`, `ws` or `wss` — including none at all.
+    case unsupportedScheme(String?)
+    /// A URL that cannot be taken apart and put back together.
+    case malformedServerURL(URL)
+
+    public var description: String {
+        switch self {
+        case .unsupportedScheme(let scheme):
+            let named = scheme.map { "\"\($0)\"" } ?? "no scheme"
+            return """
+                the server URL has \(named); a socket needs http, https, ws or wss
+                """
+        case .malformedServerURL(let url):
+            return "the server URL cannot be parsed: \(url.absoluteString)"
+        }
+    }
+}
+
+extension ServerConfiguration {
+    /// The `/ws` endpoint: same origin, same path prefix, same token — and the scheme
+    /// the WebSocket API insists on.
+    ///
+    /// **`http` is not a scheme a socket can be opened on**, and getting that wrong is
+    /// not a failed connection. `URLSession.webSocketTask(with:)` raises an
+    /// Objective-C `NSGenericException` for any scheme but `ws`/`wss`, and an
+    /// `NSException` is not a Swift `Error`: no `do`/`catch` in this package can see
+    /// it, so the process aborts with SIGABRT. In the app that is a hard crash on the
+    /// first socket connect (`syl-w40`). Everything here exists so that a bad scheme
+    /// is a value the caller can handle instead.
+    ///
+    /// A base that already speaks `ws`/`wss` is passed through, so a caller that has
+    /// already done this conversion is not punished for it.
+    public func socketURL() throws -> URL {
+        let endpoint = baseURL.appendingPathComponent("ws")
+        guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+            throw SocketURLError.malformedServerURL(baseURL)
+        }
+
+        // Lowercased first: schemes are case-insensitive, and `URLSession` compares
+        // this one literally.
+        switch components.scheme?.lowercased() {
+        case "http", "ws":
+            components.scheme = "ws"
+        case "https", "wss":
+            components.scheme = "wss"
+        case let other:
+            throw SocketURLError.unsupportedScheme(other)
+        }
+
+        guard let url = components.url else {
+            throw SocketURLError.malformedServerURL(baseURL)
+        }
+        return url
+    }
+}
+
 /// The real one.
 public struct URLSessionWebSocketConnector: WebSocketConnecting {
     private let session: URLSession
@@ -28,6 +89,15 @@ public struct URLSessionWebSocketConnector: WebSocketConnecting {
     }
 
     public func connect(to url: URL) async throws -> any WebSocketConnection {
+        // **The guard has to be here, not only at the call site.** This is a public
+        // type; anything can hand it a URL. `webSocketTask(with:)` answers an `http`
+        // one by raising `NSGenericException`, which is not a Swift `Error` and so
+        // cannot be caught anywhere in this package — the process aborts. A throw is
+        // a failed connection; an `NSException` is a dead app (`syl-w40`).
+        let scheme = url.scheme?.lowercased()
+        guard scheme == "ws" || scheme == "wss" else {
+            throw SocketURLError.unsupportedScheme(url.scheme)
+        }
         let task = session.webSocketTask(with: url)
         task.resume()
         return URLSessionWebSocketConnection(task: task)
