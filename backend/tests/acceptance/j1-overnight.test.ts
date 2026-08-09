@@ -275,6 +275,50 @@ describe("the Commander's night", () => {
         await close();
       }
     });
+
+    /**
+     * `syl-xvx` — the morning digest offers Snooze and Done, and neither works.
+     *
+     * `coalescedPayload` sets `categoryIdentifier: "reminder"`, which is the
+     * APNs category carrying the Complete and Snooze actions, so the digest
+     * arrives with both buttons on it. But `notificationFor`
+     * (backend/src/jobs/push-outbox.ts:156) includes `reminderId` only when the
+     * row has one, and a digest is exactly the row that does not —
+     * `foldInto` sets `reminderId: null` deliberately, because the digest speaks
+     * for all of them and so for none in particular.
+     *
+     * On the device, `NotificationService.snooze` and `.complete` both open
+     * `guard let reminderId = payload.reminderId else { return }` and return
+     * silently. He taps Snooze on a night's worth of reminders, nothing is
+     * deferred, and the ack that fires alongside closes all four as seen.
+     */
+    it("should send a digest whose Snooze and Done buttons the device cannot act on", async () => {
+      await registerDevice();
+      await setReminder({ text: "Ship the release notes.", wallTime: "23:00", date: "2026-08-10" });
+      await setReminder({ text: "Rotate the backup key.", wallTime: "01:00", date: "2026-08-11" });
+
+      const { runner, close } = runnerAgainst(apple);
+      try {
+        await runner.start();
+        await passesUntil(runner, Date.parse(MORNING_RELEASE));
+
+        const body = apple.pushes[0]?.body as Record<string, unknown>;
+        const aps = body["aps"] as Record<string, unknown>;
+
+        // The actionable category IS on the notification...
+        expect(aps["category"]).toBe("reminder");
+        // ...and the id its two actions need is not.
+        expect(
+          body["reminderId"],
+          "the digest now carries a reminder id — update this test and syl-xvx",
+        ).toBeUndefined();
+        // The delivery id is there, so the ack works and the row closes. That
+        // is what makes this silent rather than visible.
+        expect(body["deliveryId"]).toBeDefined();
+      } finally {
+        await close();
+      }
+    });
   });
 
   describe("journey 3 — a phone that was off", () => {
