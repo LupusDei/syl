@@ -2,7 +2,9 @@ import type { SylConfig } from "../../src/config.js";
 import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api-key-service.js";
 import { fixedClock, type Clock } from "../../src/services/clock.js";
 import { IN_MEMORY, openDatabase, type SylDatabase } from "../../src/services/database.js";
+import { DeviceTokenService } from "../../src/services/device-token-service.js";
 import type { Entropy } from "../../src/services/id.js";
+import { IdempotencyStore } from "../../src/services/idempotency.js";
 import { MessageStore } from "../../src/services/message-store.js";
 
 /**
@@ -63,8 +65,16 @@ export function testMessages(db: SylDatabase, clock: Clock = fixedClock(TEST_NOW
 export function testDeps(db: SylDatabase): {
   readonly keys: ApiKeyService;
   readonly messages: MessageStore;
+  readonly devices: DeviceTokenService;
+  readonly idempotency: IdempotencyStore;
 } {
-  return { keys: testKeys(db), messages: testMessages(db) };
+  const clock = fixedClock(TEST_NOW);
+  return {
+    keys: testKeys(db),
+    messages: testMessages(db),
+    devices: new DeviceTokenService({ db: db.handle, clock }),
+    idempotency: new IdempotencyStore({ db: db.handle, clock }),
+  };
 }
 
 /** An `ApiKeyService` on a fixed clock and predictable entropy. */

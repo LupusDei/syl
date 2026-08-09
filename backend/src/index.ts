@@ -12,10 +12,13 @@ import { loadConfig, type SylConfig } from "./config.js";
 import { requireBearerToken } from "./middleware/auth.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createConversationRouter } from "./routes/conversations.js";
+import { createDeviceRouter } from "./routes/devices.js";
 import { ApiFailure, sendFailure } from "./routes/envelope.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
 import { ApiKeyService } from "./services/api-key-service.js";
 import { openDatabase, type SylDatabase } from "./services/database.js";
+import { DeviceTokenService } from "./services/device-token-service.js";
+import { IdempotencyStore } from "./services/idempotency.js";
 import { MessageStore } from "./services/message-store.js";
 import { SylSocketServer, WS_PATH } from "./services/ws-server.js";
 
@@ -106,6 +109,10 @@ export interface AppDependencies {
   readonly keys: ApiKeyService;
   /** Conversation history. */
   readonly messages: MessageStore;
+  /** Registered push targets. */
+  readonly devices: DeviceTokenService;
+  /** The ledger that makes every write safe to retry. */
+  readonly idempotency: IdempotencyStore;
   /** Extra health probes. The billing check is always present. */
   readonly probes?: readonly HealthProbe[];
 }
@@ -130,6 +137,9 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   );
   api.use(createAuthRouter({ keys: deps.keys, authenticate }));
   api.use(createConversationRouter({ messages: deps.messages, authenticate }));
+  api.use(
+    createDeviceRouter({ devices: deps.devices, idempotency: deps.idempotency, authenticate }),
+  );
 
   app.use(API_BASE_PATH, api);
   app.use(notFound);
@@ -231,10 +241,12 @@ export function bootstrap(config: SylConfig): {
   const database = openDatabase({ path: config.databasePath });
   const keys = new ApiKeyService({ db: database.handle });
   const messages = new MessageStore({ db: database.handle });
+  const devices = new DeviceTokenService({ db: database.handle });
+  const idempotency = new IdempotencyStore({ db: database.handle });
 
   return {
     database,
-    deps: { keys, messages, probes: [databaseProbe(database.handle)] },
+    deps: { keys, messages, devices, idempotency, probes: [databaseProbe(database.handle)] },
   };
 }
 

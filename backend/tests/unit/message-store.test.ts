@@ -316,7 +316,13 @@ describe("conversations", () => {
   });
 
   it("should list every lane, most recently touched first", () => {
-    now += 1_000;
+    // The interactive conversation is seeded by migration 0001 with the
+    // database's own `now`, which is real wall-clock time and therefore ahead
+    // of the fixed test clock for most of the day. Ordering is what is under
+    // test, so the new row is stamped after the seeded one rather than after
+    // an instant that happens to be in the past.
+    const seeded = store.conversation(INTERACTIVE_CONVERSATION_ID);
+    now = Date.parse(seeded?.updatedAt ?? "") + 1_000;
     const job = store.createJobConversation("research");
 
     const listed = store.listConversations();
