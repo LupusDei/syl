@@ -141,6 +141,50 @@ describe("article intake against a live, migrated service", () => {
       expect(body.error?.code).toBe("VALIDATION_FAILED");
     });
 
+    it("should refuse a scheme Syl does not fetch, without recording it", async () => {
+      // `safeFetch` would refuse these too, permanently, at the fetch step —
+      // but a submission that can never succeed should be answered at the door
+      // rather than left in the store as a source to wonder about.
+      for (const url of ["file:///etc/passwd", "data:text/html,<p>hi</p>", "ftp://example.com/x"]) {
+        const response = await syl.api("/intake", {
+          method: "POST",
+          body: JSON.stringify({ url }),
+        });
+
+        expect(response.status).toBe(400);
+      }
+
+      expect(
+        syl.database.handle.prepare("SELECT count(*) AS n FROM intake_sources").get(),
+      ).toEqual({ n: 0 });
+    });
+
+    it("should refuse a channel or a retention class it does not know", async () => {
+      for (const body of [
+        { url: "https://example.com/a", channel: "telepathy" },
+        { url: "https://example.com/b", retention: "forever" },
+      ]) {
+        const response = await syl.api("/intake", { method: "POST", body: JSON.stringify(body) });
+        const envelope = (await response.json()) as { error?: { code?: string } };
+
+        expect(response.status).toBe(400);
+        expect(envelope.error?.code).toBe("VALIDATION_FAILED");
+      }
+    });
+
+    it("should refuse a submission with no Idempotency-Key", async () => {
+      // Every write takes one. The client that needs it most is the phone's
+      // outbox, which retries by design.
+      const response = await fetch(`${syl.baseUrl}/intake`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${syl.token}` },
+        body: JSON.stringify({ url: "https://example.com/keyless" }),
+      });
+      const body = (await response.json()) as { error?: { code?: string } };
+
+      expect(body.error?.code).toBe("IDEMPOTENCY_KEY_REQUIRED");
+    });
+
     it("should refuse an anonymous submission", async () => {
       const response = await syl.api("/intake", {
         method: "POST",
@@ -165,10 +209,20 @@ describe("article intake against a live, migrated service", () => {
       );
       expect(fetched.id).toBe(source.id);
 
-      const absent = await syl.api(
-        "/intake/syl:source:00000000-0000-7000-8000-0000000000ff",
-      );
+      // Unencoded, because `syl:source:<uuid>` is what a client actually puts
+      // in a path and the colons must not stop the route matching. The
+      // discriminator is the message: a mounted route says "no intake source",
+      // an unmounted path falls through to the terminal handler.
+      const absent = await syl.api("/intake/syl:source:00000000-0000-7000-8000-0000000000ff");
+      const failure = (await absent.json()) as { error?: { message?: string } };
+
       expect(absent.status).toBe(404);
+      expect(failure.error?.message).toContain("no intake source");
+
+      const garbage = await syl.api("/intake/not-an-id");
+      expect(((await garbage.json()) as { error?: { message?: string } }).error?.message).toContain(
+        "not an intake source id",
+      );
     });
   });
 

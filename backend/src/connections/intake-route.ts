@@ -78,6 +78,34 @@ function retentionOf(body: Record<string, unknown>): RetentionClass | undefined 
   return match;
 }
 
+/**
+ * Refuse anything that is not a web link before it becomes a row.
+ *
+ * `safeFetch` refuses a `file:` or `data:` URL too, and would refuse this one
+ * permanently at the fetch step — so this is defence in depth rather than the
+ * control. It is here because a submission that can never succeed should be
+ * answered at the door rather than recorded, advanced, failed and left in the
+ * store as a source the Commander has to wonder about.
+ */
+function assertWebUrl(raw: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new ApiFailure("VALIDATION_FAILED", `${raw} is not a URL Syl can record.`, {
+      details: { field: "url", reason: "not a URL" },
+    });
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ApiFailure(
+      "VALIDATION_FAILED",
+      `${parsed.protocol} is not a scheme Syl fetches. Only http and https are.`,
+      { details: { field: "url", reason: "scheme" } },
+    );
+  }
+}
+
 function sourceIdOf(raw: unknown): string {
   const id = typeof raw === "string" ? raw : "";
   if (!isId(id) || idType(id) !== "source") {
@@ -108,6 +136,7 @@ export function createIntakeRouter(options: IntakeRouterOptions): Router {
   router.post("/intake", (request, response) => {
     const body = bodyOf(request.body);
     const url = requireString(body, "url", MAX_URL_LENGTH);
+    assertWebUrl(url);
     const channel = channelOf(body);
     const retention = retentionOf(body);
 

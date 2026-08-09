@@ -328,6 +328,27 @@ describe("the content_ingestion handler", () => {
     expect(queue.size).toBe(0);
   });
 
+  it("should put a source back in the queue when a step throws unexpectedly", async () => {
+    const queue = new IntakeQueue();
+    const intake = new ArticleIntake({ store, clock: () => now, scheduler: queue });
+    const { source } = intake.submit({
+      url: "https://example.com/doomed",
+      channel: "link",
+      requestedBy: "commander",
+    });
+
+    const ctx = context(now);
+    // `advance` sorts its own failures into permanent and retryable, so
+    // anything that escapes it is a failure the ladder did not expect — a
+    // vanished row, a disk error. `claim` has already removed the source, so
+    // without the guard it would never re-enter the queue until a restart: a
+    // source silently dropped by a store error nobody saw.
+    store.purge(source.id);
+
+    await expect(handlerFor(intake, queue)(ctx)).rejects.toThrow(/no intake source/u);
+    expect(queue.claim(now + RETRY_DELAY_MS)).toBe(source.id);
+  });
+
   it("should back a retryable failure off rather than spinning on it", async () => {
     const queue = new IntakeQueue();
     const intake = new ArticleIntake({

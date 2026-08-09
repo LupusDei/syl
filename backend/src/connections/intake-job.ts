@@ -3,7 +3,7 @@ import type { Job } from "@syl/shared";
 import { instant, type Clock, systemClock } from "../services/clock.js";
 import type { JobHandler, JobResult } from "../services/job-runner.js";
 import type { JobStore } from "../services/job-store.js";
-import type { ArticleIntake, IntakeScheduler } from "./intake.js";
+import { RETRY_DELAY_MS, type ArticleIntake, type IntakeScheduler } from "./intake.js";
 import type { IntakeSource } from "./intake-store.js";
 
 /** Whatever can say which sources still have a step to run. */
@@ -178,7 +178,20 @@ export function createContentIngestionHandler(deps: ContentIngestionDeps): JobHa
     const before = deps.intake.get(sourceId);
     const turns = before?.stage === "read" ? 1 : 0;
 
-    const result = await deps.intake.advance(sourceId);
+    let result;
+    try {
+      result = await deps.intake.advance(sourceId);
+    } catch (error) {
+      // `claim` removed the source, and `advance` sorts its own failures into
+      // permanent and retryable — so anything that reaches here is a failure
+      // the ladder did not expect: a disk error, a corrupt row. Without this
+      // the source would leave the queue and never re-enter it until a
+      // restart, which is a source silently dropped by a store error nobody
+      // saw. Put it back, behind the retry delay, and let the runner record
+      // the failure honestly.
+      deps.queue.schedule({ sourceId, notBefore: clock() + RETRY_DELAY_MS });
+      throw error;
+    }
 
     return {
       outcome: "success",

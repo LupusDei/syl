@@ -375,16 +375,16 @@ async function main(): Promise<void> {
   const { deps } = bootstrap(config);
   await startServer(config, deps);
 
+  // Exactly one `content_ingestion` row exists, forever, and it reschedules
+  // itself. Defined before the runner starts so the first tick already sees
+  // whatever was mid-ladder when the process last died.
+  ensureContentIngestionJob(deps.jobs, Date.now());
+
   // The delivery runtime is started AFTER the socket is listening, and its
   // first tick is awaited. Awaiting it means every instant that passed while
   // the machine was down has been considered before the service claims to be
   // up — a runner that starts scheduling before it has looked at what it
   // missed silently swallows whatever was due.
-  // Exactly one `content_ingestion` row exists, forever, and it reschedules
-  // itself. Defined before the runner starts so the first tick can already see
-  // whatever was mid-ladder when the process last died.
-  ensureContentIngestionJob(deps.jobs, Date.now());
-
   const runtime = createDeliveryRuntime({
     jobs: deps.jobs,
     reminders: deps.reminders,
