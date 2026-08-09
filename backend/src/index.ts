@@ -26,9 +26,21 @@ import { createConversationRouter } from "./routes/conversations.js";
 import { createDeliveryRouter } from "./routes/deliveries.js";
 import { createDeviceRouter } from "./routes/devices.js";
 import { ApiFailure, sendFailure } from "./routes/envelope.js";
+import {
+  assertPushEnvironment,
+  assessPushEnvironment,
+  describePushEnvironment,
+  pushEnvironmentProbe,
+  type PushEnvironmentAssertion,
+} from "./ops/apns-environment.js";
+import { createLogger, type Logger } from "./ops/logging.js";
+import { assessPower, describePower } from "./ops/power.js";
+import { installShutdownHandlers } from "./ops/shutdown.js";
+import { tailnetCertProbe } from "./ops/tailnet-cert.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
 import { createJobRouter } from "./routes/jobs.js";
 import { createReminderRouter } from "./routes/reminders.js";
+import { apnsCredentialsFromEnv } from "./services/apns-service.js";
 import { ApiKeyService } from "./services/api-key-service.js";
 import { systemClock, type Clock } from "./services/clock.js";
 import { openDatabase, type SylDatabase } from "./services/database.js";
@@ -304,6 +316,13 @@ export function describeStartup(
   const lines = [
     `[syl] v${config.version} listening on http://${config.host}:${config.port}${API_BASE_PATH} (${config.nodeEnv})`,
     `[syl] websocket on ws://${config.host}:${config.port}${WS_PATH}`,
+    // The credential source, on the startup line, always — not only when it is
+    // wrong. It is the one invariant that costs real money if it quietly stops
+    // being true, and "it says none every morning" is a thing a person notices
+    // stopping. A warning that only appears on failure is a warning nobody has
+    // ever seen and therefore does not miss.
+    `[syl] credentials: ${config.credentialSource} ` +
+      `(${config.subscriptionRails ? "claude.ai subscription" : "METERED API"})`,
   ];
 
   if (!config.subscriptionRails) {
@@ -431,6 +450,16 @@ export interface RunningSyl {
   readonly runtime: DeliveryRuntime;
   /** The lines to print. Returned rather than printed, so a test can read them. */
   readonly startupLines: readonly string[];
+  /**
+   * The same start, as fields rather than prose.
+   *
+   * This is the record that goes into the rotated JSON log, and it is what
+   * anyone will actually query six months from now. `credentialSource` is in
+   * here for the reason given on `describeStartup`.
+   */
+  readonly startupFields: Readonly<Record<string, unknown>>;
+  /** What the APNs environment assertion concluded. */
+  readonly push: PushEnvironmentAssertion;
   /** Stop the loop, then the socket. Leaves the database open. */
   close(): Promise<void>;
 }
@@ -460,10 +489,51 @@ export async function startSyl(
   config: SylConfig,
   options: StartSylOptions = {},
 ): Promise<RunningSyl> {
-  const { database, deps } = bootstrap(config, options);
-  const service = await startServer(config, deps);
+  const { database, deps: bootstrapped } = bootstrap(config, options);
   const delivery = options.delivery ?? {};
   const clock = delivery.clock ?? options.clock ?? systemClock;
+
+  // Before the port is bound, because a refusal has to be a refusal. A service
+  // that binds, answers health checks and then declines to push is exactly the
+  // silent failure this assertion exists to prevent.
+  //
+  // `pushConfigured` is read from the same environment the runtime will read,
+  // not from `process.env`, so a test that redirects APNs is asserting about
+  // the credentials it actually supplied.
+  const deliveryEnv = delivery.env ?? process.env;
+  let push: PushEnvironmentAssertion;
+  let deps: ServiceDependencies;
+  try {
+    const pushConfigured = apnsCredentialsFromEnv(deliveryEnv) !== null;
+    push = assertPushEnvironment(
+      assessPushEnvironment({
+        declared: config.pushEnvironment,
+        nodeEnv: config.nodeEnv,
+        pushConfigured,
+        allowSandbox: config.allowSandboxPush,
+        registered: bootstrapped.devices.targets(),
+      }),
+    );
+    deps = {
+      ...bootstrapped,
+      probes: [
+        ...(bootstrapped.probes ?? []),
+        pushEnvironmentProbe({
+          environment: push.environment,
+          pushConfigured,
+          targets: () => bootstrapped.devices.targets(),
+        }),
+        tailnetCertProbe({ path: config.certStatusPath, now: () => clock() }),
+      ],
+    };
+  } catch (error) {
+    // The store was opened by `bootstrap` a few lines up. Leaving it open on a
+    // refused start leaks a WAL and, in a test suite, a file handle per case.
+    database.close();
+    throw error;
+  }
+
+  const service = await startServer(config, deps);
 
   ensureContentIngestionJob(deps.jobs, clock());
 
@@ -495,12 +565,35 @@ export async function startSyl(
     ? describeStartup(config, { pairingCode: deps.keys.issuePairingCode().code })
     : describeStartup(config);
 
+  const power = assessPower();
+
   return {
     database,
     deps,
     service,
     runtime,
-    startupLines: [...startup, ...describeRuntime(runtime)],
+    push,
+    startupLines: [
+      ...startup,
+      ...describeRuntime(runtime),
+      ...describePushEnvironment(push, { pushConfigured: runtime.pushEnabled }),
+      ...describePower(power),
+    ],
+    startupFields: {
+      version: config.version,
+      nodeEnv: config.nodeEnv,
+      host: config.host,
+      port: config.port,
+      databasePath: config.databasePath,
+      credentialSource: config.credentialSource,
+      subscriptionRails: config.subscriptionRails,
+      timeZone: config.quietHours.tz,
+      quietHours: `${config.quietHours.quiet.start}-${config.quietHours.quiet.end}`,
+      pushEnabled: runtime.pushEnabled,
+      pushEnvironment: push.environment,
+      pushEnvironmentDeclared: push.declared,
+      powerOk: power.ok,
+    },
     close: async () => {
       // The loop first. A tick that begins while the socket is closing has
       // nothing to gain and a database underneath it that may be going away.
@@ -510,14 +603,63 @@ export async function startSyl(
   };
 }
 
-/** Process entry point. */
-async function main(): Promise<void> {
-  const syl = await startSyl(loadConfig());
-  for (const line of syl.startupLines) console.log(line);
+/**
+ * Process entry point.
+ *
+ * Everything interesting is in `startSyl`, which a test can call. What is left
+ * here is the three things that are genuinely process-level and cannot be:
+ * opening the log file, honouring `SIGTERM`, and deciding what an unstartable
+ * configuration does to the exit code.
+ *
+ * `EX_CONFIG` (78) rather than 1 on a bad configuration, because launchd's
+ * `KeepAlive` will restart this immediately and forever; a distinct code is
+ * what tells the difference between "it crashed" and "it will crash again in
+ * ten seconds until somebody edits a plist" when reading `launchctl print`.
+ */
+export async function main(options: { readonly logger?: Logger } = {}): Promise<RunningSyl> {
+  const config = loadConfig();
+  const logger = options.logger ?? createLogger({ directory: config.logDirectory });
+  const syl = await startSyl(config);
+
+  logger.info("service.start", { ...syl.startupFields, logPath: logger.path });
+  for (const line of syl.startupLines) {
+    const level = line.includes("WARNING") ? "warn" : "info";
+    logger.log(level, "service.notice", { message: line });
+  }
+
+  installShutdownHandlers({
+    close: async () => {
+      await syl.close();
+      syl.database.close();
+      // The logger is deliberately left open. Closing it here closed the file
+      // descriptor *before* `shutdown.complete` was written, so the log ended
+      // at `shutdown.begin` and every clean stop was indistinguishable from a
+      // hang. Found by the process-level test, which is the only place it was
+      // visible. `process.exit` flushes and closes it a moment later.
+    },
+    log: (event, fields) => {
+      logger.log(event === "shutdown.complete" || event === "shutdown.begin" ? "info" : "error", event, fields);
+    },
+  });
+
+  return syl;
+}
+
+/** Run `main`, and turn anything it throws into an exit code and a line. */
+async function runAsEntryPoint(): Promise<void> {
+  try {
+    await main();
+  } catch (error) {
+    // Straight to stderr rather than through the logger: the failures that land
+    // here are configuration failures, and `loadConfig` throwing is the reason
+    // there is no logger to use.
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(78);
+  }
 }
 
 // Run only when executed directly, so importing this module in a test starts
 // nothing.
 if (process.argv[1] !== undefined && process.argv[1] === fileURLToPath(import.meta.url)) {
-  await main();
+  await runAsEntryPoint();
 }

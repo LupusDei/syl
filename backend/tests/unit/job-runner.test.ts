@@ -294,6 +294,66 @@ describe("JobRunner", () => {
     });
   });
 
+  describe("drain", () => {
+    it("should wait for the pass that is already running", async () => {
+      // `syl-007.2.3`. `stop()` disarms the *next* tick and says nothing about
+      // the one currently awaiting a push to Apple. Closing the store out from
+      // under that pass leaves a lease held by a process that no longer exists,
+      // which makes every clean restart look exactly like a crash to the next
+      // boot's recovery pass.
+      define();
+      now += 30_000;
+      let release = (): void => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let finished = false;
+      handlers.set("reminder_delivery", async () => {
+        await held;
+        finished = true;
+        return { outcome: "success", spoke: true, turns: 0, costUsd: 0 };
+      });
+
+      const loop = runner();
+      const started = loop.start();
+      loop.stop();
+
+      const drained = loop.drain();
+      let drainedFirst = false;
+      void drained.then(() => (drainedFirst = !finished));
+
+      release();
+      await drained;
+      await started;
+
+      expect(finished).toBe(true);
+      expect(drainedFirst).toBe(false);
+    });
+
+    it("should return immediately when nothing is in flight", async () => {
+      const loop = runner();
+      loop.stop();
+      await expect(loop.drain()).resolves.toBeUndefined();
+    });
+
+    it("should settle even when the pass in flight fails", async () => {
+      // A shutdown must complete regardless. A drain that propagated the
+      // handler's failure would turn a stop into a crash.
+      define();
+      now += 30_000;
+      handlers.set("reminder_delivery", () => {
+        throw new Error("Apple was down");
+      });
+
+      const loop = runner();
+      const started = loop.start();
+      loop.stop();
+
+      await expect(loop.drain()).resolves.toBeUndefined();
+      await started;
+    });
+  });
+
   describe("catch-up", () => {
     it("should fire a late commitment and mark the run late", async () => {
       let sawLate = false;

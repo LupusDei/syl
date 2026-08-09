@@ -1,6 +1,10 @@
 import { createRequire } from "node:module";
 
+import type { PushEnvironment } from "@syl/shared";
+
 import type { QuietHours } from "./harness/schedule.js";
+import { defaultLogDirectory } from "./ops/logging.js";
+import { defaultCertStatusPath } from "./ops/tailnet-cert.js";
 
 /**
  * Service configuration, read from the environment once at boot.
@@ -113,6 +117,21 @@ export interface SylConfig {
    * able to parse.
    */
   readonly quietHours: QuietHoursSetting;
+  /**
+   * Which Apple this deployment expects its device tokens to come from.
+   *
+   * `null` means nothing was declared, which is a *refusal* in production —
+   * see `ops/apns-environment.ts`. Kept as the declared value rather than a
+   * resolved one so the assertion can tell "he said production" apart from
+   * "we assumed production", and say which in the startup line.
+   */
+  readonly pushEnvironment: PushEnvironment | null;
+  /** `SYL_APNS_ALLOW_SANDBOX`: a production service pointed at sandbox on purpose. */
+  readonly allowSandboxPush: boolean;
+  /** Where the rotated operational log lives. */
+  readonly logDirectory: string;
+  /** Where the certificate renewal job leaves its status. */
+  readonly certStatusPath: string;
 }
 
 /** Thrown when the environment cannot produce a usable configuration. */
@@ -315,6 +334,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SylConfig {
   const quietHours = readQuietHours(env);
   problems.push(...quietHoursProblems(quietHours));
 
+  // Validated here and carried as the declared value. The *consequences* of a
+  // wrong environment belong to `ops/apns-environment.ts`, which knows whether
+  // APNs is configured at all; what belongs here is refusing a value that is
+  // neither of the two words, because that would otherwise fall through to a
+  // default and look exactly like it worked.
+  const declaredPush = read(env, "SYL_APNS_ENVIRONMENT");
+  if (declaredPush !== undefined && declaredPush !== "production" && declaredPush !== "sandbox") {
+    problems.push(
+      `SYL_APNS_ENVIRONMENT must be "production" or "sandbox", got "${declaredPush}". ` +
+        `TestFlight builds produce production tokens; Xcode builds produce sandbox ones.`,
+    );
+  }
+
   if (problems.length > 0) throw new ConfigError(problems);
 
   const credentialSource = resolveCredentialSource(env);
@@ -328,5 +360,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SylConfig {
     credentialSource,
     subscriptionRails: credentialSource === "none",
     quietHours,
+    pushEnvironment: declaredPush === "production" || declaredPush === "sandbox" ? declaredPush : null,
+    allowSandboxPush: read(env, "SYL_APNS_ALLOW_SANDBOX") !== undefined,
+    logDirectory: defaultLogDirectory(env),
+    certStatusPath: defaultCertStatusPath(env),
   };
 }

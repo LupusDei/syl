@@ -243,6 +243,31 @@ export class JobRunner {
   }
 
   /**
+   * Wait for the pass that is already running, if there is one.
+   *
+   * `stop()` disarms the *next* tick; it says nothing about the one currently
+   * awaiting a push to Apple. Closing the database out from under that pass is
+   * how a lease is left held by a process that no longer exists, which the next
+   * boot's recovery pass then has to reclaim — making every clean restart look
+   * exactly like a crash. Call this after `stop()` and before anything is torn
+   * down.
+   *
+   * Deliberately not folded into `stop()`: `stop()` is synchronous and is
+   * called from inside a tick's own re-arm path, where awaiting the tick would
+   * deadlock. Two steps, in that order.
+   */
+  async drain(): Promise<void> {
+    // Re-read on each turn: a pass that was mid-flight when this was called
+    // cannot start another (`#running` is already false), so this settles.
+    while (this.#inFlight !== null) {
+      // Swallowed rather than propagated. `#pass` already routes a handler's
+      // throw through `onError`; anything reaching here is the tick machinery
+      // itself failing, and a shutdown must complete regardless.
+      await this.#inFlight.catch(() => undefined);
+    }
+  }
+
+  /**
    * One pass: reclaim, run at most one job, re-arm.
    *
    * Serialised against itself. A tick that overlaps its predecessor would

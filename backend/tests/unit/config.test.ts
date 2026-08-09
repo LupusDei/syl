@@ -63,6 +63,13 @@ describe("loadConfig", () => {
         credentialSource: "none",
         subscriptionRails: true,
         quietHours: DEFAULT_QUIET_HOURS,
+        pushEnvironment: null,
+        allowSandboxPush: false,
+        // No HOME in the supplied environment, so both fall back to the
+        // repository's own dot-directory rather than to somebody's real
+        // `~/Library/Logs`.
+        logDirectory: ".syl/logs",
+        certStatusPath: ".syl/cert-status.json",
       });
     });
 

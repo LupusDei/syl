@@ -4,6 +4,8 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { PushEnvironment } from "@syl/shared";
+
 import { loadQuietHours, type SylConfig } from "../../src/config.js";
 import {
   API_BASE_PATH,
@@ -150,6 +152,10 @@ export interface StartLiveServiceOptions {
    */
   readonly clock?: Clock;
   readonly delivery?: LiveDeliveryOptions;
+  /** Declare the APNs environment, for a suite that is about the assertion. */
+  readonly pushEnvironment?: PushEnvironment | null;
+  /** Point the certificate health probe at a status file the test writes. */
+  readonly certStatusPath?: string;
 }
 
 /** Boot Syl on a free port with a real on-disk store, and pair one device. */
@@ -173,6 +179,15 @@ export async function startLiveService(
     // Through the same validator `loadConfig` uses, so the harness cannot be
     // handed a window production would have refused to start on.
     quietHours: loadQuietHours(process.env),
+    // Declared, not inferred. `nodeEnv` is `test` here so the assertion would
+    // fall back to sandbox anyway; saying it means a suite that *is* about the
+    // environment can override this field and see the real branch.
+    pushEnvironment: options.pushEnvironment ?? null,
+    allowSandboxPush: false,
+    // Under the test's own temp directory, so no suite writes into
+    // `~/Library/Logs` and no suite can read another's log.
+    logDirectory: join(directory ?? tmpdir(), "logs"),
+    certStatusPath: options.certStatusPath ?? join(directory ?? tmpdir(), "cert-status.json"),
   };
 
   const apple = options.delivery?.apple;

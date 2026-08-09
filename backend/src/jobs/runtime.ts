@@ -124,7 +124,12 @@ export function createDeliveryRuntime(deps: DeliveryRuntimeDeps): DeliveryRuntim
     job,
     pushEnabled: apns !== null,
     stop: async () => {
+      // Disarm, then wait for the pass already in the air. Without the drain,
+      // a `SIGTERM` that lands mid-push closes the store underneath a tick that
+      // is still holding a lease, and the next boot cannot tell that clean stop
+      // apart from a crash.
       runner.stop();
+      await runner.drain();
       await apns?.close();
     },
   };

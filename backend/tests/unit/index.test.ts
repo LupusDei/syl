@@ -297,11 +297,21 @@ describe("describeStartup", () => {
   it("should announce version, address and environment on a clean start", () => {
     const lines = describeStartup({ ...config, port: 4201, version: "1.2.3" });
 
-    expect(lines).toHaveLength(2);
+    expect(lines).toHaveLength(3);
     expect(lines[0]).toContain("v1.2.3");
     expect(lines[0]).toContain("http://127.0.0.1:4201");
     expect(lines[0]).toContain("test");
     expect(lines[1]).toContain("ws://127.0.0.1:4201/api/v1/ws");
+  });
+
+  it("should state the credential source on every clean start, not only a bad one", () => {
+    // `syl-007.2.2`: the billing invariant is the one that costs real money if
+    // it quietly stops being true, and a line that only appears when something
+    // is wrong is a line nobody has ever seen and therefore does not miss.
+    const lines = describeStartup(config);
+
+    expect(lines.join("\n")).toContain("credentials: none");
+    expect(lines.join("\n")).toContain("claude.ai subscription");
   });
 
   it("should warn loudly when a metered key is in the environment", () => {
@@ -311,9 +321,10 @@ describe("describeStartup", () => {
       subscriptionRails: false,
     });
 
-    expect(lines).toHaveLength(3);
+    expect(lines).toHaveLength(4);
     expect(lines.join("\n")).toContain("WARNING");
     expect(lines.join("\n")).toContain("ANTHROPIC_API_KEY");
+    expect(lines.join("\n")).toContain("METERED API");
   });
 
   it("should never print a credential value, only the variable's name", () => {

@@ -1,3 +1,6 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { DEFAULT_QUIET_HOURS, type SylConfig } from "../../src/config.js";
 import { IntakeQueue } from "../../src/connections/intake-job.js";
 import { IntakeStore } from "../../src/connections/intake-store.js";
@@ -67,6 +70,13 @@ export function testConfig(overrides: Partial<SylConfig> = {}): SylConfig {
     credentialSource: "none",
     subscriptionRails: true,
     quietHours: DEFAULT_QUIET_HOURS,
+    pushEnvironment: null,
+    allowSandboxPush: false,
+    // Under the OS temp directory rather than `~/Library/Logs`: a unit test
+    // must not write into the place the running service writes, and certainly
+    // must not rotate it.
+    logDirectory: join(tmpdir(), "syl-test-logs"),
+    certStatusPath: join(tmpdir(), "syl-test-cert-status.json"),
     ...overrides,
   };
 }
