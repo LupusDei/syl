@@ -2,7 +2,6 @@ import type { Delivery, Reminder } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { JobRunner } from "../../src/services/job-runner.js";
-import { deliveryRig, type DeliveryRig } from "../helpers/delivery-runner.js";
 import { startFakeApns, type FakeApns } from "../helpers/fake-apns.js";
 import { expectData, startLiveService, type LiveService } from "../helpers/live-service.js";
 
@@ -48,8 +47,8 @@ describe("across days", () => {
 
   beforeEach(async () => {
     now = BEFORE_DST;
-    syl = await startLiveService({ clock: () => now });
     apple = await startFakeApns();
+    syl = await startLiveService({ clock: () => now, delivery: { apple, clock: () => now } });
     await syl.api("/devices", {
       method: "POST",
       body: JSON.stringify({
@@ -68,9 +67,10 @@ describe("across days", () => {
     await syl.close();
   });
 
-  /** See the docstring on `deliveryRig`, and `syl-md5`. */
-  function runnerAgainst(target: FakeApns): DeliveryRig {
-    return deliveryRig({ syl, apple: target, clock: () => now, owner: "dst" });
+  /** The service's own delivery runner. Apple was redirected when it booted. */
+  function runnerAgainst(target: FakeApns): { runner: JobRunner; close: () => Promise<void> } {
+    if (target !== apple) throw new Error("this journey boots against one Apple");
+    return { runner: syl.runtime.runner, close: async () => undefined };
   }
 
   /** Advance to `until`, ticking every fifteen minutes on the way. */

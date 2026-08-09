@@ -137,12 +137,35 @@ describe("classifyApnsFailure", () => {
     expect(classifyApnsFailure(0, "IdleTimeout")).toBe("retry");
   });
 
-  it("should treat a configuration error as permanent", () => {
-    // Retrying a wrong bundle id forever is how a broken deploy becomes a
-    // broken deploy that also floods Apple.
-    expect(classifyApnsFailure(400, "BadTopic")).toBe("permanent");
-    expect(classifyApnsFailure(403, "InvalidProviderToken")).toBe("permanent");
+  it("should treat a wrong credential as a blocked machine, not a doomed notification", () => {
+    // `syl-clc`. These are the four values a human types once — the .p8, the
+    // key id, the team id, the bundle id — and Apple is refusing the provider,
+    // not the reminder. Classified `permanent`, the first refusal wrote
+    // `next_attempt_at = NULL` and the reminder became unreachable by every
+    // future pass. Correcting the credentials re-armed nothing.
+    expect(classifyApnsFailure(403, "InvalidProviderToken")).toBe("blocked");
+    expect(classifyApnsFailure(401, "MissingProviderToken")).toBe("blocked");
+    expect(classifyApnsFailure(403, "InvalidProviderTokenSignature")).toBe("blocked");
+    expect(classifyApnsFailure(403, "BadCertificateEnvironment")).toBe("blocked");
+    expect(classifyApnsFailure(400, "BadTopic")).toBe("blocked");
+    expect(classifyApnsFailure(400, "TopicDisallowed")).toBe("blocked");
+  });
+
+  it("should treat an authentication status as blocked even with a reason it has never seen", () => {
+    // A 403 carrying an unknown reason is far more likely to be a fifth way of
+    // saying "your key is wrong" than a bad reminder, and the cost of being
+    // wrong is asymmetric: holding a deliverable row wastes a retry, dropping
+    // an undeliverable one loses a commitment.
+    expect(classifyApnsFailure(403, "SomethingAppleAddedLater")).toBe("blocked");
+    expect(classifyApnsFailure(401, "SomethingAppleAddedLater")).toBe("blocked");
+  });
+
+  it("should treat a notification Apple will never accept as permanent", () => {
+    // The narrow, genuine case: we built something malformed. Building it
+    // again will not help, and no human fixing an environment file will.
     expect(classifyApnsFailure(413, "PayloadTooLarge")).toBe("permanent");
+    expect(classifyApnsFailure(400, "PayloadEmpty")).toBe("permanent");
+    expect(classifyApnsFailure(400, "BadExpirationDate")).toBe("permanent");
   });
 });
 

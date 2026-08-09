@@ -52,6 +52,24 @@ const REMINDER_THREAD = "reminders";
 /** The notification category carrying Complete and Snooze actions. */
 const REMINDER_CATEGORY = "reminder";
 
+/**
+ * The category a coalesced digest carries. Deliberately **not** actionable.
+ *
+ * `syl-xvx`. A digest used to arrive under `REMINDER_CATEGORY`, so it showed
+ * Complete and Snooze — and both actions on the device open with
+ * `guard let reminderId = payload.reminderId else { return }`, which a digest
+ * is exactly the row that cannot satisfy: it speaks for several reminders and
+ * therefore names none of them. He tapped Snooze on a night's work, nothing
+ * deferred, and the acknowledgement that fires alongside closed all of them as
+ * seen. A reminder he explicitly asked to be given again, silently discarded.
+ *
+ * The device registers one category, so an identifier it does not know arrives
+ * with no buttons at all and opens the app. That is the honest shape: a
+ * notification standing for four things is not a thing one button can act on,
+ * and offering a button that cannot work is worse than offering none.
+ */
+const DIGEST_CATEGORY = "reminder_digest";
+
 const SMALL_NUMBERS: readonly string[] = [
   "No",
   "One",
@@ -125,7 +143,8 @@ export function coalescedPayload(count: number): DeliveryPayload {
     // Deliberately not time-sensitive. Breaking through Focus to say "several
     // things happened while you were asleep" is the noise this exists to stop.
     interruptionLevel: "active",
-    categoryIdentifier: REMINDER_CATEGORY,
+    // And deliberately not actionable. See `DIGEST_CATEGORY`.
+    categoryIdentifier: DIGEST_CATEGORY,
     threadIdentifier: REMINDER_THREAD,
   };
 }

@@ -1,4 +1,4 @@
-import type { Job, JobKind } from "@syl/shared";
+import type { Job, JobKind, PushEnvironment } from "@syl/shared";
 
 import { ApnsClient, apnsCredentialsFromEnv } from "../services/apns-service.js";
 import { instant, systemClock, type Clock } from "../services/clock.js";
@@ -42,6 +42,20 @@ export interface DeliveryRuntimeDeps {
   readonly env?: NodeJS.ProcessEnv;
   readonly clock?: Clock;
   readonly timers?: Timers;
+  /**
+   * Where each environment's pushes go. Omit for Apple.
+   *
+   * `syl-md5`: without this, there was no way for any test to obtain a runtime
+   * from *this function* — the one `main` calls — whose pushes went anywhere
+   * but `api.push.apple.com`. So five journeys rebuilt the runner by hand out
+   * of the pieces this function uses, which is precisely the shape of test that
+   * cannot see a defect living in the assembly it skipped.
+   */
+  readonly origins?: Readonly<Record<PushEnvironment, string>>;
+  /** Where the line about a machine that cannot send goes. Default stderr. */
+  readonly warn?: (line: string) => void;
+  /** Where a handler's uncaught throw is reported. Default stderr. */
+  readonly onError?: (error: unknown, job: Job | null) => void;
 }
 
 export interface DeliveryRuntime {
@@ -73,7 +87,14 @@ export function ensureReminderDeliveryJob(jobs: JobStore, now: number): Job {
 export function createDeliveryRuntime(deps: DeliveryRuntimeDeps): DeliveryRuntime {
   const clock = deps.clock ?? systemClock;
   const credentials = apnsCredentialsFromEnv(deps.env ?? process.env);
-  const apns = credentials === null ? null : new ApnsClient({ credentials, clock });
+  const apns =
+    credentials === null
+      ? null
+      : new ApnsClient({
+          credentials,
+          clock,
+          ...(deps.origins === undefined ? {} : { origins: deps.origins }),
+        });
 
   const job = ensureReminderDeliveryJob(deps.jobs, clock());
 
@@ -82,6 +103,7 @@ export function createDeliveryRuntime(deps: DeliveryRuntimeDeps): DeliveryRuntim
     outbox: deps.outbox,
     devices: deps.devices,
     apns,
+    ...(deps.warn === undefined ? {} : { warn: deps.warn }),
   });
 
   const runner = new JobRunner({
@@ -93,6 +115,7 @@ export function createDeliveryRuntime(deps: DeliveryRuntimeDeps): DeliveryRuntim
     ]),
     clock,
     ...(deps.timers === undefined ? {} : { timers: deps.timers }),
+    ...(deps.onError === undefined ? {} : { onError: deps.onError }),
   });
 
   return {

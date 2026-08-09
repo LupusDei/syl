@@ -1,3 +1,5 @@
+import { generateKeyPairSync } from "node:crypto";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -126,10 +128,13 @@ describe("createReminderDeliveryHandler", () => {
   let outbox: Outbox;
   let devices: DeviceTokenService;
   let jobs: JobStore;
+  /** Every line the handler said out loud, so the suite stays quiet. */
+  let warned: string[];
 
   beforeEach(() => {
     db = testDatabase();
     now = NOW;
+    warned = [];
     const clock = (): number => now;
     reminders = new ReminderService({ db: db.handle, clock });
     outbox = new Outbox({ db: db.handle, clock });
@@ -152,7 +157,13 @@ describe("createReminderDeliveryHandler", () => {
   async function run(apns: ApnsSender | null): Promise<Awaited<ReturnType<ReturnType<typeof createReminderDeliveryHandler>>>> {
     const job = defineReminderDeliveryJob(jobs, new Date(now).toISOString());
     const runRow = jobs.startRun(job, job.nextRunAt ?? "", now);
-    const handler = createReminderDeliveryHandler({ reminders, outbox, devices, apns });
+    const handler = createReminderDeliveryHandler({
+      reminders,
+      outbox,
+      devices,
+      apns,
+      warn: (line) => warned.push(line),
+    });
     return handler({ job, run: runRow, triggerInstant: job.nextRunAt ?? "", late: false, now });
   }
 
@@ -175,9 +186,10 @@ describe("createReminderDeliveryHandler", () => {
     expect((await run(scriptedApns())).spoke).toBe(true);
   });
 
-  it("should succeed while reporting what is waiting to be retried", async () => {
-    // A failed attempt is not a failed run: the row survives and goes again,
-    // which is the entire reason the outbox exists.
+  it("should succeed while reporting what is held on a machine that cannot send", async () => {
+    // A blocked attempt is not a failed run: the row survives and goes again,
+    // which is the entire reason the outbox exists. But it is not silence
+    // either — the run says what is wrong and which four values to check.
     reminders.create({
       text: "Call the pharmacy.",
       wallTime: "16:00",
@@ -187,6 +199,57 @@ describe("createReminderDeliveryHandler", () => {
     now = Date.UTC(2026, 7, 9, 21, 0);
 
     const result = await run(null);
+    expect(result.outcome).toBe("success");
+    expect(result.error).toContain("held and undelivered");
+    expect(result.error).toContain("SYL_APNS_KEY_ID");
+    expect(outbox.list().items[0]?.state).toBe("pending");
+    // And it is said out loud exactly once, not once a minute forever.
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("held and undelivered");
+  });
+
+  it("should say a machine cannot send once, not on every pass", async () => {
+    // The signal has to be loud enough to notice and quiet enough to keep
+    // reading. Sixty identical lines an hour is the same as none.
+    reminders.create({
+      text: "Call the pharmacy.",
+      wallTime: "16:00",
+      tz: CHICAGO,
+      date: "2026-08-09",
+    });
+    now = Date.UTC(2026, 7, 9, 21, 0);
+
+    const job = defineReminderDeliveryJob(jobs, new Date(now).toISOString());
+    const handler = createReminderDeliveryHandler({
+      reminders,
+      outbox,
+      devices,
+      apns: null,
+      warn: (line) => warned.push(line),
+    });
+    for (let pass = 0; pass < 5; pass += 1) {
+      const runRow = jobs.startRun(job, job.nextRunAt ?? "", now);
+      await handler({ job, run: runRow, triggerInstant: job.nextRunAt ?? "", late: false, now });
+      now += 60_000;
+    }
+
+    expect(warned).toHaveLength(1);
+  });
+
+  it("should succeed while reporting what is waiting to be retried", async () => {
+    // A refusal that is about this moment. The row keeps its place in the
+    // queue and the run stays a success, because the outbox is working.
+    reminders.create({
+      text: "Call the pharmacy.",
+      wallTime: "16:00",
+      tz: CHICAGO,
+      date: "2026-08-09",
+    });
+    now = Date.UTC(2026, 7, 9, 21, 0);
+
+    const result = await run(
+      scriptedApns({ ok: false, status: 503, reason: "ServiceUnavailable", disposition: "retry" }),
+    );
     expect(result.outcome).toBe("success");
     expect(result.error).toContain("will be retried");
     expect(outbox.list().items[0]?.state).toBe("pending");
@@ -510,6 +573,59 @@ describe("the delivery runtime", () => {
     const result = await runtime.runner.start();
     // Due from boot, so the first tick runs it and finds nothing to do.
     expect(result.ran).toEqual([runtime.job.id]);
+    await runtime.stop();
+  });
+
+  it("should refuse to let a caller replace the reminder-delivery handler", async () => {
+    // The docstring on `handlers` says reminder delivery "is built here and
+    // cannot be overridden — the never-drop guarantee is not a thing a caller
+    // gets to replace". Nothing asserted it, and the property depends entirely
+    // on the order of a spread.
+    let hijacked = false;
+    const runtime = createDeliveryRuntime({
+      ...runtimeDeps({}),
+      handlers: new Map([
+        [
+          "reminder_delivery",
+          () => {
+            hijacked = true;
+            return { outcome: "success" as const };
+          },
+        ],
+      ]),
+    });
+
+    await runtime.runner.start();
+    expect(hijacked, "a caller replaced the delivery handler").toBe(false);
+    await runtime.stop();
+  });
+
+  it("should send where it was told to, rather than only ever to Apple", async () => {
+    // `syl-md5`. `origins` had no seam, so no test could obtain a runtime from
+    // this function whose pushes went anywhere but api.push.apple.com — and
+    // five journeys rebuilt the runner by hand because of it.
+    // A real P-256 key, because the provider token is signed for real on the
+    // way out and a placeholder PEM fails before the origin is ever used.
+    const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const runtime = createDeliveryRuntime({
+      ...runtimeDeps({
+        SYL_APNS_KEY_ID: "ABCD123456",
+        SYL_APNS_TEAM_ID: "TEAM123456",
+        SYL_APNS_BUNDLE_ID: "com.jmm.syl",
+        SYL_APNS_PRIVATE_KEY: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      }),
+      origins: { production: "http://127.0.0.1:1", sandbox: "http://127.0.0.1:1" },
+    });
+
+    // Nothing is listening on port 1, so a send fails at the transport — which
+    // is the observable difference between "went to the given origin" and
+    // "went to Apple", without this unit test opening a socket to the internet.
+    const result = await runtime.apns?.send({
+      token: TOKEN,
+      environment: "production",
+      payload: { title: "Syl", body: "x" },
+    });
+    expect(result?.ok).toBe(false);
     await runtime.stop();
   });
 });

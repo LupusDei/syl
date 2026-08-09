@@ -242,22 +242,16 @@ describe("US5 — she survives a restart", () => {
 
         const restarted = await startLiveService({ databasePath: path, clock: () => FROZEN });
         try {
-          const runner = new JobRunner({
-            store: restarted.deps.jobs,
-            handlers: new Map(),
-            clock: () => FROZEN,
-            timers: inertTimers,
-            owner: "syl-after-the-restart",
-          });
-          const pass = await runner.start();
-          runner.stop();
-
-          // A different owner does reclaim it — `recoverLeases` matches on
-          // owner as well as expiry, which is what saves this from being a
-          // five-minute stall. The finding is that the lease survived at all:
-          // a shutdown handler would have released it, and the reclaim path is
-          // doing the work a missing `process.on` left behind.
-          expect(pass.reclaimed).toContain(job.id);
+          // The restart's own first pass reclaims it, before the service ever
+          // claims to be up: `startSyl` awaits `runner.start()`, and every tick
+          // reclaims before it schedules. `recoverLeases` matches on owner as
+          // well as expiry, which is what saves this from being a five-minute
+          // stall.
+          //
+          // The finding is that the lease survived at all. A shutdown handler
+          // would have released it; the reclaim path is doing the work a
+          // missing `process.on` left behind.
+          expect(restarted.deps.jobs.get(job.id)?.state).toBe("pending");
 
           // And the expiry alone would not have helped in time.
           expect(DEFAULT_LEASE_MS).toBe(5 * 60_000);

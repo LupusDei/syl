@@ -64,6 +64,12 @@ describe("payloadFor", () => {
     expect(payloadFor(base, 0).interruptionLevel).toBe("time-sensitive");
   });
 
+  it("should keep the actionable category, because one reminder has an id to act on", () => {
+    // The other half of `syl-xvx`: only a *digest* loses the buttons, and it
+    // loses them because it cannot name what they would act on.
+    expect(payloadFor(base, 0).categoryIdentifier).toBe("reminder");
+  });
+
   it("should leave an ordinary rhythm message at active", () => {
     expect(payloadFor({ ...base, kind: "rhythm" }, 0).interruptionLevel).toBe("active");
   });
@@ -94,6 +100,15 @@ describe("coalescedPayload", () => {
 
   it("should not break through Focus to report a quiet night", () => {
     expect(coalescedPayload(3).interruptionLevel).toBe("active");
+  });
+
+  it("should not carry the category whose actions need a reminder id", () => {
+    // `syl-xvx`. A digest has no `reminderId` — it speaks for several and so
+    // for none in particular — and both device actions guard on exactly that
+    // field. Under the actionable category the buttons appeared and did
+    // nothing, while the acknowledgement fired alongside and closed every
+    // reminder the digest named as seen.
+    expect(coalescedPayload(3).categoryIdentifier).not.toBe("reminder");
   });
 });
 

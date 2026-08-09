@@ -47,12 +47,24 @@ export function defineReminderDeliveryJob(store: JobStore, firstRunAt?: string):
   });
 }
 
+/** The four values a human types once, named in the order they are typed. */
+const APNS_ENV_NAMES =
+  "SYL_APNS_KEY_ID, SYL_APNS_TEAM_ID, SYL_APNS_BUNDLE_ID, SYL_APNS_PRIVATE_KEY";
+
 export interface ReminderDeliveryDeps {
   readonly reminders: ReminderService;
   readonly outbox: Outbox;
   readonly devices: DeviceTokenService;
   /** `null` when APNs is not configured. The outbox holds rows regardless. */
   readonly apns: ApnsSender | null;
+  /**
+   * Where the one line about a machine that cannot send goes.
+   *
+   * Injected so a test can read it, and defaulted to stderr because the
+   * alternative — the state Syl shipped in — is that a wrong `.p8` produces no
+   * output anywhere at all while every reminder quietly piles up.
+   */
+  readonly warn?: (line: string) => void;
 }
 
 /**
@@ -64,6 +76,17 @@ export interface ReminderDeliveryDeps {
  * spawns a child process.
  */
 export function createReminderDeliveryHandler(deps: ReminderDeliveryDeps): JobHandler {
+  const warn = deps.warn ?? ((line: string): void => console.error(line));
+  /**
+   * The block already reported, so a machine that cannot send says so once and
+   * not sixty times an hour forever.
+   *
+   * Held in the closure rather than at module scope: two runtimes in one
+   * process — which is every test file that builds more than one — must not
+   * silence each other.
+   */
+  let announcedBlock: string | null = null;
+
   return async (context): Promise<JobResult> => {
     deliverDueReminders({ reminders: deps.reminders, outbox: deps.outbox }, context.now);
     const pushed = await pushDueDeliveries(
@@ -71,9 +94,40 @@ export function createReminderDeliveryHandler(deps: ReminderDeliveryDeps): JobHa
       context.now,
     );
 
+    const held = pushed.blocked.length;
     const waiting = pushed.failed.length;
+    const lost = pushed.exhausted.length;
+
+    // `syl-clc`, second half. A machine that cannot send used to be completely
+    // silent: the rows were dropped, the handler reported success, and no
+    // breaker, log line or run record said anything. The row is now held rather
+    // than dropped, which means the *only* thing standing between a wrong `.p8`
+    // and a week of undelivered reminders is somebody being told.
+    //
+    // Keyed on the *cause*, not on the count and not on the pass. A pass that
+    // found nothing due is not evidence that anything was fixed — most passes
+    // find nothing — so silence never clears the block. Only something actually
+    // reaching Apple does.
+    const cause = held === 0 ? null : (deps.outbox.get(pushed.blocked[0] ?? "")?.lastError ?? null);
+    const blockage = cause === null ? null : blockedLine(held, cause);
+    if (cause !== null && cause !== announcedBlock) {
+      warn(`[syl] ${blockage ?? cause}`);
+      announcedBlock = cause;
+    } else if (announcedBlock !== null && pushed.accepted.length > 0) {
+      warn("[syl] delivery is unblocked; the backlog is going out.");
+      announcedBlock = null;
+    }
+
     return {
-      outcome: "success",
+      // A refused attempt is not a failed run — the row survives and is
+      // retried, which is the entire reason the outbox exists — and neither is
+      // a blocked one, or a wrong key id would open the breaker and end every
+      // *future* reminder on top of the one already waiting.
+      //
+      // A row the outbox has stopped retrying is different in kind. Nothing
+      // further will happen to it on its own, so this is the one case where
+      // the run must be recorded as a failure and the breaker allowed to move.
+      outcome: lost === 0 ? "success" : "failure",
       spoke: pushed.accepted.length > 0,
       // Zero, always. If this is ever non-zero, a model got into the delivery
       // path and the guarantee is no longer independent of rate limits.
@@ -82,15 +136,39 @@ export function createReminderDeliveryHandler(deps: ReminderDeliveryDeps): JobHa
       // The contract's `summary` is the model's own one line about what it
       // did. There is no model here, so there is nothing to say.
       summary: null,
-      // A failed attempt is not a failed run: the row survives and is retried,
-      // which is the entire reason the outbox exists.
-      error:
-        waiting === 0
-          ? null
-          : `${waiting} notification${waiting === 1 ? "" : "s"} could not be sent and will be retried.`,
+      error: errorLine({ blockage, waiting, lost }),
       nextRunAt: nextWakeFor(deps, context.now),
     };
   };
+}
+
+/** What to say about rows nothing could be attempted for. */
+function blockedLine(held: number, because: string): string {
+  return (
+    `${held} reminder${held === 1 ? " is" : "s are"} held and undelivered: ${because} ` +
+    `Nothing is lost and nothing will be sent until this is fixed — check ${APNS_ENV_NAMES}.`
+  );
+}
+
+/** The run record's one line, in decreasing order of how bad it is. */
+function errorLine(input: {
+  readonly blockage: string | null;
+  readonly waiting: number;
+  readonly lost: number;
+}): string | null {
+  const parts: string[] = [];
+  if (input.lost > 0) {
+    parts.push(
+      `${input.lost} notification${input.lost === 1 ? "" : "s"} will not be retried again.`,
+    );
+  }
+  if (input.blockage !== null) parts.push(input.blockage);
+  if (input.waiting > 0) {
+    parts.push(
+      `${input.waiting} notification${input.waiting === 1 ? "" : "s"} could not be sent and will be retried.`,
+    );
+  }
+  return parts.length === 0 ? null : parts.join(" ");
 }
 
 /**

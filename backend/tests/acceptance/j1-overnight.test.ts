@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { fixedClock } from "../../src/services/clock.js";
 import type { JobRunner } from "../../src/services/job-runner.js";
-import { deliveryRig, type DeliveryRig } from "../helpers/delivery-runner.js";
 import { startFakeApns, type FakeApns } from "../helpers/fake-apns.js";
 import { expectData, startLiveService, type LiveService } from "../helpers/live-service.js";
 
@@ -45,8 +44,13 @@ describe("the Commander's night", () => {
 
   beforeEach(async () => {
     now = ASKED_AT;
-    syl = await startLiveService({ clock: fixedClock(ASKED_AT) });
     apple = await startFakeApns();
+    // Syl, booted the way `main` boots her, with Apple's address changed and
+    // her timer in this test's hand.
+    syl = await startLiveService({
+      clock: fixedClock(ASKED_AT),
+      delivery: { apple, clock: () => now },
+    });
   });
 
   afterEach(async () => {
@@ -83,15 +87,10 @@ describe("the Commander's night", () => {
     );
   }
 
-  /**
-   * The runner the service builds, with Apple replaced.
-   *
-   * See the docstring on `deliveryRig`: `createDeliveryRuntime` has no seam for
-   * the APNs origin (`syl-md5`), so the assembly `main` actually ships is
-   * exercised against a real Apple by nothing in this suite.
-   */
-  function runnerAgainst(target: FakeApns): DeliveryRig {
-    return deliveryRig({ syl, apple: target, clock: () => now, owner: "journeys" });
+  /** The service's own delivery runner. Apple was redirected when it booted. */
+  function runnerAgainst(target: FakeApns): { runner: JobRunner; close: () => Promise<void> } {
+    if (target !== apple) throw new Error("this journey boots against one Apple");
+    return { runner: syl.runtime.runner, close: async () => undefined };
   }
 
   /** Advance the clock to `until`, ticking every half hour on the way. */
@@ -226,25 +225,33 @@ describe("the Commander's night", () => {
     });
 
     /**
-     * `syl-xvx` — the morning digest offers Snooze and Done, and neither works.
+     * `syl-xvx` — the morning digest used to offer Snooze and Done, and the
+     * device could act on neither.
      *
-     * `coalescedPayload` sets `categoryIdentifier: "reminder"`, which is the
-     * APNs category carrying the Complete and Snooze actions, so the digest
-     * arrives with both buttons on it. But `notificationFor`
-     * (backend/src/jobs/push-outbox.ts:156) includes `reminderId` only when the
-     * row has one, and a digest is exactly the row that does not —
-     * `foldInto` sets `reminderId: null` deliberately, because the digest speaks
-     * for all of them and so for none in particular.
+     * `coalescedPayload` set `categoryIdentifier: "reminder"`, the APNs category
+     * carrying the Complete and Snooze actions, so the digest arrived with both
+     * buttons on it. But `notificationFor` includes `reminderId` only when the
+     * row has one, and a digest is exactly the row that does not — `foldInto`
+     * sets it to `null` deliberately, because the digest speaks for all of them
+     * and so for none in particular.
      *
      * On the device, `NotificationService.snooze` and `.complete` both open
-     * `guard let reminderId = payload.reminderId else { return }` and return
-     * silently. He taps Snooze on a night's worth of reminders, nothing is
-     * deferred, and the ack that fires alongside closes all four as seen.
+     * `guard let reminderId = payload.reminderId else { return }` and returned
+     * silently. He tapped Snooze on a night's worth of reminders, nothing was
+     * deferred, and the ack that fires alongside closed all of them as seen.
      */
-    it("should send a digest whose Snooze and Done buttons the device cannot act on", async () => {
+    it("should not offer the digest an action the device cannot carry out", async () => {
       await registerDevice();
-      await setReminder({ text: "Ship the release notes.", wallTime: "23:00", date: "2026-08-10" });
-      await setReminder({ text: "Rotate the backup key.", wallTime: "01:00", date: "2026-08-11" });
+      const notes = await setReminder({
+        text: "Ship the release notes.",
+        wallTime: "23:00",
+        date: "2026-08-10",
+      });
+      const key = await setReminder({
+        text: "Rotate the backup key.",
+        wallTime: "01:00",
+        date: "2026-08-11",
+      });
 
       const { runner, close } = runnerAgainst(apple);
       try {
@@ -254,15 +261,23 @@ describe("the Commander's night", () => {
         const body = apple.pushes[0]?.body as Record<string, unknown>;
         const aps = body["aps"] as Record<string, unknown>;
 
-        // The actionable category IS on the notification...
-        expect(aps["category"]).toBe("reminder");
-        // ...and the id its two actions need is not.
+        // No `reminderId`, because there genuinely is not one...
+        expect(body["reminderId"]).toBeUndefined();
+        // ...so it must not arrive under the category whose two actions both
+        // require one. The device knows one category; anything else opens the
+        // app, which is the only honest answer for a notification standing for
+        // several things.
+        expect(aps["category"]).not.toBe("reminder");
+
+        // What it does carry is everything it stands for — the set a snooze-all
+        // would act on, and the same set the ack path closes.
         expect(
-          body["reminderId"],
-          "the digest now carries a reminder id — update this test and syl-xvx",
-        ).toBeUndefined();
-        // The delivery id is there, so the ack works and the row closes. That
-        // is what makes this silent rather than visible.
+          [...((body["coalescedReminderIds"] as string[] | undefined) ?? [])].sort(),
+          "the digest must say which reminders it speaks for",
+        ).toEqual([notes.id, key.id].sort());
+
+        // And the delivery id, so the acknowledgement still has something to
+        // name and the row still closes.
         expect(body["deliveryId"]).toBeDefined();
       } finally {
         await close();

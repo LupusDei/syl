@@ -1,31 +1,20 @@
-import { randomUUID } from "node:crypto";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadQuietHours, type SylConfig } from "../../src/config.js";
-import { IntakeQueue } from "../../src/connections/intake-job.js";
-import { IntakeStore } from "../../src/connections/intake-store.js";
-import { ArticleIntake } from "../../src/connections/intake.js";
 import {
   API_BASE_PATH,
-  bootstrap,
-  startServer,
+  startSyl,
   type ServiceDependencies,
   type RunningService,
 } from "../../src/index.js";
-import { ApiKeyService } from "../../src/services/api-key-service.js";
+import type { DeliveryRuntime } from "../../src/jobs/runtime.js";
 import type { Clock } from "../../src/services/clock.js";
-import { DeviceTokenService } from "../../src/services/device-token-service.js";
-import { openDatabase, type SylDatabase } from "../../src/services/database.js";
-import { databaseProbe } from "../../src/routes/health.js";
-import { IdempotencyStore } from "../../src/services/idempotency.js";
-import { JobStore } from "../../src/services/job-store.js";
-import { MessageStore } from "../../src/services/message-store.js";
-import { Outbox } from "../../src/services/outbox.js";
-import { PresenceService } from "../../src/services/presence.js";
-import { ReminderService } from "../../src/services/reminder-service.js";
+import type { SylDatabase } from "../../src/services/database.js";
+import type { Timers } from "../../src/services/job-runner.js";
 import { WS_PATH } from "../../src/services/ws-server.js";
 
 /**
@@ -39,11 +28,34 @@ import { WS_PATH } from "../../src/services/ws-server.js";
  * through `startServer`. A whole class of seam lives in exactly those layers,
  * and a test that skips them cannot see any of it.
  *
- * So this is the real thing: `bootstrap` against a real SQLite **file**, a real
- * TCP port, and the WebSocket sharing it. The only concession to a test is port
- * 0 — asking the kernel for a free port, so suites never fight over 4201 or
- * each other.
+ * So this is the real thing: `startSyl` — the entire body of `main` — against a
+ * real SQLite **file**, a real TCP port, and the WebSocket sharing it. That
+ * includes the delivery runtime and the content-ingestion job, which used to be
+ * assembled in `main` alone and therefore ran for the first time in production
+ * (`syl-md5`). The only concessions to a test are port 0 — asking the kernel for
+ * a free port, so suites never fight over 4201 or each other — and a timer the
+ * test drives by hand.
  */
+
+/** A timer the test drives by hand, so no wall-clock second is ever spent. */
+export const inertTimers: Timers = { set: () => 0, clear: () => undefined };
+
+/**
+ * A throwaway APNs configuration, in the shape the environment supplies it.
+ *
+ * A real P-256 key, freshly generated, because `ApnsProviderToken` signs with
+ * it for real — `dsaEncoding: "ieee-p1363"` and all. A fake string would fail
+ * at the one place the credential handling is worth exercising.
+ */
+export function apnsEnv(): NodeJS.ProcessEnv {
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  return {
+    SYL_APNS_KEY_ID: "ABCD123456",
+    SYL_APNS_TEAM_ID: "TEAM123456",
+    SYL_APNS_BUNDLE_ID: "com.jmm.syl",
+    SYL_APNS_PRIVATE_KEY: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+  };
+}
 
 /** A running Syl, and the handles a test needs to talk to her. */
 export interface LiveService {
@@ -59,6 +71,22 @@ export interface LiveService {
   readonly deps: ServiceDependencies;
   readonly database: SylDatabase;
   readonly service: RunningService;
+  /**
+   * The delivery runtime the service built for itself.
+   *
+   * Not one a test assembled: this is the object `createDeliveryRuntime`
+   * returned on the path `main` takes, with its pushes redirected and its timer
+   * inert. Drive it with `runtime.runner.tick()`.
+   */
+  readonly runtime: DeliveryRuntime;
+  /**
+   * Every line the delivery runtime said out loud.
+   *
+   * Collected rather than printed so a suite stays readable, and exposed rather
+   * than swallowed because "a machine that cannot send says so" is a claim
+   * worth asserting — it is the entire operator signal for a wrong `.p8`.
+   */
+  readonly warnings: readonly string[];
   /** The database file, so a restart can reopen the same store. */
   readonly databasePath: string;
   /**
@@ -81,46 +109,33 @@ export interface LiveRequest extends RequestInit {
   readonly anonymous?: boolean;
 }
 
-/**
- * Build the dependency set exactly as `bootstrap` does, on a chosen clock.
- *
- * `bootstrap` takes no clock, which is right for production and impossible for
- * a story about *when* something happens: a test that boots the real service
- * and then asserts a reminder fired late would be asserting something about the
- * hour the suite happened to run. This repo has already been bitten by exactly
- * that — see the note on `testDatabase` — so determinism is not optional.
- *
- * The constructor list is duplicated here, which is a real cost, so
- * `live-service.test.ts` asserts it against `bootstrap`'s own output. A field
- * added to `ServiceDependencies` and wired in only one of the two turns the suite
- * red rather than quietly making this a different service.
- */
-function dependenciesOn(
-  config: SylConfig,
-  database: SylDatabase,
-  clock: Clock,
-): ServiceDependencies {
-  const intakeQueue = new IntakeQueue();
-  const intake = new ArticleIntake({
-    store: new IntakeStore({ db: database.handle, clock }),
-    clock,
-    scheduler: intakeQueue,
-  });
-  intakeQueue.recover(intake, clock());
-
-  return {
-    keys: new ApiKeyService({ db: database.handle, clock }),
-    messages: new MessageStore({ db: database.handle, clock }),
-    devices: new DeviceTokenService({ db: database.handle, clock }),
-    idempotency: new IdempotencyStore({ db: database.handle, clock }),
-    outbox: new Outbox({ db: database.handle, clock, quietHours: config.quietHours }),
-    reminders: new ReminderService({ db: database.handle, clock }),
-    jobs: new JobStore({ db: database.handle, clock }),
-    intake,
-    presence: new PresenceService({ clock, timeZone: config.quietHours.tz }),
-    intakeQueue,
-    probes: [databaseProbe(database.handle)],
-  };
+/** Where a live service's pushes should go, and when it should look. */
+export interface LiveDeliveryOptions {
+  /**
+   * The fake Apple to push at. Its origin serves both environments.
+   *
+   * Supplying this is also what configures APNs at all: without it the service
+   * boots with no credentials, exactly as a developer machine with no `.p8`
+   * does, and holds everything in the outbox.
+   */
+  readonly apple?: { readonly origin: string };
+  /**
+   * The clock the delivery loop walks on, when it must differ from the stores'.
+   *
+   * A timing story freezes the stores — so that what an HTTP write records is
+   * deterministic — and moves this one.
+   */
+  readonly clock?: Clock;
+  /** Real timers, for a test that genuinely wants the loop running. */
+  readonly timers?: Timers;
+  readonly warn?: (line: string) => void;
+  /**
+   * Swallow a handler's uncaught throw instead of printing it.
+   *
+   * For the reboot journey, where a tick is deliberately left running against a
+   * closed database and its death rattle is the simulation working.
+   */
+  readonly onError?: (error: unknown, job: unknown) => void;
 }
 
 export interface StartLiveServiceOptions {
@@ -130,10 +145,11 @@ export interface StartLiveServiceOptions {
   readonly pair?: boolean;
   readonly deviceName?: string;
   /**
-   * Freeze the service's clock. Omit to use `bootstrap` verbatim, which is what
-   * every test that is not about time should do.
+   * Freeze the service's clock. Omit for the real one, which is what every
+   * test that is not about time should do.
    */
   readonly clock?: Clock;
+  readonly delivery?: LiveDeliveryOptions;
 }
 
 /** Boot Syl on a free port with a real on-disk store, and pair one device. */
@@ -159,12 +175,27 @@ export async function startLiveService(
     quietHours: loadQuietHours(process.env),
   };
 
-  let database: SylDatabase;
-  let deps: ServiceDependencies;
-  if (options.clock === undefined) {
-    ({ database, deps } = bootstrap(config));
-  } else {
-    database = openDatabase({ path: config.databasePath });
+  const apple = options.delivery?.apple;
+  const warnings: string[] = [];
+  const syl = await startSyl(config, {
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
+    delivery: {
+      // A test never reaches the real Apple by omission. Credentials are
+      // supplied only alongside somewhere local to send them.
+      ...(apple === undefined
+        ? {}
+        : { env: apnsEnv(), origins: { production: apple.origin, sandbox: apple.origin } }),
+      // Inert unless a test asks otherwise: the loop is driven by hand, so no
+      // suite ever spends a wall-clock second waiting for a tick.
+      timers: options.delivery?.timers ?? inertTimers,
+      ...(options.delivery?.clock === undefined ? {} : { clock: options.delivery.clock }),
+      warn: options.delivery?.warn ?? ((line) => warnings.push(line)),
+      ...(options.delivery?.onError === undefined ? {} : { onError: options.delivery.onError }),
+    },
+  });
+  const { database, deps, service, runtime } = syl;
+
+  if (options.clock !== undefined) {
     // Migration 0001 seeds the interactive conversation with SQLite's own
     // `strftime('now')` — the real wall clock. On a frozen clock that row is
     // permanently "in the future" and sorts wrongly. Normalised here, where the
@@ -173,9 +204,7 @@ export async function startLiveService(
     database.handle
       .prepare("UPDATE conversations SET created_at = ?, updated_at = ? WHERE updated_at > ?")
       .run(seeded, seeded, seeded);
-    deps = dependenciesOn(config, database, options.clock);
   }
-  const service = await startServer(config, deps);
 
   const address = service.server.address();
   if (address === null || typeof address === "string") {
@@ -238,11 +267,13 @@ export async function startLiveService(
     deps,
     database,
     service,
+    runtime,
+    warnings,
     databasePath,
     directory,
     api,
     close: async (closeOptions = {}) => {
-      await service.close();
+      await syl.close();
       database.close();
       if (directory !== null && closeOptions.keepDatabase !== true) {
         rmSync(directory, { recursive: true, force: true });

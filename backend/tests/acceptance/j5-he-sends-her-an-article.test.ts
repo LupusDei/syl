@@ -161,33 +161,44 @@ describe("Journey 5 — he sends her an article", () => {
     });
   });
 
-  describe("what the shipped service does NOT wire", () => {
+  describe("what the shipped service wires", () => {
     /**
-     * `syl-md5` in its second form.
+     * `syl-md5` in its second form, now closed.
      *
-     * `bootstrap` builds `intake` and `intakeQueue` and calls
-     * `intakeQueue.recover`, but the `content_ingestion` **job row** is created
-     * only in `main` (backend/src/index.ts:385), and the handler is registered
-     * only in `main`'s `createDeliveryRuntime` call. A service booted through
-     * `bootstrap` + `startServer` — which is what every test uses, and what
-     * `startLiveService` documents as "Syl, started the way `main` starts her"
-     * — will accept a submission over HTTP and then never advance it.
+     * `bootstrap` built `intake` and `intakeQueue` and called
+     * `intakeQueue.recover`, but the `content_ingestion` **job row** was created
+     * only in `main`, and the handler registered only in `main`'s
+     * `createDeliveryRuntime` call. A service booted through
+     * `bootstrap` + `startServer` — which was every test, including the one that
+     * documents itself as "Syl, started the way `main` starts her" — accepted a
+     * submission over HTTP and then never advanced it. Nothing could see that,
+     * because `main` was not callable.
+     *
+     * `startSyl` is `main` now, and this boots through it.
      */
-    it("should accept a link that nothing will ever ingest, when booted the way every test boots her", async () => {
+    it("should advance a link it accepted, booted the way every test boots her", async () => {
       const source = await submit("https://example.com/tidy-desks");
       expect(source.stage).toBe("fetch");
-
-      // Everything `bootstrap` + `startServer` produced is running. No job
-      // exists to move it.
-      const jobs = await expectData<{ items: Job[] }>(await syl.api("/jobs"));
-      expect(
-        jobs.items.filter((job) => job.kind === "content_ingestion"),
-        "bootstrap now creates the content_ingestion job — update this test and syl-md5",
-      ).toHaveLength(0);
-
-      // The work is remembered, at least: the queue has it, so the moment
-      // something does define the job the source is picked up.
       expect(syl.deps.intakeQueue.size).toBe(1);
+
+      // The job exists because the service made it, not because this test did.
+      const jobs = await expectData<{ items: Job[] }>(await syl.api("/jobs"));
+      const ingestion = jobs.items.filter((job) => job.kind === "content_ingestion");
+      expect(ingestion).toHaveLength(1);
+      expect(ingestion[0]?.nextRunAt).not.toBeNull();
+
+      // And the runtime the service built for itself moves it — no handler
+      // assembled here, no runner assembled here.
+      await syl.runtime.runner.tick();
+
+      const after = await expectData<IntakeSource>(
+        await syl.api(`/intake/${encodeURIComponent(source.id)}`),
+      );
+      // The real `safeFetch` refuses to resolve example.com in this sandbox, so
+      // what is asserted is that it *moved* — off `fetch`, by the shipped
+      // wiring — rather than sitting where every previous boot left it.
+      expect(after.stage).not.toBe("fetch");
+      expect(syl.deps.intakeQueue.size).toBe(0);
     });
   });
 });
