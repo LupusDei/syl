@@ -20,8 +20,8 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { ApiFailure } from "../routes/envelope.js";
 import type { ApiKeyService } from "./api-key-service.js";
 import { instant, systemClock, type Clock } from "./clock.js";
+import type { ConversationService } from "./conversation-service.js";
 import { FrameLog, DEFAULT_CAPACITY } from "./frame-log.js";
-import type { MessageStore } from "./message-store.js";
 import type { AttachmentSink } from "./presence.js";
 
 /**
@@ -106,7 +106,18 @@ interface Connection {
 export interface SylSocketServerOptions {
   readonly server: Server;
   readonly keys: ApiKeyService;
-  readonly messages: MessageStore;
+  /**
+   * History, and the thing that answers.
+   *
+   * The socket reaches conversation history through `ConversationService`
+   * rather than through `MessageStore` directly, and that indirection is the
+   * whole of `syl-vls`: writing to the store is only half of accepting a
+   * message, and a transport that knows how to do the first half and not the
+   * second is a transport that stores what the Commander said and leaves him
+   * talking to himself. One object does both halves, and the HTTP route calls
+   * exactly the same two methods.
+   */
+  readonly chat: ConversationService;
   /**
    * Told whether anybody is attached.
    *
@@ -163,7 +174,7 @@ function equalsInConstantTime(a: string, b: string): boolean {
 export class SylSocketServer {
   readonly #wss: WebSocketServer;
   readonly #keys: ApiKeyService;
-  readonly #messages: MessageStore;
+  readonly #chat: ConversationService;
   readonly #presence: AttachmentSink | null;
   readonly #clock: Clock;
   readonly #log: FrameLog;
@@ -174,7 +185,7 @@ export class SylSocketServer {
 
   constructor(options: SylSocketServerOptions) {
     this.#keys = options.keys;
-    this.#messages = options.messages;
+    this.#chat = options.chat;
     this.#presence = options.presence ?? null;
     this.#clock = options.clock ?? systemClock;
     this.#log = new FrameLog(options.capacity ?? DEFAULT_CAPACITY);
@@ -187,6 +198,19 @@ export class SylSocketServer {
       server: options.server,
       path: options.path ?? WS_PATH,
       maxPayload: MAX_FRAME_BYTES,
+    });
+
+    // The socket subscribes itself rather than waiting to be pointed at.
+    //
+    // Presence is wired the other way round — `startServer` calls
+    // `presence.setSink` — because presence is *told* things by the socket and
+    // the two directions have to be joined by whoever owns both. This one has
+    // only one direction: the conversation service produces messages and the
+    // socket is the only thing that can publish them. A component that can
+    // subscribe itself and instead relies on a bootstrap line is one bootstrap
+    // edit away from `syl-c5q` and `syl-vls`, which are the same bug twice.
+    options.chat.setSink((message) => {
+      this.broadcastMessage(message);
     });
 
     this.#wss.on("connection", (socket) => this.#onConnection(socket));
@@ -228,6 +252,9 @@ export class SylSocketServer {
 
   /** Stop accepting connections and close the ones that are open. */
   async close(): Promise<void> {
+    // Unsubscribed here, where it was subscribed. A reply that settles after
+    // this must not be handed to a frame log nobody will ever read from again.
+    this.#chat.setSink(null);
     for (const connection of this.#connections) {
       if (connection.authTimer !== null) clearTimeout(connection.authTimer);
       connection.socket.terminate();
@@ -453,12 +480,12 @@ export class SylSocketServer {
 
     let appended;
     try {
-      appended = this.#messages.append({
+      appended = this.#chat.append({
         ...(typeof conversationId === "string" ? { conversationId } : {}),
         clientId,
         role: "user",
         text,
-      } satisfies Parameters<MessageStore["append"]>[0]);
+      } satisfies Parameters<ConversationService["append"]>[0]);
     } catch (error) {
       this.#send(
         connection.socket,
@@ -484,8 +511,12 @@ export class SylSocketServer {
 
     this.#broadcast(confirmation);
 
-    // A replayed send already produced its chat_message frame the first time.
-    if (!appended.replayed) this.broadcastMessage(appended.message);
+    // The confirmation goes first — it is this connection's answer to the send
+    // — and everything after it belongs to both write paths equally. `accept`
+    // broadcasts the message (skipping a replayed send, which already produced
+    // its frame the first time) and starts the turn that answers it. The HTTP
+    // route calls the same method on the same object.
+    this.#chat.accept(appended);
   }
 
   #onSync(connection: Connection, frame: Record<string, unknown>): void {

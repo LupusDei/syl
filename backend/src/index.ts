@@ -1,4 +1,6 @@
 import { createServer, type Server } from "node:http";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import express, {
@@ -40,10 +42,13 @@ import { tailnetCertProbe } from "./ops/tailnet-cert.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
 import { createJobRouter } from "./routes/jobs.js";
 import { createReminderRouter } from "./routes/reminders.js";
+import { fileSessionStore, memorySessionStore, SylAgent } from "./harness/agent.js";
+import type { TurnOptions, TurnRunner } from "./harness/session.js";
 import { apnsCredentialsFromEnv } from "./services/apns-service.js";
 import { ApiKeyService } from "./services/api-key-service.js";
 import { systemClock, type Clock } from "./services/clock.js";
-import { openDatabase, type SylDatabase } from "./services/database.js";
+import { ConversationService } from "./services/conversation-service.js";
+import { IN_MEMORY, openDatabase, type SylDatabase } from "./services/database.js";
 import type { Timers } from "./services/job-runner.js";
 import { DeviceTokenService } from "./services/device-token-service.js";
 import { IdempotencyStore } from "./services/idempotency.js";
@@ -149,8 +154,13 @@ export const onError: ErrorRequestHandler = (error, _request, response, _next) =
 export interface AppDependencies {
   /** Bearer tokens. Required: an app with no auth is not a thing Syl ships. */
   readonly keys: ApiKeyService;
-  /** Conversation history. */
+  /** Conversation history, for reading it. */
   readonly messages: MessageStore;
+  /**
+   * Conversation history, for writing to it — and the only path by which Syl
+   * ever says anything. See `services/conversation-service.ts`.
+   */
+  readonly chat: ConversationService;
   /** Registered push targets. */
   readonly devices: DeviceTokenService;
   /** The delivery outbox — where the never-drop guarantee lives. */
@@ -199,7 +209,8 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // Destructured in full, and reached through the names below rather than
   // through `deps.` — see the note on `AppDependencies`. Removing a use here
   // without removing the field does not compile.
-  const { keys, messages, devices, outbox, reminders, jobs, idempotency, intake, probes } = deps;
+  const { keys, messages, chat, devices, outbox, reminders, jobs, idempotency, intake, probes } =
+    deps;
   const app = express();
 
   // Nothing gains from telling the world which framework to look up CVEs for.
@@ -217,7 +228,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // response to the first consumed the pairing code and left the device
   // permanently unpairable.
   api.use(createAuthRouter({ keys, idempotency, authenticate }));
-  api.use(createConversationRouter({ messages, idempotency, authenticate }));
+  api.use(createConversationRouter({ messages, chat, idempotency, authenticate }));
   api.use(createDeviceRouter({ devices, idempotency, authenticate }));
   api.use(createDeliveryRouter({ outbox, reminders, idempotency, authenticate }));
   api.use(createReminderRouter({ reminders, idempotency, authenticate }));
@@ -262,7 +273,7 @@ export async function startServer(
   const sockets = new SylSocketServer({
     server,
     keys: app.keys,
-    messages: app.messages,
+    chat: app.chat,
     // The socket tells presence that somebody arrived...
     presence,
   });
@@ -274,6 +285,10 @@ export async function startServer(
   presence.setSink((frame) => {
     sockets.announcePresence(frame);
   });
+  // The conversation service needs no line here: `SylSocketServer` subscribes
+  // to it in its own constructor, because that direction has exactly one
+  // possible publisher and a join nobody has to remember is a join that cannot
+  // be forgotten. See the note there.
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -292,6 +307,11 @@ export async function startServer(
       // through closing is not a frame anybody wants.
       presence.setSink(null);
       presence.close();
+      // Before the socket closes, not after: a turn that is one second from
+      // finishing should still reach the clients that are still attached. The
+      // drain is bounded well under launchd's twenty-second kill clock, and
+      // `sockets.close()` is what unsubscribes it afterwards.
+      await app.chat.close();
       await sockets.close();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -343,6 +363,44 @@ export function describeStartup(
   return lines;
 }
 
+/**
+ * The repo root, from `backend/src/index.ts`.
+ *
+ * `SOUL.md`, `.mcp.json` and `.syl/` live at the root of the monorepo rather
+ * than inside the backend workspace, and `npm run ping` reaches them the same
+ * way.
+ */
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/**
+ * Syl's standing orders, appended to the system prompt on every turn.
+ *
+ * Optional by design: a service with no `SOUL.md` is a service with a
+ * characterless assistant, which is a degraded Syl rather than a broken one.
+ * Refusing to start over a missing markdown file would be the wrong trade.
+ */
+export function readSoul(root: string = REPO_ROOT): string | undefined {
+  try {
+    const soul = readFileSync(join(root, "SOUL.md"), "utf8").trim();
+    return soul === "" ? undefined : soul;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Where each lane's Claude Code session id lives between turns.
+ *
+ * Beside the operational store, so a deployment that points `SYL_DB_PATH` at a
+ * backed-up directory gets its conversational continuity backed up with it. An
+ * in-memory database is a test, and a test that wrote session files into the
+ * repo would leak state between runs.
+ */
+export function sessionStoreFor(config: SylConfig): ReturnType<typeof memorySessionStore> {
+  if (config.databasePath === IN_MEMORY) return memorySessionStore();
+  return fileSessionStore(join(dirname(config.databasePath), "sessions"));
+}
+
 /** What `bootstrap` may be told that the configuration cannot say. */
 export interface BootstrapOptions {
   /**
@@ -355,6 +413,27 @@ export interface BootstrapOptions {
    * differently-*configured* one, which is the failure that matters.
    */
   readonly clock?: Clock;
+  /**
+   * Options forwarded to every conversational turn.
+   *
+   * The one a test always supplies is `claudeBin`, pointed at the fake in
+   * `tests/helpers/fake-claude.ts`. Nothing in the suite may reach the real
+   * CLI: it costs money, it needs a login, and it is not deterministic.
+   */
+  readonly turn?: TurnOptions;
+  /**
+   * What actually runs a turn. Defaults to `runTurn` — a real subprocess.
+   *
+   * The seam exists because a turn is the one dependency in this service that
+   * is a *process*: most suites want Syl present and answering nothing, and
+   * paying a node spawn per message across a hundred test files is how a suite
+   * acquires load-dependent flakiness. The tests that are about her answering
+   * use `turn.claudeBin` and the real runner instead, so the wire format is
+   * still exercised against a captured transcript.
+   */
+  readonly runner?: TurnRunner;
+  /** Standing orders. Defaults to `SOUL.md` at the repo root, when there is one. */
+  readonly soul?: string;
 }
 
 /** Open the store and build the services the app needs. */
@@ -383,6 +462,19 @@ export function bootstrap(
   // starts later than the hour the outbox stops sending notifications.
   const presence = new PresenceService({ clock, timeZone: config.quietHours.tz });
 
+  // Syl herself, and the seam that lets her answer. `SylAgent` opts into
+  // `bypassPermissions` because this is the Commander's own trusted
+  // conversation; anything that reads fetched content goes through
+  // `runReaderTurn` instead and never comes near this object.
+  const soul = options.soul ?? readSoul();
+  const agent = new SylAgent({
+    store: sessionStoreFor(config),
+    ...(soul === undefined ? {} : { soul }),
+    ...(options.turn === undefined ? {} : { turnOptions: options.turn }),
+    ...(options.runner === undefined ? {} : { runner: options.runner }),
+  });
+  const chat = new ConversationService({ messages, agent, presence });
+
   // Intake, wired end to end: the store the migration now creates, the queue
   // that is `ArticleIntake`'s long-missing scheduler, and the ladder itself.
   // `fetch` is left at its default — `safeFetch`, the SSRF guard — because the
@@ -401,6 +493,7 @@ export function bootstrap(
     deps: {
       keys,
       messages,
+      chat,
       devices,
       outbox,
       reminders,

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type { PushEnvironment } from "@syl/shared";
 
 import { loadQuietHours, type SylConfig } from "../../src/config.js";
+import type { TurnOptions, TurnRunner } from "../../src/harness/session.js";
 import {
   API_BASE_PATH,
   startSyl,
@@ -18,6 +19,8 @@ import type { Clock } from "../../src/services/clock.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import type { Timers } from "../../src/services/job-runner.js";
 import { WS_PATH } from "../../src/services/ws-server.js";
+import { loadFixture, makeFakeClaude, type FakeClaude, type FakeClaudeConfig } from "./fake-claude.js";
+import { silentRunner } from "./service.js";
 
 /**
  * Syl, started the way `main` starts her.
@@ -41,6 +44,28 @@ import { WS_PATH } from "../../src/services/ws-server.js";
 
 /** A timer the test drives by hand, so no wall-clock second is ever spent. */
 export const inertTimers: Timers = { set: () => 0, clear: () => undefined };
+
+/**
+ * A fake `claude` that answers, replaying a real captured transcript.
+ *
+ * Pass it as `claude` to make a live service actually spawn a subprocess per
+ * turn, through `runTurn`, exactly as production does. That is the shape US2
+ * needs and it costs a node spawn per message — which is why it is opt-in
+ * rather than the default. See {@link StartLiveServiceOptions.claude}.
+ */
+export function answeringClaude(): FakeClaudeConfig {
+  return { after: loadFixture("turn-pong"), exitCode: 0 };
+}
+
+/**
+ * What {@link answeringClaude} says.
+ *
+ * It is the answer in `fixtures/turn-pong.jsonl` — a real transcript captured
+ * from Claude Code 2.1.226 — so a test asserting on the reply is asserting
+ * against the wire format the CLI really produces, which is the whole point of
+ * the fixtures (constitution rule 1).
+ */
+export const LIVE_REPLY_TEXT = "PONG";
 
 /**
  * A throwaway APNs configuration, in the shape the environment supplies it.
@@ -89,6 +114,14 @@ export interface LiveService {
    * worth asserting — it is the entire operator signal for a wrong `.p8`.
    */
   readonly warnings: readonly string[];
+  /**
+   * The fake `claude` this service spawns for every turn, or `null` when turns
+   * run in process.
+   *
+   * Its `invocation()` is how a test asserts on what the harness assembled —
+   * the argv, and that no API key reached the child.
+   */
+  readonly claude: FakeClaude | null;
   /** The database file, so a restart can reopen the same store. */
   readonly databasePath: string;
   /**
@@ -156,6 +189,37 @@ export interface StartLiveServiceOptions {
   readonly pushEnvironment?: PushEnvironment | null;
   /** Point the certificate health probe at a status file the test writes. */
   readonly certStatusPath?: string;
+  /**
+   * Install a fake `claude` executable and run turns through it for real.
+   *
+   * With this, the service drives `runTurn` exactly as production does: a
+   * subprocess per turn, argv assembled by the harness, a captured transcript
+   * on stdout. {@link answeringClaude} is the usual value; a suite about the
+   * failure path passes something that fails, e.g.
+   * `{ ignoreStdin: true, exitCode: 1, stderr: "..." }`.
+   *
+   * **Opt-in, because it costs a node spawn per message.** The default is
+   * {@link StartLiveServiceOptions.runner}, in process.
+   */
+  readonly claude?: FakeClaudeConfig;
+  /**
+   * What runs a turn, when no fake `claude` is installed.
+   *
+   * Defaults to {@link silentRunner} — Syl present, thinking about nothing, and
+   * saying nothing, which is a real production outcome and the right shape for
+   * every suite that is not about her answering. A test that needs a reply
+   * without a subprocess supplies its own.
+   *
+   * Ignored when `claude` is set: the two are alternatives, and a service
+   * cannot have its turns run in two places at once.
+   */
+  readonly runner?: TurnRunner;
+  /**
+   * Options forwarded to every turn. `claudeBin` is supplied automatically and
+   * must not be overridden with the real binary — nothing in the suite may
+   * spawn it.
+   */
+  readonly turn?: Omit<TurnOptions, "claudeBin">;
 }
 
 /** Boot Syl on a free port with a real on-disk store, and pair one device. */
@@ -190,10 +254,24 @@ export async function startLiveService(
     certStatusPath: options.certStatusPath ?? join(directory ?? tmpdir(), "cert-status.json"),
   };
 
+  // When a fake `claude` is asked for it is a real executable replaying a real
+  // capture, and `runTurn` spawns, pipes and waits exactly as it does in anger
+  // — see `helpers/fake-claude.ts` for why that is worth a subprocess. What it
+  // must never do is find the real CLI: that costs money, needs a login, and is
+  // not deterministic. Without one, turns run in process and say nothing.
+  const claude: FakeClaude | null =
+    options.claude === undefined ? null : makeFakeClaude(options.claude);
+
   const apple = options.delivery?.apple;
   const warnings: string[] = [];
   const syl = await startSyl(config, {
     ...(options.clock === undefined ? {} : { clock: options.clock }),
+    ...(claude === null
+      ? { runner: options.runner ?? silentRunner }
+      : { turn: { ...options.turn, claudeBin: claude.bin } }),
+    // A fixed soul, rather than whichever `SOUL.md` happens to be checked out.
+    // The fake ignores it; pinning it keeps the argv a test asserts on stable.
+    soul: "You are Syl, under test.",
     delivery: {
       // A test never reaches the real Apple by omission. Credentials are
       // supplied only alongside somewhere local to send them.
@@ -284,12 +362,14 @@ export async function startLiveService(
     service,
     runtime,
     warnings,
+    claude,
     databasePath,
     directory,
     api,
     close: async (closeOptions = {}) => {
       await syl.close();
       database.close();
+      claude?.cleanup();
       if (directory !== null && closeOptions.keepDatabase !== true) {
         rmSync(directory, { recursive: true, force: true });
       }
