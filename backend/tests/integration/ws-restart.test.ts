@@ -81,7 +81,23 @@ async function join(
   return { client, connected: (await client.next()) as WsConnectedFrame };
 }
 
-/** Send one message and drain the two frames it produces. */
+/**
+ * The next **numbered** frame, skipping presence.
+ *
+ * This is a live service with a character attached, so `presence` arrives on its
+ * own schedule and lands wherever it lands. It is unnumbered and never replayed
+ * — it takes no part in anything this file is about — so a test that counted
+ * frames positionally would fail on Syl thinking at the wrong moment. It did,
+ * once, and only when run alongside other suites.
+ */
+async function nextNumbered(client: TestClient): Promise<{ type: string; seq: number }> {
+  for (;;) {
+    const frame = (await client.next()) as { type: string; seq: number };
+    if (frame.type !== "presence") return frame;
+  }
+}
+
+/** Send one message and drain the two numbered frames it produces. */
 async function say(client: TestClient, text: string, id: string): Promise<number> {
   client.send({
     type: "chat_message",
@@ -89,8 +105,8 @@ async function say(client: TestClient, text: string, id: string): Promise<number
     text,
     idempotencyKey: `ws-restart-${id}`,
   });
-  expect((await client.next()).type).toBe("delivery_confirmation");
-  const frame = (await client.next()) as WsServerChatMessage;
+  expect((await nextNumbered(client)).type).toBe("delivery_confirmation");
+  const frame = (await nextNumbered(client)) as unknown as WsServerChatMessage;
   expect(frame.type).toBe("chat_message");
   return frame.seq;
 }

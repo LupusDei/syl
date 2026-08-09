@@ -125,6 +125,10 @@ describe("the handshake", () => {
 
     expect(connected.serverEpoch).toEqual(expect.any(String));
     expect(connected.serverEpoch).not.toBe("");
+    // The accessor and the wire are the same fact. A caller that logged one while
+    // clients keyed on the other would make a restart untraceable in exactly the
+    // incident where the log is the only evidence.
+    expect(connected.serverEpoch).toBe(sockets.serverEpoch);
   });
 
   it("should give every connection to one run the same epoch", async () => {
