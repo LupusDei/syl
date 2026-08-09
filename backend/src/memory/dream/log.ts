@@ -193,7 +193,13 @@ export interface DreamDuplicateEdge {
   readonly sourceNode: string;
   readonly targetNode: string;
   readonly existingEdgeId: string;
-  /** `cold` is the signature of an existence check that skipped the cold partition. */
+  /**
+   * The tier of the edge that was already there. Three values, three different
+   * bugs: `cold` is an existence check that skipped the cold partition (the
+   * expected failure), `hot` is a check that is broken outright, and
+   * `suppressed` is categorically worse than either — reflection trying to
+   * resurrect a connection the Commander explicitly rejected.
+   */
   readonly existingTier: MemoryTier | null;
   readonly insertedEdgeId: string | null;
   readonly detectedAt: string;
