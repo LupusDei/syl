@@ -74,6 +74,21 @@ keeping them testable without spawning a process is worth the seam.
 
 - **Test first.** The project constitution (`constitution.md`) requires it, and
   the base layer is exactly where it pays.
+- **An acceptance test describes CORRECT behaviour, never current behaviour.**
+  If the behaviour is not built yet, the test stays **red** saying what should
+  happen, and goes in `tests/expected-failures.json` with a bead. Never soften
+  it into asserting what the code does today. We did exactly that and it caused
+  the worst defect in this project: `should leave the Commander talking to
+  himself: no assistant message ever arrives` sat green while Syl could not
+  reply to anyone. That is worse than no test — it locks in the defect, has to
+  be rewritten rather than deleted, and makes a green suite claim the story
+  works.
+  The gate is therefore **"failures == declared"**, not "zero failures"
+  (`npm run verify`). It is strict both ways: an undeclared failure is red, and
+  **a declared test that starts PASSING is also red**, so you must promote it
+  out of the file. A list that only grows is a list nobody trusts. Do not reach
+  for `it.fails` — it shows a green tick under the correct-behaviour name, and
+  it passes when the test fails for *any* reason, including a typo.
 - **Build fixtures from real captured CLI output, never from our own type
   definitions.** The point is to catch drift between our types and the actual
   wire format.
