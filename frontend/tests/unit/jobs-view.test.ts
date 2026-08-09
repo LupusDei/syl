@@ -200,16 +200,17 @@ describe("JobsView", () => {
     expect(screen.queryByRole("table")).toBeNull();
   });
 
-  it("should decode the shipped page without inventing a shape for it", async () => {
+  it("should render every job in the shipped page, by kind and by id", async () => {
     // A guard against this view drifting from the contract: the fixture is
-    // the same bytes the mock and the Swift suite use.
-    const page = fixture("http/jobs.page") as { data: { items: { kind: string }[] } };
+    // the same bytes the mock serves and the Swift suite decodes.
+    const page = fixture("http/jobs.page") as { data: { items: { kind: string; id: string }[] } };
     stubApi();
     renderJobs();
 
     await waitFor(() => expect(screen.getByRole("table", { name: /jobs/i })).toBeTruthy());
     for (const job of page.data.items) {
-      expect(screen.getAllByTitle(new RegExp(job.kind === "" ? "." : "syl:job:")).length).toBeGreaterThan(0);
+      const trigger = screen.getByRole("button", { name: job.kind.replace(/_/g, " ") });
+      expect(trigger.getAttribute("title")).toBe(job.id);
     }
   });
 });

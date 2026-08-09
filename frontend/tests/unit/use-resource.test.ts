@@ -113,6 +113,9 @@ describe("useResource", () => {
   });
 
   it("should ignore a result that arrives after unmount", async () => {
+    // A `setState` on an unmounted tree warns on the console; asserting that
+    // nothing was logged is the only observable proof the guard holds.
+    const complaints = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const gate = deferred<string>();
     const view = render(h(Probe, { load: () => gate.promise }));
     view.unmount();
@@ -121,12 +124,13 @@ describe("useResource", () => {
       gate.resolve("late");
       await gate.promise;
     });
-    // Nothing to assert on screen — the point is that resolving after unmount
-    // does not warn or throw, which a `setState` on a dead tree would.
-    expect(true).toBe(true);
+
+    expect(complaints).not.toHaveBeenCalled();
+    complaints.mockRestore();
   });
 
   it("should ignore a failure that arrives after unmount", async () => {
+    const complaints = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const gate = deferred<string>();
     const view = render(h(Probe, { load: () => gate.promise }));
     view.unmount();
@@ -135,6 +139,8 @@ describe("useResource", () => {
       gate.reject(malformedResponse(500, "late"));
       await gate.promise.catch(() => undefined);
     });
-    expect(true).toBe(true);
+
+    expect(complaints).not.toHaveBeenCalled();
+    complaints.mockRestore();
   });
 });
