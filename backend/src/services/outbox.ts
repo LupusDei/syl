@@ -12,7 +12,7 @@ import {
   loadQuietHours,
 } from "../config.js";
 import { deferPastQuietHours, type QuietHours } from "../harness/schedule.js";
-import { instant, systemClock, type Clock } from "./clock.js";
+import { instant, parseInstant, systemClock, type Clock } from "./clock.js";
 import { newId } from "./id.js";
 import { pageOf, resolvePage, type PageOptions } from "./paging.js";
 import type { Database } from "./sqlite.js";
@@ -119,7 +119,15 @@ export interface EnqueueDelivery {
    * rationed by being coupled to something already scarce.
    */
   readonly urgent?: boolean;
-  /** Override the computed release instant. Used by the recovery paths. */
+  /**
+   * Override the computed release instant. Used by the recovery paths.
+   *
+   * Nullish means "compute it" — never "no instant at all". A pending row with
+   * a null `next_attempt_at` is invisible to `due` and to `nextDueAt` forever:
+   * a dropped reminder in a table that looks perfectly healthy. The one state
+   * this class exists to make impossible must not be reachable by passing a
+   * field the type already permits.
+   */
   readonly notBefore?: string | null;
 }
 
@@ -194,6 +202,33 @@ export function backoffFor(attempts: number, jitter: number): number {
   return Math.round(base * (1 + JITTER_FRACTION * jitter));
 }
 
+/**
+ * How long to wait when the attempt could not be made at all.
+ *
+ * Derived from how long the row has been waiting rather than from a counter,
+ * because a blocked row must **not** spend its attempt budget: an install with
+ * no device paired for a week would otherwise arrive at the ceiling and be
+ * abandoned on the first genuine APNs hiccup after the phone finally
+ * registers.
+ *
+ * The same ladder as `backoffFor`, walked by elapsed time: 30s, then a minute,
+ * then five, up to an hour. Nothing here ever gives up — an environment that
+ * cannot send yet is a state to wait out, not a reason to drop a reminder —
+ * but it stops the loop retrying every thirty seconds for weeks.
+ */
+export function blockedWaitFor(ageMs: number, jitter: number): number {
+  let elapsed = 0;
+  let step = 0;
+  while (step < BACKOFF_MS.length - 1) {
+    const current = BACKOFF_MS[step] ?? 0;
+    if (elapsed + current > ageMs) break;
+    elapsed += current;
+    step += 1;
+  }
+  const base = BACKOFF_MS[step] ?? BACKOFF_MS[BACKOFF_MS.length - 1] ?? 60_000;
+  return Math.round(base * (1 + JITTER_FRACTION * jitter));
+}
+
 export interface OutboxOptions {
   readonly db: Database;
   readonly clock?: Clock;
@@ -260,10 +295,10 @@ export class Outbox {
     const now = this.#clock();
     const id = newId("delivery");
     const createdAt = instant(now);
-    const nextAttemptAt =
-      input.notBefore === undefined
-        ? this.releaseAt(now, input.urgent ?? false)
-        : input.notBefore;
+    // Nullish, not just absent. `due` and `nextDueAt` both require a non-null
+    // `next_attempt_at`, so writing one straight through would produce a
+    // pending row no query in the system can ever return again.
+    const nextAttemptAt = input.notBefore ?? this.releaseAt(now, input.urgent ?? false);
 
     this.#db
       .prepare(
@@ -287,6 +322,55 @@ export class Outbox {
     const delivery = this.get(id);
     if (delivery === null) throw new Error("delivery vanished during enqueue");
     return { delivery, created: true };
+  }
+
+  /**
+   * Fold more into a row that is still waiting for its window.
+   *
+   * A batch held by quiet hours is keyed on the instant it will be released,
+   * so every pass inside one night addresses the same row — and the runner
+   * wakes at least every sixty seconds, so a night is many passes. `enqueue`
+   * returns the existing row untouched, which is right for a retry and wrong
+   * for a batch that has grown: the reminders the later passes found would be
+   * marked delivered while being named by no row anybody will ever see.
+   *
+   * The predicate is the whole safety argument. A row that has been claimed,
+   * attempted, or whose release instant has arrived is **not** amendable: its
+   * words may already be on their way to Apple, and quietly changing them
+   * afterwards is the same silent drop by another route. The caller must then
+   * write its own row rather than assume it was covered.
+   *
+   * @returns the amended row, or `null` if it can no longer be amended.
+   */
+  amendHeld(
+    id: string,
+    input: {
+      readonly payload: DeliveryPayload;
+      readonly reminderId: string | null;
+      readonly coalescedReminderIds: readonly string[];
+      readonly scheduledFor: string | null;
+    },
+  ): Delivery | null {
+    const result = this.#db
+      .prepare(
+        `UPDATE deliveries
+            SET payload_json = ?, reminder_id = ?, coalesced_ids = ?, scheduled_for = ?
+          WHERE id = ?
+            AND state = 'pending'
+            AND attempts = 0
+            AND next_attempt_at IS NOT NULL
+            AND next_attempt_at > ?`,
+      )
+      .run(
+        JSON.stringify(input.payload),
+        input.reminderId,
+        JSON.stringify(input.coalescedReminderIds),
+        input.scheduledFor,
+        id,
+        instant(this.#clock()),
+      );
+
+    return Number(result.changes) === 0 ? null : this.get(id);
   }
 
   /** One row by id, or `null`. */
@@ -373,15 +457,53 @@ export class Outbox {
    * process that dies between here and the result would otherwise leave the
    * row `sending` with a null `next_attempt_at`, which no query would ever
    * return again — a silently dropped reminder in a table that looks healthy.
+   *
+   * @returns the claimed row, or `null` if the claim was lost. The
+   * `state IN ('pending','sending')` predicate is the compare-and-swap that
+   * makes the claim safe, and returning the row regardless of whether it fired
+   * would leave the caller unable to tell a won claim from a lost one — so a
+   * row another pass already delivered, or the device already acknowledged,
+   * would be pushed a second time.
    */
   markSending(id: string): Delivery | null {
-    this.#db
+    const result = this.#db
       .prepare(
         `UPDATE deliveries
             SET state = 'sending', attempts = attempts + 1, next_attempt_at = ?
           WHERE id = ? AND state IN ('pending', 'sending')`,
       )
       .run(instant(this.#clock() + SENDING_STALE_MS), id);
+
+    return Number(result.changes) === 0 ? null : this.get(id);
+  }
+
+  /**
+   * The attempt could not be made: no channel, no credentials, no device.
+   *
+   * Distinct from `recordFailure` on purpose. Nothing was sent and nothing
+   * refused us, so this must not spend the row's attempt budget — an install
+   * that sat unpaired for a week would otherwise be abandoned on the first
+   * genuine hiccup after the phone finally registers. It must also not leave
+   * the drain loop retrying every thirty seconds until then.
+   *
+   * So the row waits, with a backoff derived from its own age, and is **never**
+   * abandoned: an environment that cannot send yet is a state to wait out, not
+   * a reason to drop a reminder.
+   */
+  deferBlocked(id: string, error: string): Delivery | null {
+    const current = this.get(id);
+    if (current === null) return null;
+
+    const now = this.#clock();
+    const age = Math.max(0, now - (parseInstant(current.createdAt) ?? now));
+    const wait = blockedWaitFor(age, this.#jitter());
+
+    this.#db
+      .prepare(
+        `UPDATE deliveries SET state = 'pending', next_attempt_at = ?, last_error = ?
+          WHERE id = ? AND state IN ('pending', 'sending')`,
+      )
+      .run(instant(now + wait), error, id);
     return this.get(id);
   }
 

@@ -7,6 +7,7 @@ import {
   Outbox,
   SENDING_STALE_MS,
   backoffFor,
+  blockedWaitFor,
   type EnqueueDelivery,
 } from "../../src/services/outbox.js";
 import { PagingError } from "../../src/services/paging.js";
@@ -47,6 +48,28 @@ describe("backoffFor", () => {
 
   it("should add jitter, so a fleet of retries does not arrive together", () => {
     expect(backoffFor(1, 1)).toBeGreaterThan(backoffFor(1, 0));
+  });
+});
+
+describe("blockedWaitFor", () => {
+  it("should start at the first step and climb with the wait", () => {
+    expect(blockedWaitFor(0, 0)).toBe(BACKOFF_MS[0]);
+    expect(blockedWaitFor(BACKOFF_MS[0] ?? 0, 0)).toBe(BACKOFF_MS[1]);
+  });
+
+  it("should reach the ceiling and stay there, however long the block lasts", () => {
+    // A week with no device paired must not retry every thirty seconds, and
+    // must not escalate past an hour either.
+    expect(blockedWaitFor(7 * 86_400_000, 0)).toBe(BACKOFF_MS[BACKOFF_MS.length - 1]);
+  });
+
+  it("should never go backwards as the wait grows", () => {
+    let previous = 0;
+    for (let age = 0; age <= 4 * 3_600_000; age += 30_000) {
+      const wait = blockedWaitFor(age, 0);
+      expect(wait).toBeGreaterThanOrEqual(previous);
+      previous = wait;
+    }
   });
 });
 
@@ -103,6 +126,38 @@ describe("Outbox", () => {
       const ids = ["syl:reminder:a", "syl:reminder:b"];
       const { delivery } = outbox.enqueue(reminderDelivery({ coalescedReminderIds: ids }));
       expect(delivery.coalescedReminderIds).toEqual(ids);
+    });
+
+    it("should schedule a release for an explicitly null notBefore", () => {
+      // syl-jim. `notBefore` is typed `string | null`, and a null written
+      // straight through to `next_attempt_at` is a pending row that `due` and
+      // `nextDueAt` both filter out forever — a dropped reminder in a table
+      // that looks healthy. Nullish means "compute it", never "no instant".
+      const { delivery } = outbox.enqueue(reminderDelivery({ notBefore: null }));
+
+      expect(delivery.nextAttemptAt).toBe(new Date(now).toISOString());
+      expect(outbox.due(now)).toHaveLength(1);
+      expect(outbox.nextDueAt()).not.toBeNull();
+    });
+
+    it("should keep every enqueued row reachable by some query", () => {
+      // The invariant behind syl-jim, asserted over the whole surface rather
+      // than one field: nothing pending may be invisible to the drain loop.
+      const gated = new Outbox({ db: db.handle, clock: () => now, quietHours: QUIET });
+      gated.enqueue(reminderDelivery({ idempotencyKey: "k-absent" }));
+      gated.enqueue(reminderDelivery({ idempotencyKey: "k-null", notBefore: null }));
+      gated.enqueue(
+        reminderDelivery({
+          idempotencyKey: "k-later",
+          notBefore: new Date(now + 60_000).toISOString(),
+        }),
+      );
+
+      const pending = gated.list().items.filter((delivery) => delivery.state === "pending");
+      expect(pending).toHaveLength(3);
+      expect(pending.every((delivery) => delivery.nextAttemptAt !== null)).toBe(true);
+      // A year is longer than any release this system computes.
+      expect(gated.due(now + 365 * 86_400_000)).toHaveLength(3);
     });
   });
 
@@ -272,6 +327,143 @@ describe("Outbox", () => {
     it("should ignore an attempt against a row it does not have", () => {
       expect(outbox.recordFailure("syl:delivery:missing", { error: "x", retryable: true })).toBeNull();
       expect(outbox.markSending("syl:delivery:missing")).toBeNull();
+    });
+
+    it("should refuse a claim on a row that has already left the queue", () => {
+      // syl-eer. The `state IN ('pending','sending')` predicate is the
+      // compare-and-swap; returning the row regardless of whether it fired
+      // leaves the caller unable to tell a won claim from a lost one, and it
+      // pushes a second notification for a reminder already delivered.
+      const acked = outbox.enqueue(reminderDelivery({ idempotencyKey: "acked" })).delivery;
+      outbox.acknowledge(acked.id, { ackedAt: new Date(now).toISOString() });
+      expect(outbox.markSending(acked.id)).toBeNull();
+      expect(outbox.get(acked.id)?.attempts).toBe(0);
+
+      const sent = outbox.enqueue(reminderDelivery({ idempotencyKey: "sent" })).delivery;
+      outbox.markSending(sent.id);
+      outbox.recordAccepted(sent.id, {});
+      expect(outbox.markSending(sent.id)).toBeNull();
+
+      const refused = outbox.enqueue(reminderDelivery({ idempotencyKey: "refused" })).delivery;
+      outbox.markSending(refused.id);
+      outbox.recordFailure(refused.id, { error: "BadTopic", retryable: false });
+      expect(outbox.markSending(refused.id)).toBeNull();
+    });
+
+    it("should still let a claim through for a row mid-flight", () => {
+      // The reclaim path depends on it: a row left `sending` by a crash has to
+      // be claimable again or it is a silently dropped reminder.
+      const { delivery } = outbox.enqueue(reminderDelivery());
+      outbox.markSending(delivery.id);
+      expect(outbox.markSending(delivery.id)?.attempts).toBe(2);
+    });
+  });
+
+  describe("amendHeld", () => {
+    function heldBatch(): string {
+      const gated = new Outbox({ db: db.handle, clock: () => now, quietHours: QUIET });
+      return gated.enqueue(
+        reminderDelivery({
+          idempotencyKey: "reminder-batch:2026-08-10T13:00:00.000Z",
+          notBefore: "2026-08-10T13:00:00.000Z",
+          reminderId: "syl:reminder:a",
+        }),
+      ).delivery.id;
+    }
+
+    it("should fold more reminders into a row still waiting for its window", () => {
+      const id = heldBatch();
+      const amended = outbox.amendHeld(id, {
+        payload: { title: "Syl", body: "Two things came in overnight." },
+        reminderId: null,
+        coalescedReminderIds: ["syl:reminder:a", "syl:reminder:b"],
+        scheduledFor: "2026-08-10T03:30:00.000Z",
+      });
+
+      expect(amended?.coalescedReminderIds).toEqual(["syl:reminder:a", "syl:reminder:b"]);
+      expect(amended?.payload.body).toContain("Two things");
+      expect(amended?.reminderId).toBeNull();
+      expect(amended?.scheduledFor).toBe("2026-08-10T03:30:00.000Z");
+      // Untouched: it is the same notification, still waiting for the same
+      // instant, and it has still never been attempted.
+      expect(amended?.nextAttemptAt).toBe("2026-08-10T13:00:00.000Z");
+      expect(amended?.attempts).toBe(0);
+      expect(amended?.state).toBe("pending");
+    });
+
+    it("should refuse a row that has been claimed", () => {
+      // Its words may already be on their way to Apple. Rewriting them
+      // afterwards is a silent drop by another route.
+      const id = heldBatch();
+      outbox.markSending(id);
+      expect(outbox.amendHeld(id, amendment())).toBeNull();
+    });
+
+    it("should refuse a row whose release instant has arrived", () => {
+      const id = heldBatch();
+      now = Date.UTC(2026, 7, 10, 13, 0, 0, 0);
+      expect(outbox.amendHeld(id, amendment())).toBeNull();
+    });
+
+    it("should refuse a row that has reached a terminal state", () => {
+      const id = heldBatch();
+      outbox.acknowledge(id, { ackedAt: new Date(now).toISOString() });
+      expect(outbox.amendHeld(id, amendment())).toBeNull();
+      expect(outbox.amendHeld("syl:delivery:missing", amendment())).toBeNull();
+    });
+
+    function amendment(): Parameters<Outbox["amendHeld"]>[1] {
+      return {
+        payload: { title: "Syl", body: "Two things came in overnight." },
+        reminderId: null,
+        coalescedReminderIds: ["syl:reminder:a", "syl:reminder:b"],
+        scheduledFor: null,
+      };
+    }
+  });
+
+  describe("deferBlocked", () => {
+    it("should hold the row without spending an attempt", () => {
+      const { delivery } = outbox.enqueue(reminderDelivery());
+      const held = outbox.deferBlocked(delivery.id, "No device is registered to receive this.");
+
+      expect(held?.state).toBe("pending");
+      expect(held?.attempts).toBe(0);
+      expect(held?.lastError).toContain("No device");
+      expect(held?.nextAttemptAt).toBe(new Date(now + (BACKOFF_MS[0] ?? 0)).toISOString());
+    });
+
+    it("should stop spinning, and never give up, across a week with no device", () => {
+      // syl-eer, second half. The drain loop wakes at most every 60s. A blocked
+      // row used to come due every 30 seconds for as long as the block lasted —
+      // 20,000 attempts a week — because nothing counted against it.
+      const { delivery } = outbox.enqueue(reminderDelivery());
+
+      let woken = 0;
+      const started = now;
+      for (; now <= started + 7 * 86_400_000; now += 30_000) {
+        if (outbox.due(now).length === 0) continue;
+        woken += 1;
+        outbox.deferBlocked(delivery.id, "No device is registered to receive this.");
+      }
+
+      // An hour's ceiling over a week: ~170 wake-ups, not 20,000.
+      expect(woken).toBeLessThan(200);
+      // And still here, still pending, still holding the reminder. An
+      // environment that cannot send yet is a state to wait out.
+      const final = outbox.get(delivery.id);
+      expect(final?.state).toBe("pending");
+      expect(final?.attempts).toBe(0);
+      expect(outbox.list({ unacknowledged: true }).items).toHaveLength(1);
+    });
+
+    it("should leave a row that has already been acknowledged alone", () => {
+      const { delivery } = outbox.enqueue(reminderDelivery());
+      outbox.acknowledge(delivery.id, { ackedAt: new Date(now).toISOString() });
+      outbox.deferBlocked(delivery.id, "No device is registered to receive this.");
+
+      expect(outbox.get(delivery.id)?.state).toBe("acknowledged");
+      expect(outbox.get(delivery.id)?.nextAttemptAt).toBeNull();
     });
   });
 

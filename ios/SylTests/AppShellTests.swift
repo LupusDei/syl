@@ -258,6 +258,84 @@ final class AppShellTests: XCTestCase {
         XCTAssertEqual(work.engagement, .delivered)
     }
 
+    // MARK: - Recovering a delivery push never showed
+
+    func testShouldRecogniseHeldNotificationsByPayloadRatherThanByIdentifier() {
+        // A push carries the identifier APNs assigned it, so the only thing tying a
+        // banner in Notification Center back to an outbox row is the `deliveryId` in
+        // its payload. Matching on the identifier would find nothing and the reconcile
+        // would show him a second copy of everything he can already see.
+        let held = Self.request(
+            identifier: "8A5B1C22-APNS-ASSIGNED",
+            userInfo: ["deliveryId": "syl:delivery:0198F2C3-0001-7000-8000-00000000D001"]
+        )
+        let unrelated = Self.request(identifier: "syl.something.else", userInfo: [:])
+
+        let found = NotificationService.deliveryIds(in: [held, unrelated])
+
+        // Canonical-cased: the contract permits either hex case and the service emits
+        // lower, so two ids for one resource must not compare unequal as bare strings.
+        XCTAssertEqual(found, ["syl:delivery:0198f2c3-0001-7000-8000-00000000d001"])
+    }
+
+    func testShouldCarryTheIdsARecoveredNotificationNeedsToStayActionable() {
+        // A recovered reminder he cannot snooze or complete is half a recovery, and
+        // both actions are addressed by these two ids.
+        let info = NotificationService.userInfo(for: Self.delivery(reminderId: "syl:reminder:1"))
+
+        XCTAssertEqual(info["deliveryId"], "syl:delivery:1")
+        XCTAssertEqual(info["reminderId"], "syl:reminder:1")
+        XCTAssertEqual(NotificationPayload(userInfo: info).reminderId, "syl:reminder:1")
+    }
+
+    func testShouldOmitTheReminderIdWhenADeliveryStandsForNoSingleReminder() {
+        // A coalesced digest stands for several reminders and names none of them.
+        let info = NotificationService.userInfo(for: Self.delivery(reminderId: nil))
+
+        XCTAssertNil(info["reminderId"])
+        XCTAssertEqual(info["deliveryId"], "syl:delivery:1")
+    }
+
+    func testShouldPreserveTheInterruptionLevelWhenRecoveringADelivery() {
+        // A time-sensitive reminder that comes back as passive is a reminder that
+        // waits behind Focus for the rest of the day.
+        XCTAssertEqual(NotificationService.level(of: .timeSensitive), .timeSensitive)
+        XCTAssertEqual(NotificationService.level(of: .active), .active)
+        XCTAssertEqual(NotificationService.level(of: .passive), .passive)
+    }
+
+    private static func request(
+        identifier: String,
+        userInfo: [String: String]
+    ) -> UNNotificationRequest {
+        let content = UNMutableNotificationContent()
+        content.userInfo = userInfo
+        return UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+    }
+
+    private static func delivery(reminderId: SylID?) -> Delivery {
+        Delivery(
+            id: "syl:delivery:1",
+            channel: .apns,
+            messageClass: "reminder_delivery",
+            reminderId: reminderId,
+            payload: DeliveryPayload(title: "Syl", body: "Take the medication."),
+            idempotencyKey: "k",
+            state: .delivered,
+            attempts: 1,
+            nextAttemptAt: nil,
+            deliveredAt: nil,
+            ackedAt: nil,
+            engagement: nil,
+            late: false,
+            scheduledFor: nil,
+            coalescedReminderIds: [],
+            apnsUniqueId: nil,
+            lastError: nil,
+            createdAt: Date(timeIntervalSince1970: 1_786_000_000)
+        )
+    }
+
     @MainActor
     func testShouldOnlyOpenTheAppForTheViewAction() throws {
         // A snooze that had to launch the app to take effect would be a snooze he could

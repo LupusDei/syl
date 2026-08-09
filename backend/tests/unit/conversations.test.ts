@@ -5,6 +5,8 @@ import type {
   DeliveryConfirmation,
   MessagePage,
 } from "@syl/shared";
+import { randomUUID } from "node:crypto";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp, type AppDependencies } from "../../src/index.js";
@@ -35,25 +37,32 @@ afterEach(async () => {
   db.close();
 });
 
+/**
+ * Every write carries an `Idempotency-Key`, because the contract requires one
+ * and the service now enforces it. A fresh key per call unless the test names
+ * one — a test that wants to model a retry has to say so, which is the point.
+ */
 async function api(
   path: string,
-  init: RequestInit & { readonly anonymous?: boolean } = {},
+  init: RequestInit & { readonly anonymous?: boolean; readonly idempotencyKey?: string } = {},
 ): Promise<Response> {
-  const { anonymous, ...rest } = init;
+  const { anonymous, idempotencyKey, ...rest } = init;
   return fetch(`${running.baseUrl}/api/v1${path}`, {
     ...rest,
     headers: {
       "content-type": "application/json",
       ...(anonymous === true ? {} : { authorization: `Bearer ${token}` }),
+      "Idempotency-Key": idempotencyKey ?? randomUUID(),
       ...(rest.headers ?? {}),
     },
   });
 }
 
-async function send(text: string, clientId: string): Promise<Response> {
+async function send(text: string, clientId: string, idempotencyKey?: string): Promise<Response> {
   return api(`/conversations/${INTERACTIVE_CONVERSATION_ID}/messages`, {
     method: "POST",
     body: JSON.stringify({ clientId, text }),
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
   });
 }
 
@@ -147,14 +156,64 @@ describe("POST /api/v1/conversations/{id}/messages", () => {
   });
 
   it("should answer a retried send with the original message, not a second one", async () => {
-    // The mobile client keeps a local outbox and retries by design.
-    const first = (await (await send("hello", "c-1")).json()) as Envelope<DeliveryConfirmation>;
-    const retry = await send("hello", "c-1");
+    // The mobile client keeps a local outbox and retries by design, carrying
+    // the key it stored with the queued intent — never a fresh one.
+    const first = (await (
+      await send("hello", "c-1", "outbox-key-0001")
+    ).json()) as Envelope<DeliveryConfirmation>;
+    const retry = await send("hello", "c-1", "outbox-key-0001");
     const retryBody = (await retry.json()) as Envelope<DeliveryConfirmation>;
 
-    expect(retry.status).toBe(200);
+    // `syl-9e0`: this used to answer 200, and 201 is the only success status
+    // the contract documents for a send. A client that got 201 the first time
+    // and 200 the second has to reconcile two answers to one operation, which
+    // is the ambiguity idempotency exists to remove. The replay is announced in
+    // a header instead, where it costs the client nothing to ignore.
+    expect(retry.status).toBe(201);
     expect(retry.headers.get("idempotency-replayed")).toBe("true");
     expect(retryBody.data?.serverId).toBe(first.data?.serverId);
+  });
+
+  it("should refuse a key reused for a different message", async () => {
+    // `syl-ux1`: this route did not go through the ledger at all, so it could
+    // not answer `IDEMPOTENCY_KEY_REUSE` — and `MessageStore` deduping on
+    // `clientId` masked it for every case where the client behaved.
+    await send("hello", "c-1", "outbox-key-0002");
+    const reused = await send("something else entirely", "c-2", "outbox-key-0002");
+    const body = (await reused.json()) as Envelope<never>;
+
+    expect(reused.status).toBe(409);
+    expect(body.error?.code).toBe("IDEMPOTENCY_KEY_REUSE");
+  });
+
+  it("should still recognise a repeated clientId under a key it has never seen", async () => {
+    // The two dedupe mechanisms are not redundant. A reinstall loses the
+    // outbox and its keys; `clientId` survives in the message the app already
+    // rendered. Landing a second copy of his message because the ledger had
+    // amnesia would be the visible failure.
+    const first = (await (
+      await send("hello", "c-1", "outbox-key-0003")
+    ).json()) as Envelope<DeliveryConfirmation>;
+    const again = await send("hello", "c-1", "a-completely-different-key");
+    const againBody = (await again.json()) as Envelope<DeliveryConfirmation>;
+
+    expect(againBody.data?.serverId).toBe(first.data?.serverId);
+    expect(again.headers.get("idempotency-replayed")).toBe("true");
+  });
+
+  it("should refuse a send with no Idempotency-Key at all", async () => {
+    const response = await fetch(
+      `${running.baseUrl}/api/v1/conversations/${INTERACTIVE_CONVERSATION_ID}/messages`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ clientId: "c-1", text: "hello" }),
+      },
+    );
+    const body = (await response.json()) as Envelope<never>;
+
+    expect(response.status).toBe(400);
+    expect(body.error?.code).toBe("IDEMPOTENCY_KEY_REQUIRED");
   });
 
   it("should not set the replayed header on a first send", async () => {

@@ -188,13 +188,22 @@ must not gain any.
   abandons only what can never succeed. An expired token is **not** in that category —
   the intent is fine, the token is not, and discarding his message because a token
   expired would be the worst possible response.
-- **`Idempotency-Key` is in the contract for every write, but only message sends
-  deduplicate on it today** (`syl-1mz`). So the outbox tracks which intents are safe to
-  replay blind. A snooze is not: a second one defers by another fifteen minutes, and a
-  reminder arriving half an hour late is the quiet kind of wrong this project cares
-  most about. After a failure that *may* have landed — a timeout, a dropped
-  connection, a 5xx — an unsafe intent is **parked**: not retried, not dropped, and
-  visible. A failure where nothing was ever sent is still retried normally.
+- **`Idempotency-Key` is honoured by every implemented write** (`syl-ux1`). It was in
+  the contract long before it was true — for a while only message sends deduplicated —
+  so the outbox tracks which intents are safe to replay blind, and a snooze was not: a
+  second one defers by another fifteen minutes, and a reminder arriving half an hour
+  late is the quiet kind of wrong this project cares most about. That is fixed, and
+  every kind is now replayable. The **parking** machinery stays: after a failure that
+  *may* have landed, an intent declared unsafe is neither retried nor dropped but held
+  visibly. Nothing reaches it today; it is the honest response if a future write
+  forgets the ledger.
+- **The delivery guarantee has a floor on the device** (`syl-u9e`). `deliveredAt` only
+  means APNs accepted the request, and while a phone is offline Apple keeps just the
+  most recent notification per app — so a night of reminders arrives as one. On every
+  foreground `DeliveryReconciler` asks `GET /deliveries?unacknowledged=true`, re-shows
+  anything push never delivered, and only then acknowledges it. It refuses to
+  acknowledge a row the server is still sending, and refuses to acknowledge anything it
+  could not actually show.
 - **Every id column is `COLLATE NOCASE`.** The contract's `Id` pattern permits either
   hex case; comparing bare strings would produce a duplicated row rather than an error.
   Outside SQLite, use `SylIDs.areEqual`.

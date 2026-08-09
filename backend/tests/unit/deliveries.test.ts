@@ -124,6 +124,91 @@ describe("GET /api/v1/deliveries", () => {
     expect((await api("/deliveries?unacknowledged=perhaps")).status).toBe(400);
   });
 
+  /**
+   * `syl-u9e`. This filter is the server half of the delivery guarantee, and until
+   * now it had no caller at all — `SylAPI.deliveries(unacknowledged:)` was declared
+   * in SylKit and invoked by nothing. The route was written for a reconcile that
+   * did not exist, which is why nothing noticed that the row it was meant to
+   * surface is invisible to every other query in the system.
+   */
+  describe("the rows the device still owes an answer for", () => {
+    it("should still list a delivery APNs accepted but nobody acknowledged", async () => {
+      // The overnight case. Apple took the request — `recordAccepted` sets
+      // `delivered` and clears `next_attempt_at`, so `due()` will never return it
+      // again — and while the phone was off Apple kept only the most recent
+      // notification. This query is the only thing left that can find it.
+      const accepted = enqueue();
+      deps.outbox.markSending(accepted.id);
+      deps.outbox.recordAccepted(accepted.id, { apnsUniqueId: "apns-1" });
+
+      expect(deps.outbox.due(Date.parse("2099-01-01T00:00:00.000Z"))).toHaveLength(0);
+
+      const body = (await (
+        await api("/deliveries?unacknowledged=true")
+      ).json()) as Envelope<DeliveryPage>;
+
+      expect(body.data?.items.map((item) => item.id)).toEqual([accepted.id]);
+      expect(body.data?.items[0]?.state).toBe("delivered");
+      expect(body.data?.items[0]?.deliveredAt).not.toBeNull();
+      expect(body.data?.items[0]?.ackedAt).toBeNull();
+    });
+
+    it("should stop listing it once the device answers", async () => {
+      // The loop closing. Nothing else in the system moves this row.
+      const accepted = enqueue();
+      deps.outbox.markSending(accepted.id);
+      deps.outbox.recordAccepted(accepted.id);
+
+      const acked = await api(`/deliveries/${encodeURIComponent(accepted.id)}/ack`, {
+        method: "POST",
+        body: JSON.stringify({ ackedAt: "2026-08-09T09:15:00.000Z", engagement: "delivered" }),
+      });
+      expect(acked.status).toBe(200);
+
+      const body = (await (
+        await api("/deliveries?unacknowledged=true")
+      ).json()) as Envelope<DeliveryPage>;
+      expect(body.data?.items).toHaveLength(0);
+    });
+
+    it("should list rows push could not carry at all, not only the accepted ones", async () => {
+      // `failed` and `abandoned` also have a null `next_attempt_at`, so they are
+      // equally invisible to the drain loop and equally the device's problem.
+      const failed = enqueue();
+      deps.outbox.markSending(failed.id);
+      deps.outbox.recordFailure(failed.id, { error: "BadDeviceToken", retryable: false });
+
+      const body = (await (
+        await api("/deliveries?unacknowledged=true")
+      ).json()) as Envelope<DeliveryPage>;
+
+      expect(body.data?.items.map((item) => item.state)).toEqual(["failed"]);
+    });
+
+    it("should answer a repeated acknowledgement with the first instant, not the latest", async () => {
+      // The reconcile and a tap can both answer for one delivery, and they carry the
+      // same derived key by design. The first instant is the one that is true.
+      const accepted = enqueue();
+      deps.outbox.markSending(accepted.id);
+      deps.outbox.recordAccepted(accepted.id);
+      const path = `/deliveries/${encodeURIComponent(accepted.id)}/ack`;
+      const body = JSON.stringify({ ackedAt: "2026-08-09T09:15:00.000Z" });
+
+      const first = (await (
+        await api(path, { method: "POST", body, idempotencyKey: `ack-${accepted.id}` })
+      ).json()) as Envelope<Delivery>;
+      const replay = await api(path, {
+        method: "POST",
+        body,
+        idempotencyKey: `ack-${accepted.id}`,
+      });
+      const replayBody = (await replay.json()) as Envelope<Delivery>;
+
+      expect(replay.headers.get("idempotency-replayed")).toBe("true");
+      expect(replayBody.data?.ackedAt).toBe(first.data?.ackedAt);
+    });
+  });
+
   it("should refuse a cursor it did not issue", async () => {
     expect((await api("/deliveries?cursor=nope")).status).toBe(400);
   });

@@ -196,8 +196,12 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // route added later cannot land outside it by forgetting the prefix.
   const api = Router();
   api.use(createHealthRouter(probes === undefined ? { config } : { config, probes }));
-  api.use(createAuthRouter({ keys, authenticate }));
-  api.use(createConversationRouter({ messages, authenticate }));
+  // Every write router takes `idempotency`. `syl-ux1` — `POST /auth/pair` and
+  // `POST /conversations/{id}/messages` were the two that did not, and a lost
+  // response to the first consumed the pairing code and left the device
+  // permanently unpairable.
+  api.use(createAuthRouter({ keys, idempotency, authenticate }));
+  api.use(createConversationRouter({ messages, idempotency, authenticate }));
   api.use(createDeviceRouter({ devices, idempotency, authenticate }));
   api.use(createDeliveryRouter({ outbox, reminders, idempotency, authenticate }));
   api.use(createReminderRouter({ reminders, idempotency, authenticate }));

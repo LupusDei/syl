@@ -11,7 +11,8 @@ import type { ApnsSender } from "../../src/jobs/push-outbox.js";
 import type { ApnsResult } from "../../src/services/apns-service.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import { DeviceTokenService } from "../../src/services/device-token-service.js";
-import { JobStore } from "../../src/services/job-store.js";
+import { JobRunner } from "../../src/services/job-runner.js";
+import { BREAKER_COOLDOWN_MS, BREAKER_THRESHOLD, JobStore } from "../../src/services/job-store.js";
 import { Outbox } from "../../src/services/outbox.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
 import { testDatabase } from "../helpers/service.js";
@@ -194,6 +195,252 @@ describe("createReminderDeliveryHandler", () => {
   it("should schedule its own next wake", async () => {
     const result = await run(scriptedApns());
     expect(result.nextRunAt).toBe(new Date(now + IDLE_POLL_MS).toISOString());
+  });
+});
+
+describe("delivery across a run of failures", () => {
+  let db: SylDatabase;
+  let now: number;
+  let reminders: ReminderService;
+  let outbox: Outbox;
+  let devices: DeviceTokenService;
+  let jobs: JobStore;
+
+  beforeEach(() => {
+    db = testDatabase();
+    now = NOW;
+    const clock = (): number => now;
+    reminders = new ReminderService({ db: db.handle, clock });
+    outbox = new Outbox({ db: db.handle, clock });
+    devices = new DeviceTokenService({ db: db.handle, clock });
+    jobs = new JobStore({ db: db.handle, clock });
+    devices.register({
+      token: TOKEN,
+      environment: "production",
+      platform: "ios",
+      name: "iPhone",
+      appVersion: "1",
+      osVersion: "26.1",
+    });
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  /** The real handler, behind a fault that clears after `faults` passes. */
+  function runnerThatFailsFirst(faults: number, apns: ApnsSender | null): JobRunner {
+    let left = faults;
+    const real = createReminderDeliveryHandler({ reminders, outbox, devices, apns });
+    return new JobRunner({
+      store: jobs,
+      handlers: new Map([
+        [
+          "reminder_delivery",
+          async (context) => {
+            if (left > 0) {
+              left -= 1;
+              throw new Error("APNs connection reset");
+            }
+            return real(context);
+          },
+        ],
+      ]),
+      clock: () => now,
+      timers: { set: () => null, clear: () => undefined },
+      onError: () => undefined,
+    });
+  }
+
+  it("should keep delivering after a transient fault opened the breaker", async () => {
+    // syl-6z2. Any throw out of the handler counts: an APNs socket reset,
+    // SQLITE_BUSY, a bad stored rrule. Five of them used to end reminder
+    // delivery permanently and silently, across restarts, because the only
+    // call that could close the breaker was reachable only through the query
+    // that excluded it.
+    defineReminderDeliveryJob(jobs, new Date(now).toISOString());
+    const apns = scriptedApns();
+    const runner = runnerThatFailsFirst(BREAKER_THRESHOLD, apns);
+
+    await runner.start();
+    for (let i = 0; i < BREAKER_THRESHOLD; i += 1) {
+      now += 60_000;
+      await runner.tick();
+    }
+    expect(jobs.list().items[0]?.circuitBreaker.state).toBe("open");
+
+    // The fault is over, and a reminder comes due.
+    const reminder = reminders.create({
+      text: "Take the medication.",
+      wallTime: "16:00",
+      tz: CHICAGO,
+      date: "2026-08-09",
+    });
+    now = Date.parse(reminder.nextFireAt) + 1_000;
+    for (let i = 0; i < 60; i += 1) {
+      now += 60_000;
+      await runner.tick();
+    }
+
+    expect(apns.sent).toBe(1);
+    expect(outbox.list().items).toHaveLength(1);
+    expect(reminders.get(reminder.id)?.deliveryState).toBe("delivered");
+    expect(jobs.list().items[0]?.circuitBreaker.state).toBe("closed");
+  });
+
+  it("should recover within the cooldown, not within a whole night", async () => {
+    // The bound matters as much as the recovery: a reminder held behind an
+    // open breaker is late by at most the cooldown, and says so.
+    defineReminderDeliveryJob(jobs, new Date(now).toISOString());
+    const runner = runnerThatFailsFirst(BREAKER_THRESHOLD, scriptedApns());
+
+    await runner.start();
+    for (let i = 0; i < BREAKER_THRESHOLD; i += 1) {
+      now += 60_000;
+      await runner.tick();
+    }
+
+    const opened = now;
+    let closedAt: number | null = null;
+    for (; now <= opened + 2 * BREAKER_COOLDOWN_MS && closedAt === null; now += 60_000) {
+      await runner.tick();
+      if (jobs.list().items[0]?.circuitBreaker.state === "closed") closedAt = now;
+    }
+
+    expect(closedAt).not.toBeNull();
+    expect((closedAt ?? Infinity) - opened).toBeLessThanOrEqual(BREAKER_COOLDOWN_MS + 60_000);
+  });
+
+  it("should still be trying a day after a fault that never clears", async () => {
+    // A permanent fault must not become a permanent silence. The breaker may
+    // slow the retry down; it may not end it.
+    defineReminderDeliveryJob(jobs, new Date(now).toISOString());
+    const runner = runnerThatFailsFirst(Number.MAX_SAFE_INTEGER, null);
+
+    await runner.start();
+    const started = now;
+    let runs = 0;
+    for (; now <= started + 86_400_000; now += 60_000) {
+      const tick = await runner.tick();
+      runs += tick.ran.length;
+    }
+
+    expect(runs).toBeGreaterThan(100);
+    // And the moment it clears, the queue drains. Nothing was lost meanwhile.
+    const reminder = reminders.create({
+      text: "Take the medication.",
+      wallTime: "16:00",
+      tz: CHICAGO,
+      date: "2026-08-10",
+    });
+    now = Date.parse(reminder.nextFireAt) + 1_000;
+
+    const healthy = new JobRunner({
+      store: jobs,
+      handlers: new Map([
+        ["reminder_delivery", createReminderDeliveryHandler({ reminders, outbox, devices, apns: scriptedApns() })],
+      ]),
+      clock: () => now,
+      timers: { set: () => null, clear: () => undefined },
+      onError: () => undefined,
+    });
+    for (let i = 0; i < 10; i += 1) {
+      now += 60_000;
+      await healthy.tick();
+    }
+
+    expect(reminders.get(reminder.id)?.deliveryState).toBe("delivered");
+  });
+});
+
+describe("a whole night, driven by the runner", () => {
+  let db: SylDatabase;
+  let now: number;
+  let reminders: ReminderService;
+  let outbox: Outbox;
+  let devices: DeviceTokenService;
+  let jobs: JobStore;
+
+  /** 22:00 Chicago on the 8th: the window closes. */
+  const NIGHT_STARTS = Date.UTC(2026, 7, 9, 3, 0, 0, 0);
+  /** 09:00 Chicago on the 9th: an hour after it lifts. */
+  const NEXT_MORNING = Date.UTC(2026, 7, 9, 14, 0, 0, 0);
+
+  beforeEach(() => {
+    db = testDatabase();
+    now = NIGHT_STARTS;
+    const clock = (): number => now;
+    reminders = new ReminderService({ db: db.handle, clock });
+    outbox = new Outbox({
+      db: db.handle,
+      clock,
+      quietHours: { quiet: { start: "22:00", end: "08:00" }, tz: CHICAGO },
+      jitter: () => 0,
+    });
+    devices = new DeviceTokenService({ db: db.handle, clock });
+    jobs = new JobStore({ db: db.handle, clock });
+    devices.register({
+      token: TOKEN,
+      environment: "production",
+      platform: "ios",
+      name: "iPhone",
+      appVersion: "1",
+      osVersion: "26.1",
+    });
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("should turn a night of reminders into one notification at 08:00", async () => {
+    // syl-yvi and syl-2il end to end, through the real runner rather than one
+    // hand-called pass. The runner wakes at least every sixty seconds, so this
+    // is roughly 660 passes — the shape under which the per-pass digest both
+    // burst and dropped, and which nothing in the suite ran.
+    for (const [text, wallTime] of [
+      ["The parcel is out for delivery.", "22:30"],
+      ["Priya replied.", "23:30"],
+      ["Rent cleared.", "01:30"],
+      ["The build went green.", "05:45"],
+    ] as const) {
+      reminders.create({
+        text,
+        wallTime,
+        tz: CHICAGO,
+        date: wallTime === "22:30" || wallTime === "23:30" ? "2026-08-08" : "2026-08-09",
+      });
+    }
+
+    defineReminderDeliveryJob(jobs, new Date(now).toISOString());
+    const apns = scriptedApns();
+    const runner = new JobRunner({
+      store: jobs,
+      handlers: new Map([
+        ["reminder_delivery", createReminderDeliveryHandler({ reminders, outbox, devices, apns })],
+      ]),
+      clock: () => now,
+      timers: { set: () => null, clear: () => undefined },
+      onError: () => undefined,
+    });
+
+    await runner.start();
+    for (; now <= NEXT_MORNING; now += 60_000) await runner.tick();
+
+    // One notification, not four in one second, and not two of them lost.
+    expect(apns.sent).toBe(1);
+    const rows = outbox.list().items;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.payload.body).toContain("Four things came in overnight");
+    expect(rows[0]?.coalescedReminderIds).toHaveLength(4);
+    expect(rows[0]?.state).toBe("delivered");
+
+    // And every reminder the night marked delivered is named by that row.
+    const named = new Set(rows[0]?.coalescedReminderIds ?? []);
+    for (const reminder of reminders.list().items) {
+      expect(reminder.deliveryState).toBe("delivered");
+      expect(named.has(reminder.id)).toBe(true);
+    }
   });
 });
 

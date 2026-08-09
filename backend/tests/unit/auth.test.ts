@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { ApiError, Principal, TokenGrant } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -30,12 +32,25 @@ interface Envelope<T> {
   readonly error?: ApiError;
 }
 
-async function post(path: string, body: unknown, token?: string): Promise<Response> {
+/**
+ * A fresh `Idempotency-Key` per call unless the test names one. Pairing is a
+ * write and the contract requires the header on every write; a test that wants
+ * to model a lost response has to pass the same key twice, deliberately.
+ */
+async function post(
+  path: string,
+  body: unknown,
+  options: { readonly token?: string; readonly idempotencyKey?: string | null } = {},
+): Promise<Response> {
   return fetch(`${running.baseUrl}/api/v1${path}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+      ...(options.token === undefined ? {} : { authorization: `Bearer ${options.token}` }),
+      // `null` means "send none", which is its own test case.
+      ...(options.idempotencyKey === null
+        ? {}
+        : { "Idempotency-Key": options.idempotencyKey ?? randomUUID() }),
     },
     body: JSON.stringify(body),
   });
@@ -138,6 +153,117 @@ describe("POST /api/v1/auth/pair", () => {
     });
 
     expect(response.status).toBe(400);
+  });
+
+  /**
+   * `syl-ux1`. The pairing code is consumed on use and there is no endpoint to
+   * reissue one, so a lost response used to leave the device permanently
+   * unpairable — the service had to be restarted to print a new code. The one
+   * write with no recovery path was the one with no protection.
+   */
+  describe("under a lost response", () => {
+    it("should replay the grant rather than burning the code", async () => {
+      const body = { pairingCode: keys.issuePairingCode().code, deviceName: "Commander's iPhone" };
+      const key = "pair-retry-0001";
+
+      const first = await post("/auth/pair", body, { idempotencyKey: key });
+      const firstBody = (await first.json()) as Envelope<TokenGrant>;
+      expect(first.status).toBe(200);
+
+      // The response never arrived. The client retries with the key it stored.
+      const retry = await post("/auth/pair", body, { idempotencyKey: key });
+      const retryBody = (await retry.json()) as Envelope<TokenGrant>;
+
+      expect(retry.status).toBe(200);
+      expect(retry.headers.get("idempotency-replayed")).toBe("true");
+      // The *same* token, not a second one. Re-minting would leave two live
+      // credentials for one pairing and no way to tell which the device kept.
+      expect(retryBody.data?.token).toBe(firstBody.data?.token);
+    });
+
+    it("should mint exactly one key for a replayed pairing", async () => {
+      const body = { pairingCode: keys.issuePairingCode().code, deviceName: "Commander's iPhone" };
+      await post("/auth/pair", body, { idempotencyKey: "pair-retry-0002" });
+      await post("/auth/pair", body, { idempotencyKey: "pair-retry-0002" });
+
+      expect(keys.list().filter((key) => key.revokedAt === null)).toHaveLength(1);
+    });
+
+    it("should let a corrected retry through rather than remembering the refusal", async () => {
+      // Only successes are recorded. He mistypes the code once; the same key
+      // must not fail forever after he types it correctly.
+      const code = keys.issuePairingCode().code;
+      const key = "pair-retry-0003";
+
+      const wrong = await post(
+        "/auth/pair",
+        { pairingCode: "0000-0000", deviceName: "Commander's iPhone" },
+        { idempotencyKey: key },
+      );
+      expect(wrong.status).toBe(401);
+
+      const corrected = await post(
+        "/auth/pair",
+        { pairingCode: code, deviceName: "Commander's iPhone" },
+        { idempotencyKey: key },
+      );
+      expect(corrected.status).toBe(200);
+    });
+
+    it("should refuse one key used for two different pairings", async () => {
+      const key = "pair-retry-0004";
+      await post(
+        "/auth/pair",
+        { pairingCode: keys.issuePairingCode().code, deviceName: "Commander's iPhone" },
+        { idempotencyKey: key },
+      );
+
+      const other = await post(
+        "/auth/pair",
+        { pairingCode: keys.issuePairingCode().code, deviceName: "Somebody else's iPad" },
+        { idempotencyKey: key },
+      );
+      const body = (await other.json()) as Envelope<never>;
+
+      expect(other.status).toBe(409);
+      expect(body.error?.code).toBe("IDEMPOTENCY_KEY_REUSE");
+    });
+
+    it("should not hand the grant to a caller holding only the key", async () => {
+      // The one unauthenticated write, so the replay rule has to be precise: a
+      // replay is matched on key *and* fingerprint, and the fingerprint covers the
+      // body, which carries the pairing code. A stolen key alone must buy nothing.
+      const key = "pair-retry-0005";
+      const first = await post(
+        "/auth/pair",
+        { pairingCode: keys.issuePairingCode().code, deviceName: "Commander's iPhone" },
+        { idempotencyKey: key },
+      );
+      const granted = (await first.json()) as Envelope<TokenGrant>;
+
+      const stolen = await post(
+        "/auth/pair",
+        { pairingCode: "0000-0000", deviceName: "Commander's iPhone" },
+        { idempotencyKey: key },
+      );
+      const body = (await stolen.json()) as Envelope<TokenGrant>;
+
+      expect(body.error?.code).toBe("IDEMPOTENCY_KEY_REUSE");
+      expect(body.data).toBeUndefined();
+      expect(JSON.stringify(body)).not.toContain(granted.data?.token ?? "<none>");
+    });
+
+    it("should refuse a pairing that carries no Idempotency-Key at all", async () => {
+      const response = await post(
+        "/auth/pair",
+        { pairingCode: keys.issuePairingCode().code, deviceName: "Commander's iPhone" },
+        { idempotencyKey: null },
+      );
+      const body = (await response.json()) as Envelope<never>;
+
+      expect(response.status).toBe(400);
+      expect(body.error?.code).toBe("IDEMPOTENCY_KEY_REQUIRED");
+    });
   });
 
   it("should never mark an auth failure retryable", async () => {

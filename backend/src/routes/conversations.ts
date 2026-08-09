@@ -3,12 +3,14 @@ import { Router, type Request, type RequestHandler } from "express";
 import type { ConversationLane, DeliveryConfirmation } from "@syl/shared";
 
 import { isId } from "../services/id.js";
+import type { IdempotencyStore } from "../services/idempotency.js";
 import {
   MessageStoreError,
   type MessageStore,
   type PageOptions,
 } from "../services/message-store.js";
 import { ApiFailure, sendOk } from "./envelope.js";
+import { runIdempotent, sendIdempotent } from "./idempotency.js";
 
 /**
  * Conversations and their history.
@@ -119,11 +121,12 @@ const LANES: readonly ConversationLane[] = ["interactive", "job"];
 
 export interface ConversationRouterOptions {
   readonly messages: MessageStore;
+  readonly idempotency: IdempotencyStore;
   readonly authenticate: RequestHandler;
 }
 
 export function createConversationRouter(options: ConversationRouterOptions): Router {
-  const { messages, authenticate } = options;
+  const { messages, idempotency, authenticate } = options;
   const router = Router();
 
   // Every route here is the Commander's own history. None is public.
@@ -175,30 +178,58 @@ export function createConversationRouter(options: ConversationRouterOptions): Ro
     }
   });
 
+  /**
+   * `syl-ux1`, `syl-9e0`. This was the one write that never asked for an
+   * `Idempotency-Key`, and the only write route that did not go through
+   * `routes/idempotency.ts` — so it also could not answer
+   * `IDEMPOTENCY_KEY_REUSE` when a client reused a key for a different body.
+   * `MessageStore` deduping on `clientId` masked the common case, which is why
+   * no unit test noticed.
+   *
+   * The two dedupe mechanisms are not redundant. `clientId` is what the
+   * optimistic bubble reconciles against and is the same on both send paths,
+   * HTTP and socket. The ledger is what makes *this* call safe to repeat,
+   * including the answer it gives — and the status is part of the answer,
+   * which is why a replay now returns the contract's 201 rather than the 200
+   * this route used to invent.
+   */
   router.post("/conversations/:conversationId/messages", (request, response) => {
     const conversationId = conversationIdOf(request);
-    const clientId = requireString(request.body, "clientId", MAX_CLIENT_ID);
-    const text = requireString(request.body, "text", MAX_MESSAGE_TEXT);
 
-    try {
-      const result = messages.append({ conversationId, clientId, role: "user", text });
+    sendIdempotent(
+      response,
+      runIdempotent(idempotency, request, () => {
+        const clientId = requireString(request.body, "clientId", MAX_CLIENT_ID);
+        const text = requireString(request.body, "text", MAX_MESSAGE_TEXT);
 
-      const confirmation: DeliveryConfirmation = {
-        clientId,
-        serverId: result.message.id,
-        conversationId,
-        // The MESSAGE sequence, not a frame sequence. See the module note.
-        seq: result.message.seq,
-        acceptedAt: result.message.createdAt,
-      };
+        try {
+          const result = messages.append({ conversationId, clientId, role: "user", text });
 
-      // A replayed send is the same operation, not a new one, so it answers
-      // 200 rather than 201 and says so in a header the client can see.
-      if (result.replayed) response.setHeader("Idempotency-Replayed", "true");
-      sendOk(response, confirmation, result.replayed ? 200 : 201);
-    } catch (error) {
-      asFailure(error);
-    }
+          const confirmation: DeliveryConfirmation = {
+            clientId,
+            serverId: result.message.id,
+            conversationId,
+            // The MESSAGE sequence, not a frame sequence. See the module note.
+            seq: result.message.seq,
+            acceptedAt: result.message.createdAt,
+          };
+
+          // The store recognised the `clientId` under a key the ledger has
+          // never seen — a client that regenerated its key across a reinstall,
+          // or the socket path having landed the same message first. Worth
+          // saying out loud, because the caller's optimistic bubble is about to
+          // be reconciled against a message it did not think had arrived.
+          if (result.replayed) response.setHeader("Idempotency-Replayed", "true");
+
+          // 201 either way. The contract documents exactly one success status
+          // for this operation, and a client that got 201 once and 200 the
+          // next time has to reconcile two answers to one send.
+          return { status: 201, data: confirmation };
+        } catch (error) {
+          asFailure(error);
+        }
+      }),
+    );
   });
 
   return router;

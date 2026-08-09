@@ -17,13 +17,37 @@ export interface ValidationError {
  */
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 
-function typeOf(value: unknown): JsonType {
+/**
+ * The JSON type of a value, plus the one thing JSON has no type for.
+ *
+ * `undefined` is called out rather than folded into `"object"`. It used to
+ * fall through to the final `return`, which made `matchesType(undefined,
+ * "object")` true — and since `checkObject` is only reached for
+ * `typeof value === "object"`, which `undefined` fails, the required
+ * properties were never examined either. A missing value passed between the
+ * two checks and every caller got a clean bill of health for nothing at all.
+ * See `syl-cgt`.
+ */
+function typeOf(value: unknown): JsonType | "undefined" {
+  if (value === undefined) return "undefined";
   if (value === null) return "null";
   if (Array.isArray(value)) return "array";
   if (typeof value === "number") return Number.isInteger(value) ? "integer" : "number";
   if (typeof value === "string") return "string";
   if (typeof value === "boolean") return "boolean";
   return "object";
+}
+
+/**
+ * Whether a property is present in the sense the wire understands.
+ *
+ * `JSON.stringify({ id: undefined })` is `{}`, so an own property holding
+ * `undefined` is not a property a peer will ever see. Treating it as present
+ * would let `required: ["id"]` be satisfied by a field that vanishes on
+ * serialisation, which is a lie the contract cannot afford.
+ */
+function isPresent(value: Record<string, unknown>, key: string): boolean {
+  return Object.hasOwn(value, key) && value[key] !== undefined;
 }
 
 function matchesType(value: unknown, allowed: JsonType): boolean {
@@ -71,6 +95,15 @@ function check(
   path: string,
   errors: ValidationError[],
 ): void {
+  // Before anything else, because no keyword below can be evaluated against a
+  // value that is not there. `undefined` reaches here only from the root, from
+  // an array element, or from a property explicitly set to it — `checkObject`
+  // treats such a property as absent, so an optional field is unaffected.
+  if (value === undefined) {
+    errors.push({ path, message: "expected a value, got undefined" });
+    return;
+  }
+
   if (schema.$ref !== undefined) {
     const target = registry[refName(schema.$ref)];
     if (target === undefined) throw new Error(`Unknown schema: ${refName(schema.$ref)}`);
@@ -183,26 +216,27 @@ function checkObject(
   errors: ValidationError[],
 ): void {
   for (const key of schema.required ?? []) {
-    if (!Object.hasOwn(value, key)) {
+    if (!isPresent(value, key)) {
       errors.push({ path: `${path}.${key}`, message: "required property is missing" });
     }
   }
 
   const properties = schema.properties ?? {};
   for (const [key, child] of Object.entries(properties)) {
-    if (!Object.hasOwn(value, key)) continue;
+    if (!isPresent(value, key)) continue;
     check(registry, child, value[key], `${path}.${key}`, errors);
   }
 
   if (schema.additionalProperties === false) {
     for (const key of Object.keys(value)) {
+      if (!isPresent(value, key)) continue;
       if (!Object.hasOwn(properties, key)) {
         errors.push({ path: `${path}.${key}`, message: "unexpected property" });
       }
     }
   } else if (typeof schema.additionalProperties === "object") {
     for (const key of Object.keys(value)) {
-      if (Object.hasOwn(properties, key)) continue;
+      if (Object.hasOwn(properties, key) || !isPresent(value, key)) continue;
       check(registry, schema.additionalProperties, value[key], `${path}.${key}`, errors);
     }
   }

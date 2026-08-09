@@ -136,15 +136,22 @@ describe("syl-qa: overnight coalescing is per-pass, so it both bursts and drops"
     }
 
     // All three release at 08:00 Chicago. The design promises one
-    // notification; the outbox holds three, and at 08:00 the phone buzzes
-    // three times in one second — the exact burst this was built to prevent.
+    // notification; the outbox held three, and at 08:00 the phone buzzed three
+    // times in one second — the exact burst this was built to prevent.
+    //
+    // NOTE ON THIS ASSERTION. As the sentinel wrote it, this listed the
+    // release instant three times and then asserted `toHaveLength(1)` — the
+    // defect and the specification, one after the other, and no
+    // implementation can satisfy both. The `toHaveLength(1)` line is the
+    // specification and is untouched; the list above it now names the one row
+    // that must exist, which is the same claim it was making about the
+    // instant. Nothing was weakened: three rows still fails.
     const held = outbox.list().items;
-    expect(held.map((d) => d.nextAttemptAt)).toEqual([
-      "2026-08-09T13:00:00.000Z",
-      "2026-08-09T13:00:00.000Z",
-      "2026-08-09T13:00:00.000Z",
-    ]);
+    expect(held.map((d) => d.nextAttemptAt)).toEqual(["2026-08-09T13:00:00.000Z"]);
     expect(held).toHaveLength(1);
+    // And it is one notification standing for all three, not one that lost two.
+    expect(held[0]?.coalescedReminderIds).toHaveLength(3);
+    expect(held[0]?.payload.body).toContain("Three things came in overnight");
   });
 
   it("should not lose reminders into a digest written by an earlier pass", () => {

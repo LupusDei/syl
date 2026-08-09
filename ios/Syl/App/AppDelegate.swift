@@ -24,6 +24,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     private(set) var store: LocalStore?
     private(set) var chat: ChatViewModel?
     private var syncEngine: SyncEngine?
+    /// Answers for anything push accepted but never showed. See `syl-u9e`.
+    private var deliveryReconciler: DeliveryReconciler?
     private var socket: WebSocketClient?
     private var socketPump: Task<Void, Never>?
     /// The base URL the live socket was opened against. Compared on foreground so a
@@ -91,8 +93,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
             flush: { await engine.synchronise() }
         )
 
+        // The other half of the delivery guarantee. `deliveredAt` only ever means APNs
+        // accepted the request, and Apple keeps just the most recent notification per
+        // app while a device is offline — so a night of reminders reaches the phone as
+        // one. This is what finds the rest.
+        let reconciler = DeliveryReconciler(
+            outbox: outbox,
+            fetch: DeliveryReconciler.liveFetch(backend: backend),
+            presenter: notifications.deliveryPresenter,
+            flush: { await engine.synchronise() }
+        )
+
         self.store = store
         self.syncEngine = engine
+        self.deliveryReconciler = reconciler
         self.socket = socket
         self.socketBaseURL = backend.baseURL
         self.chat = chat
@@ -102,7 +116,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         notifications.attach(outbox: outbox) { await engine.synchronise() }
 
         startSocket(socket, feeding: chat, store: store)
-        Task { await engine.synchronise() }
+        Task { await self.reconcile() }
+    }
+
+    /// Drain the outbox, then answer for everything the server is still waiting on.
+    ///
+    /// The order is not arbitrary. Pushing first means any acknowledgement he already
+    /// made — a notification tapped while the tunnel was down — reaches the server
+    /// before we ask what is outstanding, so the reconcile does not re-surface a
+    /// reminder he has already dealt with.
+    private func reconcile() async {
+        await syncEngine?.synchronise()
+        await deliveryReconciler?.reconcile()
     }
 
     /// Pumps socket events into the chat model, and keeps the frame-stream high-water
@@ -145,9 +170,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     /// Foreground reconcile. Push collapses a night of notifications into one and
     /// Apple offers no way to ask what arrived, so this is where anything that was
     /// dropped or coalesced reappears.
+    ///
+    /// It reappears through `DeliveryReconciler`, and until `syl-u9e` it did not
+    /// reappear at all: this method synchronised resources and nothing ever asked the
+    /// server which deliveries were still unacknowledged, so a push Apple accepted and
+    /// never showed was closed forever.
     func synchroniseNow() async {
         rebuildSocketIfServerChanged()
-        await syncEngine?.synchronise()
+        await reconcile()
         await chat?.refresh()
     }
 

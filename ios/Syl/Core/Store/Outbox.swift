@@ -27,27 +27,30 @@ struct OutboxRecord: Codable, FetchableRecord, MutablePersistableRecord, Equatab
         /// Whether replaying this intent is safe when we cannot tell whether the first
         /// attempt landed.
         ///
-        /// **`Idempotency-Key` is in the contract for every write, but only message
-        /// sends actually deduplicate on it today** — via a `clientId` unique index —
-        /// and the rest is tracked as `syl-1mz`. So this is not a restatement of the
-        /// contract; it is what the service currently does, which is what a retry
-        /// actually meets.
+        /// **True for every kind, and that is a recent change.** `Idempotency-Key` has
+        /// always been in the contract for every write, but for a long time only
+        /// message sends actually deduplicated on it — via a `clientId` unique index —
+        /// so this predicate described what the service *did* rather than what the
+        /// contract said. `syl-ux1` closed the gap: every implemented write now runs
+        /// through the server's idempotency ledger, and the key travels from the row
+        /// rather than being minted per attempt.
         ///
-        /// The two categories:
+        /// The case that made this worth having was `snoozeReminder`. A blind retry
+        /// used to defer the reminder by another fifteen minutes, turning one deferral
+        /// into two and landing the reminder half an hour late — the quiet kind of
+        /// wrong this project cares most about. A retry now replays the server's
+        /// stored answer instead of deferring again.
         ///
-        /// - **Server-deduplicated or naturally repeatable.** A second acknowledgement
-        ///   is documented as a no-op returning the existing row. Completing something
-        ///   already complete lands in the same terminal state.
-        /// - **Not.** A second snooze defers by another fifteen minutes, so a retry
-        ///   turns one deferral into two and the reminder arrives half an hour late —
-        ///   which is the quiet kind of wrong this project cares most about. A second
-        ///   create is a duplicated row.
+        /// The parking machinery it guards is deliberately **not** deleted. It is the
+        /// honest response if this ever stops being true — a new write that forgets
+        /// the ledger, or a retry that arrives after the ledger's 24-hour retention has
+        /// dropped the key. Nothing is silently retried that cannot be; the predicate
+        /// simply has nothing left to catch.
         var isSafeToReplayBlind: Bool {
             switch self {
-            case .sendMessage, .acknowledgeDelivery, .completeReminder, .completeTodo:
+            case .sendMessage, .acknowledgeDelivery, .completeReminder, .completeTodo,
+                 .snoozeReminder, .createTodo, .createReminder:
                 return true
-            case .snoozeReminder, .createTodo, .createReminder:
-                return false
             }
         }
     }
@@ -153,6 +156,18 @@ struct Outbox: Sendable {
                 .order(Column("createdAt"), Column("id"))
                 .limit(limit)
                 .fetchAll(db)
+        }
+    }
+
+    /// The queued intent carrying this key, or nil.
+    ///
+    /// Used by the delivery reconcile as its own memory: an `ack-<deliveryId>` row is
+    /// the durable local evidence that this delivery has already been surfaced to the
+    /// Commander. Without it a reconcile that ran twice before the ack reached the
+    /// server would show him the same reminder twice.
+    func queued(idempotencyKey: String) throws -> OutboxRecord? {
+        try database.queue.read { db in
+            try OutboxRecord.filter(Column("idempotencyKey") == idempotencyKey).fetchOne(db)
         }
     }
 

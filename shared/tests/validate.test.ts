@@ -113,6 +113,71 @@ describe("validate", () => {
     expect(validate(registry, "Message", [])).toHaveLength(1);
   });
 
+  /**
+   * `syl-cgt`. `typeOf(undefined)` fell through to `"object"`, so the type
+   * check passed, and `checkObject` was guarded on `typeof value === "object"`,
+   * which `undefined` fails — so the required properties were never examined
+   * either. The value fell between the two and nothing looked at it.
+   *
+   * The practical consequence: a route answering `{"success": true}` with no
+   * payload conformed to every operation in the contract.
+   */
+  describe("undefined", () => {
+    it("should reject undefined against an object schema rather than reporting it clean", () => {
+      const errors = validate(registry, "Message", undefined);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.path).toBe("$");
+      expect(errors[0]?.message).toMatch(/undefined/i);
+    });
+
+    it("should reject undefined against every other kind of schema too", () => {
+      expect(validate(registry, "Id", undefined)).toHaveLength(1);
+      expect(validate(registry, "Nullable", undefined)).toHaveLength(1);
+      expect(validate(registry, "Page", undefined)).toHaveLength(1);
+      expect(validate(registry, "Wrapped", undefined)).toHaveLength(1);
+      expect(validate(registry, "Either", undefined)).toHaveLength(1);
+      // `Bag` declares no constraint beyond `type: object`, which is the
+      // weakest schema in the registry and so the easiest one to slip past.
+      expect(validate(registry, "Bag", undefined)).toHaveLength(1);
+    });
+
+    it("should distinguish undefined from null", () => {
+      // `null` is a value the contract can express and sometimes requires;
+      // `undefined` is the absence of one and never travels on the wire.
+      expect(validate(registry, "Nullable", null)).toEqual([]);
+      expect(validate(registry, "Nullable", undefined)).toHaveLength(1);
+    });
+
+    it("should treat a required property present but undefined as missing", () => {
+      // `JSON.stringify({ id: undefined })` is `{}`. A value that cannot
+      // survive the wire is not a value that satisfies a requirement.
+      const errors = validate(registry, "Message", { ...message, id: undefined });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.path).toBe("$.id");
+      expect(errors[0]?.message).toMatch(/missing/i);
+    });
+
+    it("should treat an optional property present but undefined as absent", () => {
+      expect(validate(registry, "Message", { ...message, seq: undefined })).toEqual([]);
+      // ...and not as an unexpected property on a closed schema, for the same
+      // reason: it is not there once it is serialised.
+      expect(validate(registry, "Closed", { a: "x", b: undefined })).toEqual([]);
+    });
+
+    it("should reject an undefined array element", () => {
+      const errors = validate(registry, "Page", { items: [message, undefined] });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.path).toBe("$.items[1]");
+    });
+
+    it("should refuse a success envelope carrying no data at all", () => {
+      // The failure this bug actually caused, in the shape it caused it.
+      const errors = validate(registry, "Wrapped", { success: true, data: undefined });
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.path).toBe("$.data");
+    });
+  });
+
   it("should throw for an unknown schema name rather than passing silently", () => {
     expect(() => validate(registry, "Nonexistent", {})).toThrow(/Nonexistent/);
   });

@@ -121,8 +121,13 @@ final class NotificationService: NSObject, ObservableObject {
     /// into one. Only this call, from the device, marks the row delivered.
     ///
     /// Retried by design and idempotent on the server, so failing quietly is
-    /// acceptable here: the foreground reconcile through `GET /sync` picks up anything
-    /// this missed.
+    /// acceptable here — but only because something else eventually answers for it.
+    /// That something is `DeliveryReconciler`, which asks
+    /// `GET /deliveries?unacknowledged=true` on every foreground. It is **not**
+    /// `GET /sync`, which this comment used to claim: `/sync` carries resource
+    /// changes, is not implemented by the service, and knows nothing about
+    /// acknowledgements. See `syl-u9e` — three separate comments deferred the
+    /// delivery guarantee to a backstop that did not exist.
     func acknowledge(_ payload: NotificationPayload, engagement: DeliveryEngagement) async {
         guard let deliveryId = payload.deliveryId else { return }
         await enqueue(
@@ -130,8 +135,9 @@ final class NotificationService: NSObject, ObservableObject {
             targetId: deliveryId,
             body: AcknowledgeDeliveryRequest(ackedAt: now(), engagement: engagement),
             // Derived from the delivery, not random: the device retries this call by
-            // design and a fresh key each time would defeat the point.
-            idempotencyKey: "ack-\(SylIDs.canonical(deliveryId))"
+            // design and a fresh key each time would defeat the point. The reconcile
+            // derives the identical key, so his tap and its answer are one operation.
+            idempotencyKey: DeliveryReconciler.acknowledgementKey(for: deliveryId)
         )
     }
 
@@ -231,6 +237,109 @@ final class NotificationService: NSObject, ObservableObject {
                 SylAPI.completeReminder(targetId, idempotencyKey: key))
         case .sendMessage, .completeTodo, .createTodo, .createReminder:
             return
+        }
+    }
+
+    // MARK: - Recovering a delivery push never showed
+
+    /// The presenter half of `DeliveryReconciler`, bound to this service.
+    var deliveryPresenter: DeliveryPresenter {
+        DeliveryPresenter(
+            alreadyOnDevice: { [self] in await heldDeliveryIds() },
+            present: { [self] delivery in try await present(delivery) }
+        )
+    }
+
+    /// Delivery ids the system is already holding.
+    ///
+    /// Matched on `userInfo`, never on the request identifier: a push carries the
+    /// identifier APNs assigned it, so the only thing that ties a banner sitting in
+    /// Notification Center back to an outbox row is the `deliveryId` the payload
+    /// carries. Both lists matter — one that has fired and one that has not are both
+    /// content the device already has.
+    func heldDeliveryIds() async -> Set<SylID> {
+        let center = self.center
+
+        // The ids are extracted inside each completion handler so that no
+        // `UNNotification` or `UNNotificationRequest` — neither of which is
+        // `Sendable` — crosses the continuation. Same reasoning as
+        // `refreshAuthorization` above.
+        let delivered: [SylID] = await withCheckedContinuation { continuation in
+            center.getDeliveredNotifications { notifications in
+                continuation.resume(returning: Self.deliveryIds(in: notifications.map(\.request)))
+            }
+        }
+        let pending: [SylID] = await withCheckedContinuation { continuation in
+            center.getPendingNotificationRequests { requests in
+                continuation.resume(returning: Self.deliveryIds(in: requests))
+            }
+        }
+
+        return Set(delivered + pending)
+    }
+
+    /// Pure, so the mapping is testable without a notification centre.
+    nonisolated static func deliveryIds(in requests: [UNNotificationRequest]) -> [SylID] {
+        requests
+            .compactMap { NotificationPayload(userInfo: $0.content.userInfo).deliveryId }
+            .map(SylIDs.canonical)
+    }
+
+    /// Show a delivery locally, because push did not.
+    ///
+    /// The payload is reproduced faithfully — same title, same body, same category, so
+    /// Snooze and Done are still there. A recovered reminder he cannot act on is half
+    /// a recovery, and the actions write to the outbox exactly as they would have.
+    ///
+    /// Throwing matters: the caller acknowledges only on success, so a notification
+    /// that could not be shown stays unacknowledged on the server and is tried again.
+    func present(_ delivery: Delivery) async throws {
+        let content = UNMutableNotificationContent()
+        content.title = delivery.payload.title
+        content.body = delivery.payload.body
+        content.sound = .default
+        content.categoryIdentifier =
+            delivery.payload.categoryIdentifier ?? ReminderNotification.categoryIdentifier
+        if let thread = delivery.payload.threadIdentifier {
+            content.threadIdentifier = thread
+        }
+        content.interruptionLevel = Self.level(of: delivery.payload.interruptionLevel)
+        content.userInfo = Self.userInfo(for: delivery)
+
+        let request = UNNotificationRequest(
+            // Prefixed and derived, so a second recovery of the same row replaces the
+            // first rather than stacking a duplicate in Notification Center.
+            identifier: "syl.recovered.\(SylIDs.canonical(delivery.id))",
+            content: content,
+            // No trigger: it has already waited long enough.
+            trigger: nil
+        )
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            center.add(request) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        }
+    }
+
+    /// What a recovered notification carries, so its actions behave like any other.
+    nonisolated static func userInfo(for delivery: Delivery) -> [String: String] {
+        var info = ["deliveryId": delivery.id]
+        if let reminderId = delivery.reminderId {
+            info["reminderId"] = reminderId
+        }
+        return info
+    }
+
+    nonisolated static func level(of level: InterruptionLevel) -> UNNotificationInterruptionLevel {
+        switch level {
+        case .passive: return .passive
+        case .active: return .active
+        case .timeSensitive: return .timeSensitive
         }
     }
 

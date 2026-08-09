@@ -20,6 +20,10 @@ const QUIET = { quiet: { start: "22:00", end: "08:00" }, tz: CHICAGO };
 const MORNING = Date.UTC(2026, 7, 9, 12, 0, 0, 0);
 /** 2026-08-09T04:00Z — 23:00 in Chicago on the 8th, inside quiet hours. */
 const NIGHT = Date.UTC(2026, 7, 9, 4, 0, 0, 0);
+/** 22:00 Chicago on the 8th: the window closes. */
+const NIGHT_STARTS = Date.UTC(2026, 7, 9, 3, 0, 0, 0);
+/** 06:00 Chicago on the 9th, still inside it. */
+const MORNING_AFTER = Date.UTC(2026, 7, 9, 11, 0, 0, 0);
 
 describe("countWord", () => {
   it("should spell a small count", () => {
@@ -290,6 +294,113 @@ describe("deliverDueReminders", () => {
       expect(delivery?.nextAttemptAt).toBe("2026-08-09T13:00:00.000Z");
       // Every one of them is still marked handled: nothing is left behind.
       expect(result.fired).toHaveLength(3);
+    });
+
+    it("should coalesce across a whole night of passes, not just one", () => {
+      // syl-yvi. The runner wakes at least every sixty seconds and precisely at
+      // each reminder's own instant, so a night is many passes and every
+      // reminder used to be a group of one. Both older coalescing tests give
+      // every reminder the same wall time and run a single pass, which is the
+      // only shape that ever reached the digest.
+      make({ text: "One thing.", wallTime: "22:30", date: "2026-08-08" });
+      make({ text: "Another thing.", wallTime: "23:30", date: "2026-08-08" });
+      make({ text: "A third thing.", wallTime: "01:30", date: "2026-08-09" });
+      const held = gated();
+
+      // A pass every minute from 22:00 to 06:00 Chicago: the real cadence.
+      for (now = NIGHT_STARTS; now <= MORNING_AFTER; now += 60_000) {
+        deliverDueReminders({ reminders, outbox: held }, now);
+      }
+
+      const rows = held.list().items;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.nextAttemptAt).toBe("2026-08-09T13:00:00.000Z");
+      expect(rows[0]?.coalescedReminderIds).toHaveLength(3);
+      expect(rows[0]?.payload.body).toContain("Three things came in overnight");
+      // The earliest of them, not the last one folded in.
+      expect(rows[0]?.scheduledFor).toBe("2026-08-09T03:30:00.000Z");
+    });
+
+    it("should name every reminder it marks delivered, across every pass", () => {
+      // syl-2il. The invariant, stated directly: `markFired` is what stops a
+      // reminder firing again, so one marked fired and named by no outbox row
+      // is gone — invisible to the ack path and to the unacknowledged view,
+      // with nothing anywhere recording that it was dropped.
+      for (const [text, wallTime] of [
+        ["Pay the invoice.", "22:30"],
+        ["Email the landlord.", "22:30"],
+        ["Call the pharmacy.", "23:30"],
+        ["Move the car.", "23:30"],
+        ["Water the plants.", "03:15"],
+      ] as const) {
+        make({ text, wallTime, date: wallTime === "03:15" ? "2026-08-09" : "2026-08-08" });
+      }
+      const held = gated();
+
+      for (now = NIGHT_STARTS; now <= MORNING_AFTER; now += 60_000) {
+        deliverDueReminders({ reminders, outbox: held }, now);
+      }
+
+      const named = new Set(
+        held.list().items.flatMap((delivery) => [
+          ...(delivery.reminderId === null ? [] : [delivery.reminderId]),
+          ...delivery.coalescedReminderIds,
+        ]),
+      );
+      const delivered = reminders
+        .list()
+        .items.filter((reminder) => reminder.deliveryState === "delivered");
+
+      expect(delivered).toHaveLength(5);
+      expect(delivered.filter((reminder) => !named.has(reminder.id))).toEqual([]);
+    });
+
+    it("should write its own row rather than amend a batch already claimed", () => {
+      // Changing the words of a notification that is on its way to Apple is
+      // the same silent drop by another route, so a batch that has been
+      // claimed is closed to additions. A burst is a nuisance; a drop is not.
+      make({ text: "One thing.", wallTime: "23:00", date: "2026-08-08" });
+      now = NIGHT;
+      const held = gated();
+      const first = held.get(
+        deliverDueReminders({ reminders, outbox: held }, now).enqueued[0] ?? "",
+      );
+
+      // Something claimed it: a second drainer, or a clock that stepped back.
+      held.markSending(first?.id ?? "");
+
+      const later = make({ text: "Water the plants.", wallTime: "23:30", date: "2026-08-08" });
+      now = Date.UTC(2026, 7, 9, 4, 31, 0, 0);
+      const result = deliverDueReminders({ reminders, outbox: held }, now);
+
+      expect(result.fired).toEqual([later.id]);
+      expect(held.list().items).toHaveLength(2);
+      expect(held.get(result.enqueued[0] ?? "")?.payload.body).toBe("Water the plants.");
+      expect(held.get(result.enqueued[0] ?? "")?.nextAttemptAt).toBe("2026-08-09T13:00:00.000Z");
+      // And the claimed row is untouched.
+      expect(held.get(first?.id ?? "")?.payload.body).toBe("One thing.");
+    });
+
+    it("should finish a pass that died between the batch and the mark", () => {
+      // The reminders are already named by the row; what is missing is the
+      // mark. Re-running must finish the job without folding them in twice.
+      make({ text: "One.", wallTime: "23:00", date: "2026-08-08" });
+      make({ text: "Two.", wallTime: "23:00", date: "2026-08-08" });
+      now = NIGHT;
+      const held = gated();
+
+      const ids = deliverDueReminders({ reminders, outbox: held }, now).fired;
+      // The row was written; the process died before `markFired` landed.
+      db.handle
+        .prepare("UPDATE reminders SET delivery_state = 'scheduled' WHERE id IN (?, ?)")
+        .run(ids[0] ?? "", ids[1] ?? "");
+
+      const again = deliverDueReminders({ reminders, outbox: held }, now);
+
+      expect(again.fired).toHaveLength(2);
+      expect(held.list().items).toHaveLength(1);
+      expect(held.list().items[0]?.coalescedReminderIds).toHaveLength(2);
+      for (const id of ids) expect(reminders.get(id)?.deliveryState).toBe("delivered");
     });
 
     it("should write one digest when the pass runs twice", () => {

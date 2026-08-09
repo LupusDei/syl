@@ -67,6 +67,24 @@ const PRIORITY_ORDER: Readonly<Record<JobPriority, number>> = {
 /** Consecutive failures before a kind is disabled and reported once. */
 export const BREAKER_THRESHOLD = 5;
 
+/**
+ * How long an open breaker stays shut before one trial run is allowed through.
+ *
+ * **A breaker with no way back is not a breaker, it is a kill switch.** The
+ * only path to `release` — the one call that can close a breaker — runs through
+ * `due`, and `due` excludes open breakers. Without a cooldown the job could
+ * never be selected, never run, and never be released, so five transient
+ * failures ended reminder delivery permanently and silently, across restarts.
+ * Any throw counted: an APNs socket reset, SQLITE_BUSY, a bad stored rrule.
+ *
+ * Five minutes is chosen against the thing being protected. The breaker exists
+ * to stop a hot loop, and going from a 60-second tick to a 5-minute probe is a
+ * factor of five off the failing path — while a reminder held by an open
+ * breaker is at worst five minutes late, and says so. A late reminder is a
+ * nuisance; a vanished one destroys trust.
+ */
+export const BREAKER_COOLDOWN_MS = 5 * 60_000;
+
 /** Thrown when a job cannot be written as asked. */
 export class JobStoreError extends Error {
   readonly kind: "unknown_kind" | "bad_trigger";
@@ -329,34 +347,53 @@ export class JobStore {
   /**
    * Everything due, highest priority first.
    *
-   * A job whose breaker is open is excluded: the whole point of the breaker is
-   * that nothing retries forever.
+   * A job whose breaker is open is excluded **for the cooldown, and no
+   * longer**. After that one trial run is let through — the half-open probe —
+   * because `release` is reachable only from here, so a breaker that excluded
+   * its job unconditionally could never be closed by anything: not a success,
+   * not an endpoint, not a restart.
+   *
+   * A breaker in a state this code did not write (`open` with no instant
+   * recorded) is treated as ready to probe. Failing open is the right way for
+   * this particular predicate to be wrong.
    */
   due(now: number = this.#clock()): readonly Job[] {
     const rows = this.#db
       .prepare(
         `SELECT ${JOB_COLUMNS} FROM jobs
           WHERE state = 'pending'
-            AND breaker_state != 'open'
+            AND (breaker_state != 'open'
+                 OR breaker_opened_at IS NULL
+                 OR breaker_opened_at <= ?)
             AND next_run_at IS NOT NULL
             AND next_run_at <= ?
           ORDER BY next_run_at, id`,
       )
-      .all(instant(now));
+      .all(instant(now - BREAKER_COOLDOWN_MS), instant(now));
 
     return rows
       .map((row) => toJob(row as unknown as JobRow))
       .sort((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]);
   }
 
-  /** The next instant anything is scheduled, or `null`. */
-  nextRunAt(): string | null {
+  /**
+   * The next instant anything is scheduled, or `null`.
+   *
+   * An open breaker hides its job only until the cooldown expires. It must
+   * agree with `due` about that: a job `due` would return but this one hides
+   * is a job the runner never arms a timer for.
+   */
+  nextRunAt(now: number = this.#clock()): string | null {
     const row = this.#db
       .prepare(
         `SELECT min(next_run_at) AS next FROM jobs
-          WHERE state = 'pending' AND breaker_state != 'open' AND next_run_at IS NOT NULL`,
+          WHERE state = 'pending'
+            AND (breaker_state != 'open'
+                 OR breaker_opened_at IS NULL
+                 OR breaker_opened_at <= ?)
+            AND next_run_at IS NOT NULL`,
       )
-      .get();
+      .get(instant(now - BREAKER_COOLDOWN_MS));
     // Safe assertion: `min` over a TEXT column is TEXT or NULL.
     return (row as unknown as { next: string | null } | undefined)?.next ?? null;
   }
@@ -364,19 +401,31 @@ export class JobStore {
   /**
    * Take a lease on a job.
    *
+   * A job whose breaker has been open longer than the cooldown moves to
+   * `half_open` as it is leased: taking the lease *is* the trial run, and
+   * recording it here means the state on the admin surface says what is
+   * actually happening rather than "open" forever.
+   *
    * @returns the leased job, or `null` if another runner got there first. The
    * `state = 'pending'` predicate in the UPDATE is what makes that race safe
    * without a transaction: exactly one writer changes the row.
    */
   lease(id: string, owner: string, leaseMs: number): Job | null {
-    const expiresAt = instant(this.#clock() + leaseMs);
+    const now = this.#clock();
+    const expiresAt = instant(now + leaseMs);
     const result = this.#db
       .prepare(
         `UPDATE jobs
-            SET state = 'leased', lease_owner = ?, lease_expires_at = ?, updated_at = ?
+            SET state = 'leased', lease_owner = ?, lease_expires_at = ?, updated_at = ?,
+                breaker_state = CASE
+                  WHEN breaker_state = 'open'
+                       AND (breaker_opened_at IS NULL OR breaker_opened_at <= ?)
+                  THEN 'half_open'
+                  ELSE breaker_state
+                END
           WHERE id = ? AND state = 'pending'`,
       )
-      .run(owner, expiresAt, instant(this.#clock()), id);
+      .run(owner, expiresAt, instant(now), instant(now - BREAKER_COOLDOWN_MS), id);
 
     return Number(result.changes) === 0 ? null : this.get(id);
   }
@@ -399,6 +448,13 @@ export class JobStore {
    * `nextRunAt` lets a handler name its own next instant. The reminder job is
    * the reason: what it needs is `min(next reminder, next outbox attempt)`,
    * which no trigger expression can know and only the job itself can compute.
+   *
+   * The breaker moves here and nowhere else. A success closes it outright,
+   * whatever it was — that is what makes the half-open probe worth running. A
+   * failure at or past the threshold opens it **from this instant**: the
+   * cooldown is measured from the last failure, never from the first, or a
+   * breaker that keeps failing its probes would go straight back to being a
+   * one-way door.
    */
   release(
     id: string,
@@ -413,8 +469,7 @@ export class JobStore {
     const failed = outcome === "failure";
     const failures = failed ? job.circuitBreaker.consecutiveFailures + 1 : 0;
     const breakerState = failures >= BREAKER_THRESHOLD ? "open" : "closed";
-    const openedAt =
-      breakerState === "open" ? (job.circuitBreaker.openedAt ?? instant(now)) : null;
+    const openedAt = breakerState === "open" ? instant(now) : null;
 
     this.#db
       .prepare(

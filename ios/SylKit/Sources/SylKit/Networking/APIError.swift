@@ -47,11 +47,15 @@ public enum APIError: Error, Equatable, Sendable {
 
     /// Whether the request may have reached the server despite the failure.
     ///
-    /// The distinction matters because `Idempotency-Key` is specified across the whole
-    /// contract but, today, only message sends actually deduplicate on it (tracked as
-    /// `syl-1mz`). For every other write, a retry after an *ambiguous* failure risks a
-    /// second snooze or a duplicated to-do — so the outbox needs to tell "it never
-    /// left" from "it may have landed".
+    /// The distinction used to be load-bearing: `Idempotency-Key` was specified across
+    /// the whole contract while only message sends actually deduplicated on it, so a
+    /// retry after an *ambiguous* failure risked a second snooze or a duplicated to-do
+    /// and the outbox had to tell "it never left" from "it may have landed".
+    /// `syl-ux1` closed that gap — every implemented write now runs through the
+    /// server's idempotency ledger — so nothing is parked on this basis any more.
+    ///
+    /// It stays because the distinction is still true and still cheap, and because the
+    /// day a new write forgets the ledger is the day something needs to ask.
     ///
     /// A connection that was never established is unambiguous: nothing was sent. A
     /// timeout, a connection dropped mid-flight, or a 5xx are all "we do not know".
