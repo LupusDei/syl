@@ -1,0 +1,14 @@
+# Credentials. The workflow writes these from GitHub secrets and deletes them again;
+# none of them may ever be committed.
+#
+# Adjutant's repository does contain a real AuthKey.p8 and a populated api_key.json.
+# That is a mistake worth not copying: an App Store Connect key is a credential that
+# can upload builds under the team's name, and a private repository is not an excuse.
+AuthKey.p8
+api_key.json
+.env
+
+# Fastlane output
+report.xml
+README.md
+test_output/

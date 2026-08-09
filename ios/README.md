@@ -199,6 +199,69 @@ must not gain any.
   hex case; comparing bare strings would produce a duplicated row rather than an error.
   Outside SQLite, use `SylIDs.areEqual`.
 
+## Shipping
+
+Two workflows, and the split between them is deliberate.
+
+| | `.github/workflows/ios.yml` | `.github/workflows/testflight.yml` |
+|---|---|---|
+| Runs on | every push and PR touching `ios/**` | a push to `main` that changes `MARKETING_VERSION` |
+| Does | `ios/scripts/test.sh` | tests, then build, sign, upload |
+| Runner | `macos-26` | `macos-26` |
+
+**CI runs both test commands, and that is the point of the job.** A scheme's
+TestAction cannot run a local SPM package's test target: the reference parses fine and
+is then silently skipped, so `xcodebuild test` alone reports SUCCESS having run
+NOTHING. Green CI, zero tests executed, and nothing says so. `scripts/test.sh` runs
+`swift test` and `xcodebuild test`; CI calls the script rather than reinventing the
+invocation.
+
+**The test workflow is deliberately not gated on a version change.** Adjutant gates
+its iOS tests that way to save macOS minutes, which bill at 10×, and the effect is
+that most iOS commits merge untested. The version gate stays on the *deploy*, because
+that is where the cost actually is.
+
+**`macos-26` is required, not preferred.** Older runners build against an SDK App
+Store Connect rejects with a 409 — *after* a successful build and a successful sign,
+so the failure lands at the end of the slowest step with nothing before it having
+complained. Adjutant's own test workflow is still on `macos-15` and disagrees with its
+deploy workflow; both of Syl's are on `macos-26`.
+
+**`Gemfile.lock` is committed and must not be regenerated.** Without `arm64-darwin` in
+its `PLATFORMS` section, bundler fails about 25 seconds in, before Swift compiles
+anything, with an error that says nothing about the architecture.
+
+Nothing new had to be provisioned. The same Apple team, the same App Store Connect
+key — one key covers a second app in the same team — the same match repository and
+password, and the same six secrets Adjutant already uses:
+
+`APP_STORE_CONNECT_API_KEY_BASE64`, `APP_STORE_CONNECT_API_KEY_ID`,
+`APP_STORE_CONNECT_API_ISSUER_ID`, `MATCH_GIT_URL`, `MATCH_PASSWORD`,
+`MATCH_DEPLOY_KEY`.
+
+The one manual step is adding `com.jmm.syl` to the match repository, by running
+`bundle exec fastlane sync_certs` locally once with `MATCH_READONLY` unset.
+
+### Releasing
+
+```sh
+# 1. Prove Release builds locally. Optionals and type shadowing that compile in Debug
+#    have failed in Release before, and TestFlight is an expensive place to find out.
+xcodebuild build -project ios/Syl.xcodeproj -scheme Syl -configuration Release \
+  -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 17'
+
+# 2. Bump MARKETING_VERSION in ios/Syl.xcodeproj/project.pbxproj. That is the trigger.
+#    CFBundleVersion comes from CURRENT_PROJECT_VERSION via GENERATE_INFOPLIST_FILE and
+#    is set by fastlane from the newest TestFlight build — never write it by hand, and
+#    never make it a literal.
+
+# 3. Push to main. Or run the workflow by hand with a changelog.
+```
+
+**Never commit `fastlane/AuthKey.p8` or `fastlane/api_key.json`.** The workflow writes
+them from secrets and deletes them on `always()`. Adjutant's repository does contain
+real ones; that is a mistake worth not copying.
+
 ## Not built yet
 
 The local store, the app UI and the TestFlight pipeline are separate beads under
