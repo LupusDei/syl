@@ -250,51 +250,37 @@ final class LiveServerTests: XCTestCase {
         XCTAssertNotNil(reminder.nextFireAt)
     }
 
-    // MARK: - The endpoints the app calls that the real service does not serve
+    // MARK: - The endpoints that used to be missing, and now are not
+
+    // These two tests asserted the ABSENCE of /sync, /todos and /goals, and each
+    // failed with a message its author had written for exactly this moment:
+    // "GET /sync now exists — delete this test". `syl-c1m` implemented them.
+    //
+    // Inverted rather than deleted, because deleting would throw away the only
+    // place the SWIFT CLIENT meets those endpoints on a REAL server. The models
+    // already existed in SylKit and had never once been decoded from anything
+    // but a fixture — which is how a client ships confidently against a shape
+    // the server does not actually produce.
 
     /// `syl-c1m` — `GET /sync` is the app's whole offline-catch-up path.
     ///
-    /// `SyncEngine.pull` calls it on every foreground reconcile. The mock serves it,
-    /// because the mock derives its routes from `openapi.yaml`. Syl has no route for
-    /// it, so against the real service every reconcile is a `NOT_FOUND` the engine
-    /// treats as a failure.
-    func testShouldFindThatSyncIsNotServedByTheRealService() async throws {
-        do {
-            _ = try await makeClient().send(SylAPI.sync())
-            XCTFail("GET /sync now exists — delete this test and the bead with it")
-        } catch let error as APIError {
-            guard case .api(let api, let status) = error else {
-                return XCTFail("expected a typed refusal, got \(error)")
-            }
-            XCTAssertEqual(api.code, .notFound)
-            XCTAssertEqual(status, 404)
-            // The terminal handler, not a route saying "no such resource": nothing
-            // is mounted at this path at all.
-            XCTAssertTrue(
-                api.message.contains("No route"),
-                "expected the terminal 404; got: \(api.message)"
-            )
-        }
+    /// `SyncEngine.pull` calls it on every foreground reconcile, so a mismatch
+    /// here is not a missing feature but a reconcile loop that fails forever.
+    func testShouldServeSyncDecodedByTheAppsOwnModel() async throws {
+        let page = try await makeClient().send(SylAPI.sync())
+
+        // A cursor must come back even when nothing has changed, or the client
+        // has nothing to send next time and starts from zero on every pull.
+        XCTAssertNotNil(page.cursor, "a pull must always return a cursor to resume from")
     }
 
-    /// `syl-c1m` — the same for to-dos and goals.
-    func testShouldFindThatTodosAndGoalsAreNotServedByTheRealService() async throws {
+    /// `syl-c1m` — to-dos and goals are the substance of the product.
+    func testShouldServeTodosAndGoalsDecodedByTheAppsOwnModels() async throws {
         let client = try makeClient()
 
-        for probe in ["todos", "goals"] {
-            do {
-                if probe == "todos" {
-                    _ = try await client.send(SylAPI.todos())
-                } else {
-                    _ = try await client.send(SylAPI.goals())
-                }
-                XCTFail("/\(probe) now exists — delete this test and the bead with it")
-            } catch let error as APIError {
-                guard case .api(let api, _) = error else {
-                    return XCTFail("expected a typed refusal for /\(probe), got \(error)")
-                }
-                XCTAssertEqual(api.code, .notFound, "/\(probe)")
-            }
-        }
+        // Decoding is the assertion. If the server's shape and the app's model
+        // disagree, `send` throws a decoding failure rather than returning.
+        _ = try await client.send(SylAPI.todos())
+        _ = try await client.send(SylAPI.goals())
     }
 }
