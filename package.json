@@ -17,8 +17,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "verify": "npm run typecheck && npm test",
-    "mock": "npm run mock -w shared",
-    "contract:generate": "npm run generate -w shared",
+    "mock": "tsx shared/src/cli/mock.ts",
+    "contract:generate": "tsx shared/src/cli/generate.ts",
     "ping": "tsx backend/src/harness/cli/ping.ts",
     "when": "tsx backend/src/harness/cli/when.ts"
   },
