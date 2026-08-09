@@ -144,9 +144,14 @@ describe("Outbox", () => {
       // The invariant behind syl-jim, asserted over the whole surface rather
       // than one field: nothing pending may be invisible to the drain loop.
       const gated = new Outbox({ db: db.handle, clock: () => now, quietHours: QUIET });
-      for (const notBefore of [undefined, null, new Date(now + 60_000).toISOString()]) {
-        gated.enqueue(reminderDelivery({ idempotencyKey: `k-${String(notBefore)}`, notBefore }));
-      }
+      gated.enqueue(reminderDelivery({ idempotencyKey: "k-absent" }));
+      gated.enqueue(reminderDelivery({ idempotencyKey: "k-null", notBefore: null }));
+      gated.enqueue(
+        reminderDelivery({
+          idempotencyKey: "k-later",
+          notBefore: new Date(now + 60_000).toISOString(),
+        }),
+      );
 
       const pending = gated.list().items.filter((delivery) => delivery.state === "pending");
       expect(pending).toHaveLength(3);

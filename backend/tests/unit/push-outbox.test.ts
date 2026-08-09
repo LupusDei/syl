@@ -7,7 +7,6 @@ import {
   type ApnsSender,
 } from "../../src/jobs/push-outbox.js";
 import type { ApnsNotification, ApnsResult } from "../../src/services/apns-service.js";
-import { fixedClock } from "../../src/services/clock.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import { DeviceTokenService } from "../../src/services/device-token-service.js";
 import { Outbox } from "../../src/services/outbox.js";
@@ -291,7 +290,7 @@ describe("pushDueDeliveries", () => {
     const sent: string[] = [];
     const apns: ApnsSender = {
       send: (notification) => {
-        sent.push(String(notification.data["deliveryId"]));
+        sent.push(String(notification.data?.["deliveryId"]));
         // The phone acknowledges the second row while we are still sending the
         // first — it was in the same digest-less batch and already arrived.
         outbox.acknowledge(second, { ackedAt: new Date(TEST_NOW).toISOString() });

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SylDatabase } from "../../src/services/database.js";
 import {
+  BREAKER_COOLDOWN_MS,
   BREAKER_THRESHOLD,
   JobStore,
   JobStoreError,
@@ -78,6 +79,14 @@ describe("JobStore", () => {
     jobs = new JobStore({ db: db.handle, clock: () => now });
   });
 
+  /** Fail a job enough times to open its breaker. */
+  function trip(id: string): void {
+    for (let i = 0; i < BREAKER_THRESHOLD; i += 1) {
+      jobs.lease(id, "owner", 60_000);
+      jobs.release(id, "failure", null);
+    }
+  }
+
   afterEach(() => {
     db.close();
   });
@@ -136,26 +145,88 @@ describe("JobStore", () => {
       expect(due.map((job) => job.priority)).toEqual(["reminder", "background"]);
     });
 
-    it("should exclude a job whose breaker is open", () => {
+    it("should exclude a job whose breaker is open, for the cooldown and no longer", () => {
+      // syl-6z2. This test used to assert the exclusion was permanent, which
+      // is what it was: `release` is the only call that can close a breaker
+      // and it is reachable only from `due`, so a job `due` never returned
+      // could never run, never be released, and never recover — not on a
+      // success, not from an endpoint, not across a restart.
       const job = jobs.define(reminderDelivery());
-      for (let i = 0; i < BREAKER_THRESHOLD; i += 1) {
+      trip(job.id);
+
+      expect(jobs.get(job.id)?.circuitBreaker.state).toBe("open");
+      expect(jobs.get(job.id)?.circuitBreaker.openedAt).toBe(new Date(now).toISOString());
+
+      // Shut, while the cooldown runs.
+      expect(jobs.due(now + BREAKER_COOLDOWN_MS - 1_000)).toHaveLength(0);
+      expect(jobs.nextRunAt(now + BREAKER_COOLDOWN_MS - 1_000)).toBeNull();
+
+      // And open to exactly one trial run afterwards.
+      expect(jobs.due(now + BREAKER_COOLDOWN_MS)).toHaveLength(1);
+      expect(jobs.nextRunAt(now + BREAKER_COOLDOWN_MS)).not.toBeNull();
+    });
+
+    it("should probe an open breaker rather than stay open forever", () => {
+      const job = jobs.define(reminderDelivery());
+      trip(job.id);
+
+      now += BREAKER_COOLDOWN_MS;
+      // Taking the lease is the trial run, and the state says so.
+      expect(jobs.lease(job.id, "owner", 60_000)?.circuitBreaker.state).toBe("half_open");
+    });
+
+    it("should close the breaker again after a success, even from wide open", () => {
+      // The old version of this test failed once — leaving the breaker closed —
+      // and then asserted recovery, so it exercised a state the system can
+      // always reach and never the one it could not escape.
+      const job = jobs.define(reminderDelivery());
+      trip(job.id);
+
+      now += BREAKER_COOLDOWN_MS;
+      jobs.lease(job.id, "owner", 60_000);
+      const released = jobs.release(job.id, "success", null);
+
+      expect(released?.circuitBreaker.state).toBe("closed");
+      expect(released?.circuitBreaker.consecutiveFailures).toBe(0);
+      expect(released?.circuitBreaker.openedAt).toBeNull();
+      expect(jobs.due(now + 60_000)).toHaveLength(1);
+    });
+
+    it("should re-open from the failed probe, not from the first failure", () => {
+      // Otherwise the cooldown expires once and every later tick probes a job
+      // that is still broken — the hot loop the breaker exists to stop.
+      const job = jobs.define(reminderDelivery());
+      trip(job.id);
+
+      now += BREAKER_COOLDOWN_MS;
+      jobs.lease(job.id, "owner", 60_000);
+      jobs.release(job.id, "failure", null);
+
+      expect(jobs.get(job.id)?.circuitBreaker.state).toBe("open");
+      expect(jobs.get(job.id)?.circuitBreaker.openedAt).toBe(new Date(now).toISOString());
+      expect(jobs.due(now + 60_000)).toHaveLength(0);
+    });
+
+    it("should keep probing a job that stays broken all day, and never abandon it", () => {
+      // The shape nothing in the suite ran: many passes, not one. A job that
+      // fails every probe must go on being probed — for reminder delivery the
+      // alternative is that the Commander is never reminded of anything again.
+      const job = jobs.define(reminderDelivery());
+      trip(job.id);
+
+      let probes = 0;
+      const started = now;
+      for (; now <= started + 86_400_000; now += 60_000) {
+        if (jobs.due(now).length === 0) continue;
+        probes += 1;
         jobs.lease(job.id, "owner", 60_000);
         jobs.release(job.id, "failure", null);
       }
 
+      // A day of five-minute cooldowns: bounded, and never zero.
+      expect(probes).toBeGreaterThan(250);
+      expect(probes).toBeLessThan(300);
       expect(jobs.get(job.id)?.circuitBreaker.state).toBe("open");
-      expect(jobs.due(now + 3_600_000)).toHaveLength(0);
-      expect(jobs.nextRunAt()).toBeNull();
-    });
-
-    it("should close the breaker again after a success", () => {
-      const job = jobs.define(reminderDelivery());
-      jobs.lease(job.id, "owner", 60_000);
-      jobs.release(job.id, "failure", null);
-      jobs.lease(job.id, "owner", 60_000);
-      jobs.release(job.id, "success", null);
-
-      expect(jobs.get(job.id)?.circuitBreaker.consecutiveFailures).toBe(0);
     });
 
     it("should report the next instant anything is scheduled", () => {
