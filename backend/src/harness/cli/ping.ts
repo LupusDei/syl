@@ -33,7 +33,9 @@ async function main(): Promise<void> {
   const soul = readSoul();
 
   const agent = new SylAgent({
-    store: fileSessionStore(join(root, ".syl", "session-id")),
+    // One file per lane. The Commander's conversation must not share a
+    // transcript with the heartbeat or the nightly consolidation pass.
+    store: fileSessionStore(join(root, ".syl", "sessions")),
     ...(soul ? { soul } : {}),
     turnOptions: {
       model: "claude-haiku-4-5",

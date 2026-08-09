@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 import { resolveClaudeBinFromProcess } from "./claude-bin.js";
 
@@ -40,19 +41,38 @@ export interface TurnOptions {
   readonly mcpConfig?: string;
   /** Prior session id, to continue an existing conversation. */
   readonly resume?: string;
+  /**
+   * Session id to create the conversation under, instead of letting the CLI
+   * mint one. Must be a UUID; `newSessionId()` produces a suitable value.
+   *
+   * Ignored when `resume` is set — that conversation already has an id.
+   * Defaults to a fresh uuid, so the id is always known before the spawn.
+   */
+  readonly sessionId?: string;
   /** Override the `claude` binary path. */
   readonly claudeBin?: string;
   /**
-   * Claude Code permission mode. Defaults to `bypassPermissions`.
+   * Claude Code permission mode. **No default** — the caller decides.
    *
-   * The CLI default requires interactive approval, and in `-p` mode there is
-   * nobody to approve — so every MCP call is denied and the assistant burns
-   * turns discovering it cannot act. Unattended means pre-authorised.
+   * A headless turn nobody can approve needs `"bypassPermissions"`, or the CLI
+   * denies every call and the assistant burns turns discovering it cannot act.
+   * But that is exactly the wrong answer for a turn that reads untrusted text,
+   * so it must be chosen at each call site rather than inherited silently.
+   * See `runReaderTurn` for the other end of that spectrum.
    */
   readonly permissionMode?: string;
   /**
-   * Ignore ambient MCP configuration and use only `mcpConfig`. Defaults to true
-   * when `mcpConfig` is set.
+   * Which built-in tools exist for this turn. `""` disables all of them.
+   *
+   * This is `--tools`, not `--allowedTools`, and the difference is a security
+   * boundary: `--allowedTools` pre-approves names on a surface that still
+   * exists, while `--tools` sets what exists at all. Only the latter makes a
+   * turn *incapable* of acting.
+   */
+  readonly tools?: string;
+  /**
+   * Ignore ambient MCP configuration. Defaults to true when `mcpConfig` is set,
+   * and can be set true on its own to mean "no MCP servers at all".
    *
    * Without it the session inherits every MCP server the user happens to have
    * configured, and the model burns dozens of turns searching a tool surface
@@ -64,8 +84,54 @@ export interface TurnOptions {
    * Defaults to true — this harness exists to stay on subscription rails.
    */
   readonly requireSubscriptionAuth?: boolean;
+  /**
+   * Milliseconds before a turn that has produced no result is killed.
+   * Defaults to {@link DEFAULT_TURN_TIMEOUT_MS}; zero or less disables it.
+   */
+  readonly timeoutMs?: number;
+  /**
+   * Called with the session id **before the process is spawned**, so a caller
+   * can persist it first. See {@link runTurn} on why that ordering matters.
+   */
+  readonly onSessionId?: (sessionId: string) => void;
   /** Called for every decoded event as it arrives. */
   readonly onEvent?: (event: SylEvent) => void;
+}
+
+/**
+ * Default ceiling on a single turn.
+ *
+ * Generous on purpose: a research turn doing real work legitimately runs for
+ * minutes, and a timeout that fires on a healthy turn is worse than none. This
+ * is a deadlock breaker, not a latency budget.
+ */
+export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60_000;
+
+/** How long a killed child gets to exit on SIGTERM before SIGKILL. */
+const SIGKILL_GRACE_MS = 2_000;
+
+/**
+ * The turn was killed for making no progress.
+ *
+ * Distinct from a turn that failed: nothing is known about whether the work
+ * happened, so a caller must not treat this as "Claude said no".
+ */
+export class TurnTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number, sawInit: boolean) {
+    super(
+      `Claude turn exceeded its ${timeoutMs}ms timeout and was killed ` +
+        `(${sawInit ? "the session had started but never produced a result" : "the CLI never completed its init handshake"}).`,
+    );
+    this.name = "TurnTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/** A session id in the form the CLI's `--session-id` requires. */
+export function newSessionId(): string {
+  return randomUUID();
 }
 
 export interface TurnResult {
@@ -93,13 +159,23 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
   delete env["ANTHROPIC_API_KEY"];
   delete env["ANTHROPIC_AUTH_TOKEN"];
 
+  // The id is settled before the spawn, not learned from the init event.
+  // Learning it means a crash between spawn and init loses a conversation that
+  // exists on disk — the caller has no id to resume and no way to find one.
+  // Verified on 2.1.226: `--session-id <uuid>` is honoured exactly, and both
+  // the init and result frames come back carrying it.
+  const sessionId = options.resume ?? options.sessionId ?? newSessionId();
+  options.onSessionId?.(sessionId);
+
   const args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"];
   if (options.model) args.push("--model", options.model);
   if (options.systemPrompt) args.push("--append-system-prompt", options.systemPrompt);
   if (options.mcpConfig) args.push("--mcp-config", options.mcpConfig);
-  if (options.mcpConfig && options.strictMcpConfig !== false) args.push("--strict-mcp-config");
-  args.push("--permission-mode", options.permissionMode ?? "bypassPermissions");
+  if (options.strictMcpConfig ?? options.mcpConfig !== undefined) args.push("--strict-mcp-config");
+  if (options.permissionMode) args.push("--permission-mode", options.permissionMode);
+  if (options.tools !== undefined) args.push("--tools", options.tools);
   if (options.resume) args.push("--resume", options.resume);
+  else args.push("--session-id", sessionId);
 
   const claudeBin = options.claudeBin ?? resolveClaudeBinFromProcess();
   const child = spawn(claudeBin, args, {
@@ -150,15 +226,46 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
     stderr += chunk;
   });
 
+  // If the CLI rejects its arguments it exits before reading stdin, and the
+  // write below lands on a closed pipe. An unhandled EPIPE on a stream takes
+  // the whole process down and buries the actual error, which is the exit code
+  // and stderr the close handler is about to report.
+  child.stdin.on("error", () => {
+    /* deliberately ignored — the exit path below explains what happened */
+  });
+
   // The turn only completes on stdin EOF — see the note above.
   child.stdin.write(frame);
   child.stdin.end();
 
+  // A wedged CLI holds its pipes open and produces nothing. Without this the
+  // turn never settles and takes its caller — a scheduled job, an HTTP
+  // request — down with it. SIGTERM first so the CLI can tidy up; SIGKILL
+  // after a grace period in case it is wedged badly enough to ignore that.
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
+  let timedOut = false;
+  let timer: NodeJS.Timeout | undefined;
+  let killTimer: NodeJS.Timeout | undefined;
+
   const exitCode = await new Promise<number | null>((resolve, reject) => {
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+        killTimer = setTimeout(() => child.kill("SIGKILL"), SIGKILL_GRACE_MS);
+        killTimer.unref();
+      }, timeoutMs);
+    }
     child.once("error", reject);
     child.once("close", resolve);
+  }).finally(() => {
+    clearTimeout(timer);
+    clearTimeout(killTimer);
   });
 
+  // Checked first: after a kill the transcript is arbitrarily truncated, so
+  // every check below would report the wrong cause.
+  if (timedOut) throw new TurnTimeoutError(timeoutMs, init !== undefined);
   if (apiError) throw apiError;
   if (!init) {
     throw new Error(

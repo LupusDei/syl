@@ -41,10 +41,9 @@ jobs:
       - name: Test (every workspace)
         run: npm test
 
-      # Not yet blocking. runTurn() in backend/src/harness/session.ts has no
-      # unit tests at all, which holds the repo at ~72% lines against the
-      # constitution's 80%. syl-001.3.1 adds them; flip this to a hard gate by
-      # deleting continue-on-error once it lands.
-      - name: Coverage (report only — see syl-001.3.1)
+      # Blocking. Thresholds live in vitest.shared.ts (80/70/60, constitution
+      # rule 1) so no workspace can quietly lower its own bar. This step ran
+      # report-only until syl-001.3.1 gave session.ts its first tests; do not
+      # reintroduce continue-on-error, and do not lower the thresholds.
+      - name: Coverage
         run: npm run test:coverage
-        continue-on-error: true

@@ -47,7 +47,10 @@ An npm monorepo. `ios/` is Swift and deliberately **not** an npm workspace.
 backend/                          the Node 22 service (npm workspace)
   src/harness/protocol.ts         pure codec — JSON lines <-> typed events. Zero I/O.
   src/harness/session.ts          runTurn(): one subprocess per turn
-  src/harness/agent.ts            SylAgent: continuity + stale-session recovery
+  src/harness/agent.ts            SylAgent: per-lane continuity + stale-session recovery
+  src/harness/reader.ts           runReaderTurn(): untrusted text, no tools
+  tests/helpers/fake-claude.ts    a real fake `claude` executable, for driving runTurn
+  tests/fixtures/*.jsonl          captured CLI transcripts — never hand-written
   src/harness/schedule.ts         wall-clock scheduling + quiet hours
   src/harness/cli/ping.ts         end-to-end smoke test
   tests/unit/**                   vitest
@@ -118,10 +121,25 @@ to add is about *additional* surfaces and blocks nothing.
   disables every built-in tool). To make a turn incapable of acting — which is
   what reading untrusted content requires — you need `--tools`, not
   `--allowedTools`. Verified against `claude --help` on 2.1.226.
-- `runTurn` defaults to `--permission-mode bypassPermissions`. That is correct
-  for a headless turn nobody can approve, and **actively dangerous the moment
-  untrusted text enters a prompt**. Any turn that reads fetched content must
-  drop to a no-tools shape first.
+- **`runTurn` has no default permission mode** (as of `syl-001.3.4`). It used to
+  default to `bypassPermissions`, which is correct for a headless turn nobody
+  can approve and actively dangerous the moment untrusted text enters a prompt.
+  Each call site now opts in: `SylAgent` asks for `bypassPermissions` because it
+  is the Commander's own trusted conversation, and `runReaderTurn` does not.
+- **Reading anything fetched goes through `runReaderTurn`** (`harness/reader.ts`),
+  never `runTurn`: `--tools ""`, `--strict-mcp-config` with no MCP config, no
+  pre-authorisation, a session that is never resumed or persisted, and output
+  that is schema-validated or discarded. It throws if the tool surface comes
+  back non-empty, so a CLI change cannot silently reopen the hole.
+- Every turn gets its session id **before** the spawn, via `--session-id <uuid>`
+  (honoured exactly on 2.1.226; both init and result echo it). `TurnOptions.
+  onSessionId` fires pre-spawn so the id can be persisted first — a crash
+  between spawn and init used to strand a conversation that existed on disk.
+- `runTurn` kills a turn that produces no result within `timeoutMs`
+  (`DEFAULT_TURN_TIMEOUT_MS`, 10 minutes) and throws `TurnTimeoutError`.
+- Session continuity is **per lane** — `commander`, `heartbeat`, `agenda`,
+  `consolidation` — each in its own file under `.syl/sessions/`. One shared id
+  would interleave Syl's inner monologue with talking to the Commander.
 - Node **22** is required (`.nvmrc` pins 22.23.1). Node 20 is end-of-life and
   lacks `node:sqlite`. Verified on 22.23.1: `node:sqlite` imports without a flag
   (SQLite 3.51.3) and **FTS5 is compiled in**, so keyword search needs no native

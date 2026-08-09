@@ -1,6 +1,16 @@
-import { describe, it, expect, vi } from "vitest";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { SylAgent, type SessionStore } from "../../src/harness/agent.js";
+import { afterEach, describe, it, expect, vi } from "vitest";
+
+import {
+  LANES,
+  SylAgent,
+  fileSessionStore,
+  memorySessionStore,
+  type SessionStore,
+} from "../../src/harness/agent.js";
 import type { TurnOptions, TurnResult, TurnRunner } from "../../src/harness/session.js";
 
 function fakeResult(sessionId: string, text = "ok"): TurnResult {
@@ -23,12 +33,16 @@ function fakeResult(sessionId: string, text = "ok"): TurnResult {
   };
 }
 
-function memoryStore(initial?: string): SessionStore {
-  let value = initial;
+/** In-memory store, optionally pre-seeded per lane. */
+function memoryStore(initial: Record<string, string> = {}): SessionStore {
+  const lanes = new Map(Object.entries(initial));
   return {
-    read: () => value,
-    write: (id) => {
-      value = id;
+    read: (lane) => lanes.get(lane),
+    write: (lane, id) => {
+      lanes.set(lane, id);
+    },
+    clear: (lane) => {
+      lanes.delete(lane);
     },
   };
 }
@@ -38,6 +52,31 @@ function optionsOfCall(runner: ReturnType<typeof vi.fn<TurnRunner>>, index: numb
   const call = runner.mock.calls[index];
   if (!call) throw new Error(`expected runner call #${index}`);
   return call[1];
+}
+
+/**
+ * A runner that behaves like `runTurn`: it announces the session id it is about
+ * to use before doing any work, and returns that same id.
+ */
+function announcingRunner(idFor: (call: number) => string): ReturnType<typeof vi.fn<TurnRunner>> {
+  let call = 0;
+  return vi.fn<TurnRunner>(async (_prompt, options) => {
+    const id = options.resume ?? options.sessionId ?? idFor(call++);
+    options.onSessionId?.(id);
+    return fakeResult(id);
+  });
+}
+
+const dirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function tempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "syl-agent-"));
+  dirs.push(dir);
+  return dir;
 }
 
 describe("SylAgent", () => {
@@ -81,6 +120,26 @@ describe("SylAgent", () => {
     expect(optionsOfCall(runner, 0).systemPrompt).toBe("be helpful");
   });
 
+  it("should pre-authorise its turns, since a headless turn has nobody to approve it", async () => {
+    // runTurn deliberately has no default permission mode. This is the trusted
+    // lane — the Commander's own conversation — so it opts in explicitly rather
+    // than inheriting a default that would also apply to untrusted content.
+    const runner = vi.fn<TurnRunner>(async () => fakeResult("s"));
+
+    await new SylAgent({ runner, store: memoryStore() }).ask("hi");
+
+    expect(optionsOfCall(runner, 0).permissionMode).toBe("bypassPermissions");
+  });
+
+  it("should let the caller override the permission mode", async () => {
+    const runner = vi.fn<TurnRunner>(async () => fakeResult("s"));
+    const agent = new SylAgent({ runner, store: memoryStore(), turnOptions: { permissionMode: "plan" } });
+
+    await agent.ask("hi");
+
+    expect(optionsOfCall(runner, 0).permissionMode).toBe("plan");
+  });
+
   it("should drop a stale session id when resuming fails, so a bad id cannot wedge the agent permanently", async () => {
     // Guards the failure where a session is expired or pruned: without this the
     // agent retries the same dead id forever and never speaks again.
@@ -88,7 +147,7 @@ describe("SylAgent", () => {
       .fn<TurnRunner>()
       .mockRejectedValueOnce(new Error("No conversation found with session ID: dead"))
       .mockResolvedValueOnce(fakeResult("sess-new"));
-    const agent = new SylAgent({ runner, store: memoryStore("dead") });
+    const agent = new SylAgent({ runner, store: memoryStore({ commander: "dead" }) });
 
     const result = await agent.ask("hello");
 
@@ -104,7 +163,7 @@ describe("SylAgent", () => {
     const runner = vi
       .fn<TurnRunner>()
       .mockRejectedValue(new Error("Claude API error (billing_error): Credit balance is too low"));
-    const agent = new SylAgent({ runner, store: memoryStore("sess-1") });
+    const agent = new SylAgent({ runner, store: memoryStore({ commander: "sess-1" }) });
 
     await expect(agent.ask("hello")).rejects.toThrow(/billing_error/);
     expect(runner).toHaveBeenCalledTimes(1);
@@ -112,11 +171,231 @@ describe("SylAgent", () => {
 
   it("should clear the stored session on reset so the next turn starts clean", async () => {
     const runner = vi.fn<TurnRunner>(async () => fakeResult("sess-2"));
-    const agent = new SylAgent({ runner, store: memoryStore("sess-1") });
+    const agent = new SylAgent({ runner, store: memoryStore({ commander: "sess-1" }) });
 
     agent.reset();
     await agent.ask("hi");
 
     expect(optionsOfCall(runner, 0).resume).toBeUndefined();
+  });
+
+  describe("session lanes", () => {
+    it("should keep each lane on its own conversation", async () => {
+      // The failure this prevents: the heartbeat, the morning agenda and the
+      // Commander's own conversation sharing one thread, so Syl's inner
+      // monologue interleaves with talking to him.
+      const store = memoryStore();
+      const runner = announcingRunner((n) => `sess-${n}`);
+      const syl = new SylAgent({ runner, store });
+
+      await syl.ask("morning agenda please", LANES.agenda);
+      await syl.ask("anything needing attention?", LANES.heartbeat);
+      await syl.ask("agenda again", LANES.agenda);
+      await syl.ask("heartbeat again", LANES.heartbeat);
+
+      expect(optionsOfCall(runner, 0).resume).toBeUndefined();
+      expect(optionsOfCall(runner, 1).resume).toBeUndefined();
+      // Each lane resumes what it started, not what the other lane last said.
+      expect(optionsOfCall(runner, 2).resume).toBe("sess-0");
+      expect(optionsOfCall(runner, 3).resume).toBe("sess-1");
+    });
+
+    it("should default to the Commander's lane", async () => {
+      const store = memoryStore();
+      const runner = announcingRunner(() => "sess-c");
+
+      await new SylAgent({ runner, store }).ask("hi");
+
+      expect(store.read(LANES.commander)).toBe("sess-c");
+      expect(store.read(LANES.heartbeat)).toBeUndefined();
+    });
+
+    it("should expose a lane-scoped agent so a scheduled job can hold a stable handle", async () => {
+      const store = memoryStore();
+      const runner = announcingRunner((n) => `sess-${n}`);
+      const heartbeat = new SylAgent({ runner, store }).forLane(LANES.heartbeat);
+
+      await heartbeat.ask("tick");
+      await heartbeat.ask("tock");
+
+      expect(heartbeat.lane).toBe(LANES.heartbeat);
+      expect(optionsOfCall(runner, 1).resume).toBe("sess-0");
+      expect(store.read(LANES.commander)).toBeUndefined();
+    });
+
+    it("should reset only the lane it was asked to reset", async () => {
+      const store = memoryStore({ commander: "sess-c", heartbeat: "sess-h" });
+      const runner = announcingRunner(() => "fresh");
+      const syl = new SylAgent({ runner, store });
+
+      syl.reset(LANES.heartbeat);
+
+      expect(syl.sessionIdFor(LANES.commander)).toBe("sess-c");
+      expect(syl.sessionIdFor(LANES.heartbeat)).toBeUndefined();
+    });
+
+    it("should recover a stale lane without disturbing the others", async () => {
+      const store = memoryStore({ commander: "sess-c", heartbeat: "dead" });
+      const runner = vi
+        .fn<TurnRunner>()
+        .mockRejectedValueOnce(new Error("No conversation found with session ID: dead"))
+        .mockResolvedValueOnce(fakeResult("sess-h2"));
+      const syl = new SylAgent({ runner, store });
+
+      await syl.ask("tick", LANES.heartbeat);
+
+      expect(syl.sessionIdFor(LANES.heartbeat)).toBe("sess-h2");
+      expect(syl.sessionIdFor(LANES.commander)).toBe("sess-c");
+    });
+
+    it("should reject a lane name that cannot be a file name", async () => {
+      // Lane names become paths in the file-backed store; "../../etc/passwd"
+      // must not be one of them.
+      const syl = new SylAgent({ runner: announcingRunner(() => "s"), store: memoryStore() });
+
+      await expect(syl.ask("hi", "../escape")).rejects.toThrow(/lane/i);
+      expect(() => syl.forLane("has space")).toThrow(/lane/i);
+    });
+  });
+
+  describe("crash-safe session ids", () => {
+    it("should persist the session id before the turn runs, not after it succeeds", async () => {
+      // The window: the CLI creates the session on disk, then the process dies
+      // before init. If the id is only learned from the result, that
+      // conversation is unreachable forever.
+      const store = memoryStore();
+      const runner = vi.fn<TurnRunner>(async (_prompt, options) => {
+        options.onSessionId?.("sess-born");
+        throw new Error("claude exited with code 1 before the init handshake. stderr: boom");
+      });
+
+      await expect(new SylAgent({ runner, store }).ask("hi")).rejects.toThrow(/init handshake/);
+
+      expect(store.read(LANES.commander)).toBe("sess-born");
+    });
+
+    it("should resume the id a crashed turn left behind", async () => {
+      const store = memoryStore();
+      const runner = vi
+        .fn<TurnRunner>()
+        .mockImplementationOnce(async (_prompt, options) => {
+          options.onSessionId?.("sess-born");
+          throw new Error("claude exited with code 1 before the init handshake");
+        })
+        .mockImplementationOnce(async () => fakeResult("sess-born"));
+      const syl = new SylAgent({ runner, store });
+
+      await syl.ask("hi").catch(() => undefined);
+      await syl.ask("still there?");
+
+      expect(optionsOfCall(runner, 1).resume).toBe("sess-born");
+    });
+
+    it("should not persist an announced id from a retry that then fails outright", async () => {
+      // A resume failure clears the lane and retries fresh. If that retry also
+      // dies, the lane must hold the *new* id — the old one is known dead.
+      const store = memoryStore({ commander: "dead" });
+      const runner = vi
+        .fn<TurnRunner>()
+        .mockImplementationOnce(async () => {
+          throw new Error("No conversation found with session ID: dead");
+        })
+        .mockImplementationOnce(async (_prompt, options) => {
+          options.onSessionId?.("sess-second");
+          throw new Error("claude exited with code 1 before the init handshake");
+        });
+
+      await expect(new SylAgent({ runner, store }).ask("hi")).rejects.toThrow(/init handshake/);
+
+      expect(store.read(LANES.commander)).toBe("sess-second");
+    });
+  });
+
+  describe("memorySessionStore", () => {
+    it("should keep lanes apart within the process", () => {
+      const store = memorySessionStore();
+
+      store.write("commander", "sess-c");
+      store.write("heartbeat", "sess-h");
+
+      expect(store.read("commander")).toBe("sess-c");
+      expect(store.read("heartbeat")).toBe("sess-h");
+    });
+
+    it("should report an unwritten lane as absent, and forget one on clear", () => {
+      const store = memorySessionStore();
+      store.write("commander", "sess-c");
+
+      store.clear("commander");
+
+      expect(store.read("commander")).toBeUndefined();
+      expect(store.read("agenda")).toBeUndefined();
+    });
+
+    it("should reject an invalid lane name just as the file-backed store does", () => {
+      // The two stores are interchangeable, so they must agree on what a lane
+      // is. A name that only fails once it reaches disk is a latent surprise.
+      const store = memorySessionStore();
+
+      expect(() => store.write("../escape", "sess")).toThrow(/lane/i);
+      expect(() => store.read("a/b")).toThrow(/lane/i);
+    });
+
+    it("should be the default, giving continuity for the life of the process only", async () => {
+      const runner = announcingRunner(() => "sess-default");
+      const syl = new SylAgent({ runner });
+
+      await syl.ask("first");
+      await syl.ask("second");
+
+      expect(optionsOfCall(runner, 1).resume).toBe("sess-default");
+      // A fresh agent has a fresh store, which is what "no continuity" means.
+      expect(new SylAgent({ runner }).sessionId).toBeUndefined();
+    });
+  });
+
+  describe("fileSessionStore", () => {
+    it("should keep each lane in its own file", () => {
+      const dir = tempDir();
+      const store = fileSessionStore(dir);
+
+      store.write("commander", "sess-c");
+      store.write("heartbeat", "sess-h");
+
+      expect(store.read("commander")).toBe("sess-c");
+      expect(store.read("heartbeat")).toBe("sess-h");
+      expect(readFileSync(join(dir, "heartbeat"), "utf8")).toBe("sess-h");
+    });
+
+    it("should report an unwritten lane as absent rather than throwing", () => {
+      const store = fileSessionStore(join(tempDir(), "not", "created", "yet"));
+
+      expect(store.read("commander")).toBeUndefined();
+    });
+
+    it("should treat an empty or whitespace-only file as no session", () => {
+      // How a cleared lane looks on disk, and how a truncated write looks too.
+      const dir = tempDir();
+      writeFileSync(join(dir, "commander"), "  \n", "utf8");
+
+      expect(fileSessionStore(dir).read("commander")).toBeUndefined();
+    });
+
+    it("should forget a lane on clear", () => {
+      const dir = tempDir();
+      const store = fileSessionStore(dir);
+      store.write("commander", "sess-c");
+
+      store.clear("commander");
+
+      expect(store.read("commander")).toBeUndefined();
+    });
+
+    it("should refuse a lane name that would escape its directory", () => {
+      const store = fileSessionStore(tempDir());
+
+      expect(() => store.write("../outside", "sess")).toThrow(/lane/i);
+      expect(() => store.read("a/b")).toThrow(/lane/i);
+    });
   });
 });
