@@ -23,6 +23,33 @@ final class ModelCodingTests: XCTestCase {
         XCTAssertFalse(SylIDs.isWellFormed("syl:reminder:"))
     }
 
+    func testShouldTreatTwoCasesOfTheSameIdentifierAsTheSameResource() {
+        // The contract's pattern permits either hex case and the service accepts both,
+        // though it only ever mints lower case. Comparing bare strings would produce a
+        // duplicated row rather than an error.
+        let lower = "syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f"
+        let upper = "syl:reminder:0198F2C1-4A3B-7D21-9F00-1A2B3C4D5E6F"
+
+        XCTAssertTrue(SylIDs.areEqual(lower, upper))
+        XCTAssertNotEqual(lower, upper, "which is exactly why areEqual exists")
+        XCTAssertEqual(SylIDs.canonical(upper), lower)
+    }
+
+    func testShouldAcceptEitherHexCaseAsWellFormed() {
+        XCTAssertTrue(
+            SylIDs.isWellFormed("syl:reminder:0198F2C1-4A3B-7D21-9F00-1A2B3C4D5E6F")
+        )
+    }
+
+    func testShouldNotTreatDifferentIdentifiersAsEqual() {
+        XCTAssertFalse(
+            SylIDs.areEqual(
+                "syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f",
+                "syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e70"
+            )
+        )
+    }
+
     func testShouldReadTheResourceTypeOutOfAnIdentifier() {
         XCTAssertEqual(
             SylIDs.type(of: "syl:conversation:00000000-0000-7000-8000-000000000001"),

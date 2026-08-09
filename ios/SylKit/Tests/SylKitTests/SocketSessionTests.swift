@@ -192,6 +192,58 @@ final class SocketSessionTests: XCTestCase {
         XCTAssertEqual(outcomes, [.emit(.needsHTTPSync(fromSeq: 4102))])
     }
 
+    func testShouldAskAgainWhenAPageWasTruncatedRatherThanFallingBackToHTTP() {
+        // The service is explicit: truncation by `limit` is NOT incompleteness. Nothing
+        // was lost, so the client re-syncs from `toSeq`. Treating a capped page as
+        // incomplete would send it to GET /sync on every large gap, and the two ends
+        // would disagree about what "complete" means.
+        var session = makeSession(lastSeq: 100)
+        _ = session.receive(.authChallenge(WsAuthChallenge(nonce: "n", protocolVersion: 1)))
+        _ = session.receive(.connected(connected(lastSeq: 500)))
+
+        let outcomes = session.receive(
+            .syncResponse(WsSyncResponse(fromSeq: 100, toSeq: 300, complete: true, frames: []))
+        )
+
+        XCTAssertEqual(outcomes, [.send(.sync(WsSync(sinceSeq: 300)))])
+        XCTAssertFalse(
+            outcomes.contains { outcome in
+                if case .emit(.needsHTTPSync) = outcome { return true }
+                return false
+            },
+            "a truncated page is not a lost one"
+        )
+    }
+
+    func testShouldStopAskingOnceATruncatedSequenceCatchesUpWithTheServer() {
+        var session = makeSession(lastSeq: 100)
+        _ = session.receive(.authChallenge(WsAuthChallenge(nonce: "n", protocolVersion: 1)))
+        _ = session.receive(.connected(connected(lastSeq: 300)))
+
+        let outcomes = session.receive(
+            .syncResponse(WsSyncResponse(fromSeq: 100, toSeq: 300, complete: true, frames: []))
+        )
+
+        XCTAssertTrue(outcomes.isEmpty)
+    }
+
+    func testShouldNotLoopWhenAPageMovesTheMarkNowhere() {
+        // A page that returned nothing and advanced nothing would otherwise ask for
+        // the same range forever.
+        var session = makeSession(lastSeq: 300)
+        _ = session.receive(.authChallenge(WsAuthChallenge(nonce: "n", protocolVersion: 1)))
+        _ = session.receive(.connected(connected(lastSeq: 500)))
+
+        let outcomes = session.receive(
+            .syncResponse(WsSyncResponse(fromSeq: 300, toSeq: 300, complete: true, frames: []))
+        )
+
+        XCTAssertFalse(outcomes.contains { outcome in
+            if case .send = outcome { return true }
+            return false
+        })
+    }
+
     func testShouldStillAdvanceToTheEndOfAnIncompleteRangeSoItDoesNotAskAgainForever() {
         var session = ready(lastSeq: 4102)
 

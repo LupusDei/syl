@@ -30,6 +30,9 @@ struct SyncReport: Equatable, Sendable {
     var abandoned = 0
     /// Intents left queued after a failure that might yet succeed.
     var deferred = 0
+    /// Intents parked because the first attempt may have landed and the service does
+    /// not deduplicate that kind. Neither retried nor dropped.
+    var blocked = 0
     var changesApplied = 0
     var pagesPulled = 0
     /// The server had more to give than this run took. Not an error — a device back
@@ -99,6 +102,23 @@ actor SyncEngine {
                     try? outbox.abandon(record)
                     report.abandoned += 1
                     report.failures.append("\(record.kind.rawValue): \(error.localizedDescription)")
+                } else if !record.kind.isSafeToReplayBlind, error.mayHaveReachedTheServer {
+                    // The request may have landed and the service does not deduplicate
+                    // this kind — `Idempotency-Key` is in the contract but only message
+                    // sends honour it today (`syl-1mz`). Retrying a snooze here would
+                    // defer the reminder by another fifteen minutes, which is exactly
+                    // the quiet kind of wrong this project cares most about.
+                    //
+                    // So it is parked, not dropped. Nothing vanishes; it waits visibly.
+                    try? outbox.block(record, reason: error.localizedDescription)
+                    report.blocked += 1
+                    report.failures.append(
+                        """
+                        \(record.kind.rawValue) may already have taken effect and cannot be \
+                        retried safely: \(error.localizedDescription)
+                        """
+                    )
+                    return
                 } else {
                     try? outbox.recordFailure(record, error: error.localizedDescription)
                     report.deferred += 1

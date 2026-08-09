@@ -36,6 +36,17 @@ public struct URLSessionWebSocketConnector: WebSocketConnecting {
 
 /// Wraps `URLSessionWebSocketTask`.
 ///
+/// **The server speaks first, and this API is pull-based, which is why that is safe.**
+/// `auth_challenge` is sent the instant the connection opens. A client built on an
+/// event-subscription API that awaits `open` and only *then* attaches a message
+/// listener misses the challenge entirely — and a lost first frame looks exactly like
+/// a server that never sent one, so the hour goes into reading the server's code and
+/// finding it plainly correct.
+///
+/// `URLSessionWebSocketTask` buffers received frames until `receive()` asks for them,
+/// so nothing arrives before someone is listening. Do not "modernise" this into a
+/// delegate or a callback registered after the open event.
+///
 /// Note what is *not* here: no `Authorization` header. Authentication is a frame, not
 /// a header — the browser WebSocket API cannot set one, and the iOS client
 /// deliberately uses the same handshake so there is one code path across two

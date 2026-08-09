@@ -23,6 +23,33 @@ struct OutboxRecord: Codable, FetchableRecord, MutablePersistableRecord, Equatab
         case completeTodo
         case createTodo
         case createReminder
+
+        /// Whether replaying this intent is safe when we cannot tell whether the first
+        /// attempt landed.
+        ///
+        /// **`Idempotency-Key` is in the contract for every write, but only message
+        /// sends actually deduplicate on it today** — via a `clientId` unique index —
+        /// and the rest is tracked as `syl-1mz`. So this is not a restatement of the
+        /// contract; it is what the service currently does, which is what a retry
+        /// actually meets.
+        ///
+        /// The two categories:
+        ///
+        /// - **Server-deduplicated or naturally repeatable.** A second acknowledgement
+        ///   is documented as a no-op returning the existing row. Completing something
+        ///   already complete lands in the same terminal state.
+        /// - **Not.** A second snooze defers by another fifteen minutes, so a retry
+        ///   turns one deferral into two and the reminder arrives half an hour late —
+        ///   which is the quiet kind of wrong this project cares most about. A second
+        ///   create is a duplicated row.
+        var isSafeToReplayBlind: Bool {
+            switch self {
+            case .sendMessage, .acknowledgeDelivery, .completeReminder, .completeTodo:
+                return true
+            case .snoozeReminder, .createTodo, .createReminder:
+                return false
+            }
+        }
     }
 
     var id: Int64?
@@ -35,6 +62,11 @@ struct OutboxRecord: Codable, FetchableRecord, MutablePersistableRecord, Equatab
     var createdAt: Date
     var attempts: Int
     var lastError: String?
+    /// Set when the row must not be retried automatically because the first attempt
+    /// may have landed and the service does not deduplicate this kind. The row stays —
+    /// nothing is ever dropped — but it waits for the Commander rather than risking a
+    /// second deferral.
+    var blockedReason: String?
 
     init(
         id: Int64? = nil,
@@ -44,7 +76,8 @@ struct OutboxRecord: Codable, FetchableRecord, MutablePersistableRecord, Equatab
         payload: Data? = nil,
         createdAt: Date,
         attempts: Int = 0,
-        lastError: String? = nil
+        lastError: String? = nil,
+        blockedReason: String? = nil
     ) {
         self.id = id
         self.idempotencyKey = idempotencyKey
@@ -54,6 +87,7 @@ struct OutboxRecord: Codable, FetchableRecord, MutablePersistableRecord, Equatab
         self.createdAt = createdAt
         self.attempts = attempts
         self.lastError = lastError
+        self.blockedReason = blockedReason
     }
 
     mutating func didInsert(_ inserted: InsertionSuccess) {
@@ -110,11 +144,25 @@ struct Outbox: Sendable {
 
     /// The queue, oldest first. Order matters: a message sent before a snooze should
     /// reach the server in that order, because the Commander did them in that order.
+    ///
+    /// Blocked rows are excluded — they are not gone, they are waiting for a decision.
     func pending(limit: Int = 100) throws -> [OutboxRecord] {
         try database.queue.read { db in
             try OutboxRecord
+                .filter(Column("blockedReason") == nil)
                 .order(Column("createdAt"), Column("id"))
                 .limit(limit)
+                .fetchAll(db)
+        }
+    }
+
+    /// Rows that may already have taken effect and cannot be replayed safely. Shown to
+    /// the Commander rather than silently retried or silently dropped.
+    func blocked() throws -> [OutboxRecord] {
+        try database.queue.read { db in
+            try OutboxRecord
+                .filter(Column("blockedReason") != nil)
+                .order(Column("createdAt"), Column("id"))
                 .fetchAll(db)
         }
     }
@@ -148,5 +196,23 @@ struct Outbox: Sendable {
     /// identically forever, and retrying it blocks everything behind it.
     func abandon(_ record: OutboxRecord) throws {
         try complete(record)
+    }
+
+    /// Parks an intent that may already have taken effect.
+    ///
+    /// Neither retried nor discarded: retrying risks a second deferral, and discarding
+    /// would be the silent drop this project forbids. It waits, visibly, until someone
+    /// says which it was.
+    func block(_ record: OutboxRecord, reason: String) throws {
+        guard let id = record.id else { return }
+        try database.queue.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE outbox SET attempts = attempts + 1, lastError = ?, blockedReason = ?
+                    WHERE id = ?
+                    """,
+                arguments: [reason, reason, id]
+            )
+        }
     }
 }

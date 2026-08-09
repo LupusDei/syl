@@ -150,6 +150,59 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(try outbox.count(), 1)
     }
 
+    // MARK: - Writes the service does not deduplicate
+
+    func testShouldParkASnoozeThatMayAlreadyHaveTakenEffect() async throws {
+        // `Idempotency-Key` is in the contract for every write but only message sends
+        // honour it today (syl-1mz). Retrying a snooze after an ambiguous failure would
+        // defer the reminder by another fifteen minutes.
+        try enqueueSnooze(key: "key-00000001")
+
+        let report = await makeEngine(
+            push: { _ in throw APIError.transport(code: .timedOut, description: "timed out") }
+        ).synchronise()
+
+        XCTAssertEqual(report.blocked, 1)
+        XCTAssertEqual(report.deferred, 0)
+        XCTAssertEqual(try outbox.pending().count, 0, "not retried")
+        XCTAssertEqual(try outbox.blocked().count, 1, "and not dropped either")
+    }
+
+    func testShouldRetryASnoozeWhenTheRequestProvablyNeverLeftTheDevice() async throws {
+        // Nothing was received, so nothing can have been applied twice.
+        try enqueueSnooze(key: "key-00000001")
+
+        let report = await makeEngine(
+            push: { _ in throw APIError.transport(code: .cannotConnectToHost, description: "") }
+        ).synchronise()
+
+        XCTAssertEqual(report.blocked, 0)
+        XCTAssertEqual(report.deferred, 1)
+        XCTAssertEqual(try outbox.pending().count, 1)
+    }
+
+    func testShouldStillRetryAMessageAfterAnAmbiguousFailure() async throws {
+        // Message sends are deduplicated by the clientId unique index, so a replay is
+        // safe and the bubble must not hang pending forever.
+        try enqueueSend(clientId: "c1", key: "key-00000001")
+
+        let report = await makeEngine(
+            push: { _ in throw APIError.transport(code: .timedOut, description: "") }
+        ).synchronise()
+
+        XCTAssertEqual(report.blocked, 0)
+        XCTAssertEqual(try outbox.pending().count, 1)
+    }
+
+    func testShouldKnowWhichIntentsAreSafeToReplayBlind() {
+        XCTAssertTrue(OutboxRecord.Kind.sendMessage.isSafeToReplayBlind)
+        XCTAssertTrue(OutboxRecord.Kind.acknowledgeDelivery.isSafeToReplayBlind)
+        XCTAssertTrue(OutboxRecord.Kind.completeReminder.isSafeToReplayBlind)
+        XCTAssertFalse(OutboxRecord.Kind.snoozeReminder.isSafeToReplayBlind)
+        XCTAssertFalse(OutboxRecord.Kind.createTodo.isSafeToReplayBlind)
+        XCTAssertFalse(OutboxRecord.Kind.createReminder.isSafeToReplayBlind)
+    }
+
     func testShouldClassifyPermanentAndRecoverableFailuresApart() {
         XCTAssertTrue(
             SyncEngine.isPermanent(
@@ -416,6 +469,18 @@ final class SyncEngineTests: XCTestCase {
             return SyncResponse(
                 cursor: page.cursor, hasMore: page.hasMore, changes: [], serverTime: serverTime)
         }
+    }
+
+    private func enqueueSnooze(key: String) throws {
+        try outbox.enqueue(
+            OutboxRecord(
+                idempotencyKey: key,
+                kind: .snoozeReminder,
+                targetId: "syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f",
+                payload: try SylJSON.encoder().encode(SnoozeReminderRequest.minutes(15)),
+                createdAt: instant("2026-08-09T06:59:48.220Z")
+            )
+        )
     }
 
     private func enqueueSend(clientId: String, key: String) throws {

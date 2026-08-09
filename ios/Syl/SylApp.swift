@@ -25,17 +25,44 @@ struct RootView: View {
     @StateObject private var profiles = ServerProfileStore()
     @StateObject private var network = NetworkMonitor()
 
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
-        StatusView(
-            notifications: appDelegate.notifications,
-            serverName: profiles.selected.name,
-            baseURL: profiles.selected.baseURL,
-            reachability: network.reachability,
-            registration: appDelegate.registration
-        )
+        TabView {
+            NavigationStack {
+                if let chat = appDelegate.chat {
+                    ChatView(model: chat)
+                } else {
+                    // A database that will not open is a real state, not a crash. The
+                    // status tab still works and still says what is wrong.
+                    ContentUnavailableView(
+                        "This device's copy of Syl could not be opened",
+                        systemImage: "externaldrive.badge.exclamationmark",
+                        description: Text("Check free space, then relaunch.")
+                    )
+                }
+            }
+            .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
+
+            StatusView(
+                notifications: appDelegate.notifications,
+                serverName: profiles.selected.name,
+                baseURL: profiles.selected.baseURL,
+                reachability: network.reachability,
+                registration: appDelegate.registration
+            )
+            .tabItem { Label("Status", systemImage: "gearshape") }
+        }
         .task {
             network.start()
             appDelegate.notifications.refreshAuthorization()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // The foreground reconcile. Push collapses a night of notifications into
+            // one and Apple offers no way to ask what arrived, so returning to the app
+            // is where anything dropped or coalesced reappears.
+            guard phase == .active else { return }
+            Task { await appDelegate.synchroniseNow() }
         }
     }
 }

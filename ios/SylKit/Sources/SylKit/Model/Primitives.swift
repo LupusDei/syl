@@ -30,6 +30,21 @@ public enum SylIDs {
         return String(parts[1])
     }
 
+    /// An id in the form the service mints them.
+    ///
+    /// The contract's `Id` pattern permits either hex case, and the service accepts
+    /// both — but only ever emits lower case. That asymmetry is a trap: two ids that
+    /// the contract says are the same resource compare unequal as bare strings, and
+    /// the symptom is a duplicated row rather than an error.
+    public static func canonical(_ id: SylID) -> SylID {
+        id.lowercased()
+    }
+
+    /// Whether two ids name the same resource. **Use this rather than `==`.**
+    public static func areEqual(_ lhs: SylID, _ rhs: SylID) -> Bool {
+        lhs.compare(rhs, options: .caseInsensitive) == .orderedSame
+    }
+
     /// Whether an id matches the convention. Mirrors the `Id` pattern in `openapi.yaml`.
     public static func isWellFormed(_ id: SylID) -> Bool {
         let parts = id.split(separator: ":", omittingEmptySubsequences: false)

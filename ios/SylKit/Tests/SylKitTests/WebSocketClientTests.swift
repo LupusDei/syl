@@ -30,6 +30,25 @@ final class WebSocketClientTests: XCTestCase {
         await client.stop()
     }
 
+    func testShouldNotMissTheChallengeWhenTheServerSpeaksBeforeAnyoneIsListening() async throws {
+        // The server sends `auth_challenge` the instant the connection opens. A client
+        // built on an event-subscription API that awaits `open` and only then attaches
+        // a listener misses it entirely — and a lost first frame looks exactly like a
+        // server that never sent one, so the hour goes into reading the server's code.
+        //
+        // This client pulls: `URLSessionWebSocketTask` buffers until `receive()` asks.
+        // Queueing the challenge before the client even starts proves the ordering.
+        let socket = FakeSocket()
+        await socket.push(challenge())
+        await socket.push(connected(lastSeq: 7))
+        let client = makeClient(socket: socket, lastSeq: 7)
+
+        await client.start()
+
+        try await eventually { await client.connectionState == .connected }
+        await client.stop()
+    }
+
     func testShouldAskForTheGapWhenTheServerIsAhead() async throws {
         let socket = FakeSocket()
         let client = makeClient(socket: socket, lastSeq: 4471)

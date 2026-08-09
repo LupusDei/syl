@@ -117,6 +117,15 @@ The three rules worth knowing before touching it:
 - **`sinceSeq` is not `since`.** The frame recovers a socket by sequence number; the
   endpoint rebuilds a device store by opaque cursor. The names differ so they cannot
   be conflated.
+- **`complete: false` means the range aged out of the buffer, and nothing else.** A
+  page truncated by the server's `limit` is *not* incomplete — nothing was lost, so
+  the client re-syncs from `toSeq` rather than falling back to HTTP. The service is
+  explicit about this; a client that disagreed would either loop or drop messages.
+- **The server speaks first, and this client pulls.** `auth_challenge` arrives the
+  instant the socket opens. `URLSessionWebSocketTask` buffers until `receive()` asks,
+  so nothing is missed — but an event-subscription rewrite that awaited `open` before
+  attaching a listener would lose the challenge, and a lost first frame is
+  indistinguishable from a server that never sent one.
 
 ## The app shell, and four scars it is shaped around
 
@@ -179,6 +188,16 @@ must not gain any.
   abandons only what can never succeed. An expired token is **not** in that category —
   the intent is fine, the token is not, and discarding his message because a token
   expired would be the worst possible response.
+- **`Idempotency-Key` is in the contract for every write, but only message sends
+  deduplicate on it today** (`syl-1mz`). So the outbox tracks which intents are safe to
+  replay blind. A snooze is not: a second one defers by another fifteen minutes, and a
+  reminder arriving half an hour late is the quiet kind of wrong this project cares
+  most about. After a failure that *may* have landed — a timeout, a dropped
+  connection, a 5xx — an unsafe intent is **parked**: not retried, not dropped, and
+  visible. A failure where nothing was ever sent is still retried normally.
+- **Every id column is `COLLATE NOCASE`.** The contract's `Id` pattern permits either
+  hex case; comparing bare strings would produce a duplicated row rather than an error.
+  Outside SQLite, use `SylIDs.areEqual`.
 
 ## Not built yet
 

@@ -69,6 +69,15 @@ public struct SocketSession: Sendable {
     public private(set) var phase: Phase = .awaitingChallenge
     /// The protocol version the server announced, once it has.
     public private(set) var protocolVersion: Int?
+    /// The newest frame sequence the server said it holds, from `connected`.
+    ///
+    /// Kept because a `sync_response` may be **truncated** by the server's `limit`
+    /// without being incomplete. Truncation is not loss — nothing aged out, the page
+    /// was simply capped — so the client re-syncs from `toSeq` rather than falling
+    /// back to HTTP. Without remembering where the server was, a truncated page would
+    /// leave the client believing it was caught up until the next live frame happened
+    /// to reveal the hole.
+    public private(set) var serverLastSeq: Int = 0
 
     private let token: String
     private let supportedProtocolVersion: Int
@@ -153,6 +162,7 @@ public struct SocketSession: Sendable {
     private mutating func handle(_ connected: WsConnected) -> [Outcome] {
         protocolVersion = connected.protocolVersion
         phase = .ready
+        serverLastSeq = max(serverLastSeq, connected.lastSeq)
 
         var outcomes: [Outcome] = [.emit(.connectionState(.connected))]
 
@@ -166,6 +176,10 @@ public struct SocketSession: Sendable {
     // MARK: - Numbered frames
 
     private mutating func handleNumbered(seq: Int, event: SocketEvent) -> [Outcome] {
+        // A live frame is proof of where the server is, and keeps the truncation check
+        // in `handle(_: WsSyncResponse)` from asking for a range that no longer exists.
+        serverLastSeq = max(serverLastSeq, seq)
+
         // Already seen. This is the ordinary case on reconnect: the server replays
         // from our mark and the first frames back are ones we already hold.
         guard seq > lastSeq else { return [] }
@@ -189,8 +203,13 @@ public struct SocketSession: Sendable {
         var outcomes: [Outcome] = []
 
         if !response.complete {
-            // The requested range had already fallen off the replay buffer. The
-            // frames we did get are real and worth applying, but the client is NOT
+            // **`complete: false` means the range aged out of the replay buffer** —
+            // genuinely unrecoverable history — and nothing else. It does NOT mean the
+            // page was truncated by the server's `limit`; the service is explicit
+            // about that, and treating a truncated page as incomplete would send the
+            // client to `GET /sync` on every large gap.
+            //
+            // The frames we did get are real and worth applying, but the client is NOT
             // caught up and must say so.
             outcomes.append(.emit(.needsHTTPSync(fromSeq: response.fromSeq)))
         }
@@ -207,9 +226,21 @@ public struct SocketSession: Sendable {
             }
         }
 
+        let previous = lastSeq
         // The socket is now at `toSeq` whether or not the payload was complete: the
         // frames below it are gone from the buffer and asking again would loop.
         lastSeq = max(lastSeq, response.toSeq)
+
+        // Truncation, the other half of the same rule. A capped page leaves the client
+        // short of where the server said it was, and nothing was lost — so ask again
+        // from here rather than falling back to HTTP.
+        //
+        // Guarded on progress: a page that moved the mark nowhere would otherwise ask
+        // for the same range forever.
+        if lastSeq > previous, lastSeq < serverLastSeq {
+            outcomes.append(.send(.sync(WsSync(sinceSeq: lastSeq))))
+        }
+
         return outcomes
     }
 

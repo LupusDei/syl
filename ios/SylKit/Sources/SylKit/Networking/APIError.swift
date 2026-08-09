@@ -45,6 +45,41 @@ public enum APIError: Error, Equatable, Sendable {
         }
     }
 
+    /// Whether the request may have reached the server despite the failure.
+    ///
+    /// The distinction matters because `Idempotency-Key` is specified across the whole
+    /// contract but, today, only message sends actually deduplicate on it (tracked as
+    /// `syl-1mz`). For every other write, a retry after an *ambiguous* failure risks a
+    /// second snooze or a duplicated to-do — so the outbox needs to tell "it never
+    /// left" from "it may have landed".
+    ///
+    /// A connection that was never established is unambiguous: nothing was sent. A
+    /// timeout, a connection dropped mid-flight, or a 5xx are all "we do not know".
+    public var mayHaveReachedTheServer: Bool {
+        switch self {
+        case .transport(let code, _):
+            return !Self.neverLeftTheDeviceCodes.contains(code)
+        case .api, .malformedResponse, .decoding:
+            // Something answered, so something received the request.
+            return true
+        case .cancelled:
+            return true
+        }
+    }
+
+    /// Transport failures where the request provably never reached anything.
+    static let neverLeftTheDeviceCodes: Set<URLError.Code> = [
+        .notConnectedToInternet,
+        .cannotFindHost,
+        .cannotConnectToHost,
+        .dnsLookupFailed,
+        .internationalRoamingOff,
+        .dataNotAllowed,
+        .secureConnectionFailed,
+        .badURL,
+        .unsupportedURL,
+    ]
+
     /// A server-suggested backoff floor, when there is one.
     public var retryAfter: TimeInterval? {
         guard case .api(let error, _) = self, let ms = error.retryAfterMs else { return nil }

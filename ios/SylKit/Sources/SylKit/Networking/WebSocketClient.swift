@@ -17,6 +17,8 @@ public actor WebSocketClient {
     /// Raised when a caller tries to send over a socket that is not ready. The caller
     /// falls back to `POST /conversations/{id}/messages`, which reconciles identically.
     public struct NotConnected: Error, CustomStringConvertible {
+        public init() {}
+
         public var description: String {
             "the socket is not ready — send over HTTP and reconcile by clientId instead"
         }

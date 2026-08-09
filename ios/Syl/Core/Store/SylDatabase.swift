@@ -22,6 +22,14 @@ import SylKit
 /// a column-per-field schema would buy no additional safety here; it would only add a
 /// second definition to keep in step. Indexes go on the columns queries need, and
 /// nothing else does.
+///
+/// ## Why every id column is `COLLATE NOCASE`
+///
+/// The contract's `Id` pattern permits either hex case and the service accepts both,
+/// though it only ever mints lower case. That asymmetry is a trap: two spellings the
+/// contract says are the same resource would compare unequal in SQLite's default
+/// binary collation, and the symptom is a duplicated row rather than an error. Putting
+/// the rule in the schema means no query has to remember it.
 struct SylDatabase: Sendable {
     let queue: DatabaseQueue
 
@@ -81,7 +89,7 @@ struct SylDatabase: Sendable {
 
         migrator.registerMigration("v1") { db in
             try db.create(table: "conversation") { table in
-                table.primaryKey("id", .text)
+                table.primaryKey("id", .text).collate(.nocase)
                 table.column("lane", .text).notNull()
                 table.column("lastMessageAt", .datetime)
                 table.column("updatedAt", .datetime).notNull()
@@ -89,8 +97,8 @@ struct SylDatabase: Sendable {
             }
 
             try db.create(table: "message") { table in
-                table.primaryKey("id", .text)
-                table.column("conversationId", .text).notNull()
+                table.primaryKey("id", .text).collate(.nocase)
+                table.column("conversationId", .text).notNull().collate(.nocase)
                 // Zero until the server confirms. A pending message has no position in
                 // the conversation yet, because the server has not given it one.
                 table.column("seq", .integer).notNull()
@@ -115,7 +123,7 @@ struct SylDatabase: Sendable {
             )
 
             try db.create(table: "reminder") { table in
-                table.primaryKey("id", .text)
+                table.primaryKey("id", .text).collate(.nocase)
                 table.column("nextFireAt", .datetime).notNull()
                 table.column("deliveryState", .text).notNull()
                 table.column("urgent", .boolean).notNull()
@@ -129,7 +137,7 @@ struct SylDatabase: Sendable {
             )
 
             try db.create(table: "todo") { table in
-                table.primaryKey("id", .text)
+                table.primaryKey("id", .text).collate(.nocase)
                 table.column("status", .text).notNull()
                 table.column("dueAt", .datetime)
                 table.column("pinned", .boolean).notNull()
@@ -145,18 +153,21 @@ struct SylDatabase: Sendable {
                 // without it.
                 table.column("idempotencyKey", .text).notNull().unique()
                 table.column("kind", .text).notNull()
-                table.column("targetId", .text)
+                table.column("targetId", .text).collate(.nocase)
                 table.column("payload", .blob)
                 table.column("createdAt", .datetime).notNull()
                 table.column("attempts", .integer).notNull().defaults(to: 0)
                 table.column("lastError", .text)
+                // Set when an intent may already have taken effect and the service
+                // does not deduplicate that kind. Neither retried nor discarded.
+                table.column("blockedReason", .text)
             }
             try db.create(index: "outbox_on_createdAt", on: "outbox", columns: ["createdAt"])
 
             try db.create(table: "syncState") { table in
                 // One row, ever. The primary key is a constant so a second row cannot
                 // exist to disagree with the first.
-                table.primaryKey("id", .text)
+                table.primaryKey("id", .text).collate(.nocase)
                 table.column("cursor", .text)
                 table.column("lastFrameSeq", .integer).notNull().defaults(to: 0)
             }

@@ -57,6 +57,40 @@ final class APIErrorTests: XCTestCase {
         XCTAssertFalse(APIError.decoding("keyNotFound(todoId)").isRetryable)
     }
 
+    // MARK: - Did it land?
+
+    func testShouldKnowARequestNeverLeftWhenTheConnectionWasNeverMade() {
+        // The outbox needs this because Idempotency-Key is specified everywhere but
+        // honoured only for message sends today: retrying a snooze that may have
+        // landed would defer the reminder twice.
+        XCTAssertFalse(
+            APIError.transport(code: .cannotConnectToHost, description: "").mayHaveReachedTheServer
+        )
+        XCTAssertFalse(
+            APIError.transport(code: .notConnectedToInternet, description: "").mayHaveReachedTheServer
+        )
+    }
+
+    func testShouldAdmitItCannotTellAfterATimeout() {
+        // The request may have been received and the answer lost.
+        XCTAssertTrue(
+            APIError.transport(code: .timedOut, description: "").mayHaveReachedTheServer
+        )
+        XCTAssertTrue(
+            APIError.transport(code: .networkConnectionLost, description: "").mayHaveReachedTheServer
+        )
+    }
+
+    func testShouldTreatAnyAnsweredRequestAsHavingReachedTheServer() {
+        XCTAssertTrue(
+            APIError.api(ApiError(code: .internalError, message: "", retryable: true), status: 500)
+                .mayHaveReachedTheServer
+        )
+        XCTAssertTrue(
+            APIError.malformedResponse(status: 502, preview: "<html>").mayHaveReachedTheServer
+        )
+    }
+
     // MARK: - Backoff floor
 
     func testShouldSurfaceTheServerSuggestedBackoffFloor() {
