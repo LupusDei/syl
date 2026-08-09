@@ -186,17 +186,18 @@ describe("the live service against shared/openapi.yaml", () => {
     });
 
     /**
-     * `syl-9e0` — the replay answers 200, and 201 is the only success status
-     * the contract documents for `sendMessage`.
+     * `syl-9e0` — the replay used to answer 200, and 201 is the only success
+     * status the contract documents for `sendMessage`.
      *
      * `backend/src/routes/idempotency.ts` — which every other write route goes
-     * through — argues the opposite case in its own doc comment: *"A replayed
+     * through — argued the opposite case in its own doc comment: *"A replayed
      * request answers with the stored status, not a fresh one. A client that
      * got a 201 the first time and a 200 the second has to reconcile two
-     * different answers to one operation."* Two files in one service disagree,
-     * and the contract sides with the one this route does not use.
+     * different answers to one operation."* Two files in one service disagreed,
+     * and the contract sided with the one this route did not use. It uses it
+     * now, so the disagreement is gone and this asserts the resolution.
      */
-    it("should replay a repeated send, at a status the contract does not document", async () => {
+    it("should replay a repeated send at the status the contract documents", async () => {
       const path = `/conversations/${encodeURIComponent(INTERACTIVE_CONVERSATION_ID)}/messages`;
       const body = JSON.stringify({
         clientId: "syl:message:00000000-0000-7000-8000-00000000cafe",
@@ -208,9 +209,8 @@ describe("the live service against shared/openapi.yaml", () => {
 
       const replay = await syl.api(path, { method: "POST", body, idempotencyKey: "conform-cafe" });
       expect(replay.headers.get("idempotency-replayed")).toBe("true");
-      // The body still conforms; only the status is off-contract.
-      expect(replay.status).toBe(200);
-      expect(operation("sendMessage").successStatus).toBe(201);
+      expect(replay.status).toBe(operation("sendMessage").successStatus);
+      await expectConformingSuccess(replay, "sendMessage");
     });
   });
 
@@ -220,13 +220,15 @@ describe("the live service against shared/openapi.yaml", () => {
      * with the reason spelled out next to it: the mobile outbox retries by
      * design and will duplicate without it.
      *
-     * `syl-9e0` — `sendMessage` is the one write that never asks. It is the
-     * only route that does not go through `routes/idempotency.ts`, so it also
-     * cannot answer `IDEMPOTENCY_KEY_REUSE` for a reused key with a different
-     * body. `MessageStore` deduping on `clientId` masks the common case, which
-     * is why no unit test noticed.
+     * The list is empty and must stay empty. `syl-ux1` — two writes used to
+     * ignore the header, and this probe saw neither of them. `sendMessage` was
+     * listed as a known exception; `pairDevice` was not even reached, because
+     * the loop skipped every operation declaring `security: []` and pairing is
+     * the one write that must be unauthenticated. The endpoint with no recovery
+     * path — the pairing code is consumed on use and cannot be reissued — was
+     * the endpoint the guard could not see.
      */
-    const NOT_ENFORCING: readonly string[] = ["sendMessage"];
+    const NOT_ENFORCING: readonly string[] = [];
 
     it("should refuse every declared write that arrives without the header", async () => {
       const bodies: Readonly<Record<string, unknown>> = {
@@ -236,15 +238,22 @@ describe("the live service against shared/openapi.yaml", () => {
         registerDevice: { token: APNS_TOKEN, environment: "production", platform: "ios" },
       };
 
+      const probed: string[] = [];
       const accepted: string[] = [];
       for (const spec of specOperations()) {
-        if (!spec.requiresAuth) continue;
         if (spec.method === "GET") continue;
         if (UNIMPLEMENTED.includes(spec.operationId)) continue;
+        probed.push(spec.operationId);
 
         const response = await fetch(`${syl.baseUrl}${fillPath(spec.template, ABSENT_IDS)}`, {
           method: spec.method,
-          headers: { "content-type": "application/json", authorization: `Bearer ${syl.token}` },
+          headers: {
+            "content-type": "application/json",
+            // Unauthenticated writes get no token, and must still be probed:
+            // an operation skipped for declaring `security: []` is an
+            // operation this guard is blind to.
+            ...(spec.requiresAuth ? { authorization: `Bearer ${syl.token}` } : {}),
+          },
           body: JSON.stringify(bodies[spec.operationId] ?? {}),
         });
         const body = (await response.json()) as { error?: { code?: string } };
@@ -252,7 +261,33 @@ describe("the live service against shared/openapi.yaml", () => {
         if (body.error?.code !== "IDEMPOTENCY_KEY_REQUIRED") accepted.push(spec.operationId);
       }
 
+      expect(probed).toContain("pairDevice");
+      expect(probed).toContain("sendMessage");
       expect(accepted.sort()).toEqual([...NOT_ENFORCING].sort());
+    });
+
+    it("should replay a pairing whose response was lost rather than burning the code", async () => {
+      // `syl-ux1`, on the live service. The pairing code is consumed on use and
+      // there is no endpoint to reissue one, so this retry used to answer 401
+      // and leave the device permanently unpairable.
+      const body = JSON.stringify({
+        pairingCode: syl.deps.keys.issuePairingCode().code,
+        deviceName: "A device with a flaky tunnel",
+      });
+      const send = async (): Promise<Response> =>
+        fetch(`${syl.baseUrl}/auth/pair`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "Idempotency-Key": "conform-pair" },
+          body,
+        });
+
+      const first = await send();
+      const granted = await expectConformingSuccess<{ token: string }>(first, "pairDevice");
+
+      const retry = await send();
+      expect(retry.headers.get("idempotency-replayed")).toBe("true");
+      const replayed = await expectConformingSuccess<{ token: string }>(retry, "pairDevice");
+      expect(replayed.token).toBe(granted.token);
     });
 
     it("should reject a reused key carrying a different body", async () => {

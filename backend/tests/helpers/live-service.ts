@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -166,18 +167,22 @@ export async function startLiveService(
   const origin = `http://127.0.0.1:${String(port)}`;
   const baseUrl = `${origin}${API_BASE_PATH}`;
 
-  let keyCounter = 0;
   let token = "";
 
   const api = async (path: string, init: LiveRequest = {}): Promise<Response> => {
     const { idempotencyKey, anonymous, headers, ...rest } = init;
-    keyCounter += 1;
     return fetch(`${baseUrl}${path}`, {
       ...rest,
       headers: {
         "content-type": "application/json",
         ...(anonymous === true || token === "" ? {} : { authorization: `Bearer ${token}` }),
-        "Idempotency-Key": idempotencyKey ?? `live-${String(keyCounter)}`,
+        // A UUID rather than a counter. The counter restarted at zero for every
+        // `startLiveService`, so a test that restarts the service against the
+        // same database — which is the whole of US5 — re-sent `live-1` with a
+        // different body and got `IDEMPOTENCY_KEY_REUSE`. The ledger outlives
+        // the process; a key generator that does not is a bug waiting for the
+        // day the ledger starts being enforced. That day is today.
+        "Idempotency-Key": idempotencyKey ?? randomUUID(),
         ...(headers as Record<string, string> | undefined),
       },
     });

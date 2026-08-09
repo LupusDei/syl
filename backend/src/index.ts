@@ -148,8 +148,14 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
       deps.probes === undefined ? { config } : { config, probes: deps.probes },
     ),
   );
-  api.use(createAuthRouter({ keys: deps.keys, authenticate }));
-  api.use(createConversationRouter({ messages: deps.messages, authenticate }));
+  api.use(createAuthRouter({ keys: deps.keys, idempotency: deps.idempotency, authenticate }));
+  api.use(
+    createConversationRouter({
+      messages: deps.messages,
+      idempotency: deps.idempotency,
+      authenticate,
+    }),
+  );
   api.use(
     createDeviceRouter({ devices: deps.devices, idempotency: deps.idempotency, authenticate }),
   );
