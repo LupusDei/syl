@@ -359,6 +359,69 @@ describe("Outbox", () => {
     });
   });
 
+  describe("amendHeld", () => {
+    function heldBatch(): string {
+      const gated = new Outbox({ db: db.handle, clock: () => now, quietHours: QUIET });
+      return gated.enqueue(
+        reminderDelivery({
+          idempotencyKey: "reminder-batch:2026-08-10T13:00:00.000Z",
+          notBefore: "2026-08-10T13:00:00.000Z",
+          reminderId: "syl:reminder:a",
+        }),
+      ).delivery.id;
+    }
+
+    it("should fold more reminders into a row still waiting for its window", () => {
+      const id = heldBatch();
+      const amended = outbox.amendHeld(id, {
+        payload: { title: "Syl", body: "Two things came in overnight." },
+        reminderId: null,
+        coalescedReminderIds: ["syl:reminder:a", "syl:reminder:b"],
+        scheduledFor: "2026-08-10T03:30:00.000Z",
+      });
+
+      expect(amended?.coalescedReminderIds).toEqual(["syl:reminder:a", "syl:reminder:b"]);
+      expect(amended?.payload.body).toContain("Two things");
+      expect(amended?.reminderId).toBeNull();
+      expect(amended?.scheduledFor).toBe("2026-08-10T03:30:00.000Z");
+      // Untouched: it is the same notification, still waiting for the same
+      // instant, and it has still never been attempted.
+      expect(amended?.nextAttemptAt).toBe("2026-08-10T13:00:00.000Z");
+      expect(amended?.attempts).toBe(0);
+      expect(amended?.state).toBe("pending");
+    });
+
+    it("should refuse a row that has been claimed", () => {
+      // Its words may already be on their way to Apple. Rewriting them
+      // afterwards is a silent drop by another route.
+      const id = heldBatch();
+      outbox.markSending(id);
+      expect(outbox.amendHeld(id, amendment())).toBeNull();
+    });
+
+    it("should refuse a row whose release instant has arrived", () => {
+      const id = heldBatch();
+      now = Date.UTC(2026, 7, 10, 13, 0, 0, 0);
+      expect(outbox.amendHeld(id, amendment())).toBeNull();
+    });
+
+    it("should refuse a row that has reached a terminal state", () => {
+      const id = heldBatch();
+      outbox.acknowledge(id, { ackedAt: new Date(now).toISOString() });
+      expect(outbox.amendHeld(id, amendment())).toBeNull();
+      expect(outbox.amendHeld("syl:delivery:missing", amendment())).toBeNull();
+    });
+
+    function amendment(): Parameters<Outbox["amendHeld"]>[1] {
+      return {
+        payload: { title: "Syl", body: "Two things came in overnight." },
+        reminderId: null,
+        coalescedReminderIds: ["syl:reminder:a", "syl:reminder:b"],
+        scheduledFor: null,
+      };
+    }
+  });
+
   describe("deferBlocked", () => {
     it("should hold the row without spending an attempt", () => {
       const { delivery } = outbox.enqueue(reminderDelivery());

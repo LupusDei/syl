@@ -1,4 +1,4 @@
-import type { DeliveryPayload, Reminder } from "@syl/shared";
+import type { Delivery, DeliveryPayload, Reminder } from "@syl/shared";
 
 import type { Outbox } from "../services/outbox.js";
 import type { ReminderService } from "../services/reminder-service.js";
@@ -212,8 +212,50 @@ function holdUntilRelease(
   // the same row rather than writing a second digest.
   const key = `reminder-batch:${release}`;
   const existing = outbox.byIdempotencyKey(key);
+  if (existing !== null) return foldInto(deps, existing, release, group);
 
-  if (existing === null) return openBatch(deps, key, release, group);
+  const only = group.length === 1 ? group[0] : undefined;
+
+  // One held reminder is not a batch: it keeps its own words. It is still
+  // written under the window's key, so the next pass of the night can fold
+  // into it rather than making a second notification out of it.
+  const { delivery, created } = outbox.enqueue({
+    channel: "apns",
+    messageClass: "reminder_delivery",
+    reminderId: only?.id ?? null,
+    payload:
+      only === undefined
+        ? coalescedPayload(group.length)
+        : payloadFor(only, reminders.skippedCount(only.id)),
+    idempotencyKey: key,
+    late: true,
+    scheduledFor: earliest(group),
+    coalescedReminderIds: only === undefined ? group.map((reminder) => reminder.id) : [],
+    notBefore: release,
+  });
+
+  // Somebody wrote this key between the read and the insert. `created` is the
+  // answer to "does that row name my reminders", and assuming it does is
+  // precisely how they were lost before.
+  if (!created) return foldInto(deps, delivery, release, group);
+
+  for (const reminder of group) reminders.markFired(reminder.id, { late: true });
+  return {
+    enqueued: [delivery.id],
+    fired: group.map((reminder) => reminder.id),
+    coalesced: only === undefined ? group.length : 0,
+  };
+}
+
+/** Fold a group into the batch row that already exists for its window. */
+function foldInto(
+  deps: DeliverRemindersDeps,
+  existing: Delivery,
+  release: string,
+  group: readonly Reminder[],
+): { enqueued: string[]; fired: string[]; coalesced: number } {
+  const { reminders, outbox } = deps;
+  const everyone = group.map((reminder) => reminder.id);
 
   const covered = new Set(namedBy(existing));
   const additions = group.filter((reminder) => !covered.has(reminder.id));
@@ -221,7 +263,7 @@ function holdUntilRelease(
     // Every one of them is already named by the row. This is a pass that died
     // between writing the batch and marking them fired; finish the job.
     for (const reminder of group) reminders.markFired(reminder.id, { late: true });
-    return { enqueued: [], fired: group.map((reminder) => reminder.id), coalesced: 0 };
+    return { enqueued: [], fired: everyone, coalesced: 0 };
   }
 
   const ids = [...covered, ...additions.map((reminder) => reminder.id)];
@@ -241,55 +283,23 @@ function holdUntilRelease(
     const enqueued = additions.map((reminder) =>
       enqueueOne(deps, reminder, { late: true, notBefore: release }),
     );
-    return { enqueued, fired: additions.map((reminder) => reminder.id), coalesced: 0 };
+    // The ones already named by the sent row are handed over by it.
+    for (const reminder of group) {
+      if (!covered.has(reminder.id)) continue;
+      reminders.markFired(reminder.id, { late: true });
+    }
+    return { enqueued, fired: everyone, coalesced: 0 };
   }
 
-  for (const reminder of additions) reminders.markFired(reminder.id, { late: true });
-  return {
-    enqueued: [amended.id],
-    fired: additions.map((reminder) => reminder.id),
-    coalesced: additions.length,
-  };
-}
-
-/** Write the first row for a release instant. */
-function openBatch(
-  deps: DeliverRemindersDeps,
-  key: string,
-  release: string,
-  group: readonly Reminder[],
-): { enqueued: string[]; fired: string[]; coalesced: number } {
-  const { reminders, outbox } = deps;
-  const only = group.length === 1 ? group[0] : undefined;
-
-  // One held reminder is not a batch: it keeps its own words. It is still
-  // written under the window's key, so the next pass of the night can fold
-  // into it rather than making a second notification out of it.
-  const { delivery } = outbox.enqueue({
-    channel: "apns",
-    messageClass: "reminder_delivery",
-    reminderId: only?.id ?? null,
-    payload:
-      only === undefined
-        ? coalescedPayload(group.length)
-        : payloadFor(only, reminders.skippedCount(only.id)),
-    idempotencyKey: key,
-    late: true,
-    scheduledFor: earliest(group),
-    coalescedReminderIds: only === undefined ? group.map((reminder) => reminder.id) : [],
-    notBefore: release,
-  });
-
+  // The whole group, not only the additions: a reminder already named by the
+  // row but not yet marked is a pass that died halfway, and leaving it unmarked
+  // means it comes back every pass until one happens to find nothing new.
   for (const reminder of group) reminders.markFired(reminder.id, { late: true });
-  return {
-    enqueued: [delivery.id],
-    fired: group.map((reminder) => reminder.id),
-    coalesced: only === undefined ? group.length : 0,
-  };
+  return { enqueued: [amended.id], fired: everyone, coalesced: additions.length };
 }
 
-/** Every reminder a delivery row stands for. */
-function namedBy(delivery: { reminderId: string | null; coalescedReminderIds: readonly string[] }): readonly string[] {
+/** Every reminder a delivery row stands for. Matches the ack path exactly. */
+function namedBy(delivery: Delivery): readonly string[] {
   return delivery.reminderId === null
     ? delivery.coalescedReminderIds
     : [delivery.reminderId, ...delivery.coalescedReminderIds];
