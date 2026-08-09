@@ -12,6 +12,11 @@ import {
 } from "../../src/harness/session.js";
 import type { SylEvent } from "../../src/harness/protocol.js";
 import {
+  autoMemoryAt,
+  autoMemoryOff,
+  AutoMemoryMismatchError,
+} from "../../src/memory/auto-memory.js";
+import {
   flagValue,
   loadFixture,
   makeFakeClaude,
@@ -28,9 +33,16 @@ import {
  */
 
 const PONG = loadFixture("turn-pong");
+const REDIRECT = loadFixture("auto-memory-redirect");
+const DISABLED = loadFixture("auto-memory-disabled");
 
 /** Session id baked into the `turn-pong` capture. */
 const PONG_SESSION = "14846aeb-eae5-47fe-80f2-61185042c969";
+
+/** The auto-memory directory the `auto-memory-redirect` capture was taken with. */
+const CAPTURED_MEMORY_DIR =
+  "/private/tmp/claude-501/-Users-Reason-code-ai-syl-worktrees-tassadar/" +
+  "ab05b64b-ab6e-4026-b375-52e73da96203/scratchpad/memtest/sylmem";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -196,7 +208,14 @@ describe("runTurn", () => {
       await runTurn("hi", options(f));
 
       const { argv } = invocationOf(f);
-      for (const flag of ["--model", "--append-system-prompt", "--mcp-config", "--resume", "--tools"]) {
+      for (const flag of [
+        "--model",
+        "--append-system-prompt",
+        "--mcp-config",
+        "--resume",
+        "--tools",
+        "--settings",
+      ]) {
         expect(argv).not.toContain(flag);
       }
     });
@@ -237,6 +256,85 @@ describe("runTurn", () => {
       await runTurn("hi", options(f, { cwd: tmpRealPath() }));
 
       expect(invocationOf(f).cwd).toBe(tmpRealPath());
+    });
+  });
+
+  describe("auto-memory", () => {
+    /**
+     * Claude Code's own memory store, pointed somewhere Syl owns. The turn asks
+     * via `--settings` and then *checks the init frame*, because the CLI
+     * discards a directory it does not like and falls back to its own default
+     * without a warning, a stderr line or a non-zero exit.
+     */
+    it("should ask for the directory via --settings, alongside memory being explicitly on", async () => {
+      const f = replaying(PONG);
+
+      await runTurn("hi", options(f, { autoMemory: autoMemoryAt("/srv/syl/memory") }));
+
+      expect(JSON.parse(flagValue(invocationOf(f).argv, "--settings") ?? "null")).toEqual({
+        autoMemoryEnabled: true,
+        autoMemoryDirectory: "/srv/syl/memory",
+      });
+    });
+
+    it("should accept a turn whose init frame reports the directory that was asked for", async () => {
+      // Replays the real capture taken with this exact flag on 2.1.226.
+      const f = replaying(REDIRECT, { echoSessionId: false });
+
+      const result = await runTurn("hi", options(f, { autoMemory: autoMemoryAt(CAPTURED_MEMORY_DIR) }));
+
+      expect(result.init.autoMemoryPath).toBe(`${CAPTURED_MEMORY_DIR}/`);
+    });
+
+    it("should reject the turn when the CLI resolved a different directory", async () => {
+      // `echoAutoMemory: false` makes the fake ignore the setting, which is
+      // precisely what the CLI does with a value it dislikes.
+      const f = replaying(PONG, { echoAutoMemory: false });
+
+      await expect(
+        runTurn("hi", options(f, { autoMemory: autoMemoryAt("/srv/syl/memory") })),
+      ).rejects.toThrow(AutoMemoryMismatchError);
+    });
+
+    it("should kill the child rather than let it write memories to the wrong directory", async () => {
+      // The point of failing on init rather than on the result: by the time a
+      // result arrives the model has already written. `hang` would never settle
+      // at all if the guard did not end the process itself.
+      const f = replaying(PONG, { echoAutoMemory: false, hang: true });
+
+      await expect(
+        runTurn("hi", options(f, { autoMemory: autoMemoryAt("/srv/syl/memory"), timeoutMs: 0 })),
+      ).rejects.toThrow(AutoMemoryMismatchError);
+    });
+
+    it("should ask for memory to be switched off, and accept a frame carrying none", async () => {
+      const f = replaying(DISABLED, { echoSessionId: false });
+
+      const result = await runTurn("hi", options(f, { autoMemory: autoMemoryOff() }));
+
+      expect(JSON.parse(flagValue(invocationOf(f).argv, "--settings") ?? "null")).toEqual({
+        autoMemoryEnabled: false,
+      });
+      expect(result.init.autoMemoryPath).toBeUndefined();
+    });
+
+    it("should reject a turn that asked for no memory but was given one", async () => {
+      const f = replaying(PONG, { echoAutoMemory: false });
+
+      await expect(runTurn("hi", options(f, { autoMemory: autoMemoryOff() }))).rejects.toThrow(
+        AutoMemoryMismatchError,
+      );
+    });
+
+    it("should leave the CLI's own default alone when no auto-memory is requested", async () => {
+      // Not every caller is Syl. A turn that says nothing about memory gets
+      // whatever the machine is configured for, and no assertion is made.
+      const f = replaying(PONG);
+
+      const result = await runTurn("hi", options(f));
+
+      expect(invocationOf(f).argv).not.toContain("--settings");
+      expect(result.init.autoMemoryPath).toMatch(/\/memory\/$/);
     });
   });
 

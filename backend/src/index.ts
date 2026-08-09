@@ -47,6 +47,7 @@ import { createSyncRouter } from "./routes/sync.js";
 import { createTodoRouter } from "./routes/todos.js";
 import { fileSessionStore, memorySessionStore, SylAgent } from "./harness/agent.js";
 import type { TurnOptions, TurnRunner } from "./harness/session.js";
+import { autoMemoryAt } from "./memory/auto-memory.js";
 import { apnsCredentialsFromEnv } from "./services/apns-service.js";
 import { ApiKeyService } from "./services/api-key-service.js";
 import { systemClock, type Clock } from "./services/clock.js";
@@ -509,6 +510,12 @@ export function bootstrap(
   const soul = options.soul ?? readSoul();
   const agent = new SylAgent({
     store: sessionStoreFor(config),
+    // One memory directory for every lane, and not the CLI's per-project
+    // default. Sessions are partitioned so Syl's inner monologue does not
+    // interleave with the Commander's conversation; memory is deliberately not,
+    // or the morning agenda would know nothing he said last night. See
+    // `memory/auto-memory.ts`.
+    autoMemory: autoMemoryAt(config.autoMemoryDirectory),
     ...(soul === undefined ? {} : { soul }),
     ...(options.turn === undefined ? {} : { turnOptions: options.turn }),
     ...(options.runner === undefined ? {} : { runner: options.runner }),

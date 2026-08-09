@@ -109,6 +109,28 @@ describe("parseEvent", () => {
     expect(event.capabilities).toContain("msg_lifecycle_v1");
   });
 
+  it("should expose the auto-memory directory the CLI actually resolved", () => {
+    // `memory_paths.auto` is the only evidence that a requested memory
+    // directory was honoured: the CLI discards one it does not like and falls
+    // back to its own default with no warning and no non-zero exit.
+    const line = JSON.stringify({
+      type: "system",
+      subtype: "init",
+      session_id: "s",
+      model: "claude-opus-5",
+      apiKeySource: "none",
+      memory_paths: { auto: "/srv/syl/memory/" },
+    });
+
+    expect((parseEvent(line) as InitEvent).autoMemoryPath).toBe("/srv/syl/memory/");
+  });
+
+  it("should report no auto-memory directory when the init frame carries none", () => {
+    // Verified on 2.1.226: `autoMemoryEnabled:false` removes the whole
+    // `memory_paths` key rather than emptying it.
+    expect((parseEvent(INIT_LINE) as InitEvent).autoMemoryPath).toBeUndefined();
+  });
+
   it("should expose connected MCP servers from init so the caller can verify the Adjutant bridge", () => {
     const event = parseEvent(INIT_LINE) as InitEvent;
     expect(event.mcpServers).toEqual([

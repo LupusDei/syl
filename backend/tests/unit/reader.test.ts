@@ -33,8 +33,8 @@ function fake(config: FakeClaudeConfig): FakeClaude {
   return created;
 }
 
-function replaying(lines: readonly string[]): FakeClaude {
-  return fake({ after: lines, exitCode: 0 });
+function replaying(lines: readonly string[], extra: FakeClaudeConfig = {}): FakeClaude {
+  return fake({ after: lines, exitCode: 0, ...extra });
 }
 
 function invocationOf(f: FakeClaude): FakeClaudeInvocation {
@@ -184,6 +184,49 @@ describe("runReaderTurn", () => {
 
       expect(invocationOf(f).argv).not.toContain("--resume");
       expect(result).not.toHaveProperty("sessionId");
+    });
+
+    it("should switch Claude Code's auto-memory off", async () => {
+      // Auto-memory would cut straight through the sealed room in both
+      // directions: it loads Syl's MEMORY.md into a context whose other half is
+      // attacker-written, and it is a *writable* store reachable from a turn
+      // whose input the attacker controls — which is how one injected page
+      // becomes a standing instruction Syl reads at the start of every session
+      // afterwards.
+      const f = replaying(READER_INJECTION);
+
+      await runReaderTurn({ instruction: "Summarise.", untrusted: ARTICLE }, { claudeBin: f.bin });
+
+      expect(JSON.parse(flagValue(invocationOf(f).argv, "--settings") ?? "null")).toEqual({
+        autoMemoryEnabled: false,
+      });
+    });
+
+    it("should refuse the turn if Claude Code reported a memory directory anyway", async () => {
+      // The same shape as the empty-tool-surface check: the flag is only worth
+      // anything if a CLI that stopped honouring it is caught rather than
+      // trusted. `echoAutoMemory: false` models exactly that.
+      const f = replaying(READER_INJECTION, { echoAutoMemory: false });
+
+      await expect(
+        runReaderTurn({ instruction: "Summarise.", untrusted: ARTICLE }, { claudeBin: f.bin }),
+      ).rejects.toThrow(/memory/i);
+    });
+
+    it("should not let a caller switch memory back on", async () => {
+      // Not an option on ReaderTurnOptions at all, and this pins that: it is
+      // part of the shape, not a default.
+      const f = replaying(READER_INJECTION);
+
+      await runReaderTurn(
+        { instruction: "Summarise.", untrusted: ARTICLE },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reaching past the type on purpose
+        { claudeBin: f.bin, autoMemory: { mode: "directory", directory: "/srv/syl/memory" } } as any,
+      );
+
+      expect(JSON.parse(flagValue(invocationOf(f).argv, "--settings") ?? "null")).toEqual({
+        autoMemoryEnabled: false,
+      });
     });
 
     it("should not pre-authorise anything", async () => {

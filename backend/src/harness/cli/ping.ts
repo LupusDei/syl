@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { autoMemoryAt } from "../../memory/auto-memory.js";
 import { SylAgent, fileSessionStore } from "../agent.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -36,6 +37,9 @@ async function main(): Promise<void> {
     // One file per lane. The Commander's conversation must not share a
     // transcript with the heartbeat or the nightly consolidation pass.
     store: fileSessionStore(join(root, ".syl", "sessions")),
+    // One directory, shared by every lane. `--session-id` partitions the
+    // transcripts; nothing should partition what Syl knows.
+    autoMemory: autoMemoryAt(join(root, ".syl", "memory")),
     ...(soul ? { soul } : {}),
     turnOptions: {
       model: "claude-haiku-4-5",
@@ -61,7 +65,11 @@ async function main(): Promise<void> {
       `  ${init.apiKeySource === "none" ? "(subscription rails OK)" : "(API KEY — NOT subscription)"}`,
   );
   console.log(`  mcp       ${init.mcpServers.map((s) => `${s.name}=${s.status}`).join(", ") || "none"}`);
-  console.log(`  caps      ${init.capabilities.join(", ")}\n`);
+  console.log(`  caps      ${init.capabilities.join(", ")}`);
+  // Printed rather than assumed: the CLI discards an autoMemoryDirectory it
+  // does not like and falls back to its own default in complete silence, so
+  // this line is the only place the redirect is visible to a human.
+  console.log(`  memory    ${init.autoMemoryPath ?? "OFF — nothing will be remembered"}\n`);
 
   console.log(`> ${prompt}\n`);
   console.log(`${result.text}\n`);

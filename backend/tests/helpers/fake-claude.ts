@@ -64,7 +64,20 @@ export type FixtureName =
    * The control for `reader-direct`: same prompt, no `--tools ""`. 30 tools on
    * the surface, a real `tool_use` for Bash, and `whoami` actually executed.
    */
-  | "tooled-direct";
+  | "tooled-direct"
+  /**
+   * A headless turn run with `--settings '{"autoMemoryDirectory":"<abs>"}'`.
+   * It wrote `MEMORY.md` and a topic file into that exact directory, and
+   * `init.memory_paths.auto` reports it back verbatim with a trailing
+   * separator. The capture that proves the redirect is real.
+   */
+  | "auto-memory-redirect"
+  /**
+   * Reader shape — `--tools ""` — with `{"autoMemoryEnabled":false}`.
+   * `memory_paths` is absent from the init frame entirely, which is how "off"
+   * is confirmed rather than assumed.
+   */
+  | "auto-memory-disabled";
 
 /** What the fake recorded about how it was invoked. */
 export interface FakeClaudeInvocation {
@@ -115,6 +128,22 @@ export interface FakeClaudeConfig {
    * Defaults to true.
    */
   readonly echoSessionId?: boolean;
+  /**
+   * Rewrite `memory_paths` on the init line to agree with the `--settings` the
+   * fake was handed, which is what the real CLI does. Defaults to true.
+   *
+   * Verified on 2.1.226 with four live captures: given
+   * `{"autoMemoryDirectory":"<abs>"}` the init frame reports that directory
+   * verbatim with a trailing separator, and given `{"autoMemoryEnabled":false}`
+   * the `memory_paths` key is absent from the frame entirely.
+   *
+   * Without this the fixtures — all captured before Syl set the flag, and so
+   * all carrying whatever memory directory the capturing machine defaulted to —
+   * would contradict every argv the fake is now given. Set it false to model a
+   * CLI that ignored the setting, which is the failure `runTurn` exists to
+   * catch.
+   */
+  readonly echoAutoMemory?: boolean;
 }
 
 export interface FakeClaude {
@@ -133,6 +162,7 @@ export interface FakeClaude {
  */
 const SCRIPT = `#!/usr/bin/env node
 import { writeFileSync } from "node:fs";
+import { sep } from "node:path";
 
 const config = __CONFIG__;
 const recordPath = __RECORD__;
@@ -159,13 +189,49 @@ record();
 const sessionIdIndex = argv.indexOf("--session-id");
 const sessionId = sessionIdIndex === -1 ? undefined : argv[sessionIdIndex + 1];
 
+const settingsIndex = argv.indexOf("--settings");
+const settingsRaw = settingsIndex === -1 ? undefined : argv[settingsIndex + 1];
+
+// What the real CLI would report in \`memory_paths\` for this argv: a directory,
+// or nothing at all when auto-memory is switched off. \`null\` means the setting
+// said nothing about memory, so the captured line is left exactly as it is.
+let memoryPaths = null;
+if (config.echoAutoMemory !== false && settingsRaw && settingsRaw.trimStart().startsWith("{")) {
+  try {
+    const parsed = JSON.parse(settingsRaw);
+    if (parsed.autoMemoryEnabled === false) memoryPaths = { off: true };
+    else if (typeof parsed.autoMemoryDirectory === "string")
+      memoryPaths = { dir: parsed.autoMemoryDirectory.replace(/[/\\\\]+$/, "") + sep };
+  } catch {
+    /* a settings string the CLI could not parse is not this helper's problem */
+  }
+}
+
+// The value is a flat object, so this never has to balance nested braces.
+const MEMORY_PATHS = /"memory_paths":\\{[^{}]*\\}/;
+
+const applyMemoryPaths = (line) => {
+  if (memoryPaths === null || !line.includes('"subtype":"init"')) return line;
+  if (memoryPaths.off) {
+    // Take the neighbouring comma with it, or the frame stops being JSON.
+    if (new RegExp(',' + MEMORY_PATHS.source).test(line))
+      return line.replace(new RegExp(',' + MEMORY_PATHS.source), "");
+    return line.replace(new RegExp(MEMORY_PATHS.source + ',?'), "");
+  }
+  const field = '"memory_paths":{"auto":' + JSON.stringify(memoryPaths.dir) + "}";
+  if (MEMORY_PATHS.test(line)) return line.replace(MEMORY_PATHS, field);
+  return line.replace(/\\}$/, "," + field + "}");
+};
+
 const emit = (lines) => {
   let out = "";
   for (const line of lines) {
     out +=
-      (config.echoSessionId !== false && sessionId
-        ? line.replace(/"session_id":"[^"]*"/g, '"session_id":"' + sessionId + '"')
-        : line) + "\\n";
+      applyMemoryPaths(
+        config.echoSessionId !== false && sessionId
+          ? line.replace(/"session_id":"[^"]*"/g, '"session_id":"' + sessionId + '"')
+          : line,
+      ) + "\\n";
   }
   if (out === "") return;
   const size = config.chunkChars;

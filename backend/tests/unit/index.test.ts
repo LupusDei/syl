@@ -20,7 +20,8 @@ import type { SylDatabase } from "../../src/services/database.js";
 import { WS_PATH } from "../../src/services/ws-server.js";
 import { startTestApp, wrap, type RunningApp } from "../helpers/http.js";
 import { TestClient } from "../helpers/ws.js";
-import { testConfig, testDatabase, testDeps } from "../helpers/service.js";
+import { silentRunner, testConfig, testDatabase, testDeps } from "../helpers/service.js";
+import { INTERACTIVE_CONVERSATION_ID } from "../../src/services/database.js";
 
 const config: SylConfig = testConfig();
 
@@ -358,6 +359,33 @@ describe("bootstrap", () => {
 
       expect(body.data?.checks.map((check) => check.name)).toContain("database");
       expect(body.data?.status).toBe("ok");
+    } finally {
+      built.database.close();
+    }
+  });
+
+  it("should point Syl's auto-memory at the configured directory on every turn", async () => {
+    // The wiring the whole bead is about: without this, memory lands in
+    // ~/.claude/projects/<sanitised-cwd>/memory/ — partitioned by whatever
+    // directory the service happened to start in, and outside .syl/ entirely.
+    const seen: (unknown | undefined)[] = [];
+    const built = bootstrap(
+      testConfig({ databasePath: ":memory:", autoMemoryDirectory: "/srv/syl/memory" }),
+      {
+        runner: async (_prompt, options) => {
+          seen.push(options.autoMemory);
+          options.onSessionId?.("sess-1");
+          return silentRunner(_prompt, options);
+        },
+      },
+    );
+    try {
+      built.deps.chat.accept(
+        built.deps.chat.append({ conversationId: INTERACTIVE_CONVERSATION_ID, role: "user", text: "hello" }),
+      );
+      await built.deps.chat.idle();
+
+      expect(seen).toEqual([{ mode: "directory", directory: "/srv/syl/memory" }]);
     } finally {
       built.database.close();
     }
