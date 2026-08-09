@@ -9,6 +9,7 @@
   },
   "workspaces": [
     "backend",
+    "frontend",
     "shared"
   ],
   "scripts": {

@@ -1,0 +1,316 @@
+/*
+ * Layout and component styling. Every value comes from a token in
+ * `theme/tokens.css` — there are no literal colours in this file, which is
+ * what makes the palette swappable.
+ *
+ * The look is an instrument panel: a dense grid, hairline rules instead of
+ * shadows, one accent used only for "you are here" and primary action, and
+ * monospace reserved for identifiers you might copy.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--syl-bg-base);
+  color: var(--syl-text-primary);
+  font-family: var(--syl-font-ui);
+  font-size: var(--syl-text-size);
+  line-height: var(--syl-line-height);
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+.mono {
+  font-family: var(--syl-font-mono);
+  font-size: var(--syl-text-size-small);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--syl-focus-ring);
+  border-radius: var(--syl-radius);
+}
+
+/* ---------------------------------------------------------------- chrome */
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.shell__header {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-4);
+  padding: var(--syl-space-2) var(--syl-space-4);
+  background: var(--syl-bg-panel);
+  border-bottom: var(--syl-border-width) solid var(--syl-border);
+  box-shadow: var(--syl-shadow-panel);
+}
+
+.shell__brand {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.shell__target {
+  color: var(--syl-text-muted);
+}
+
+.shell__spacer {
+  flex: 1;
+}
+
+.shell__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.shell__main {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: var(--syl-space-5);
+}
+
+/* ------------------------------------------------------------------- nav */
+
+.nav {
+  flex: 0 0 208px;
+  padding: var(--syl-space-3) var(--syl-space-2);
+  background: var(--syl-bg-panel);
+  border-right: var(--syl-border-width) solid var(--syl-border);
+  overflow: auto;
+}
+
+.nav__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav__link {
+  display: block;
+  padding: var(--syl-space-2) var(--syl-space-3);
+  border-radius: var(--syl-radius);
+  color: var(--syl-text-secondary);
+  text-decoration: none;
+}
+
+.nav__link:hover {
+  background: var(--syl-bg-raised);
+  color: var(--syl-text-primary);
+}
+
+.nav__link--active {
+  background: var(--syl-accent-soft);
+  color: var(--syl-accent);
+  font-weight: 600;
+}
+
+/* ----------------------------------------------------------------- views */
+
+.view {
+  max-width: 76rem;
+}
+
+.view__title {
+  margin: 0 0 var(--syl-space-2);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.view__lede {
+  margin: 0 0 var(--syl-space-5);
+  color: var(--syl-text-secondary);
+  max-width: 62ch;
+}
+
+.notice {
+  padding: var(--syl-space-3) var(--syl-space-4);
+  background: var(--syl-bg-panel);
+  border: var(--syl-border-width) solid var(--syl-border);
+  border-left: 3px solid var(--syl-state-pending);
+  border-radius: var(--syl-radius);
+  color: var(--syl-text-secondary);
+}
+
+/* ----------------------------------------------------------------- table */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--syl-bg-panel);
+  border: var(--syl-border-width) solid var(--syl-border);
+  border-radius: var(--syl-radius);
+}
+
+.table__caption {
+  text-align: left;
+  padding-bottom: var(--syl-space-2);
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: var(--syl-space-2) var(--syl-space-3);
+  border-bottom: var(--syl-border-width) solid var(--syl-border);
+  vertical-align: top;
+  font-weight: 400;
+}
+
+.table thead th {
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.table tbody th {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.table tbody tr:last-child th,
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table__prose {
+  color: var(--syl-text-secondary);
+}
+
+/* ---------------------------------------------------------------- status */
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--syl-space-2);
+  white-space: nowrap;
+}
+
+/* The dot's colour comes from a token named in TypeScript — see STATUS_TOKEN
+   in app/views.tsx. */
+.status__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--syl-state-pending);
+}
+
+/* --------------------------------------------------------------- control */
+
+.field {
+  display: inline-flex;
+  gap: var(--syl-space-2);
+  color: var(--syl-text-muted);
+}
+
+.field--inline {
+  align-items: center;
+}
+
+.field__label {
+  display: block;
+  margin-bottom: var(--syl-space-1);
+  color: var(--syl-text-secondary);
+}
+
+.field__input,
+.field__select {
+  background: var(--syl-bg-inset);
+  color: var(--syl-text-primary);
+  border: var(--syl-border-width) solid var(--syl-border-strong);
+  border-radius: var(--syl-radius);
+  padding: var(--syl-space-2) var(--syl-space-3);
+  font: inherit;
+}
+
+.field__input {
+  width: 100%;
+  font-family: var(--syl-font-mono);
+}
+
+.button {
+  background: var(--syl-bg-raised);
+  color: var(--syl-text-primary);
+  border: var(--syl-border-width) solid var(--syl-border-strong);
+  border-radius: var(--syl-radius);
+  padding: var(--syl-space-2) var(--syl-space-3);
+  font: inherit;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--syl-accent);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button--primary {
+  background: var(--syl-accent);
+  color: var(--syl-accent-contrast);
+  border-color: var(--syl-accent);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ gate */
+
+.gate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: var(--syl-space-5);
+}
+
+.gate__card {
+  width: min(28rem, 100%);
+  display: flex;
+  flex-direction: column;
+  padding: var(--syl-space-5);
+  background: var(--syl-bg-panel);
+  border: var(--syl-border-width) solid var(--syl-border);
+  border-radius: var(--syl-radius);
+  box-shadow: var(--syl-shadow-panel);
+}
+
+.gate__title {
+  margin: 0 0 var(--syl-space-2);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.gate__lede {
+  margin: 0 0 var(--syl-space-5);
+  color: var(--syl-text-secondary);
+}
+
+.gate__target {
+  margin: var(--syl-space-3) 0 var(--syl-space-5);
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+}
