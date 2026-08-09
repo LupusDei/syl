@@ -409,7 +409,19 @@ describe("runTurn", () => {
 
       // Long enough for the child to boot and record its pid; the point here is
       // the kill, and a timeout that fires during node's startup proves nothing.
-      await runTurn("hi", options(f, { timeoutMs: 1_000 })).catch(() => undefined);
+      //
+      // This was 1_000, which is a wall-clock assumption about how fast node
+      // starts — true on an idle machine and false under the full suite, where
+      // dozens of processes compete. When startup lost that race the timeout
+      // fired first, no pid was ever recorded, and the failure surfaced as
+      // `expected undefined to be greater than 0`: not the kill misbehaving,
+      // but the test never reaching the thing it was written to check.
+      //
+      // The comment above already named the hazard and then picked a number
+      // that did not honour it. 5s is still a wall-clock guess, but it sits far
+      // enough above worst-case startup under load to be one in name only, and
+      // the suite-wide 20s test timeout leaves it room.
+      await runTurn("hi", options(f, { timeoutMs: 5_000 })).catch(() => undefined);
 
       // The fake records its own pid; if the kill did not land it is still alive.
       const pid = invocationOf(f).pid;

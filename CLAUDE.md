@@ -79,6 +79,15 @@ keeping them testable without spawning a process is worth the seam.
   Adjutant project.
 - **Communicate through Adjutant MCP.** Terminal output alone is invisible to the
   Commander; `send_message` reaches his dashboard and phone.
+- **Never `git stash` while other worktrees are live.** Worktrees share one
+  object store, and the stash is a REPO-GLOBAL stack: `pop` takes the top entry,
+  not *your* entry. Two agents stashing concurrently means one pops the other's
+  work into the wrong tree, silently, with the damage landing in someone else's
+  files. It has already happened once — recovered in full only because the agent
+  noticed and reported it. Use a **scratch commit on your own branch** instead:
+  it is per-worktree, it is named, and nobody else can take it. If you do pop
+  something that is not yours, re-push it with `-u` and the same paths rather
+  than deleting it.
 
 ## Commands
 
