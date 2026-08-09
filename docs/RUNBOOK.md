@@ -196,17 +196,40 @@ running* shows up too.
 
 ## 7. Push credentials — `syl-007.3.2`
 
-Four environment variables. **Do not generate a new APNs key**: Adjutant's
-existing `.p8` covers Syl — one key serves every app in the team, and Apple's
-hard limit is **two keys per team**. Only the bundle id differs.
+Five environment variables. **Do not generate a new APNs key**: the existing
+`.p8` covers Syl — one key serves every app in the team, and Apple's hard limit
+is **two keys per team**, both of which are already spent. Only the bundle id
+differs.
+
+The key lives in the repo root, `git`-ignored by extension and `chmod 600`.
 
 ```sh
-export SYL_APNS_KEY_ID=<the 10 characters in the .p8 filename>
-export SYL_APNS_TEAM_ID=<the Apple team id>
+cd "$(git rev-parse --show-toplevel)"
+
+export SYL_APNS_KEY_ID=XXTN5423K8
+export SYL_APNS_TEAM_ID=2BRYAM5Q52
 export SYL_APNS_BUNDLE_ID=com.jmm.syl
-export SYL_APNS_PRIVATE_KEY="$(cat /path/to/AuthKey_XXXXXXXXXX.p8)"
+export SYL_APNS_PRIVATE_KEY="$(cat ./AuthKey_XXTN5423K8.p8)"
 export SYL_APNS_ENVIRONMENT=production
 ```
+
+**`SYL_APNS_BUNDLE_ID` is `com.jmm.syl`, not `com.jmm.adjutant`.** Same team,
+same key, same everything else — copying that one line unchanged from the other
+project's config is the easiest mistake on this page, and it fails as an
+authentication error on every send.
+
+The path is **relative**, so moving the project does not break this page. That
+is also why the `cd` above is part of the snippet rather than an assumption:
+`$(cat ./…)` resolves against **your shell's** working directory, so running
+these lines from somewhere else silently exports an empty key. `git rev-parse
+--show-toplevel` works from anywhere inside the checkout.
+
+Relative is safe here for a reason worth stating: `SYL_APNS_PRIVATE_KEY` holds
+the key's **contents**, not its location. Once exported, nothing ever resolves
+that path again — the value is written into the plist, and the running service
+has no idea where the file was. (The other project stores a *path* instead,
+which is why it needs `../AuthKey_…`; do not copy that shape here. A relative
+path means nothing to a launchd job, whose working directory is not yours.)
 
 `SYL_APNS_ENVIRONMENT` is not optional, and the service **refuses to start**
 without it in production. TestFlight and App Store builds produce **production**
