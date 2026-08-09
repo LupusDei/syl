@@ -1,0 +1,29 @@
+{
+  "name": "@syl/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The API contract: OpenAPI 3.1 spec, WebSocket frame schema, generated TypeScript types, shared fixtures, and the mock server.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fixtures": "./src/fixtures.ts",
+    "./types": "./src/types.ts",
+    "./openapi.yaml": "./openapi.yaml",
+    "./schemas/ws.json": "./schemas/ws.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "generate": "tsx src/cli/generate.ts",
+    "mock": "tsx src/cli/mock.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13",
+    "yaml": "^2.6.1"
+  }
+}
