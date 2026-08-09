@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { ApiKeyGate } from "../auth/ApiKeyGate";
 import { AuthProvider, useAuth } from "../auth/AuthProvider";
+import { DeliveryView } from "../features/delivery/DeliveryView";
 import { JobsView } from "../features/jobs/JobsView";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import type { StorageLike } from "../storage";
@@ -18,6 +19,7 @@ import { NotFoundView, OverviewView, PlaceholderView } from "./views";
  */
 const VIEWS: Readonly<Record<string, ReactElement>> = {
   "/jobs": <JobsView />,
+  "/delivery": <DeliveryView />,
 };
 
 /**

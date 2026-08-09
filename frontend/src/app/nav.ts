@@ -38,7 +38,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Delivery outbox",
     summary: "What was sent, what was retried, and what is still unconfirmed.",
     bead: "syl-004.2.2",
-    status: "planned",
+    status: "ready",
   },
   {
     path: "/conversations",

@@ -206,6 +206,26 @@ code,
   font-size: var(--syl-text-size-small);
 }
 
+/* ---------------------------------------------------------------- banner */
+
+/* The outbox answers its own question before a row is read: this sits above
+   the table and is toned by the worst standing on the page. */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--syl-space-4);
+  padding: var(--syl-space-3) var(--syl-space-4);
+  background: var(--syl-bg-panel);
+  border: var(--syl-border-width) solid var(--syl-border);
+  border-radius: var(--syl-radius);
+}
+
+.banner__counts {
+  color: var(--syl-text-muted);
+}
+
 /* ----------------------------------------------------------------- table */
 
 .table {
@@ -272,6 +292,12 @@ code,
 
 .row--step {
   background: var(--syl-bg-inset);
+}
+
+/* An unacknowledged delivery is the one thing on this surface that must never
+   be scanned past. */
+.row--unconfirmed th {
+  border-left: 3px solid var(--syl-state-warn);
 }
 
 .row__sub {

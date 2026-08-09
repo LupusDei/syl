@@ -60,6 +60,7 @@ src/format/text.ts         ids, cost, enum names. Pure
 src/ui/Badge.tsx           a state chip, coloured by token reference
 src/ui/feedback.tsx        Loading / Empty / ErrorNotice
 src/features/jobs/         the job and run viewer (syl-004.2.1)
+src/features/delivery/     the outbox viewer (syl-004.2.2)
 tests/helpers/fixtures.ts  the shared fixtures, read off disk
 tests/unit/**              vitest
 ```
@@ -117,6 +118,21 @@ to **reads only**: every write in the contract requires an `Idempotency-Key`,
 and a retry loop without one turns a timeout into a duplicate. That is why the
 client is read-only — a write surface must carry the key before it may reuse
 the policy.
+
+## The delivery viewer is the load-bearing one
+
+It is how the never-drop guarantee is *proved* rather than asserted, so it is
+built around one distinction the contract is emphatic about: `deliveredAt`
+means APNs accepted the request, and **only `ackedAt` — set by the device —
+means it arrived**. Apple keeps only the most recent notification per app
+while a device is offline, so a night of reminders can collapse into one; a
+surface that treated `delivered` as done would show a green screen for a night
+the Commander never heard about.
+
+So `state: delivered` is coloured as a *warning*, the standing column says
+`unconfirmed` and for how long, the banner leads with the unconfirmed count,
+and the default filter is `unacknowledged` — stated in words above the table,
+so an empty table is never mistaken for an empty outbox.
 
 ## Auth
 
