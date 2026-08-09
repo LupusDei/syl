@@ -1,0 +1,108 @@
+/*
+ * The palette. Every value the interface uses lives in this file and nowhere
+ * else; `tokens.ts` holds only references. Swapping the look is editing a
+ * block here, not touching a component.
+ *
+ * Deliberately not a CRT. This is an instrument panel: quiet ground, high
+ * text contrast, one accent, four state colours that mean exactly one thing
+ * each. Density over polish — the job is reading a lot of rows at once.
+ */
+
+:root {
+  --syl-bg-base: #0e1116;
+  --syl-bg-panel: #151a21;
+  --syl-bg-raised: #1c222b;
+  --syl-bg-inset: #0a0d11;
+
+  --syl-text-primary: #e6ebf2;
+  --syl-text-secondary: #aab4c2;
+  --syl-text-muted: #6f7c8d;
+  --syl-text-inverse: #0e1116;
+
+  --syl-border: #232b35;
+  --syl-border-strong: #38424f;
+
+  --syl-accent: #57a8ff;
+  --syl-accent-contrast: #05121f;
+  --syl-accent-soft: rgba(87, 168, 255, 0.14);
+
+  --syl-state-ok: #4ec98a;
+  --syl-state-warn: #e0b341;
+  --syl-state-fail: #ef6a6a;
+  --syl-state-pending: #8f9bab;
+
+  /* Type, spacing and shape are theme-invariant: the palette changes, the
+     information density does not. */
+  --syl-font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --syl-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --syl-text-size: 13px;
+  --syl-text-size-small: 11.5px;
+  --syl-line-height: 1.45;
+
+  --syl-space-1: 4px;
+  --syl-space-2: 8px;
+  --syl-space-3: 12px;
+  --syl-space-4: 16px;
+  --syl-space-5: 24px;
+
+  --syl-radius: 4px;
+  --syl-border-width: 1px;
+  --syl-focus-ring: 0 0 0 2px var(--syl-accent-soft), 0 0 0 1px var(--syl-accent);
+  --syl-shadow-panel: 0 1px 0 rgba(0, 0, 0, 0.4);
+}
+
+/* Named explicitly as well as inherited, so a stamped document and an
+   unstamped one render identically. */
+[data-theme="instrument"] {
+  --syl-bg-base: #0e1116;
+  --syl-bg-panel: #151a21;
+  --syl-bg-raised: #1c222b;
+  --syl-bg-inset: #0a0d11;
+
+  --syl-text-primary: #e6ebf2;
+  --syl-text-secondary: #aab4c2;
+  --syl-text-muted: #6f7c8d;
+  --syl-text-inverse: #0e1116;
+
+  --syl-border: #232b35;
+  --syl-border-strong: #38424f;
+
+  --syl-accent: #57a8ff;
+  --syl-accent-contrast: #05121f;
+  --syl-accent-soft: rgba(87, 168, 255, 0.14);
+
+  --syl-state-ok: #4ec98a;
+  --syl-state-warn: #e0b341;
+  --syl-state-fail: #ef6a6a;
+  --syl-state-pending: #8f9bab;
+
+  --syl-shadow-panel: 0 1px 0 rgba(0, 0, 0, 0.4);
+}
+
+/* Light. Useful when the admin is open next to a terminal all day, and the
+   one honest way to check contrast decisions survive a bright room. */
+[data-theme="paper"] {
+  --syl-bg-base: #f4f6f9;
+  --syl-bg-panel: #ffffff;
+  --syl-bg-raised: #ffffff;
+  --syl-bg-inset: #eceff4;
+
+  --syl-text-primary: #131820;
+  --syl-text-secondary: #414d5c;
+  --syl-text-muted: #6b7787;
+  --syl-text-inverse: #ffffff;
+
+  --syl-border: #dde2e9;
+  --syl-border-strong: #b9c2ce;
+
+  --syl-accent: #1f6feb;
+  --syl-accent-contrast: #ffffff;
+  --syl-accent-soft: rgba(31, 111, 235, 0.1);
+
+  --syl-state-ok: #1a7f4b;
+  --syl-state-warn: #8a5d00;
+  --syl-state-fail: #c62f2f;
+  --syl-state-pending: #6b7787;
+
+  --syl-shadow-panel: 0 1px 2px rgba(16, 24, 40, 0.08);
+}

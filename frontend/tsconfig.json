@@ -1,0 +1,17 @@
+// Extends the repo-wide base. `strict` and `noUncheckedIndexedAccess` come from
+// there and are not relaxed here (constitution rule 2); the overrides below are
+// only the things a browser bundle genuinely needs and a Node service does not.
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // The base targets a Node service, so it ships neither the DOM lib nor a
+    // JSX transform. Both are non-negotiable here.
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    // Vite injects `import.meta.env`; the type comes from vite/client. `node`
+    // is kept for vite.config.ts and vitest.config.ts, which are typechecked
+    // alongside src/.
+    "types": ["node", "vite/client"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx", "*.config.ts"]
+}
