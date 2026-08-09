@@ -56,29 +56,29 @@ struct LocalStore: Sendable {
         }
     }
 
+    /// Writes the server's copy of a message, retiring any optimistic row it replaces.
+    ///
+    /// The retirement is not optional. `message_on_clientId` is a partial UNIQUE index,
+    /// so writing the server's copy of a message the Commander sent — same `clientId`,
+    /// new `id` — while the pending row is still there violates it and the write
+    /// throws. The message would then simply never appear, which is the worst outcome
+    /// available: he watched himself type it.
+    ///
+    /// This is the same reconciliation `reconcile(_:)` performs, arriving by the other
+    /// door. A `chat_message` frame and a `delivery_confirmation` frame race, and
+    /// either may land first.
     func upsert(_ messages: [Message]) throws {
         guard !messages.isEmpty else { return }
         try database.queue.write { db in
             for message in messages {
+                if let clientId = message.clientId {
+                    try db.execute(
+                        sql: "DELETE FROM message WHERE clientId = ? AND id <> ?",
+                        arguments: [clientId, message.id]
+                    )
+                }
                 try MessageRecord(message).save(db)
             }
-        }
-    }
-
-    /// Which of these ids the device already holds. The sync engine uses it to skip
-    /// re-decoding a page it has already seen.
-    func knownMessageIds(_ ids: [SylID]) throws -> Set<SylID> {
-        guard !ids.isEmpty else { return [] }
-        return try database.queue.read { db in
-            try Set(
-                String.fetchAll(
-                    db,
-                    sql: """
-                        SELECT id FROM message WHERE id IN (\(ids.map { _ in "?" }.joined(separator: ",")))
-                        """,
-                    arguments: StatementArguments(ids)
-                )
-            )
         }
     }
 
@@ -270,15 +270,30 @@ struct LocalStore: Sendable {
         }
     }
 
+    /// Writes the HTTP cursor, and **only** the cursor.
+    ///
+    /// A read-then-write-the-whole-row would race: the sync engine sets the cursor
+    /// from its own actor while the socket pump sets the frame sequence from the main
+    /// actor, and whichever wrote second would roll the other one back. One targeted
+    /// UPDATE in one transaction cannot.
     func setCursor(_ cursor: String?) throws {
-        var state = try syncState()
-        state.cursor = cursor
-        try database.queue.write { db in try state.save(db) }
+        try database.queue.write { db in
+            try SyncStateRecord().insert(db, onConflict: .ignore)
+            try db.execute(
+                sql: "UPDATE syncState SET cursor = ? WHERE id = ?",
+                arguments: [cursor, SyncStateRecord.singletonID]
+            )
+        }
     }
 
+    /// Writes the frame-stream sequence, and only that. See `setCursor`.
     func setLastFrameSeq(_ seq: Int) throws {
-        var state = try syncState()
-        state.lastFrameSeq = seq
-        try database.queue.write { db in try state.save(db) }
+        try database.queue.write { db in
+            try SyncStateRecord().insert(db, onConflict: .ignore)
+            try db.execute(
+                sql: "UPDATE syncState SET lastFrameSeq = ? WHERE id = ?",
+                arguments: [seq, SyncStateRecord.singletonID]
+            )
+        }
     }
 }

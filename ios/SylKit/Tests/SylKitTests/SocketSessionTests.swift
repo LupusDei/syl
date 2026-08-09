@@ -98,7 +98,41 @@ final class SocketSessionTests: XCTestCase {
 
         let outcomes = session.receive(.chatMessage(chatMessage(seq: 14, messageSeq: 900)))
 
-        XCTAssertEqual(outcomes.first, .send(.sync(WsSync(sinceSeq: 10))))
+        XCTAssertEqual(outcomes, [.send(.sync(WsSync(sinceSeq: 10)))])
+        XCTAssertEqual(
+            session.lastSeq,
+            10,
+            """
+            the mark must NOT jump the hole. Advancing it to 14 would make every frame \
+            in the replay look already-seen, so the answer to our own question would be \
+            discarded in full and nothing would ask again.
+            """
+        )
+    }
+
+    func testShouldDeliverEveryFrameInTheGapAfterALiveFrameRevealedIt() {
+        // The end-to-end path the previous test only starts. This is the regression
+        // that matters: ask for the gap, then actually receive what was asked for.
+        var session = ready(lastSeq: 10)
+        _ = session.receive(.chatMessage(chatMessage(seq: 14, messageSeq: 900)))
+
+        let outcomes = session.receive(
+            .syncResponse(
+                WsSyncResponse(
+                    fromSeq: 10,
+                    toSeq: 14,
+                    complete: true,
+                    frames: [
+                        .chatMessage(chatMessage(seq: 11, messageSeq: 897)),
+                        .chatMessage(chatMessage(seq: 12, messageSeq: 898)),
+                        .chatMessage(chatMessage(seq: 13, messageSeq: 899)),
+                        .chatMessage(chatMessage(seq: 14, messageSeq: 900)),
+                    ]
+                )
+            )
+        )
+
+        XCTAssertEqual(outcomes.count, 4, "all four, including the one that revealed the gap")
         XCTAssertEqual(session.lastSeq, 14)
     }
 
@@ -201,11 +235,24 @@ final class SocketSessionTests: XCTestCase {
         _ = session.receive(.authChallenge(WsAuthChallenge(nonce: "n", protocolVersion: 1)))
         _ = session.receive(.connected(connected(lastSeq: 500)))
 
+        // A page CARRYING FRAMES, deliberately. An empty one is the only shape under
+        // which a progress guard read after the replay loop would still look correct,
+        // so an empty-page test cannot catch that mistake.
         let outcomes = session.receive(
-            .syncResponse(WsSyncResponse(fromSeq: 100, toSeq: 300, complete: true, frames: []))
+            .syncResponse(
+                WsSyncResponse(
+                    fromSeq: 100,
+                    toSeq: 300,
+                    complete: true,
+                    frames: [
+                        .chatMessage(chatMessage(seq: 299, messageSeq: 800)),
+                        .chatMessage(chatMessage(seq: 300, messageSeq: 801)),
+                    ]
+                )
+            )
         )
 
-        XCTAssertEqual(outcomes, [.send(.sync(WsSync(sinceSeq: 300)))])
+        XCTAssertEqual(outcomes.last, .send(.sync(WsSync(sinceSeq: 300))))
         XCTAssertFalse(
             outcomes.contains { outcome in
                 if case .emit(.needsHTTPSync) = outcome { return true }
@@ -279,18 +326,6 @@ final class SocketSessionTests: XCTestCase {
             if case .send = outcome { return true }
             return false
         })
-    }
-
-    // MARK: - The high-water mark survives a drop
-
-    func testShouldKeepItsHighWaterMarkWhenTheSocketDrops() {
-        // This is the property that makes "the phone was in a tunnel" a non-event.
-        var session = ready(lastSeq: 4488)
-
-        session.socketClosed()
-
-        XCTAssertEqual(session.lastSeq, 4488)
-        XCTAssertEqual(session.phase, .awaitingChallenge)
     }
 
     // MARK: - Errors

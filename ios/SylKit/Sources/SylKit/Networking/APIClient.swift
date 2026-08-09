@@ -58,11 +58,6 @@ public actor APIClient {
     private let sleeper: Sleeper
     private let randomSampler: RandomSampler
 
-    /// Delays actually waited, newest last. Diagnostics for tests and for the
-    /// connection-state indicator — the app is required to be honest about
-    /// reconnecting rather than pretending everything is fine.
-    private(set) var recordedDelays: [TimeInterval] = []
-
     public init(
         configuration: ServerConfiguration,
         session: URLSession = .shared,
@@ -101,16 +96,11 @@ public actor APIClient {
                     randomSample: randomSampler(),
                     serverFloor: error.retryAfter
                 )
-                recordedDelays.append(delay)
                 try await sleeper(delay)
                 attempt += 1
             }
         }
     }
-
-    /// The delays this client has waited. Reset per client; used by tests and by the
-    /// reconnecting indicator.
-    public func delayHistory() -> [TimeInterval] { recordedDelays }
 
     // MARK: - One attempt
 

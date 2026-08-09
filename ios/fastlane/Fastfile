@@ -84,14 +84,9 @@ platform :ios do
     )
   end
 
-  desc "Run both halves of the iOS test suite"
-  lane :test do
-    # Not `run_tests`. A scheme's TestAction silently skips a local SPM package's test
-    # target — xcodebuild reports SUCCESS having run NOTHING — so SylKit would be
-    # untested and nothing would say so. `scripts/test.sh` runs `swift test` and
-    # `xcodebuild test`, which is the only way to exercise both.
-    sh("../scripts/test.sh")
-  end
+  # There is deliberately no `test` lane. `ios/scripts/test.sh` is the single entry
+  # point — both workflows and every developer call it directly — and a second way to
+  # run the suite is a second thing that can drift out of step with the first.
 
   def connect_api_key
     app_store_connect_api_key(

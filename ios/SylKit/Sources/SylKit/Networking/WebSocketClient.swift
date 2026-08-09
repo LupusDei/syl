@@ -29,7 +29,6 @@ public actor WebSocketClient {
     private let tokenProvider: TokenProviding
     private let reconnectPolicy: RetryPolicy
     private let keepaliveInterval: TimeInterval
-    private let missedPongsBeforeDead: Int
     private let sleeper: Sleeper
     private let randomSampler: APIClient.RandomSampler
     private let now: @Sendable () -> Date
@@ -71,7 +70,6 @@ public actor WebSocketClient {
         self.lastSeq = lastSeq
         self.reconnectPolicy = reconnectPolicy
         self.keepaliveInterval = keepaliveInterval
-        self.missedPongsBeforeDead = missedPongsBeforeDead
         self.keepalive = Keepalive(
             interval: keepaliveInterval,
             missedPongsBeforeDead: missedPongsBeforeDead
@@ -84,8 +82,15 @@ public actor WebSocketClient {
     // MARK: - Events
 
     /// The event stream. One consumer; calling it again replaces the previous one.
+    ///
+    /// The replaced continuation is finished rather than dropped: an abandoned
+    /// continuation leaves its `for await` loop suspended forever, and the task that
+    /// owns it never completes.
     public func events() -> AsyncStream<SocketEvent> {
-        AsyncStream { continuation in
+        continuation?.finish()
+        // Bounded. The consumer writes to disk per event, and an unbounded buffer
+        // behind a slow consumer grows for as long as the socket is busy.
+        return AsyncStream(bufferingPolicy: .bufferingNewest(256)) { continuation in
             self.continuation = continuation
         }
     }
@@ -107,13 +112,23 @@ public actor WebSocketClient {
     public func stop() {
         runTask?.cancel()
         runTask = nil
-        stopKeepalive()
-        connection?.close()
-        connection = nil
+        teardownConnection()
         session = nil
         presence.clear()
         set(.idle)
         continuation?.finish()
+        // Cleared, not just finished. A later `start()` would otherwise run a working
+        // socket whose every event goes to a stream nobody can hear.
+        continuation = nil
+    }
+
+    /// Closes the socket and stops the keepalive. Every exit from the pump runs this,
+    /// including the fatal one — a stopped client that left its task looping and its
+    /// `URLSessionWebSocketTask` open would keep both for the life of the process.
+    private func teardownConnection() {
+        stopKeepalive()
+        connection?.close()
+        connection = nil
     }
 
     /// Sends over the socket. Throws `NotConnected` when it is not ready, which is the
@@ -142,23 +157,24 @@ public actor WebSocketClient {
 
     private func run() async {
         var attempt = 1
+        // Cleared on every exit, so `start()` is not a permanent no-op afterwards.
+        // Without it a client that stopped — a missing token, a fatal error — could
+        // never be restarted once the Commander re-paired.
+        defer { runTask = nil }
 
         while !Task.isCancelled {
             set(attempt == 1 ? .connecting : .reconnecting(attempt: attempt))
 
             let outcome = await connectAndPump()
+            teardownConnection()
+            // Presence does not survive a disconnection: a state held across the gap
+            // would assert something about now that stopped being true.
+            presence.clear()
+
             switch outcome {
             case .stopped:
                 return
             case .disconnected(let hadReachedReady):
-                stopKeepalive()
-                connection?.close()
-                connection = nil
-                session?.socketClosed()
-                // Presence does not survive a disconnection: a state held across the
-                // gap would assert something about now that stopped being true.
-                presence.clear()
-
                 if hadReachedReady { attempt = 1 }
                 guard !Task.isCancelled else { return }
 

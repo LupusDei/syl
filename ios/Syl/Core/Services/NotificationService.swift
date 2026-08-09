@@ -28,6 +28,14 @@ final class NotificationService: NSObject, ObservableObject {
     private let registrar: PushRegistrationService
     private let now: @Sendable () -> Date
 
+    /// Where an action is written before anything is attempted over the network.
+    ///
+    /// Nil only when the database could not be opened. Wired in by `AppDelegate` as
+    /// soon as the store exists — the delegate is constructed on the launch path,
+    /// before the store, and a notification can arrive in between.
+    private var outbox: Outbox?
+    private var flush: (@Sendable () async -> Void)?
+
     init(
         backend: SylBackend,
         center: UNUserNotificationCenter = .current(),
@@ -38,6 +46,11 @@ final class NotificationService: NSObject, ObservableObject {
         self.center = center
         self.now = now
         super.init()
+    }
+
+    func attach(outbox: Outbox, flush: @escaping @Sendable () async -> Void) {
+        self.outbox = outbox
+        self.flush = flush
     }
 
     // MARK: - Setup
@@ -112,15 +125,13 @@ final class NotificationService: NSObject, ObservableObject {
     /// this missed.
     func acknowledge(_ payload: NotificationPayload, engagement: DeliveryEngagement) async {
         guard let deliveryId = payload.deliveryId else { return }
-        let request = AcknowledgeDeliveryRequest(ackedAt: now(), engagement: engagement)
-        _ = try? await backend.client().send(
-            try SylAPI.acknowledgeDelivery(
-                deliveryId,
-                request,
-                // Derived from the delivery, not random: the device retries this call
-                // by design and a fresh key each time would defeat the point.
-                idempotencyKey: "ack-\(deliveryId)"
-            )
+        await enqueue(
+            kind: .acknowledgeDelivery,
+            targetId: deliveryId,
+            body: AcknowledgeDeliveryRequest(ackedAt: now(), engagement: engagement),
+            // Derived from the delivery, not random: the device retries this call by
+            // design and a fresh key each time would defeat the point.
+            idempotencyKey: "ack-\(SylIDs.canonical(deliveryId))"
         )
     }
 
@@ -132,20 +143,95 @@ final class NotificationService: NSObject, ObservableObject {
     /// later instant or refuse with `DEFERRAL_NOT_LATER`.
     func snooze(_ payload: NotificationPayload) async {
         guard let reminderId = payload.reminderId else { return }
-        _ = try? await backend.client().send(
-            try SylAPI.snoozeReminder(
-                reminderId,
-                .minutes(ReminderNotification.snoozeMinutes),
-                idempotencyKey: IdempotencyKey.generate()
-            )
+        await enqueue(
+            kind: .snoozeReminder,
+            targetId: reminderId,
+            body: SnoozeReminderRequest.minutes(ReminderNotification.snoozeMinutes),
+            // Derived from the reminder and the delivery that prompted it, never
+            // random. He tapped Snooze on *this* notification once; a fresh key on a
+            // retry would ask the server to defer a second time, and a reminder half an
+            // hour late is exactly the quiet wrongness this project cares about.
+            idempotencyKey: Self.actionKey("snooze", reminderId, payload.deliveryId)
         )
     }
 
     func complete(_ payload: NotificationPayload) async {
         guard let reminderId = payload.reminderId else { return }
-        _ = try? await backend.client().send(
-            SylAPI.completeReminder(reminderId, idempotencyKey: IdempotencyKey.generate())
+        await enqueue(
+            kind: .completeReminder,
+            targetId: reminderId,
+            body: Optional<SnoozeReminderRequest>.none,
+            idempotencyKey: Self.actionKey("complete", reminderId, payload.deliveryId)
         )
+    }
+
+    static func actionKey(_ action: String, _ reminderId: SylID, _ deliveryId: SylID?) -> String {
+        "\(action)-\(SylIDs.canonical(reminderId))-\(deliveryId.map(SylIDs.canonical) ?? "direct")"
+    }
+
+    /// Writes the intent to disk, then tries to push it.
+    ///
+    /// **Disk first, always.** Adjutant calls the network directly from its
+    /// notification actions and swallows the failure, so a snooze tapped while the
+    /// tailnet is down simply vanishes — which is the one outcome this project forbids.
+    /// The outbox is retried by the sync engine and its idempotency key is derived, so
+    /// the deferral survives a dead tunnel, a rebooting Mac and a killed app.
+    private func enqueue(
+        kind: OutboxRecord.Kind,
+        targetId: SylID,
+        body: (some Encodable)?,
+        idempotencyKey: String
+    ) async {
+        guard let outbox else {
+            // No database. Better to try the network than to do nothing, though this
+            // is the path that can lose an action — which is why the store is opened
+            // on launch before anything else.
+            await sendDirectly(kind: kind, targetId: targetId, body: body, key: idempotencyKey)
+            return
+        }
+
+        do {
+            try outbox.enqueue(
+                OutboxRecord(
+                    idempotencyKey: idempotencyKey,
+                    kind: kind,
+                    targetId: targetId,
+                    payload: try body.map { try SylJSON.encoder().encode($0) },
+                    createdAt: now()
+                )
+            )
+        } catch {
+            await sendDirectly(kind: kind, targetId: targetId, body: body, key: idempotencyKey)
+            return
+        }
+
+        // Push it now rather than waiting for the next scheduled sync: he is holding
+        // the phone and expects the snooze to have happened.
+        await flush?()
+    }
+
+    private func sendDirectly(
+        kind: OutboxRecord.Kind,
+        targetId: SylID,
+        body: (some Encodable)?,
+        key: String
+    ) async {
+        let client = backend.client()
+        switch kind {
+        case .acknowledgeDelivery:
+            guard let request = body as? AcknowledgeDeliveryRequest else { return }
+            _ = try? await client.send(
+                try SylAPI.acknowledgeDelivery(targetId, request, idempotencyKey: key))
+        case .snoozeReminder:
+            guard let request = body as? SnoozeReminderRequest else { return }
+            _ = try? await client.send(
+                try SylAPI.snoozeReminder(targetId, request, idempotencyKey: key))
+        case .completeReminder:
+            _ = try? await client.send(
+                SylAPI.completeReminder(targetId, idempotencyKey: key))
+        case .sendMessage, .completeTodo, .createTodo, .createReminder:
+            return
+        }
     }
 
     /// Maps an action identifier onto the work it implies. Pure and separate from the

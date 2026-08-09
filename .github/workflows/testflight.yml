@@ -43,8 +43,12 @@ jobs:
         if: github.event_name == 'push'
         id: diff
         run: |
-          CURRENT=$(grep 'MARKETING_VERSION' ios/Syl.xcodeproj/project.pbxproj | head -1 | sed 's/.*= *//;s/;.*//')
-          PREVIOUS=$(git show HEAD~1:ios/Syl.xcodeproj/project.pbxproj 2>/dev/null | grep 'MARKETING_VERSION' | head -1 | sed 's/.*= *//;s/;.*//' || echo "")
+          # Every occurrence, sorted and deduplicated, not just the first. Debug and
+          # Release each carry one, and `head -1` reads whichever configuration happens
+          # to appear first in the pbxproj — which changes when Xcode rewrites the file.
+          extract() { grep 'MARKETING_VERSION' | sed 's/.*= *//;s/;.*//' | sort -u | tr '\n' ' '; }
+          CURRENT=$(extract < ios/Syl.xcodeproj/project.pbxproj)
+          PREVIOUS=$(git show HEAD~1:ios/Syl.xcodeproj/project.pbxproj 2>/dev/null | extract || echo "")
           echo "current=$CURRENT previous=$PREVIOUS"
           if [ "$CURRENT" != "$PREVIOUS" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -109,16 +113,22 @@ jobs:
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          # Through `env`, never interpolated into the script body. `changelog` is
+          # attacker-controlled on `workflow_dispatch`, and this runner is holding a
+          # decoded App Store Connect key and the match password — a `${{ }}` splice
+          # into a shell command is a remote code execution with those in reach.
+          CHANGELOG_INPUT: ${{ github.event.inputs.changelog || 'CI build from commit' }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
           printf '%s\n' \
             "APP_STORE_CONNECT_API_KEY_ID=$APP_STORE_CONNECT_API_KEY_ID" \
             "APP_STORE_CONNECT_API_ISSUER_ID=$APP_STORE_CONNECT_API_ISSUER_ID" \
             "APP_STORE_CONNECT_API_KEY_PATH=./fastlane/AuthKey.p8" \
-            "APP_IDENTIFIER=${{ env.APP_IDENTIFIER }}" \
-            "TEAM_ID=${{ env.TEAM_ID }}" \
+            "APP_IDENTIFIER=$APP_IDENTIFIER" \
+            "TEAM_ID=$TEAM_ID" \
             "MATCH_GIT_URL=$MATCH_GIT_URL" \
             "MATCH_PASSWORD=$MATCH_PASSWORD" \
-            "CHANGELOG=${{ github.event.inputs.changelog || 'CI build from commit' }} ${{ github.sha }}" \
+            "CHANGELOG=$CHANGELOG_INPUT $COMMIT_SHA" \
             > fastlane/.env
 
       - name: Setup SSH for match

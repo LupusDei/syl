@@ -21,22 +21,41 @@ final class FourTrapsTests: XCTestCase {
         XCTAssertEqual(presence.intensity, 0.4, accuracy: 0.0001)
     }
 
-    func testShouldBreakOnCamelCaseFieldsIfABlanketSnakeCaseStrategyWereUsed() throws {
-        // The trap, demonstrated rather than asserted in prose. `.convertFromSnakeCase`
-        // would indeed turn `ttl_ms` into `ttlMs` — and it is applied to *every* key,
-        // so `messageSeq` becomes `messageSeq` unchanged but `conversationId` and the
-        // rest are only safe by luck. The frame that proves it is one that mixes both:
-        // presence has `ttl_ms` next to camelCase-free names, so the clean
-        // demonstration is a frame with a genuinely camelCase key.
-        let data = try fixture("ws/delivery_confirmation.json")
-
-        let lenient = JSONDecoder()
-        lenient.keyDecodingStrategy = .convertFromSnakeCase
-        lenient.dateDecodingStrategy = .iso8601
+    func testShouldMangleACamelCaseKeyIfABlanketSnakeCaseStrategyWereUsed() throws {
+        // The trap, demonstrated on the mechanism itself rather than on a decode that
+        // might fail for some other reason.
+        //
+        // `.convertFromSnakeCase` is applied to EVERY key, and its transform is not the
+        // identity on camelCase input: it lowercases a leading run and then re-splits on
+        // underscores, so `messageSeq` survives but a key like `apnsUniqueId` does not
+        // necessarily. Proving it by round-tripping the strategy's own output is exact —
+        // the alternative, "this decode throws", passes even when key conversion is
+        // entirely harmless, because the date strategy throws first.
+        let mangled = try JSONSerialization.data(withJSONObject: [
+            "type": "presence",
+            "state": "speaking",
+            "intensity": 0.4,
+            "since": "2026-08-09T07:00:03.114Z",
+            // What the strategy would hand the decoder instead of `ttl_ms`.
+            "ttlMs": 4000,
+        ])
 
         XCTAssertThrowsError(
-            try lenient.decode(WsDeliveryConfirmation.self, from: data),
-            "a blanket snake_case strategy must not be able to decode this contract"
+            try SylJSON.decoder().decode(WsPresence.self, from: mangled),
+            """
+            the wire spelling is ttl_ms. A decoder that accepted the converted spelling \
+            would be one where a blanket .convertFromSnakeCase looked like it worked.
+            """
+        ) { error in
+            guard case DecodingError.keyNotFound = error else {
+                return XCTFail("expected keyNotFound for ttl_ms, got \(error)")
+            }
+        }
+
+        // And the genuine wire spelling decodes, so the assertion above is about the
+        // key and not about the frame being unreadable in general.
+        XCTAssertNoThrow(
+            try SylJSON.decoder().decode(WsPresence.self, from: try fixture("ws/presence_speaking.json"))
         )
     }
 

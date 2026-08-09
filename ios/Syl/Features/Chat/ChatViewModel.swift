@@ -135,7 +135,14 @@ final class ChatViewModel: ObservableObject {
             // and a bare `==` would drop a message into the wrong thread rather than
             // fail loudly.
             guard SylIDs.areEqual(message.conversationId, conversationId) else { return false }
-            try? store.upsert([message])
+            do {
+                try store.upsert([message])
+            } catch {
+                // A message the device cannot write is one he will not see. Saying so
+                // is the only honest option; swallowing it makes the app look fine.
+                notice = "A message arrived that this device could not save."
+                return false
+            }
             await refresh()
             return true
 
@@ -156,7 +163,10 @@ final class ChatViewModel: ObservableObject {
             return false
 
         case .error(let error, let fatal):
-            notice = fatal ? error.message : nil
+            // Only a fatal error writes here. A transient one — "slow down" — must not
+            // clear a standing notice like "this device needs to be paired again",
+            // which is still true and still the more important thing to say.
+            if fatal { notice = error.message }
             return false
         }
     }

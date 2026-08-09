@@ -22,12 +22,12 @@ struct ServerProfile: Equatable, Codable, Sendable, Identifiable {
     /// publicly trusted, so no App Transport Security exception is needed — but it is
     /// a 90-day Let's Encrypt certificate that does not auto-renew, and an expired one
     /// is a silent outage on a timer.
-    static func tailnet(host: String) -> ServerProfile {
-        ServerProfile(
-            id: "tailnet",
-            name: "Tailnet",
-            baseURL: URL(string: "https://\(host)/api/v1")!
-        )
+    /// Nil when the host is not usable in a URL. Returning an optional rather than
+    /// force-unwrapping: the host is typed in, and a stray space would otherwise trap
+    /// the app on a settings screen.
+    static func tailnet(host: String) -> ServerProfile? {
+        guard let url = URL(string: "https://\(host)/api/v1") else { return nil }
+        return ServerProfile(id: "tailnet", name: "Tailnet", baseURL: url)
     }
 
     /// The mock server, `npm run mock`. Present so a simulator build is useful before
@@ -77,10 +77,14 @@ final class ServerProfileStore: ObservableObject {
             (storedURL.flatMap { url in (stored.isEmpty ? [fallback] : stored).first { $0.baseURL == url } })
             ?? (stored.first ?? fallback)
 
-        // Write the fallback through on first launch so the registration path, which
-        // reads UserDefaults directly and knows nothing about this type, always finds
-        // a value.
-        if storedURL == nil {
+        // Write through whenever the stored key disagrees with what this store will
+        // actually use — not only when it is absent.
+        //
+        // The absent-only version had a hole: a stored URL matching no known profile
+        // left the old value in `UserDefaults` while the UI showed a different server,
+        // and the push registration path reads that key directly. The device would
+        // have registered against a host the app was not talking to.
+        if storedURL != selected.baseURL {
             defaults.set(selected.baseURL.absoluteString, forKey: Self.selectedBaseURLKey)
         }
         if stored.isEmpty {

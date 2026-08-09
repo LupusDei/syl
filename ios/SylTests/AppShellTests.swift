@@ -43,9 +43,9 @@ final class AppShellTests: XCTestCase {
     }
 
     @MainActor
-    func testShouldPersistTheSelectionSoTheRegistrationPathSeesIt() {
+    func testShouldPersistTheSelectionSoTheRegistrationPathSeesIt() throws {
         let store = ServerProfileStore(defaults: defaults, fallback: .mock)
-        let tailnet = ServerProfile.tailnet(host: "syl.tail1234.ts.net")
+        let tailnet = try XCTUnwrap(ServerProfile.tailnet(host: "syl.tail1234.ts.net"))
         store.add(tailnet)
 
         store.select(tailnet)
@@ -57,18 +57,18 @@ final class AppShellTests: XCTestCase {
     }
 
     @MainActor
-    func testShouldIgnoreASelectionThatIsNotAKnownProfile() {
+    func testShouldIgnoreASelectionThatIsNotAKnownProfile() throws {
         let store = ServerProfileStore(defaults: defaults, fallback: .mock)
 
-        store.select(ServerProfile.tailnet(host: "someone-elses.ts.net"))
+        store.select(try XCTUnwrap(ServerProfile.tailnet(host: "someone-elses.ts.net")))
 
         XCTAssertEqual(store.selected, .mock)
     }
 
     @MainActor
-    func testShouldRestoreThePreviouslySelectedProfileOnRelaunch() {
+    func testShouldRestoreThePreviouslySelectedProfileOnRelaunch() throws {
         let first = ServerProfileStore(defaults: defaults, fallback: .mock)
-        let tailnet = ServerProfile.tailnet(host: "syl.tail1234.ts.net")
+        let tailnet = try XCTUnwrap(ServerProfile.tailnet(host: "syl.tail1234.ts.net"))
         first.add(tailnet)
         first.select(tailnet)
 
@@ -80,7 +80,7 @@ final class AppShellTests: XCTestCase {
     // MARK: - The scar itself
 
     @MainActor
-    func testShouldFollowAServerChangeWithoutBeingRebuilt() {
+    func testShouldFollowAServerChangeWithoutBeingRebuilt() throws {
         // The whole point of reading UserDefaults on every access. A backend that
         // captured the URL once would keep pushing to the old server — or, on the
         // launch path where nothing had configured it yet, to localhost.
@@ -88,7 +88,7 @@ final class AppShellTests: XCTestCase {
         let store = ServerProfileStore(defaults: defaults, fallback: .mock)
         XCTAssertEqual(backend.baseURL, ServerProfile.mock.baseURL)
 
-        let tailnet = ServerProfile.tailnet(host: "syl.tail1234.ts.net")
+        let tailnet = try XCTUnwrap(ServerProfile.tailnet(host: "syl.tail1234.ts.net"))
         store.add(tailnet)
         store.select(tailnet)
 
@@ -176,6 +176,12 @@ final class AppShellTests: XCTestCase {
         )
     }
 
+    func testShouldRefuseAHostThatCannotBeAURL() {
+        // The host is typed in. A stray space would otherwise trap the app on a
+        // settings screen.
+        XCTAssertNil(ServerProfile.tailnet(host: "not a host"))
+    }
+
     func testShouldReportBothTheMarketingVersionAndTheBuildNumber() {
         // A TestFlight report that says only "0.1.0" cannot be matched to a build.
         let version = PushRegistration.appVersion()
@@ -252,11 +258,64 @@ final class AppShellTests: XCTestCase {
         XCTAssertEqual(work.engagement, .delivered)
     }
 
-    func testShouldOnlyOpenTheAppForTheViewAction() {
-        // A snooze that had to launch the app to take effect would be a snooze he
-        // could miss.
-        XCTAssertEqual(ReminderNotification.Action.allCases.count, 3)
+    @MainActor
+    func testShouldOnlyOpenTheAppForTheViewAction() throws {
+        // A snooze that had to launch the app to take effect would be a snooze he could
+        // miss. Asserted on the actions actually registered with the system, not on a
+        // count — a count passes unchanged if every action gains `.foreground`, which
+        // is the exact mistake the rule exists to prevent.
+        let center = UNUserNotificationCenter.current()
+        NotificationService(backend: SylBackend(defaults: defaults, tokens: InMemoryTokenStore()))
+            .registerCategories()
+
+        let categories = try awaitCategories(from: center)
+        let reminder = try XCTUnwrap(
+            categories.first { $0.identifier == ReminderNotification.categoryIdentifier }
+        )
+
+        XCTAssertEqual(reminder.actions.count, 3)
+        for action in reminder.actions {
+            let opensApp = action.options.contains(.foreground)
+            XCTAssertEqual(
+                opensApp,
+                action.identifier == ReminderNotification.Action.view.rawValue,
+                "\(action.identifier) has the wrong foreground option"
+            )
+        }
+    }
+
+    private func awaitCategories(
+        from center: UNUserNotificationCenter
+    ) throws -> Set<UNNotificationCategory> {
+        let expectation = expectation(description: "categories")
+        nonisolated(unsafe) var result: Set<UNNotificationCategory> = []
+        center.getNotificationCategories { categories in
+            result = categories
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 5)
+        return result
+    }
+
+    func testShouldDeferByFifteenMinutes() {
         XCTAssertEqual(ReminderNotification.snoozeMinutes, 15)
+    }
+
+    @MainActor
+    func testShouldDeriveANotificationActionKeyFromTheReminderAndDelivery() {
+        // Never random. He tapped Snooze on this notification once; a fresh key on a
+        // retry would ask the server to defer a second time.
+        let first = NotificationService.actionKey(
+            "snooze", "syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f", "syl:delivery:abc")
+        let second = NotificationService.actionKey(
+            "snooze", "syl:reminder:0198F2C1-4A3B-7D21-9F00-1A2B3C4D5E6F", "syl:delivery:ABC")
+
+        XCTAssertEqual(first, second, "id case must not change the key")
+        XCTAssertNotEqual(
+            first,
+            NotificationService.actionKey(
+                "complete", "syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f", "syl:delivery:abc")
+        )
     }
 
     // MARK: - Token storage

@@ -260,6 +260,12 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(report.pagesPulled, 3)
         XCTAssertFalse(report.hasMore)
         XCTAssertEqual(try store.syncState().cursor, "c3")
+        let cursors = await pages.cursorsSeen
+        XCTAssertEqual(
+            cursors,
+            [nil, "c1", "c2"],
+            "each page must be asked for from where the previous one ended"
+        )
     }
 
     func testShouldStopAtThePageCeilingAndSayThereIsMore() async throws {
@@ -460,7 +466,13 @@ final class SyncEngineTests: XCTestCase {
             self.serverTime = serverTime
         }
 
+        private(set) var cursorsSeen: [String?] = []
+
+        /// Records the cursor it was handed. A source that ignored `since` could not
+        /// tell a client that pages correctly from one that re-asks for page one
+        /// forever, which is the failure paging tests exist to catch.
         func next(since: String?) -> SyncResponse {
+            cursorsSeen.append(since)
             guard !pages.isEmpty else {
                 return SyncResponse(
                     cursor: since ?? "", hasMore: false, changes: [], serverTime: serverTime)

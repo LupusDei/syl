@@ -118,14 +118,6 @@ public struct SocketSession: Sendable {
         }
     }
 
-    /// The socket dropped. Keeps `lastSeq` — that is the whole point of it — and puts
-    /// the handshake back to the start.
-    public mutating func socketClosed() {
-        guard phase != .closed else { return }
-        phase = .awaitingChallenge
-        protocolVersion = nil
-    }
-
     // MARK: - Handshake
 
     private mutating func handle(_ challenge: WsAuthChallenge) -> [Outcome] {
@@ -184,17 +176,20 @@ public struct SocketSession: Sendable {
         // from our mark and the first frames back are ones we already hold.
         guard seq > lastSeq else { return [] }
 
-        var outcomes: [Outcome] = []
-
-        // A hole in the sequence space is how loss is detected. Ask for the range
-        // before consuming this frame, so the replayed frames arrive in order.
+        // A hole in the sequence space is how loss is detected.
+        //
+        // **Do not consume this frame.** Asking for the gap and then advancing the
+        // mark past it would make every replayed frame look already-seen — the reply
+        // to our own question would be rejected in full, the messages in the hole
+        // would never reach the UI, and nothing would ask again. The frame that
+        // revealed the gap is inside the range we are asking for, so it comes back
+        // with the rest; emitting it now as well would duplicate it.
         if seq > lastSeq + 1 {
-            outcomes.append(.send(.sync(WsSync(sinceSeq: lastSeq))))
+            return [.send(.sync(WsSync(sinceSeq: lastSeq)))]
         }
 
         lastSeq = seq
-        outcomes.append(.emit(event))
-        return outcomes
+        return [.emit(event)]
     }
 
     // MARK: - Gap recovery
@@ -214,6 +209,12 @@ public struct SocketSession: Sendable {
             outcomes.append(.emit(.needsHTTPSync(fromSeq: response.fromSeq)))
         }
 
+        // Captured **before** the replay loop. Reading it afterwards would compare the
+        // mark with itself, the progress guard below would never fire, and a truncated
+        // page carrying frames — the only kind that occurs in practice — would never
+        // ask for the rest.
+        let previous = lastSeq
+
         for frame in response.frames {
             switch frame {
             case .chatMessage(let frame):
@@ -226,7 +227,6 @@ public struct SocketSession: Sendable {
             }
         }
 
-        let previous = lastSeq
         // The socket is now at `toSeq` whether or not the payload was complete: the
         // frames below it are gone from the buffer and asking again would loop.
         lastSeq = max(lastSeq, response.toSeq)

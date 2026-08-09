@@ -26,6 +26,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     private var syncEngine: SyncEngine?
     private var socket: WebSocketClient?
     private var socketPump: Task<Void, Never>?
+    /// The base URL the live socket was opened against. Compared on foreground so a
+    /// server-profile change moves the socket too — `SylBackend` re-reads the URL for
+    /// every HTTP call, but a socket is a long-lived thing and would otherwise keep
+    /// hammering the host the Commander switched away from.
+    private var socketBaseURL: URL?
 
     /// The last registration outcome, so the app can be honest about it rather than
     /// pretending push works.
@@ -89,7 +94,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         self.store = store
         self.syncEngine = engine
         self.socket = socket
+        self.socketBaseURL = backend.baseURL
         self.chat = chat
+
+        // Notification actions write to the outbox rather than calling the network, so
+        // a snooze tapped while the tailnet is down survives.
+        notifications.attach(outbox: outbox) { await engine.synchronise() }
 
         startSocket(socket, feeding: chat, store: store)
         Task { await engine.synchronise() }
@@ -107,6 +117,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
             let events = await socket.events()
             await socket.start()
 
+            var persistedSeq = (try? store.syncState().lastFrameSeq) ?? 0
+
             for await event in events {
                 await chat.apply(event)
 
@@ -115,8 +127,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
                     // it; only the durable cursor can.
                     await self?.syncEngine?.synchronise()
                 }
+
+                // Only when it actually moved, and off the main actor. Presence and
+                // connection-state events do not advance the mark at all, and a
+                // synchronous SQLite write per frame during a `speaking` burst is a
+                // main-thread stall on the busiest path in the app.
                 let seq = await socket.lastSeq
-                try? store.setLastFrameSeq(seq)
+                guard seq != persistedSeq else { continue }
+                persistedSeq = seq
+                await Task.detached(priority: .utility) {
+                    try? store.setLastFrameSeq(seq)
+                }.value
             }
         }
     }
@@ -125,8 +146,38 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     /// Apple offers no way to ask what arrived, so this is where anything that was
     /// dropped or coalesced reappears.
     func synchroniseNow() async {
+        rebuildSocketIfServerChanged()
         await syncEngine?.synchronise()
         await chat?.refresh()
+    }
+
+    /// Reopens the socket when the selected server profile has moved.
+    ///
+    /// HTTP follows the change on its own because `SylBackend` reads `UserDefaults`
+    /// per call. A socket cannot: it is one long-lived connection to one host, so the
+    /// only way to follow is to open a new one.
+    private func rebuildSocketIfServerChanged() {
+        guard let store, socketBaseURL != nil, socketBaseURL != backend.baseURL else { return }
+        let socket = self.socket
+        socketPump?.cancel()
+        socketPump = nil
+        Task { await socket?.stop() }
+        self.socket = nil
+        self.socketBaseURL = nil
+        _ = store
+        openSocket()
+    }
+
+    private func openSocket() {
+        guard let store, let chat, socket == nil else { return }
+        let socket = WebSocketClient(
+            configuration: ServerConfiguration(baseURL: backend.baseURL),
+            tokenProvider: TokenStoreProvider(store: KeychainTokenStore()),
+            lastSeq: (try? store.syncState().lastFrameSeq) ?? 0
+        )
+        self.socket = socket
+        self.socketBaseURL = backend.baseURL
+        startSocket(socket, feeding: chat, store: store)
     }
 
     func application(
