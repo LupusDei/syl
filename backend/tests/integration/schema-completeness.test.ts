@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { IntakeStore } from "../../src/connections/intake-store.js";
-import { openDatabase, type SylDatabase } from "../../src/services/database.js";
+import {
+  MIGRATIONS_DIR,
+  openDatabase,
+  readMigrations,
+  type SylDatabase,
+} from "../../src/services/database.js";
 import { existingTables, referencedTables } from "../helpers/sql-tables.js";
 
 /**
@@ -56,9 +61,22 @@ describe("a freshly migrated database", () => {
   });
 
   it("should apply every migration that ships, in order", () => {
-    expect(db.applied.map((migration) => migration.version)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-    ]);
+    // Derived rather than hardcoded. The literal `[1 … 11]` this replaced made
+    // every migration author edit a test in a file they had no other business
+    // in — and with several agents adding migrations at once, the same line
+    // conflicting is not a hypothetical.
+    //
+    // Still strict: the versions must be exactly the shipped set, contiguous
+    // from one, and there must be at least as many as the day this floor was
+    // written. A floor only ever rises, so it cannot rot the way the literal
+    // did, and it keeps the assertion from going vacuous if `readMigrations`
+    // ever came back empty.
+    const shipped = readMigrations(MIGRATIONS_DIR).map((migration) => migration.version);
+    const applied = db.applied.map((migration) => migration.version);
+
+    expect(shipped.length).toBeGreaterThanOrEqual(12);
+    expect(shipped).toEqual(shipped.map((_, index) => index + 1));
+    expect(applied).toEqual(shipped);
     expect(db.pragmas.journalMode).toBe("wal");
     expect(db.pragmas.foreignKeys).toBe(true);
   });

@@ -12,6 +12,7 @@ import {
   type SessionStore,
 } from "../../src/harness/agent.js";
 import type { TurnOptions, TurnResult, TurnRunner } from "../../src/harness/session.js";
+import { autoMemoryAt } from "../../src/memory/auto-memory.js";
 
 function fakeResult(sessionId: string, text = "ok"): TurnResult {
   return {
@@ -28,6 +29,7 @@ function fakeResult(sessionId: string, text = "ok"): TurnResult {
       mcpServers: [],
       tools: [],
       capabilities: [],
+      autoMemoryPath: undefined,
     },
     events: [],
   };
@@ -255,6 +257,93 @@ describe("SylAgent", () => {
 
       await expect(syl.ask("hi", "../escape")).rejects.toThrow(/lane/i);
       expect(() => syl.forLane("has space")).toThrow(/lane/i);
+    });
+  });
+
+  describe("auto-memory", () => {
+    /**
+     * Lanes exist to keep transcripts apart. Memory is the one thing that must
+     * *not* be kept apart: a fact learned while talking to the Commander is
+     * exactly what the morning agenda needs, and the consolidation lane — whose
+     * whole job is compacting what the others learned — could otherwise only
+     * ever see its own. The reasoning is written out in `memory/auto-memory.ts`.
+     */
+    it("should send the configured memory directory on every turn", async () => {
+      const runner = announcingRunner(() => "sess-1");
+      const syl = new SylAgent({
+        runner,
+        store: memoryStore(),
+        autoMemory: autoMemoryAt("/srv/syl/memory"),
+      });
+
+      await syl.ask("hello");
+
+      expect(optionsOfCall(runner, 0).autoMemory).toEqual({
+        mode: "directory",
+        directory: "/srv/syl/memory",
+      });
+    });
+
+    it("should give every lane the same memory directory", async () => {
+      const runner = announcingRunner((n) => `sess-${n}`);
+      const syl = new SylAgent({
+        runner,
+        store: memoryStore(),
+        autoMemory: autoMemoryAt("/srv/syl/memory"),
+      });
+
+      await syl.ask("hi", LANES.commander);
+      await syl.ask("tick", LANES.heartbeat);
+      await syl.ask("morning", LANES.agenda);
+      await syl.ask("review", LANES.consolidation);
+
+      const directories = [0, 1, 2, 3].map((n) => optionsOfCall(runner, n).autoMemory);
+      expect(new Set(directories.map((m) => JSON.stringify(m))).size).toBe(1);
+    });
+
+    it("should carry the memory directory into a lane-scoped view", async () => {
+      // `forLane` builds a new agent; a field forgotten there is a lane that
+      // silently remembers nothing.
+      const runner = announcingRunner(() => "sess-1");
+      const syl = new SylAgent({
+        runner,
+        store: memoryStore(),
+        autoMemory: autoMemoryAt("/srv/syl/memory"),
+      });
+
+      await syl.forLane(LANES.heartbeat).ask("tick");
+
+      expect(optionsOfCall(runner, 0).autoMemory).toEqual({
+        mode: "directory",
+        directory: "/srv/syl/memory",
+      });
+    });
+
+    it("should not let an incidental turnOptions move where memory lives", async () => {
+      const runner = announcingRunner(() => "sess-1");
+      const syl = new SylAgent({
+        runner,
+        store: memoryStore(),
+        autoMemory: autoMemoryAt("/srv/syl/memory"),
+        turnOptions: { autoMemory: autoMemoryAt("/tmp/somewhere-else") },
+      });
+
+      await syl.ask("hello");
+
+      expect(optionsOfCall(runner, 0).autoMemory).toEqual({
+        mode: "directory",
+        directory: "/srv/syl/memory",
+      });
+    });
+
+    it("should say nothing about memory when the agent was not configured with any", async () => {
+      // An agent nobody told about memory must not quietly assert a directory;
+      // `runTurn` only checks the init frame when it was asked to.
+      const runner = announcingRunner(() => "sess-1");
+
+      await new SylAgent({ runner, store: memoryStore() }).ask("hello");
+
+      expect(optionsOfCall(runner, 0).autoMemory).toBeUndefined();
     });
   });
 

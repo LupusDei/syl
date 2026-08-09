@@ -150,3 +150,37 @@ describe("idType", () => {
     expect(idType("nonsense")).toBeNull();
   });
 });
+
+describe("the memory and dream id types", () => {
+  // syl-5yt. The union is meant to be the closed list, and for a while it was
+  // not: 0012 and 0013 shipped ids the union had never heard of. The shared
+  // regex accepted them, so nothing failed — which is exactly why this is
+  // worth pinning rather than trusting.
+  it.each(["memory_node", "memory_edge", "dream_session"] as const)(
+    "should mint and recognise a %s id",
+    (type) => {
+      const id = newId(type);
+
+      expect(idType(id)).toBe(type);
+      expect(isId(id, type)).toBe(true);
+    },
+  );
+
+  it("should keep the graph and the dream log in separate id namespaces", () => {
+    // Constraint 7. The dream log is telemetry ABOUT the graph and never a node
+    // in it. If these two ever collided, a dream session could be addressed as
+    // a memory node and the next sweep would consolidate Syl's own dreams as
+    // experience.
+    const node = newId("memory_node");
+
+    expect(isId(node, "dream_session")).toBe(false);
+    expect(isId(newId("dream_session"), "memory_node")).toBe(false);
+  });
+
+  it("should not address a memory node with an operational goal id", () => {
+    // The node KIND is a column, not part of the id: `syl:goal:<uuid>` already
+    // addresses a row in the operational goals table, and one id shape must
+    // never address two different stores.
+    expect(isId(newId("goal"), "memory_node")).toBe(false);
+  });
+});

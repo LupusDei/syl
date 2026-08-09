@@ -41,6 +41,17 @@ export interface InitEvent extends BaseEvent {
   readonly mcpServers: ReadonlyArray<{ name: string; status: string }>;
   readonly tools: readonly string[];
   readonly capabilities: readonly string[];
+  /**
+   * The auto-memory directory the CLI actually resolved (`memory_paths.auto`),
+   * or `undefined` when auto-memory is off for this session.
+   *
+   * This is the field that makes a redirected memory directory *verifiable*.
+   * The CLI silently discards an `autoMemoryDirectory` it does not like and
+   * falls back to `~/.claude/projects/<sanitised-cwd>/memory/` with no warning
+   * and no exit code, so the request going out is not evidence of anything —
+   * this is. See `memory/auto-memory.ts`.
+   */
+  readonly autoMemoryPath: string | undefined;
 }
 
 /** Assistant prose intended for the user. */
@@ -132,6 +143,8 @@ export function parseEvent(line: string): SylEvent | null {
     const subtype = str(raw["subtype"]);
     if (subtype === "init") {
       const servers = Array.isArray(raw["mcp_servers"]) ? raw["mcp_servers"] : [];
+      const memoryPaths = isObject(raw["memory_paths"]) ? raw["memory_paths"] : {};
+      const autoMemoryPath = memoryPaths["auto"];
       return {
         kind: "init",
         sessionId,
@@ -140,6 +153,7 @@ export function parseEvent(line: string): SylEvent | null {
         apiKeySource: str(raw["apiKeySource"]),
         tools: strArray(raw["tools"]),
         capabilities: strArray(raw["capabilities"]),
+        autoMemoryPath: typeof autoMemoryPath === "string" ? autoMemoryPath : undefined,
         mcpServers: servers.filter(isObject).map((s) => ({
           name: str(s["name"]),
           status: str(s["status"]),

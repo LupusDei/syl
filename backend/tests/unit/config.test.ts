@@ -1,5 +1,11 @@
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
+import {
+  AUTO_MEMORY_ENV_VAR,
+  DEFAULT_AUTO_MEMORY_PATH,
+} from "../../src/memory/auto-memory.js";
 import {
   ConfigError,
   DEFAULT_DATABASE_PATH,
@@ -60,6 +66,9 @@ describe("loadConfig", () => {
         nodeEnv: "development",
         version: SERVICE_VERSION,
         databasePath: DEFAULT_DATABASE_PATH,
+        // Absolute, because Claude Code discards a relative auto-memory
+        // directory without saying so.
+        autoMemoryDirectory: resolve(process.cwd(), DEFAULT_AUTO_MEMORY_PATH),
         credentialSource: "none",
         subscriptionRails: true,
         quietHours: DEFAULT_QUIET_HOURS,
@@ -86,6 +95,48 @@ describe("loadConfig", () => {
 
     it("should treat a blank SYL_DB_PATH as unset rather than as the empty path", () => {
       expect(loadConfig({ SYL_DB_PATH: "   " }).databasePath).toBe(DEFAULT_DATABASE_PATH);
+    });
+
+    it("should read the auto-memory directory from SYL_AUTO_MEMORY_DIR", () => {
+      expect(loadConfig({ [AUTO_MEMORY_ENV_VAR]: "/var/lib/syl/memory" }).autoMemoryDirectory).toBe(
+        "/var/lib/syl/memory",
+      );
+    });
+
+    it("should make a relative auto-memory directory absolute, never passing it on as given", () => {
+      // Verified on Claude Code 2.1.226: a relative `autoMemoryDirectory` is
+      // discarded in silence and memory goes to the CLI's own default instead.
+      // Nothing warns, nothing exits non-zero, and the next session reads from
+      // the same wrong place — so it even looks like it worked.
+      const config = loadConfig({ [AUTO_MEMORY_ENV_VAR]: "var/memory" });
+
+      expect(config.autoMemoryDirectory).toBe(resolve(process.cwd(), "var/memory"));
+    });
+
+    it("should keep memory under .syl/ by default, which is already gitignored", () => {
+      // Same reasoning as the database: the Commander's private memory must not
+      // be one `git add .` from a commit.
+      expect(loadConfig({}).autoMemoryDirectory.endsWith("/.syl/memory")).toBe(true);
+    });
+
+    it("should refuse to start on an auto-memory directory the CLI would discard", () => {
+      // A misconfigured service must refuse to start rather than quietly write
+      // the Commander's memory somewhere Syl never reads.
+      expect(() => loadConfig({ [AUTO_MEMORY_ENV_VAR]: "/srv/syl\0/memory" })).toThrow(ConfigError);
+    });
+
+    it("should report an unusable memory directory together with every other problem", () => {
+      // One throw listing everything, so misconfiguration is not fixed one
+      // restart at a time.
+      try {
+        loadConfig({ [AUTO_MEMORY_ENV_VAR]: "\0", SYL_QUIET_START: "nope" });
+        expect.unreachable("expected a ConfigError");
+      } catch (error) {
+        expect(error).toBeInstanceOf(ConfigError);
+        const { problems } = error as ConfigError;
+        expect(problems.some((p) => p.includes(AUTO_MEMORY_ENV_VAR))).toBe(true);
+        expect(problems.some((p) => p.includes("SYL_QUIET_START"))).toBe(true);
+      }
     });
 
     it("should read HOST, PORT and NODE_ENV from the environment", () => {

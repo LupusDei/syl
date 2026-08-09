@@ -76,6 +76,7 @@ function result(text: string, sessionId = "session-1"): TurnResult {
       mcpServers: [],
       tools: [],
       capabilities: [],
+      autoMemoryPath: undefined,
     },
     events: [],
   };

@@ -56,6 +56,10 @@ initiative.
 | Quiet hours | **23:00–08:00**, configurable | Commander |
 | Timezone | **US Central**, configurable. Store IANA `America/Chicago`, never a fixed offset | Commander; offset choice is mine, for DST correctness |
 | Quiet-hours behavior | Defer, never drop. Per-reminder urgent override | My recommendation; Commander has not objected |
+| Inferred-edge lifecycle | **Demote, never prune.** Asymptotic decay toward zero that never arrives; a dormant edge stays addressable and can be promoted back to high relevance if it ever matters | Commander, 2026-08-09, overruling proposal `62329e61` §4 at the point that proposal invited him to |
+| Nightly dream budget | **Start large — on the order of six hours**, expressed as a token ceiling per session, not wall-clock. Tune down once the admin shows what it produces | Commander, 2026-08-09 |
+| Graph visualisation | **Yes, build it**, in the web admin, during development. He wants to watch the memory evolve and judge how relevant the inferred engine actually is | Commander, 2026-08-09 |
+| Memory observability | **First principle, not a phase.** Per-session dream metrics, current memory-system state, and a permanent per-session log. Maximise now; revisit only if it becomes burdensome at scale | Commander, 2026-08-09 |
 
 **The payment-rails constraint is the strongest one and it selects the
 architecture on its own.** When in doubt about a design question, check what it
@@ -361,6 +365,40 @@ Vitest's 5s default timeout is also not a valid assumption for a suite whose
 job is spawning subprocesses — raised to 20s.
 
 ---
+
+**`autoMemoryDirectory` fails silently, in both directions.** Claude Code ships
+its own auto-memory — a `MEMORY.md` index plus topic files, written by the model
+with the ordinary Write tool — and it is relocatable via the `autoMemoryDirectory`
+setting. The setting is validated as "absolute, at least three characters, no
+NUL, not a UNC root", and on failure the CLI returns *undefined* and falls back
+to `~/.claude/projects/<sanitised-cwd>/memory/`: no warning, no stderr line, no
+exit code. Captured live on 2.1.226 — a relative path was discarded exactly this
+way. Nothing about it looks broken, because writes and reads both go to the same
+wrong directory, so it even appears to work.
+
+The fix is `init.memory_paths.auto`, which reports the directory the CLI actually
+resolved. `runTurn` asserts it against the request and kills the turn on a
+mismatch, the same shape as the `apiKeySource` guard. Three more facts worth
+having: `--settings '{...}'` takes a JSON string and lands as `flagSettings`,
+which outranks user, project and local settings; a set `autoMemoryDirectory` is
+used **verbatim**, with no per-project segment appended, so it is shared by every
+cwd that names it; and `autoMemoryEnabled:false` removes `memory_paths` from the
+init frame entirely, which is how `runReaderTurn` proves untrusted text cannot
+reach the store.
+
+**Memory is shared across lanes; only transcripts are partitioned.** Sessions are
+per lane so Syl's inner monologue does not interleave with the Commander's
+conversation. Memory is deliberately the opposite: a fact learned talking to him
+is exactly what the morning agenda needs, and the consolidation lane — whose job
+is compacting what the others learned — could otherwise only ever see its own.
+The index budget agrees: 200 lines / 25 KB is loaded per *directory*, so sharding
+would multiply the total and quarter what any one lane can recall.
+
+**The index is the model's job, and a cheaper model skips it.** Only `MEMORY.md`
+is loaded at session start; a topic file with no entry in it is on disk and
+unreachable. An opus turn wrote both files; a haiku turn wrote the topic file
+only, and the next session answered "NONE" to the fact it had just been told to
+remember. Filed as `syl-03d`. Do not assume a written memory is a recallable one.
 
 ## 8. Design principles to hold
 

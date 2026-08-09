@@ -151,6 +151,7 @@ describe("presence on the live socket", () => {
             mcpServers: [],
             tools: [],
             capabilities: [],
+            autoMemoryPath: undefined,
           },
           events: [],
         };

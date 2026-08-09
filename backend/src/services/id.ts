@@ -28,7 +28,17 @@ export type IdType =
   | "delivery"
   | "job"
   | "run"
-  | "step";
+  | "step"
+  // The memory graph (`0012_memory_core.sql`). The KIND of a node — fact,
+  // person, source, goal — is a column, not part of the id: `syl:goal:<uuid>`
+  // already addresses a row in the operational `goals` table above, and one id
+  // shape must never address two different stores.
+  | "memory_node"
+  | "memory_edge"
+  // Telemetry, not memory. A dream session is a row in the dream log
+  // (`0013_dream_log.sql`) and never a node in the graph — see the header of
+  // that migration for why the two must not touch.
+  | "dream_session";
 
 /**
  * `syl:<type>:<uuid>`, matching the contract's `Id` pattern exactly.

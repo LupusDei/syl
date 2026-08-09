@@ -30,6 +30,19 @@ without asking.
 5. **Store IANA timezones (`America/Chicago`), never fixed UTC offsets.** An
    offset is a property of an instant, not of a place, and a fixed one drifts an
    hour at every DST boundary.
+6. **Never delete an inferred edge. Demote it.** Confidence decays toward zero
+   asymptotically and never arrives — a dormant edge stays addressable, so if it
+   ever becomes relevant it can be promoted straight back to high confidence.
+   Commander's call, 2026-08-09, overruling the prune recommendation in proposal
+   `62329e61` §4 exactly where that proposal invited him to. This is the same
+   instinct as constraint 4: the system does not get to silently discard things.
+   **Nodes are superseded, edges are demoted, nothing is destroyed.**
+7. **Every dream session is logged permanently, and the log is not memory.**
+   Observability is a first principle of the memory build, not a later phase —
+   a memory system that cannot be inspected cannot be tuned. The dream log is
+   telemetry *about* the graph and must live in its own store; writing it into
+   the graph would make Syl dream about her own dreams. Err toward logging too
+   much; revisit only if it becomes burdensome at scale.
 
 ## Architecture in one line
 
@@ -172,9 +185,18 @@ to add is about *additional* surfaces and blocks nothing.
   is the Commander's own trusted conversation, and `runReaderTurn` does not.
 - **Reading anything fetched goes through `runReaderTurn`** (`harness/reader.ts`),
   never `runTurn`: `--tools ""`, `--strict-mcp-config` with no MCP config, no
-  pre-authorisation, a session that is never resumed or persisted, and output
-  that is schema-validated or discarded. It throws if the tool surface comes
-  back non-empty, so a CLI change cannot silently reopen the hole.
+  pre-authorisation, **auto-memory off**, a session that is never resumed or
+  persisted, and output that is schema-validated or discarded. It throws if the
+  tool surface comes back non-empty, so a CLI change cannot silently reopen the
+  hole.
+  **Auto-memory is ON BY DEFAULT in headless `-p`**, so until `syl-005.1.2` the
+  reader was loading Syl's `MEMORY.md` into the same context as untrusted text —
+  everything known about the Commander, handed to whatever an article told the
+  model to do. The captured `reader-direct` and `reader-injection` fixtures still
+  show `memory_paths` in their init frames; that is the evidence, not a theory.
+  `runReaderTurn` now passes `autoMemoryOff()` unconditionally and it is
+  deliberately **not** exposed on `ReaderTurnOptions`, so no call site can turn
+  it back on. A quarantine you have to remember to switch on is not a quarantine.
 - Every turn gets its session id **before** the spawn, via `--session-id <uuid>`
   (honoured exactly on 2.1.226; both init and result echo it). `TurnOptions.
   onSessionId` fires pre-spawn so the id can be persisted first — a crash

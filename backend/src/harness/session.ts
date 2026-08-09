@@ -4,6 +4,12 @@ import { randomUUID } from "node:crypto";
 import { resolveClaudeBinFromProcess } from "./claude-bin.js";
 
 import {
+  assertAutoMemory,
+  autoMemorySettingsFlag,
+  type AutoMemory,
+} from "../memory/auto-memory.js";
+
+import {
   assertSubscriptionAuth,
   buildUserFrame,
   createLineDecoder,
@@ -79,6 +85,17 @@ export interface TurnOptions {
    * it does not need.
    */
   readonly strictMcpConfig?: boolean;
+  /**
+   * Where Claude Code's own auto-memory reads and writes for this turn, or
+   * that it is switched off. Omit and the CLI uses whatever the machine's
+   * settings say, which for a personal assistant is nobody's decision.
+   *
+   * Passed as `--settings`, then **checked against the init frame** — the CLI
+   * discards a directory it does not like and falls back to its own default
+   * silently, so the flag going out proves nothing. See `memory/auto-memory.ts`
+   * for the captures behind that.
+   */
+  readonly autoMemory?: AutoMemory;
   /**
    * Fail fast if the CLI resolved an API key instead of the claude.ai login.
    * Defaults to true — this harness exists to stay on subscription rails.
@@ -172,6 +189,7 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
   if (options.systemPrompt) args.push("--append-system-prompt", options.systemPrompt);
   if (options.mcpConfig) args.push("--mcp-config", options.mcpConfig);
   if (options.strictMcpConfig ?? options.mcpConfig !== undefined) args.push("--strict-mcp-config");
+  if (options.autoMemory) args.push("--settings", autoMemorySettingsFlag(options.autoMemory));
   if (options.permissionMode) args.push("--permission-mode", options.permissionMode);
   if (options.tools !== undefined) args.push("--tools", options.tools);
   if (options.resume) args.push("--resume", options.resume);
@@ -189,7 +207,10 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
 
   const events: SylEvent[] = [];
   let init: InitEvent | undefined;
-  let apiError: Error | undefined;
+  // Why a variable rather than a throw at the point of discovery: this runs
+  // inside a stream handler, where a throw goes nowhere useful. The turn is
+  // killed and the reason is carried out to the settled promise below.
+  let fatal: Error | undefined;
   let stderr = "";
 
   const decode = createLineDecoder();
@@ -202,20 +223,23 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
 
       if (event.kind === "init") {
         init = event;
-        if (options.requireSubscriptionAuth !== false) {
-          try {
-            assertSubscriptionAuth(event);
-          } catch (error) {
-            apiError = error as Error;
-            child.kill();
-          }
+        // Both guards are about what this process is allowed to do, and both
+        // have to land before the model acts: an API key means the wrong payment
+        // rail, and a memory directory the CLI did not take means the next thing
+        // written is the Commander's private memory in a path Syl never reads.
+        try {
+          if (options.requireSubscriptionAuth !== false) assertSubscriptionAuth(event);
+          if (options.autoMemory) assertAutoMemory(event, options.autoMemory);
+        } catch (error) {
+          fatal = error as Error;
+          child.kill();
         }
       }
 
       // An api_error arrives shaped like a normal assistant message. Capture it
       // so the turn rejects instead of relaying a failure as if it were an answer.
       if (event.kind === "api_error") {
-        apiError = new Error(
+        fatal = new Error(
           `Claude API error${event.errorType ? ` (${event.errorType})` : ""}: ${event.message}`,
         );
       }
@@ -266,7 +290,7 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
   // Checked first: after a kill the transcript is arbitrarily truncated, so
   // every check below would report the wrong cause.
   if (timedOut) throw new TurnTimeoutError(timeoutMs, init !== undefined);
-  if (apiError) throw apiError;
+  if (fatal) throw fatal;
   if (!init) {
     throw new Error(
       `claude exited with code ${exitCode ?? "null"} before the init handshake. stderr: ${stderr.trim()}`,

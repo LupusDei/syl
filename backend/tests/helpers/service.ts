@@ -74,6 +74,10 @@ export function testConfig(overrides: Partial<SylConfig> = {}): SylConfig {
     nodeEnv: "test",
     version: "0.1.0",
     databasePath: IN_MEMORY,
+    // Absolute, because Claude Code discards a relative auto-memory directory
+    // without a word. Nothing in a unit test spawns the CLI, so this only has
+    // to be a well-formed value.
+    autoMemoryDirectory: "/tmp/syl-test-memory",
     credentialSource: "none",
     subscriptionRails: true,
     quietHours: DEFAULT_QUIET_HOURS,
@@ -143,6 +147,7 @@ export const silentRunner: TurnRunner = (_prompt, options) => {
       mcpServers: [],
       tools: [],
       capabilities: [],
+      autoMemoryPath: undefined,
     },
     events: [],
   } satisfies TurnResult);
@@ -178,6 +183,7 @@ export function replyingRunner(text: string, options: { readonly delayMs?: numbe
         mcpServers: [],
         tools: [],
         capabilities: [],
+        autoMemoryPath: undefined,
       },
       events: [],
     } satisfies TurnResult;

@@ -52,6 +52,7 @@ function config(overrides: Partial<SylConfig> = {}): SylConfig {
     nodeEnv: "test",
     version: "0.1.0",
     databasePath: join(directory, "syl.db"),
+    autoMemoryDirectory: join(directory, "memory"),
     credentialSource: "none",
     subscriptionRails: true,
     quietHours: loadQuietHours(process.env),
