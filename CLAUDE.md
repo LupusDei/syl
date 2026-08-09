@@ -36,8 +36,16 @@ without asking.
 Drive `claude -p --input-format stream-json --output-format stream-json --verbose`
 as one subprocess per turn, with continuity via `--resume`.
 
-One process per turn is forced, not chosen: a turn does not complete until stdin
-reaches EOF. Details and the measurement in `docs/CONTEXT.md` §3.
+One process per turn **is no longer forced** (re-measured 2026-08-09 on CLI
+2.1.226). A `result` now arrives with stdin still open, so one process can serve
+many turns. Follow-up turns cost **~1.4s** against **~5.5-9.7s** for a fresh
+spawn — 4-7x, on every turn Syl takes. `runTurn` has not been changed yet:
+`syl-per1`. Reproduce with `node scripts/experiments/persistent-session.mjs`;
+details in `docs/CONTEXT.md` §3.
+
+The old note said the opposite, was correctly measured, and had silently decided
+the whole architecture. **Load-bearing measurements against someone else's binary
+need a version stamp and a re-run.**
 
 ## Layout
 
