@@ -634,3 +634,55 @@ describe("the control plane", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("surviving bad input", () => {
+  // Regression: `loadFixture` throws by design, but the handler was invoked as
+  // `void this.handleHttp(...)`, so the rejection was unhandled and Node exited.
+  // One malformed curl killed the server two squads were building against.
+  it("should answer 500 and stay up when a control call names an unknown fixture", async () => {
+    const res = await fetch(`${base}/__mock/broadcast`, {
+      method: "POST",
+      body: JSON.stringify({ fixture: "ws/does-not-exist" }),
+    });
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error: { message: string } };
+    // The error still lists the alternatives, which is why it throws at all.
+    expect(body.error.message).toMatch(/No fixture named/);
+    expect((await fetch(`${base}${API_BASE}/health`)).status).toBe(200);
+  });
+
+  // Regression: the control plane parsed JSON with no try/catch, so a
+  // hand-typed body took the process down the same way.
+  it("should answer 400 and stay up on a malformed control body", async () => {
+    const res = await fetch(`${base}/__mock/scenario`, { method: "POST", body: "not json at all" });
+    expect(res.status).toBe(400);
+    expect((await fetch(`${base}${API_BASE}/health`)).status).toBe(200);
+  });
+
+  it("should answer 400 and stay up on a malformed API body", async () => {
+    const res = await fetch(`${base}${API_BASE}/todos`, {
+      method: "POST",
+      headers: { ...TOKEN, "Idempotency-Key": "malformed-body-1" },
+      body: "{ not json",
+    });
+    expect(res.status).toBe(400);
+    expect((await fetch(`${base}${API_BASE}/health`)).status).toBe(200);
+  });
+
+  // Regression: a per-request X-Mock-Error wrote its own failNext back to the
+  // server, silently consuming a global "fail the next three" a test was using.
+  it("should not let a per-request error consume the global failNext countdown", async () => {
+    await fetch(`${base}/__mock/scenario`, {
+      method: "POST",
+      body: JSON.stringify({ failNext: 2, error: "UPSTREAM_UNAVAILABLE", status: 503 }),
+    });
+    const withHeader = await fetch(`${base}${API_BASE}/reminders`, {
+      headers: { ...TOKEN, "X-Mock-Error": "RATE_LIMITED", "X-Mock-Status": "429" },
+    });
+    expect(withHeader.status).toBe(429);
+    // The global countdown is untouched: still exactly two failures owed.
+    expect((await get("/reminders")).status).toBe(503);
+    expect((await get("/reminders")).status).toBe(503);
+    expect((await get("/reminders")).status).toBe(200);
+  });
+});

@@ -126,4 +126,40 @@ describe("the spec itself", () => {
       expect(example).toMatch(/Z$/);
     }
   });
+
+  it("should use only the JSON Schema keywords the validator actually enforces", () => {
+    // The validator supports a deliberate subset. Anything outside it is not
+    // rejected — it is silently ignored, which means a constraint could be
+    // added to the spec, believed, and never checked on either side. This test
+    // is what makes "a named subset" honest rather than aspirational: adding
+    // `maxItems` to the spec fails here until `validate.ts` implements it.
+    const supported = new Set([
+      "$ref", "type", "const", "enum", "properties", "required", "items",
+      "allOf", "oneOf", "additionalProperties", "format", "pattern",
+      "minimum", "maximum", "minLength", "maxLength", "minItems",
+      // Documentation only; carried into the generated output, never validated.
+      "description", "default", "examples", "summary",
+    ]);
+
+    const offenders = new Set<string>();
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach(walk);
+        return;
+      }
+      if (node === null || typeof node !== "object") return;
+      for (const [key, child] of Object.entries(node)) {
+        if (!supported.has(key)) offenders.add(key);
+        // `properties` keys are field names, not keywords.
+        if (key === "properties" && child !== null && typeof child === "object") {
+          Object.values(child).forEach(walk);
+        } else {
+          walk(child);
+        }
+      }
+    };
+    Object.values(registry).forEach(walk);
+
+    expect([...offenders].sort()).toEqual([]);
+  });
 });

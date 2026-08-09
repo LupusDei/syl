@@ -93,7 +93,25 @@ export class MockServer {
     this.quiet = options.quiet === true;
     this.rng = createRng(this.scenario.seed);
     this.http = createServer((req, res) => {
-      void this.handleHttp(req, res);
+      // A throw inside the handler would otherwise become an unhandled
+      // rejection and take the whole process down — which for a mock two
+      // squads are building against means everyone's afternoon, from one bad
+      // request. Answer 500 and stay up.
+      this.handleHttp(req, res).catch((cause: unknown) => {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        this.log(`${req.method ?? "GET"} ${req.url ?? "/"} -> 500 ${message}`);
+        if (res.headersSent) {
+          res.end();
+          return;
+        }
+        this.sendError(res, 500, {
+          code: "INTERNAL",
+          message,
+          retryable: false,
+          details: null,
+          retryAfterMs: null,
+        });
+      });
     });
     this.wss = new WebSocketServer({ noServer: true });
     this.http.on("upgrade", (req, socket, head) => {
@@ -332,7 +350,12 @@ export class MockServer {
     if (wait > 0) await sleep(wait);
 
     const decision = nextFault(effective, this.rng);
-    if (decision.scenario.failNext !== effective.failNext) {
+    // Only a fault drawn from the *global* countdown decrements it. A
+    // per-request `X-Mock-Error` sets failNext on its own copy, and letting
+    // that write back would silently consume a global "fail the next three"
+    // that another test was relying on.
+    const perRequestOverride = effective.failNext !== this.scenario.failNext;
+    if (!perRequestOverride && decision.scenario.failNext !== this.scenario.failNext) {
       this.scenario = { ...this.scenario, failNext: decision.scenario.failNext };
     }
     if (decision.fault !== undefined) {
@@ -509,7 +532,26 @@ export class MockServer {
     res: ServerResponse,
   ): Promise<void> {
     const raw = await readBody(req);
-    const body = raw.length > 0 ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    let body: Record<string, unknown> = {};
+    if (raw.length > 0) {
+      try {
+        body = JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        // These are driven by hand-written curl commands, so a malformed body
+        // is the expected kind of mistake, not an exceptional one.
+        this.send(res, 400, {
+          success: false,
+          error: {
+            code: "VALIDATION_FAILED",
+            message: "Control-plane body was not valid JSON.",
+            retryable: false,
+            details: null,
+            retryAfterMs: null,
+          },
+        });
+        return;
+      }
+    }
 
     switch (`${method} ${url.pathname}`) {
       case "GET /__mock/scenario":
