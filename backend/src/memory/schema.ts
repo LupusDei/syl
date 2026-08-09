@@ -1,4 +1,4 @@
-import { uuidv7 } from "../services/id.js";
+import { newId, uuidv7 } from "../services/id.js";
 
 /**
  * The memory graph's vocabulary: ids, tiers, kinds, and the PARTITION KEY.
@@ -104,14 +104,22 @@ export const MEMORY_EDGE_ID_PREFIX = "syl:memory_edge:";
 /** The canonical UUID text form, either hex case, as the shared `Id` allows. */
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
-/** Mint a node id. */
+/**
+ * Mint a node id.
+ *
+ * Delegates to `newId` rather than concatenating the prefix itself. These
+ * types were absent from the closed `IdType` union when this file was written,
+ * so it had to mint its own — which left two minting paths for one id shape,
+ * and two paths are how a convention drifts without anything failing. syl-5yt
+ * closed the union; this is the other half.
+ */
 export function newMemoryNodeId(generate: () => string = uuidv7): string {
-  return `${MEMORY_NODE_ID_PREFIX}${generate()}`;
+  return newId("memory_node", generate);
 }
 
-/** Mint an edge id. */
+/** Mint an edge id. See `newMemoryNodeId` for why this delegates. */
 export function newMemoryEdgeId(generate: () => string = uuidv7): string {
-  return `${MEMORY_EDGE_ID_PREFIX}${generate()}`;
+  return newId("memory_edge", generate);
 }
 
 /** Whether a string addresses a memory node. */
