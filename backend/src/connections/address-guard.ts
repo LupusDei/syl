@@ -11,7 +11,7 @@ import { isIP } from "node:net";
  * of the CGNAT range, so every machine on the Commander's tailnet — including
  * Syl's own API, Adjutant's backend, and his Mac — is reachable at a
  * `100.x.y.z` address that is neither loopback nor RFC 1918. A hostile article
- * that redirects to `http://100.100.42.7:4201/api/v1/...` reaches Syl's own
+ * that redirects to `http://100.100.42.7:4220/api/v1/...` reaches Syl's own
  * service *from inside her trust zone*, with whatever the fetch carries.
  *
  * Two entirely reasonable decisions made separately — "put the service on a

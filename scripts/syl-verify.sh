@@ -23,7 +23,7 @@
 
 set -uo pipefail
 
-PORT="${SYL_PORT:-4201}"
+PORT="${SYL_PORT:-4220}"
 LABEL="${SYL_CORE_LABEL:-com.jmm.syl.core}"
 WATCHDOG_LABEL="${SYL_WATCHDOG_LABEL:-com.jmm.syl.watchdog}"
 HEALTH_URL="${SYL_HEALTH_URL:-http://127.0.0.1:$PORT/api/v1/health}"

@@ -106,7 +106,14 @@ to add is about *additional* surfaces and blocks nothing.
 
 ## Environment notes
 
-- Backend runs on port **4201**. Read it from `.mcp.json`; do not assume 3001.
+- **Two different backends, two different ports, and confusing them has already
+  cost a real failure.** `.mcp.json` points at **4201** — that is *Adjutant's*
+  backend, the MCP server Syl's agents use for messaging. **Syl's own service
+  runs on 4220.** The line here used to say only "backend runs on 4201", which
+  predated Syl having a backend at all; an agent read it as Syl's port, and Syl
+  would have failed to bind on every boot forever with Adjutant already holding
+  4201. Ports in use around here: Adjutant 4200/4201, contract mock 4210, Syl
+  admin dev 4211, **Syl service 4220**.
 - The shell has `noclobber` set — a plain `>` fails if the file exists. Use `>|`.
 - `--verbose` is mandatory alongside `--output-format stream-json` in `-p` mode.
 - Headless sessions are pre-authorised (`--permission-mode bypassPermissions`)

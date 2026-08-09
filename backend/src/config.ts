@@ -38,8 +38,27 @@ const NODE_ENVS: readonly NodeEnv[] = ["development", "test", "production"];
  */
 export const DEFAULT_HOST = "127.0.0.1";
 
-/** 4201 is what `.mcp.json` already points at. Do not drift from it. */
-export const DEFAULT_PORT = 4201;
+/**
+ * Syl's own port. **Not 4201** — that is Adjutant's backend, and it is running
+ * on this machine.
+ *
+ * This was 4201, on the reasoning that `.mcp.json` already pointed there. That
+ * reading was wrong and cost a real failure: the `.mcp.json` in this repo
+ * configures the *Adjutant MCP server* Syl's agents talk to for messaging. It
+ * has never described Syl's own service.
+ *
+ * Installed as a LaunchAgent with that default, Syl would have failed to bind
+ * on every boot, forever — `EADDRINUSE` from a neighbour that was there first.
+ * Not a degraded assistant: an assistant that never starts, and therefore every
+ * delivery guarantee in the system silently void.
+ *
+ * Found by running the launchd entrypoint on the target machine rather than in
+ * a test with an ephemeral port, which is the only place it could have shown up.
+ *
+ * Neighbours to stay clear of: Adjutant 4200/4201, the contract mock 4210, the
+ * Syl admin dev server 4211.
+ */
+export const DEFAULT_PORT = 4220;
 
 /**
  * The operational store, under the repo's own dot-directory.

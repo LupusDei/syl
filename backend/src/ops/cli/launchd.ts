@@ -55,7 +55,7 @@ const paths: LaunchdPaths = {
   logDirectory: flag(argv, "logs") ?? defaultLogDirectory(),
   nodeBin: process.execPath,
   databasePath: flag(argv, "db") ?? join(home, ".syl", "syl.db"),
-  port: Number(flag(argv, "port") ?? process.env["PORT"] ?? "4201"),
+  port: Number(flag(argv, "port") ?? process.env["PORT"] ?? "4220"),
   ...(flag(argv, "host") === undefined ? {} : { tailnetHostname: flag(argv, "host") ?? "" }),
   environment: forwarded,
 };
