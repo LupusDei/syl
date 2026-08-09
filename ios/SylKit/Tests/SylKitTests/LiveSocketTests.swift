@@ -12,6 +12,11 @@ import XCTest
 struct LiveSyl {
     let url: URL
     let token: String
+    /// A live, unspent pairing code, when the harness supplied one.
+    ///
+    /// Optional because a human driving this by hand against a running Syl has a
+    /// token and usually not a spare code. The harness always sets it.
+    let pairingCode: String?
 
     /// Throws `XCTSkip` when this is somebody's machine rather than the harness.
     static func fromEnvironment() throws -> LiveSyl {
@@ -22,7 +27,16 @@ struct LiveSyl {
         guard let token = environment["SYL_LIVE_TOKEN"], !token.isEmpty else {
             throw XCTSkip("set SYL_LIVE_TOKEN to a bearer token from POST /auth/pair")
         }
-        return LiveSyl(url: url, token: token)
+        let code = environment["SYL_LIVE_PAIRING_CODE"]
+        return LiveSyl(url: url, token: token, pairingCode: code?.isEmpty == true ? nil : code)
+    }
+
+    /// The pairing code, or a skip. Separate so a suite that needs one says so.
+    func code() throws -> String {
+        guard let pairingCode else {
+            throw XCTSkip("set SYL_LIVE_PAIRING_CODE to a live code from `npm run pair`")
+        }
+        return pairingCode
     }
 }
 

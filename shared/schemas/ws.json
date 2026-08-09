@@ -30,10 +30,12 @@
     },
     "ErrorCode": {
       "type": "string",
-      "description": "The typed code is the contract; the HTTP status is advisory. Clients\nbranch on this, never on the status line.\n",
+      "description": "The typed code is the contract; the HTTP status is advisory. Clients\nbranch on this, never on the status line.\n\n`PAIRING_CODE_EXPIRED` and `PAIRING_CODE_ALREADY_USED` are the only\nplaces the service tells one authentication failure from another, and\nthey are safe because **both are reachable only by presenting a code\nthat matches a stored one**. A wrong guess, and an attempt made while\nno code is live, are the same `UNAUTHORIZED`. So the extra detail\nreaches the person holding the code and nobody else — which is what\nlets a pairing screen on a phone say something more useful than \"that\ndid not work\".\n",
       "enum": [
         "VALIDATION_FAILED",
         "UNAUTHORIZED",
+        "PAIRING_CODE_EXPIRED",
+        "PAIRING_CODE_ALREADY_USED",
         "FORBIDDEN",
         "NOT_FOUND",
         "CONFLICT",

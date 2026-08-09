@@ -358,6 +358,12 @@ export function describeStartup(
       `[syl] No device is paired. Pairing code: ${options.pairingCode} ` +
         `(POST ${API_BASE_PATH}/auth/pair). It expires shortly and is consumed on use.`,
     );
+  } else {
+    // The line that matters on every boot *after* the first. A code is printed
+    // only while nothing is paired, which used to leave no way at all to pair a
+    // second device or re-pair a reinstalled one — the service had already
+    // decided not to offer a code and nothing could ask it for another.
+    lines.push("[syl] To pair another device, run `npm run pair` on this machine.");
   }
 
   return lines;

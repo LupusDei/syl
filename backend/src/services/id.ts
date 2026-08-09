@@ -18,6 +18,7 @@ import { systemClock, type Clock } from "./clock.js";
 export type IdType =
   | "principal"
   | "apikey"
+  | "pairing_code"
   | "conversation"
   | "message"
   | "reminder"

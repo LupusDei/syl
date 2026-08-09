@@ -12,11 +12,44 @@ import UIKit
 /// device token against `localhost`. Every push failed afterwards, silently.
 @MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
+    /// The one Keychain handle.
+    ///
+    /// It used to be constructed in three places, which was harmless only because
+    /// nothing ever wrote to it (`syl-q1f`). Now that pairing does, three handles
+    /// would mean three objects that have to agree about when the token changed.
+    private let tokens: any TokenStore
+
     /// Built from `UserDefaults` and the Keychain, both of which are available before
     /// anything else is.
-    private lazy var backend = SylBackend(tokens: KeychainTokenStore())
+    private lazy var backend = SylBackend(tokens: tokens)
     private(set) lazy var notifications = NotificationService(backend: backend)
     private lazy var registrar = PushRegistrationService(backend: backend)
+
+    /// Whether this device holds a credential at all.
+    ///
+    /// The gate on the whole app: without a token every request goes out with no
+    /// `Authorization` header, the socket answers `.unauthenticated` and stops, and
+    /// the app is inert against a real backend while looking perfectly healthy. That
+    /// was the bug. Showing the pairing screen instead is the fix.
+    @Published private(set) var isPaired: Bool
+
+    override init() {
+        let tokens = KeychainTokenStore()
+        self.tokens = tokens
+        // Read once, synchronously, before any view exists. A Keychain item survives
+        // deleting the app, so a reinstall from TestFlight normally comes back already
+        // paired — which is the good case, and is why `verifyPairing` exists to catch
+        // the bad one rather than making every launch re-pair defensively.
+        self.isPaired = tokens.read() != nil
+        super.init()
+    }
+
+    /// Convenience for tests and previews, which have no Keychain worth speaking of.
+    init(tokens: any TokenStore) {
+        self.tokens = tokens
+        self.isPaired = tokens.read() != nil
+        super.init()
+    }
 
     /// The device's copy of Syl. Optional because a database that cannot be opened is
     /// a real state — a full disk, a corrupt file — and the app should still show the
@@ -76,7 +109,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         )
         let socket = WebSocketClient(
             configuration: ServerConfiguration(baseURL: backend.baseURL),
-            tokenProvider: TokenStoreProvider(store: KeychainTokenStore()),
+            tokenProvider: TokenStoreProvider(store: tokens),
             lastSeq: (try? store.syncState().lastFrameSeq) ?? 0,
             // Restored together. A mark without the run it came from is `syl-47j` one
             // launch later: the socket compares it against a stream that never issued
@@ -179,6 +212,54 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         }
     }
 
+    // MARK: - Pairing
+
+    /// A pairing succeeded. Take the credential and start behaving like a paired app.
+    ///
+    /// **Order is load-bearing and every step of it has a failure attached.** The
+    /// profile is selected before the token is stored, because `SylBackend` reads the
+    /// base URL from `UserDefaults` on every call: storing first leaves a window where
+    /// the app holds the new token and is still pointed at the old server. The socket
+    /// is rebuilt last, because it captured both.
+    func completePairing(grant: TokenGrant, profile: ServerProfile, profiles: ServerProfileStore) {
+        profiles.add(profile)
+        profiles.select(profile)
+        tokens.write(grant.token)
+        isPaired = true
+
+        // The socket was opened at launch against no credential and gave up
+        // immediately. Nothing prompts it to try again on its own — that is what left
+        // `WebSocketClient` returning `.unauthenticated` forever.
+        rebuildSocket()
+        Task { await self.reconcile() }
+    }
+
+    /// Check on launch whether the stored token is still a credential.
+    ///
+    /// This is the case the Keychain surviving a reinstall creates. The token comes
+    /// back from before the app was deleted, and it may be perfectly good — usually
+    /// it is — or it may have been revoked, or the store it was minted against may
+    /// have been rebuilt. Both look identical from here until something is asked.
+    ///
+    /// `whoami` is the cheapest possible authenticated call and exists for exactly
+    /// this. **The distinction it draws is the whole point**: a refusal means the
+    /// token is dead and the Commander must re-pair; a transport failure means the
+    /// tunnel is still coming up, which under Tailscale is routine after a wake.
+    /// Treating the second as the first would send him to a pairing screen every time
+    /// his phone came out of his pocket, which is worse than not checking at all.
+    func verifyPairing() async {
+        guard isPaired else { return }
+        do {
+            _ = try await backend.client().send(SylAPI.whoami())
+        } catch let error as APIError where error.requiresReauthentication {
+            tokens.clear()
+            isPaired = false
+        } catch {
+            // Unreachable, or something else answered. Keep the token: the app works
+            // from disk, and the next foreground tries again.
+        }
+    }
+
     /// Foreground reconcile. Push collapses a night of notifications into one and
     /// Apple offers no way to ask what arrived, so this is where anything that was
     /// dropped or coalesced reappears.
@@ -199,14 +280,24 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     /// per call. A socket cannot: it is one long-lived connection to one host, so the
     /// only way to follow is to open a new one.
     private func rebuildSocketIfServerChanged() {
-        guard let store, socketBaseURL != nil, socketBaseURL != backend.baseURL else { return }
+        guard socketBaseURL != nil, socketBaseURL != backend.baseURL else { return }
+        rebuildSocket()
+    }
+
+    /// Close the socket and open a new one against whatever is current now.
+    ///
+    /// Separate from the "if the server changed" check because pairing needs it
+    /// unconditionally: the URL may be identical — pairing against the mock, or
+    /// re-pairing the same Mac — and the connection still has to be remade, because
+    /// what changed is the credential it presents.
+    private func rebuildSocket() {
+        guard store != nil else { return }
         let socket = self.socket
         socketPump?.cancel()
         socketPump = nil
         Task { await socket?.stop() }
         self.socket = nil
         self.socketBaseURL = nil
-        _ = store
         openSocket()
     }
 
@@ -214,7 +305,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         guard let store, let chat, socket == nil else { return }
         let socket = WebSocketClient(
             configuration: ServerConfiguration(baseURL: backend.baseURL),
-            tokenProvider: TokenStoreProvider(store: KeychainTokenStore()),
+            tokenProvider: TokenStoreProvider(store: tokens),
             lastSeq: (try? store.syncState().lastFrameSeq) ?? 0,
             // Restored together. A mark without the run it came from is `syl-47j` one
             // launch later: the socket compares it against a stream that never issued

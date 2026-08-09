@@ -1,7 +1,13 @@
 import { Router, type RequestHandler } from "express";
 
+import type { ErrorCode } from "@syl/shared";
+
 import { requireAuth } from "../middleware/auth.js";
-import { PairingError, type ApiKeyService } from "../services/api-key-service.js";
+import {
+  PairingError,
+  type ApiKeyService,
+  type PairingFailure,
+} from "../services/api-key-service.js";
 import type { IdempotencyStore } from "../services/idempotency.js";
 import { ApiFailure, sendOk } from "./envelope.js";
 import { runIdempotent, sendIdempotent } from "./idempotency.js";
@@ -59,6 +65,45 @@ const MAX_DEVICE_NAME = 120;
 /** A pairing code is eight digits and a hyphen; anything longer is noise. */
 const MAX_PAIRING_CODE = 32;
 
+/**
+ * How each pairing failure is rendered, and why they are not all the same.
+ *
+ * The original rule here was that every pairing failure is one
+ * indistinguishable `UNAUTHORIZED`, on the reasoning that a caller who can
+ * tell "wrong code" from "expired code" can narrow a hundred-million-value
+ * search. That reasoning is right about `unknown` and wrong about the other
+ * two, and the difference is worth being exact about:
+ *
+ * - `malformed` and `unknown` collapse into `UNAUTHORIZED`. A guess that was
+ *   wrong and an attempt made while no code is live must look identical, or
+ *   the endpoint reports when a pairing window is open.
+ * - `expired` and `already_used` are returned **only for a code that matched a
+ *   stored one**. Reaching either requires already knowing the secret, so
+ *   neither narrows anything — and both are things the Commander genuinely
+ *   needs to be told, on a phone, with no console in front of him. "Get a new
+ *   code" and "that one already paired something" have different next actions,
+ *   and rendering them as one message is how a person ends up retyping the
+ *   same eight digits four times.
+ *
+ * The details field carries nothing beyond the code: it is the code that is
+ * the contract.
+ */
+const FAILURE_CODES: Readonly<Record<PairingFailure, ErrorCode>> = {
+  malformed: "UNAUTHORIZED",
+  unknown: "UNAUTHORIZED",
+  expired: "PAIRING_CODE_EXPIRED",
+  already_used: "PAIRING_CODE_ALREADY_USED",
+};
+
+/** What the client is told for each. Never more than the code implies. */
+const FAILURE_MESSAGES: Readonly<Record<PairingFailure, string>> = {
+  malformed: "That pairing code was not accepted.",
+  unknown: "That pairing code was not accepted.",
+  expired: "That pairing code has expired. Run `npm run pair` on the server for a new one.",
+  already_used:
+    "That pairing code has already paired a device. Run `npm run pair` on the server for a new one.",
+};
+
 export interface AuthRouterOptions {
   readonly keys: ApiKeyService;
   /** The ledger that makes pairing survivable when the response is lost. */
@@ -106,16 +151,15 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
           return { status: 200, data: keys.pair(pairingCode, deviceName) };
         } catch (error) {
           if (error instanceof PairingError) {
-            // Every pairing failure is UNAUTHORIZED rather than NOT_FOUND or
-            // VALIDATION_FAILED. The code is an eight-digit secret: a caller
-            // who can tell "wrong code" from "expired code" from "no code
-            // active" can narrow the search, and there are only a hundred
-            // million of them.
+            // See `FAILURE_CODES` for why these are not all one code.
             //
             // A failure is never recorded in the ledger, which matters here:
             // the Commander mistyping a code once must not make the same key
             // fail forever once he types it correctly.
-            throw new ApiFailure("UNAUTHORIZED", "That pairing code was not accepted.");
+            throw new ApiFailure(
+              FAILURE_CODES[error.reason],
+              FAILURE_MESSAGES[error.reason],
+            );
           }
           throw error;
         }

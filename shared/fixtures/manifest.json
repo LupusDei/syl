@@ -32,6 +32,18 @@
       "summary": "404. The code is the contract; the status is advisory."
     },
     {
+      "file": "errors/pairing_code_already_used.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "The one refusal that means stop retyping and go get another code. Only a caller holding the right code can see it."
+    },
+    {
+      "file": "errors/pairing_code_expired.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "Ten minutes passed, or another code superseded this one. Distinguishable from a wrong guess only to someone who knows the code."
+    },
+    {
       "file": "errors/quiet_hours.json",
       "schema": "ErrorEnvelope",
       "envelope": "raw",

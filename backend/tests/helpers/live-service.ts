@@ -94,6 +94,14 @@ export interface LiveService {
   readonly origin: string;
   /** A bearer token obtained over HTTP, by pairing exactly as a device does. */
   readonly token: string;
+  /**
+   * A fresh pairing code, issued the way `npm run pair` issues one.
+   *
+   * Each call supersedes the last, which is the service's own invariant rather
+   * than a convenience: a test that wants two live codes is a test asserting
+   * something that cannot happen.
+   */
+  issuePairingCode(): string;
   readonly config: SylConfig;
   readonly deps: ServiceDependencies;
   readonly database: SylDatabase;
@@ -366,6 +374,7 @@ export async function startLiveService(
     databasePath,
     directory,
     api,
+    issuePairingCode: () => deps.keys.issuePairingCode().code,
     close: async (closeOptions = {}) => {
       await syl.close();
       database.close();

@@ -30,6 +30,58 @@ struct ServerProfile: Equatable, Codable, Sendable, Identifiable {
         return ServerProfile(id: "tailnet", name: "Tailnet", baseURL: url)
     }
 
+    /// The contract's base path. Part of the contract, not a setting.
+    static let apiBasePath = "/api/v1"
+
+    /// A profile from whatever the Commander actually typed.
+    ///
+    /// `npm run pair` prints `https://bastion.tail0000.ts.net/api/v1`, which is the
+    /// thing most likely to be pasted; a person typing from memory writes
+    /// `bastion.tail0000.ts.net`. Both have to work, and so does either with a
+    /// trailing slash, a stray space from a keyboard, or the base path already on the
+    /// end. Every one of those is a *correct* answer typed slightly differently, and
+    /// refusing them is how a setup screen becomes the reason somebody gives up.
+    ///
+    /// What it will not do is guess a scheme other than `https`. The tailnet
+    /// certificate is real and publicly trusted, so plain HTTP is either the mock (a
+    /// deliberate choice, made by pasting the whole URL) or a mistake; silently
+    /// downgrading a typo'd host to cleartext is not a favour.
+    ///
+    /// @returns `nil` when nothing usable can be made of the entry.
+    static func from(entry: String) -> ServerProfile? {
+        let trimmed = entry.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // An explicit scheme means the whole URL was supplied — including, quite
+        // possibly, a mock on http. Take it as given rather than rebuilding it.
+        if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
+            guard let url = URL(string: normalise(trimmed)), url.host != nil else { return nil }
+            return ServerProfile(
+                id: url.scheme == "http" ? "custom" : "tailnet",
+                name: url.host ?? "Server",
+                baseURL: url
+            )
+        }
+
+        // A bare host, possibly with the base path already stuck on the end.
+        guard let url = URL(string: normalise("https://\(trimmed)")), let host = url.host else {
+            return nil
+        }
+        // A host with a space, a slash in the middle, or other punctuation parses into
+        // something that is not a hostname, and the resulting request fails much later
+        // with a message about the network.
+        guard host.contains("."), !host.contains(" ") else { return nil }
+        return ServerProfile(id: "tailnet", name: host, baseURL: url)
+    }
+
+    /// Trailing slashes off, exactly one copy of the base path on.
+    private static func normalise(_ value: String) -> String {
+        var text = value
+        while text.hasSuffix("/") { text.removeLast() }
+        if text.hasSuffix(apiBasePath) { return text }
+        return text + apiBasePath
+    }
+
     /// The mock server, `npm run mock`. Present so a simulator build is useful before
     /// the Mac is reachable.
     static let mock = ServerProfile(

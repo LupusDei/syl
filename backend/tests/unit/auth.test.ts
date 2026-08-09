@@ -98,8 +98,8 @@ describe("POST /api/v1/auth/pair", () => {
   });
 
   it("should refuse a wrong code as UNAUTHORIZED, not NOT_FOUND", async () => {
-    // A caller who can tell "no code active" from "wrong code" from "expired
-    // code" can narrow the search, and there are only a hundred million codes.
+    // A caller who can tell "no code active" from "wrong code" can learn when
+    // a pairing window is open, and there are only a hundred million codes.
     keys.issuePairingCode();
 
     const response = await post("/auth/pair", {
@@ -127,6 +127,78 @@ describe("POST /api/v1/auth/pair", () => {
     const withBody = (await withCode.json()) as Envelope<never>;
 
     expect(withoutBody.error).toEqual(withBody.error);
+  });
+
+  /**
+   * `syl-q1f` — the four states a pairing screen has to render.
+   *
+   * On a phone, with no debugger and no console, "that did not work" is the
+   * difference between a product and a demo: wrong digits, a stale code, a
+   * code already spent, and a Mac that is simply not reachable all have
+   * *different next actions*, and rendering them identically sends the
+   * Commander round the same loop four times.
+   *
+   * The fourth state has no test here because it cannot: "cannot reach the
+   * server" is the absence of a response, and it is the client that has to
+   * tell it from a refusal. `SylKit`'s `APIError.transport` is that seam, and
+   * `PairingViewModel` is where the two meet.
+   */
+  describe("the states a pairing screen must tell apart", () => {
+    it("should say a code has expired, but only to somebody who has it", async () => {
+      const code = keys.issuePairingCode().code;
+      // Superseded by the next issue, which is the ordinary way a code dies:
+      // he ran the pairing command twice and typed the first slip.
+      keys.issuePairingCode();
+
+      const response = await post("/auth/pair", { pairingCode: code, deviceName: "iPhone" });
+      const body = (await response.json()) as Envelope<never>;
+
+      expect(response.status).toBe(401);
+      expect(body.error?.code).toBe("PAIRING_CODE_EXPIRED");
+      expect(body.error?.retryable).toBe(false);
+      expect(body.error?.message).toContain("npm run pair");
+    });
+
+    it("should say a code has already paired something, rather than 'wrong code'", async () => {
+      const code = keys.issuePairingCode().code;
+      await post("/auth/pair", { pairingCode: code, deviceName: "Commander's iPhone" });
+
+      const second = await post("/auth/pair", { pairingCode: code, deviceName: "Second attempt" });
+      const body = (await second.json()) as Envelope<never>;
+
+      expect(second.status).toBe(401);
+      expect(body.error?.code).toBe("PAIRING_CODE_ALREADY_USED");
+      // And it really did not pair anything.
+      expect(keys.list()).toHaveLength(1);
+    });
+
+    it("should keep the useful answers unreachable without the code", async () => {
+      // The whole safety argument in one case. Both of the informative codes
+      // above require presenting a code that matches a stored one, so guessing
+      // — before, during and after a live window, and after one was spent —
+      // only ever yields the one indistinguishable refusal.
+      const spent = keys.issuePairingCode().code;
+      await post("/auth/pair", { pairingCode: spent, deviceName: "Commander's iPhone" });
+      keys.issuePairingCode();
+
+      for (const guess of ["0000-0000", "1111-1111", "9999-9999"]) {
+        const response = await post("/auth/pair", { pairingCode: guess, deviceName: "Attacker" });
+        const body = (await response.json()) as Envelope<never>;
+
+        expect(body.error?.code, guess).toBe("UNAUTHORIZED");
+        expect(body.error?.message, guess).toBe("That pairing code was not accepted.");
+      }
+    });
+
+    it("should treat a code of the wrong shape as an ordinary refusal", async () => {
+      keys.issuePairingCode();
+
+      const response = await post("/auth/pair", { pairingCode: "hello", deviceName: "iPhone" });
+      const body = (await response.json()) as Envelope<never>;
+
+      expect(response.status).toBe(401);
+      expect(body.error?.code).toBe("UNAUTHORIZED");
+    });
   });
 
   it("should reject a missing pairingCode with a field-level validation error", async () => {

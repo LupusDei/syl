@@ -1143,9 +1143,20 @@ components:
       description: |
         The typed code is the contract; the HTTP status is advisory. Clients
         branch on this, never on the status line.
+
+        `PAIRING_CODE_EXPIRED` and `PAIRING_CODE_ALREADY_USED` are the only
+        places the service tells one authentication failure from another, and
+        they are safe because **both are reachable only by presenting a code
+        that matches a stored one**. A wrong guess, and an attempt made while
+        no code is live, are the same `UNAUTHORIZED`. So the extra detail
+        reaches the person holding the code and nobody else — which is what
+        lets a pairing screen on a phone say something more useful than "that
+        did not work".
       enum:
         - VALIDATION_FAILED
         - UNAUTHORIZED
+        - PAIRING_CODE_EXPIRED
+        - PAIRING_CODE_ALREADY_USED
         - FORBIDDEN
         - NOT_FOUND
         - CONFLICT
@@ -1224,11 +1235,28 @@ components:
     PairRequest:
       type: object
       required: [pairingCode, deviceName]
+      description: |
+        How a device gets its first credential, and the only unauthenticated
+        write in the contract.
+
+        The human types the *short-lived* secret and the app keeps the
+        *long-lived* one: eight digits, good for ten minutes and for exactly
+        one device, exchanged for a bearer token the app puts in the Keychain
+        and never shows anyone. Nothing is ever baked into the build.
+
+        Get a code by running `npm run pair` on the machine Syl runs on. It is
+        also printed at startup while no device is paired.
       properties:
         pairingCode:
           type: string
-          description: Shown on the server console. Single use, short-lived.
-        deviceName: { type: string }
+          description: |
+            `NNNN-NNNN`. Issued by `npm run pair` on the server. Single use,
+            ten minutes, and superseded the moment another one is issued.
+          pattern: "^\\d{4}-\\d{4}$"
+          examples: ["4821-9930"]
+        deviceName:
+          type: string
+          description: What the Commander will see on the paired-devices list.
 
     TokenGrant:
       type: object

@@ -79,6 +79,18 @@ public struct ErrorEnvelope: Codable, Equatable, Sendable {
 public enum ErrorCode: String, Codable, Equatable, Sendable, CaseIterable {
     case validationFailed = "VALIDATION_FAILED"
     case unauthorized = "UNAUTHORIZED"
+    /// The pairing code was right ten minutes ago, or another one superseded it.
+    ///
+    /// These two are the only place the service tells one authentication failure from
+    /// another, and they are safe for the same reason they are useful: **both are
+    /// reachable only by presenting a code that matches a stored one.** A wrong guess
+    /// and an attempt made while no code is live are the same `unauthorized`, so
+    /// nothing here narrows a search — it only tells the person who already holds the
+    /// code which of the four things went wrong, which is the difference between a
+    /// pairing screen and a shrug.
+    case pairingCodeExpired = "PAIRING_CODE_EXPIRED"
+    /// The code was right, and a device has already spent it.
+    case pairingCodeAlreadyUsed = "PAIRING_CODE_ALREADY_USED"
     case forbidden = "FORBIDDEN"
     case notFound = "NOT_FOUND"
     case conflict = "CONFLICT"

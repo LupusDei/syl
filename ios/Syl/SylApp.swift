@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 struct SylApp: App {
@@ -28,6 +29,32 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
+        if appDelegate.isPaired {
+            paired
+        } else {
+            // `syl-q1f`. Without this the app looked healthy and was inert: no token
+            // meant no `Authorization` header on anything, a socket that answered
+            // `.unauthenticated` and stopped, and no screen anywhere that said so.
+            //
+            // The arguments are read once — `PairingView` holds its model as a
+            // `@StateObject` — so this body re-evaluating does not wipe the fields
+            // he is typing into. See the note there.
+            PairingView(
+                // Pre-filled only when he has been here before: a profile he already
+                // chose is the likeliest answer, and retyping a tailnet hostname on a
+                // phone keyboard is nobody's idea of a good time.
+                serverEntry: profiles.selected.id == "mock"
+                    ? ""
+                    : profiles.selected.baseURL.absoluteString,
+                deviceName: UIDevice.current.name,
+                onPaired: { profile, grant in
+                    appDelegate.completePairing(grant: grant, profile: profile, profiles: profiles)
+                }
+            )
+        }
+    }
+
+    private var paired: some View {
         TabView {
             NavigationStack {
                 if let chat = appDelegate.chat {
@@ -56,6 +83,10 @@ struct RootView: View {
         .task {
             network.start()
             appDelegate.notifications.refreshAuthorization()
+            // Is the credential we are holding still a credential? A Keychain item
+            // survives deleting the app, so a reinstall arrives already "paired"
+            // against a token that may have been revoked in the meantime.
+            await appDelegate.verifyPairing()
         }
         .onChange(of: scenePhase) { _, phase in
             // The foreground reconcile. Push collapses a night of notifications into

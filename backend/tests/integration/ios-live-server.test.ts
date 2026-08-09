@@ -135,6 +135,12 @@ function runSwiftTests(syl: LiveService, suite: string): Promise<SwiftRun> {
           ...process.env,
           SYL_LIVE_URL: syl.baseUrl,
           SYL_LIVE_TOKEN: syl.token,
+          // A live, unspent code, so the Swift side can drive `SylAPI.pair`
+          // against the real service rather than only against the mock.
+          // `syl-q1f`: the app's pairing path had never met the backend, and
+          // the two new refusal codes it has to render are exactly the kind of
+          // thing that agrees on paper and disagrees on the wire.
+          SYL_LIVE_PAIRING_CODE: syl.issuePairingCode(),
         },
         stdio: ["ignore", "pipe", "pipe"],
       },

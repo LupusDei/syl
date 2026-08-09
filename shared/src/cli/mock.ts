@@ -1,5 +1,10 @@
 import { API_BASE, WS_PATH } from "../mock/router.js";
-import { startMockServer } from "../mock/server.js";
+import {
+  MOCK_EXPIRED_PAIRING_CODE,
+  MOCK_PAIRING_CODE,
+  MOCK_USED_PAIRING_CODE,
+  startMockServer,
+} from "../mock/server.js";
 
 /**
  * `npm run mock` — serve the contract from the fixtures.
@@ -45,6 +50,14 @@ console.log(`
   Served from shared/fixtures/. Writes echo your own clientId and change what
   later reads return, so optimistic send and cursor sync are both testable.
 
+  Pairing — the real service issues a code out of band, so these stand in.
+  Every outcome a pairing screen has to render is reachable from here:
+
+    ${MOCK_PAIRING_CODE}    pairs, once. Ask twice and it is already used.
+    ${MOCK_EXPIRED_PAIRING_CODE}    PAIRING_CODE_EXPIRED
+    ${MOCK_USED_PAIRING_CODE}    PAIRING_CODE_ALREADY_USED
+    anything else PAIRING_CODE_INCORRECT, as UNAUTHORIZED
+
   Scripting — none of these are delayed or faulted themselves:
 
     GET    /__mock/routes        every operation in the contract
@@ -53,7 +66,8 @@ console.log(`
     POST   /__mock/scenario      { latencyMs, jitterMs, errorRate, failNext,
                                    error, status, offline, seed }
     DELETE /__mock/scenario      back to defaults
-    POST   /__mock/reset         reseed the store, clear idempotency keys
+    POST   /__mock/reset         reseed the store, clear idempotency keys,
+                                 and unspend the pairing code
     POST   /__mock/presence      { state, intensity, ttl_ms } — unnumbered
     POST   /__mock/broadcast     { fixture } — numbered and replayable
     POST   /__mock/disconnect    drop every socket, to exercise replay
