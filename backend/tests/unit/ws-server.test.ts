@@ -43,7 +43,7 @@ async function start(options: { capacity?: number; authTimeoutMs?: number } = {}
   sockets = new SylSocketServer({
     server: http,
     keys,
-    messages,
+    chat: deps.chat,
     ...(options.capacity === undefined ? {} : { capacity: options.capacity }),
     ...(options.authTimeoutMs === undefined ? {} : { authTimeoutMs: options.authTimeoutMs }),
   });

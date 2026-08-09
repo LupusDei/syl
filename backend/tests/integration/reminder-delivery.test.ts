@@ -21,7 +21,7 @@ import { ReminderService } from "../../src/services/reminder-service.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import { startFakeApns, type FakeApns } from "../helpers/fake-apns.js";
 import { startTestApp, type RunningApp } from "../helpers/http.js";
-import { testConfig, testDatabase, testKeys } from "../helpers/service.js";
+import { testChat, testConfig, testDatabase, testKeys } from "../helpers/service.js";
 
 /**
  * `syl-002.5.1` — the end-to-end proof, and the point of the whole feature.
@@ -119,10 +119,12 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
     jobs = new JobStore({ db: db.handle, clock });
     const keys = testKeys(db, { clock });
 
+    const messages = new MessageStore({ db: db.handle, clock });
     running = await startTestApp(
       createApp(testConfig(), {
         keys,
-        messages: new MessageStore({ db: db.handle, clock }),
+        messages,
+        chat: testChat(messages),
         devices,
         outbox,
         reminders,

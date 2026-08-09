@@ -9,22 +9,33 @@ export const sharedTestConfig = {
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
-    // Vitest's default is 5s, and that is not a valid assumption for this
-    // suite. A large share of these tests spawn a REAL subprocess — the fake
-    // `claude` executable, the launchd entrypoint — because that is the only
-    // way to test a harness whose entire job is spawning one.
-    //
-    // In isolation each takes 300-400ms and 5s looks generous. Under the full
-    // suite, with vitest running files in parallel and each spawning node,
-    // they intermittently blew past 5s: five failures on one run, a DIFFERENT
-    // five on the next, including the `ANTHROPIC_API_KEY` stripping test.
-    // A flaky guard on the billing constraint is worse than no guard, because
-    // a red that moves around teaches everyone to re-run until green.
-    //
-    // The cost of 20s is that a genuinely hung fast test takes 20s to report
-    // instead of 5s. That is a far better trade than a suite whose result
-    // depends on machine load. Tests needing longer still pass their own value
-    // (the launchd entrypoint asks for 90s).
+    /**
+     * Longer than vitest's 5s default, because a real subprocess is not a
+     * mocked one.
+     *
+     * `session.test.ts`, `reader.test.ts`, `intake.test.ts`, `us2` and `us4`
+     * spawn an actual `node` per turn — see `tests/helpers/fake-claude.ts` for
+     * why the fake is an executable rather than a stubbed `spawn`. Each takes
+     * ~300-600ms alone, and vitest runs files in parallel across every core. On
+     * a busy machine a spawn is starved long enough to blow a 5s budget, and
+     * the suite goes red in a DIFFERENT PLACE each run with nothing wrong in it.
+     *
+     * Measured twice, independently, by two people who each arrived at 20s: the
+     * same commit produced 0, 1, 11 and 24 failures on consecutive runs; and a
+     * separate pass saw five failures on one run and a different five on the
+     * next — including the `ANTHROPIC_API_KEY` stripping test. A flaky guard on
+     * the billing constraint is worse than no guard, because a red that moves
+     * around teaches everyone to re-run until green.
+     *
+     * A timeout is a deadlock breaker, not a latency budget — the same
+     * reasoning as `DEFAULT_TURN_TIMEOUT_MS`. A test that genuinely hangs still
+     * fails; it takes twenty seconds to say so, which is a fair price for a
+     * green run meaning something. Tests needing longer still pass their own
+     * value (the launchd entrypoint asks for 90s).
+     *
+     * `hookTimeout` matches, because a `beforeAll` that builds the backend is
+     * subject to exactly the same starvation as the tests it prepares.
+     */
     testTimeout: 20_000,
     hookTimeout: 20_000,
     coverage: {

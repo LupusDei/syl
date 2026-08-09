@@ -41,7 +41,7 @@ beforeEach(async () => {
   keys = deps.keys;
 
   http = createServer();
-  sockets = new SylSocketServer({ server: http, keys, messages: deps.messages });
+  sockets = new SylSocketServer({ server: http, keys, chat: deps.chat });
   presence = new PresenceService({
     clock: () => now,
     // Exactly the wiring a bootstrap would do: the socket server's own method

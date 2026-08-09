@@ -2,6 +2,7 @@ import { Router, type Request, type RequestHandler } from "express";
 
 import type { ConversationLane, DeliveryConfirmation } from "@syl/shared";
 
+import type { ConversationService } from "../services/conversation-service.js";
 import { isId } from "../services/id.js";
 import type { IdempotencyStore } from "../services/idempotency.js";
 import {
@@ -120,13 +121,24 @@ const MAX_CLIENT_ID = 128;
 const LANES: readonly ConversationLane[] = ["interactive", "job"];
 
 export interface ConversationRouterOptions {
+  /** Reading history. */
   readonly messages: MessageStore;
+  /**
+   * Writing to it, announcing it, and answering it.
+   *
+   * The three are one operation and this route used to do only the first
+   * (`syl-vls`): a message posted here was stored and never broadcast, so every
+   * attached client showed a conversation missing a message until it reloaded,
+   * and nothing ever answered it. Both send paths now go through the same two
+   * calls on the same object.
+   */
+  readonly chat: ConversationService;
   readonly idempotency: IdempotencyStore;
   readonly authenticate: RequestHandler;
 }
 
 export function createConversationRouter(options: ConversationRouterOptions): Router {
-  const { messages, idempotency, authenticate } = options;
+  const { messages, chat, idempotency, authenticate } = options;
   const router = Router();
 
   // Every route here is the Commander's own history. None is public.
@@ -203,7 +215,7 @@ export function createConversationRouter(options: ConversationRouterOptions): Ro
         const text = requireString(request.body, "text", MAX_MESSAGE_TEXT);
 
         try {
-          const result = messages.append({ conversationId, clientId, role: "user", text });
+          const result = chat.append({ conversationId, clientId, role: "user", text });
 
           const confirmation: DeliveryConfirmation = {
             clientId,
@@ -220,6 +232,16 @@ export function createConversationRouter(options: ConversationRouterOptions): Ro
           // saying out loud, because the caller's optimistic bubble is about to
           // be reconciled against a message it did not think had arrived.
           if (result.replayed) response.setHeader("Idempotency-Replayed", "true");
+
+          // Announced and answered. **Not awaited**: a turn runs for up to ten
+          // minutes, and a client that had to hold a connection open for one
+          // would time out long before Syl finished thinking. The reply arrives
+          // on the socket and is persisted on the way past, so a client that
+          // was not attached still finds it in history.
+          //
+          // Inside the idempotent body on purpose — a replayed request answers
+          // from the ledger and must not start a second turn.
+          chat.accept(result);
 
           // 201 either way. The contract documents exactly one success status
           // for this operation, and a client that got 201 once and 200 the

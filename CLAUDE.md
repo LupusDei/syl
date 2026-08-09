@@ -49,6 +49,10 @@ backend/                          the Node 22 service (npm workspace)
   src/harness/session.ts          runTurn(): one subprocess per turn
   src/harness/agent.ts            SylAgent: per-lane continuity + stale-session recovery
   src/harness/reader.ts           runReaderTurn(): untrusted text, no tools
+  src/services/conversation-service.ts  the seam that makes her answer: both write
+                                  paths append + accept here; one turn at a time
+                                  per conversation; a failed turn is a message,
+                                  never silence
   tests/helpers/fake-claude.ts    a real fake `claude` executable, for driving runTurn
   tests/fixtures/*.jsonl          captured CLI transcripts — never hand-written
   src/harness/schedule.ts         wall-clock scheduling + quiet hours

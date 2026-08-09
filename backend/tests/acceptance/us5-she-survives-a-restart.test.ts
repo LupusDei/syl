@@ -315,9 +315,14 @@ describe("US5 — she survives a restart", () => {
         exitCode: 0,
       });
 
+      // A generous window, for the reason its sibling above spells out: racing
+      // a fixed timeout against node's own startup turns this into a machine-load
+      // test. What is asserted is that a healthy turn is *not* disturbed, and
+      // the size of the window it finishes inside is not part of the claim.
+      // Observed failing at 10s on a saturated machine (`syl-vls`).
       const result = await runTurn("Reply with exactly: PONG", {
         claudeBin: prompt.bin,
-        timeoutMs: 10_000,
+        timeoutMs: 60_000,
       });
       expect(result.text).toContain("PONG");
     });

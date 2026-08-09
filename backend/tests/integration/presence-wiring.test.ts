@@ -115,31 +115,89 @@ describe("presence on the live socket", () => {
     expect(syl.deps.presence.current.state).toBe("absent");
   });
 
-  it("should send no presence frame while a message is being handled", async () => {
-    const client = await connect();
-    await client.next(); // the attach
-
-    client.send({
-      type: "chat_message",
-      clientId: "syl:message:00000000-0000-7000-8000-0000000000d1",
-      text: "Are you thinking about it?",
+  it("should say she is thinking while a turn is open, and stop when it closes", async () => {
+    // `syl-vls`. This test used to assert the opposite — that no presence frame
+    // appeared while a message was handled — and the reason it gave was right
+    // at the time: `#onChatMessage` stored the message and broadcast it
+    // synchronously, with no model involved, so `thinking` would have said
+    // something was happening when nothing was. Derived state cannot lie, and
+    // there was nothing to derive it from.
+    //
+    // There is now. A turn is a subprocess that runs for as long as it runs,
+    // and `thinking` is downstream of it being open rather than of anything the
+    // model claims. The turn here is held open by the test's own runner, so
+    // what is asserted is the *derivation*, not a race with a real spawn.
+    let finish = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+      finish = resolve;
     });
 
-    const frames: string[] = [];
-    frames.push(((await client.next()) as { type: string }).type);
-    frames.push(((await client.next()) as { type: string }).type);
-    await client.expectSilence(500);
+    const slow = await startLiveService({
+      clock: fixedClock(NOON_IN_CHICAGO),
+      runner: async (_prompt, options) => {
+        options.onSessionId?.("held-session");
+        await held;
+        return {
+          sessionId: "held-session",
+          text: "Yes.",
+          costUsd: 0,
+          numTurns: 1,
+          init: {
+            kind: "init",
+            sessionId: "held-session",
+            raw: {},
+            model: "test",
+            apiKeySource: "none",
+            mcpServers: [],
+            tools: [],
+            capabilities: [],
+          },
+          events: [],
+        };
+      },
+    });
 
-    // Still true, and deliberately so. `thinking` means a turn is open, and no
-    // turn opens on this path: `#onChatMessage` stores the message and
-    // broadcasts it, synchronously, with no model involved. Calling
-    // `turnStarted`/`turnEnded` around it would put `thinking` then `idle` on
-    // the wire within the same millisecond — a state that says something is
-    // happening when nothing is. Derived state cannot lie, and this is the
-    // seam where it would start. It gets its caller when the agent is wired to
-    // the socket, not before.
-    expect(frames).toEqual(["delivery_confirmation", "chat_message"]);
-    expect(frames).not.toContain("presence");
+    try {
+      const client = await TestClient.connect(slow.wsUrl);
+      const challenge = (await client.next()) as WsAuthChallenge;
+      client.send({ type: "auth_response", token: slow.token, nonce: challenge.nonce });
+      await client.next(); // connected
+      await client.next(); // the `idle` frame the attach produced
+
+      client.send({
+        type: "chat_message",
+        clientId: "syl:message:00000000-0000-7000-8000-0000000000d1",
+        text: "Are you thinking about it?",
+      });
+
+      const seen: string[] = [];
+      let thinking: WsPresence | undefined;
+      while (thinking === undefined) {
+        const frame = (await client.next()) as { type: string };
+        seen.push(frame.type);
+        if (frame.type === "presence") thinking = frame as WsPresence;
+      }
+
+      // His message and its receipt come first; the turn opens behind them.
+      expect(seen.slice(0, 2)).toEqual(["delivery_confirmation", "chat_message"]);
+      expect(thinking.state).toBe("thinking");
+      // Re-announced before it lapses, so a three-minute turn does not leave the
+      // client falling back to idle after fifteen seconds.
+      expect(thinking.ttl_ms).toBeGreaterThan(0);
+
+      finish();
+
+      // The turn closes: her answer, and a character that is no longer busy.
+      const after: string[] = [];
+      while (!after.includes("presence") || !after.includes("chat_message")) {
+        after.push(((await client.next()) as { type: string }).type);
+      }
+      expect(slow.deps.presence.current.state).toBe("idle");
+      client.close();
+    } finally {
+      finish();
+      await slow.close();
+    }
   });
 
   it("should have a caller in the service for every presence mutator that is wired", () => {
@@ -167,8 +225,13 @@ describe("presence on the live socket", () => {
       }
     }
 
-    expect([...callers.keys()].sort()).toEqual(["setAttached"]);
+    expect([...callers.keys()].sort()).toEqual(["setAttached", "turnEnded", "turnStarted"]);
     expect(callers.get("setAttached")).toEqual(["services/ws-server.ts"]);
+    // `syl-vls` wired the turn. Both halves, in the one place that owns a turn's
+    // lifetime — a `turnStarted` without a matching `turnEnded` pins Syl on
+    // `thinking` until the process restarts.
+    expect(callers.get("turnStarted")).toEqual(["services/conversation-service.ts"]);
+    expect(callers.get("turnEnded")).toEqual(["services/conversation-service.ts"]);
   });
 
   /**
@@ -176,8 +239,8 @@ describe("presence on the live socket", () => {
    *
    * `alerted` belongs to the delivery path — `jobs/reminder-delivery-job.ts`
    * decides that a notification is time-sensitive, and that file belongs to
-   * another lane. `turnStarted`, `audioStarted` and `micOpened` need a turn, a
-   * voice and a microphone, none of which reach this service yet.
+   * another lane. `audioStarted` and `micOpened` need a voice and a microphone,
+   * neither of which reaches this service yet.
    *
    * This is an exemption list and it is a **finding, not a configuration**: the
    * assertion above fails the moment one of these gains a caller, so nobody can
