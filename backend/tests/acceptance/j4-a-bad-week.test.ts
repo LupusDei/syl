@@ -95,7 +95,7 @@ describe("Journey 4 — a bad week", () => {
    * `createDeliveryRuntime` has no seam for the APNs origin — `APNS_ORIGINS` is
    * a module constant and the runtime does not forward an override — so this
    * rebuilds the runner from the same two exported pieces the runtime uses.
-   * That is itself a finding, filed as `syl-p6r`; every reminder journey in the
+   * That is itself a finding, filed as `syl-md5`; every reminder journey in the
    * suite has to do this, so the assembly `main` actually ships is exercised
    * against a real Apple by nothing.
    */
@@ -170,7 +170,7 @@ describe("Journey 4 — a bad week", () => {
       // future attempt — an environment that cannot send yet is a state to wait
       // out, not a reason to drop a reminder.
       //
-      // OBSERVED (syl-p6q): exactly one push is ever attempted. A 403 with
+      // OBSERVED (syl-clc): exactly one push is ever attempted. A 403 with
       // `InvalidProviderToken` is classified `permanent`, `recordFailure` sets
       // `state = 'failed'` and `next_attempt_at = NULL`, and `Outbox.due` only
       // ever selects `pending`/`sending` rows with a non-null instant. The row

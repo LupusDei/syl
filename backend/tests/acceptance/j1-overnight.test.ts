@@ -104,7 +104,7 @@ describe("the Commander's night", () => {
    *
    * `createDeliveryRuntime` has no seam for the APNs origin, so this rebuilds
    * the runner from the same two exported pieces the runtime uses. Filed as
-   * `syl-p6r`: the assembly `main` actually ships is exercised against a real
+   * `syl-md5`: the assembly `main` actually ships is exercised against a real
    * Apple by nothing in this suite.
    */
   function runnerAgainst(target: FakeApns): { runner: JobRunner; close: () => Promise<void> } {
