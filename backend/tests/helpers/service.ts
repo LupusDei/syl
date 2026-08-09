@@ -5,6 +5,7 @@ import { IN_MEMORY, openDatabase, type SylDatabase } from "../../src/services/da
 import { DeviceTokenService } from "../../src/services/device-token-service.js";
 import type { Entropy } from "../../src/services/id.js";
 import { IdempotencyStore } from "../../src/services/idempotency.js";
+import { JobStore } from "../../src/services/job-store.js";
 import { MessageStore } from "../../src/services/message-store.js";
 import { Outbox } from "../../src/services/outbox.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
@@ -70,6 +71,7 @@ export function testDeps(db: SylDatabase): {
   readonly devices: DeviceTokenService;
   readonly outbox: Outbox;
   readonly reminders: ReminderService;
+  readonly jobs: JobStore;
   readonly idempotency: IdempotencyStore;
 } {
   const clock = fixedClock(TEST_NOW);
@@ -81,6 +83,7 @@ export function testDeps(db: SylDatabase): {
     // otherwise depend on what hour TEST_NOW happens to be in.
     outbox: new Outbox({ db: db.handle, clock }),
     reminders: new ReminderService({ db: db.handle, clock }),
+    jobs: new JobStore({ db: db.handle, clock }),
     idempotency: new IdempotencyStore({ db: db.handle, clock }),
   };
 }

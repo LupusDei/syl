@@ -16,11 +16,13 @@ import { createDeliveryRouter } from "./routes/deliveries.js";
 import { createDeviceRouter } from "./routes/devices.js";
 import { ApiFailure, sendFailure } from "./routes/envelope.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
+import { createJobRouter } from "./routes/jobs.js";
 import { createReminderRouter } from "./routes/reminders.js";
 import { ApiKeyService } from "./services/api-key-service.js";
 import { openDatabase, type SylDatabase } from "./services/database.js";
 import { DeviceTokenService } from "./services/device-token-service.js";
 import { IdempotencyStore } from "./services/idempotency.js";
+import { JobStore } from "./services/job-store.js";
 import { MessageStore } from "./services/message-store.js";
 import { Outbox, quietHoursFromEnv } from "./services/outbox.js";
 import { ReminderService } from "./services/reminder-service.js";
@@ -119,6 +121,8 @@ export interface AppDependencies {
   readonly outbox: Outbox;
   /** Reminders, and the deferral invariant. */
   readonly reminders: ReminderService;
+  /** Scheduled work, its runs, and the lateness of each. */
+  readonly jobs: JobStore;
   /** The ledger that makes every write safe to retry. */
   readonly idempotency: IdempotencyStore;
   /** Extra health probes. The billing check is always present. */
@@ -163,6 +167,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
       authenticate,
     }),
   );
+  api.use(createJobRouter({ jobs: deps.jobs, authenticate }));
 
   app.use(API_BASE_PATH, api);
   app.use(notFound);
@@ -268,6 +273,7 @@ export function bootstrap(config: SylConfig): {
   const idempotency = new IdempotencyStore({ db: database.handle });
   const outbox = new Outbox({ db: database.handle, quietHours: quietHoursFromEnv(process.env) });
   const reminders = new ReminderService({ db: database.handle });
+  const jobs = new JobStore({ db: database.handle });
 
   return {
     database,
@@ -277,6 +283,7 @@ export function bootstrap(config: SylConfig): {
       devices,
       outbox,
       reminders,
+      jobs,
       idempotency,
       probes: [databaseProbe(database.handle)],
     },
