@@ -1,0 +1,556 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://syl.invalid/schemas/ws.json",
+  "title": "Syl WebSocket frames",
+  "description": "GENERATED FILE — DO NOT EDIT. Rendered from shared/openapi.yaml. Every frame on the socket is one of these. Note that `presence` carries no `seq` and is never replayed; see shared/ws-protocol.md.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/WsClientFrame"
+    },
+    {
+      "$ref": "#/$defs/WsServerFrame"
+    }
+  ],
+  "$defs": {
+    "Id": {
+      "type": "string",
+      "description": "`syl:<type>:<uuidv7>` — type-prefixed, time-sortable.",
+      "pattern": "^syl:[a-z][a-z_]*:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "examples": [
+        "syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f"
+      ]
+    },
+    "Instant": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339, UTC, millisecond precision. Never a fixed offset.",
+      "examples": [
+        "2026-08-09T07:00:03.114Z"
+      ]
+    },
+    "ErrorCode": {
+      "type": "string",
+      "description": "The typed code is the contract; the HTTP status is advisory. Clients\nbranch on this, never on the status line.\n",
+      "enum": [
+        "VALIDATION_FAILED",
+        "UNAUTHORIZED",
+        "FORBIDDEN",
+        "NOT_FOUND",
+        "CONFLICT",
+        "IDEMPOTENCY_KEY_REUSE",
+        "IDEMPOTENCY_KEY_REQUIRED",
+        "DEFERRAL_NOT_LATER",
+        "RRULE_UNSUPPORTED",
+        "UNKNOWN_JOB_KIND",
+        "DEVICE_TOKEN_INVALID",
+        "QUIET_HOURS",
+        "RATE_LIMITED",
+        "UPSTREAM_UNAVAILABLE",
+        "INTERNAL"
+      ]
+    },
+    "ApiError": {
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable, for a log line or an admin screen. Never parsed."
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "Whether the client's backoff should try again. `RATE_LIMITED`,\n`UPSTREAM_UNAVAILABLE` and `INTERNAL` are retryable; a validation\nfailure never is. Auth and billing failures halt rather than\nretry — retrying an auth failure fifty times is the worst\npossible response to a key having shadowed the subscription login.\n"
+        },
+        "details": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Structured context. `VALIDATION_FAILED` carries `{ field, reason }[]`.",
+          "additionalProperties": true
+        },
+        "retryAfterMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Server-suggested backoff floor, when it knows one."
+        }
+      }
+    },
+    "Principal": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "description": "There is exactly one. Syl answers to the Commander and to nobody\nelse — that allowlist is the trust boundary, not a placeholder for a\nuser table.\n",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "MessageRole": {
+      "type": "string",
+      "enum": [
+        "user",
+        "assistant",
+        "system"
+      ]
+    },
+    "Message": {
+      "type": "object",
+      "required": [
+        "id",
+        "conversationId",
+        "clientId",
+        "role",
+        "text",
+        "createdAt",
+        "seq"
+      ],
+      "description": "`text` has already had the affect hint stripped. The\n`<!--affect: concerned 0.6-->` marker that a turn may emit is removed\nby the service before display and before synthesis; it drives the\n`presence` frame and never crosses the wire as message content.\n",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "conversationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "clientId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Echoed back exactly as the client sent it, so an optimistic\nrender can be reconciled. Null for anything Syl originated.\n"
+        },
+        "role": {
+          "$ref": "#/$defs/MessageRole"
+        },
+        "text": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$ref": "#/$defs/Instant"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Monotonic per conversation. The client tracks the highest it has\nseen; the WebSocket `sync` frame replays from there.\n"
+        }
+      }
+    },
+    "PresenceState": {
+      "type": "string",
+      "description": "**Treat an unrecognised value as `idle`.** The enum is open on\npurpose so the service can add a state without shipping an app\nupdate. A client that rejects the frame instead is a client that\nbreaks on a server deploy.\n\n`absent` is the default, not `idle` — she is not on screen unless\nsomething put her there. During quiet hours it is `absent`\nunconditionally, including for a reminder that was deferred and will\nbe shown in the morning.\n",
+      "enum": [
+        "absent",
+        "idle",
+        "listening",
+        "thinking",
+        "speaking",
+        "alert",
+        "delighted",
+        "concerned",
+        "manifest"
+      ]
+    },
+    "WsAuthChallenge": {
+      "type": "object",
+      "required": [
+        "type",
+        "nonce",
+        "protocolVersion"
+      ],
+      "description": "Server → client, first frame on every connection.",
+      "properties": {
+        "type": {
+          "const": "auth_challenge"
+        },
+        "nonce": {
+          "type": "string"
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "WsAuthResponse": {
+      "type": "object",
+      "required": [
+        "type",
+        "token"
+      ],
+      "description": "Client → server, in reply to the challenge.",
+      "properties": {
+        "type": {
+          "const": "auth_response"
+        },
+        "token": {
+          "type": "string"
+        },
+        "nonce": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastSeq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "The highest sequence the client already holds. Lets the server\nanswer `connected` with enough information for the client to know\nimmediately whether it has a gap.\n"
+        }
+      }
+    },
+    "WsConnected": {
+      "type": "object",
+      "required": [
+        "type",
+        "lastSeq",
+        "serverTime",
+        "protocolVersion",
+        "principal"
+      ],
+      "description": "Server → client. `lastSeq` is the newest sequence the server holds.\nThe client compares it with its own high-water mark and, if there is a\ngap, sends `sync`.\n",
+      "properties": {
+        "type": {
+          "const": "connected"
+        },
+        "lastSeq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "serverTime": {
+          "$ref": "#/$defs/Instant"
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "principal": {
+          "$ref": "#/$defs/Principal"
+        }
+      }
+    },
+    "WsClientChatMessage": {
+      "type": "object",
+      "required": [
+        "type",
+        "clientId",
+        "conversationId",
+        "text",
+        "idempotencyKey"
+      ],
+      "description": "Client → server. Same semantics as `POST\n/conversations/{id}/messages`, over the socket — the client falls\nback to HTTP when the socket is down and reconciles identically.\n",
+      "properties": {
+        "type": {
+          "const": "chat_message"
+        },
+        "clientId": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128
+        },
+        "conversationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128
+        }
+      }
+    },
+    "WsServerChatMessage": {
+      "type": "object",
+      "required": [
+        "type",
+        "seq",
+        "ts",
+        "message"
+      ],
+      "description": "Server → client. Replayable: this is exactly the frame whose loss the\nsequence-and-replay machinery exists to make a non-event.\n",
+      "properties": {
+        "type": {
+          "const": "chat_message"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ts": {
+          "$ref": "#/$defs/Instant"
+        },
+        "message": {
+          "$ref": "#/$defs/Message"
+        }
+      }
+    },
+    "WsDeliveryConfirmation": {
+      "type": "object",
+      "required": [
+        "type",
+        "seq",
+        "ts",
+        "clientId",
+        "serverId",
+        "conversationId",
+        "messageSeq",
+        "acceptedAt"
+      ],
+      "description": "Server → client. The other half of optimistic send: the client\nmatches `clientId` against its pending row and swaps in `serverId`.\nReplayable.\n",
+      "properties": {
+        "type": {
+          "const": "delivery_confirmation"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ts": {
+          "$ref": "#/$defs/Instant"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "serverId": {
+          "$ref": "#/$defs/Id"
+        },
+        "conversationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "messageSeq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "acceptedAt": {
+          "$ref": "#/$defs/Instant"
+        }
+      }
+    },
+    "WsPresence": {
+      "type": "object",
+      "required": [
+        "type",
+        "state",
+        "intensity",
+        "since",
+        "ttl_ms"
+      ],
+      "description": "Server → client. **Never replayed on reconnect, and it carries no\n`seq`.**\n\nEvery other frame type replays; this one must not. Replaying a\nmessage the Commander missed is the whole point of the replay buffer.\nReplaying \"thinking\" from four minutes ago is a lie — a character\nfrozen mid-thought is worse than no character, because it is actively\nmisrepresenting what the system is doing.\n\nIt carries no sequence number for the same reason: numbering it would\neither force the server to replay it on a `sync` (forbidden) or punch\nholes in the sequence space (which is how gap detection works). It is\nout-of-band and unnumbered.\n\nNote `ttl_ms`. It is the one snake_case field on the wire, preserved\nexactly as the character proposal specifies it.\n",
+      "properties": {
+        "type": {
+          "const": "presence"
+        },
+        "state": {
+          "$ref": "#/$defs/PresenceState"
+        },
+        "intensity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Amplitude, not a separate state — \"mildly concerned\" and\n\"seriously concerned\" are one state at two intensities. Clamp\nclient-side; a server that sends 1.4 is wrong but must not break\nthe app.\n"
+        },
+        "since": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/Instant"
+            }
+          ],
+          "description": "When the current state began — not when the frame was sent. A\nclient that joins mid-`speaking` uses it to know how long this\nhas been going.\n"
+        },
+        "ttl_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How long this state stays valid without a further frame. On\nexpiry the client falls to `idle`, and after a further\n30 seconds of silence to `absent`. The failure mode has to be\nquiet, not stuck.\n"
+        }
+      }
+    },
+    "WsSync": {
+      "type": "object",
+      "required": [
+        "type",
+        "sinceSeq"
+      ],
+      "description": "Client → server. Gap recovery on this socket, by sequence number.\n\nDeliberately **not** named like `GET /sync`, and its parameter is\n`sinceSeq` rather than `since`, so the two mechanisms cannot be\nconflated. This one recovers frames dropped in a tunnel; the HTTP one\nrebuilds a device store that has been offline for a week.\n",
+      "properties": {
+        "type": {
+          "const": "sync"
+        },
+        "sinceSeq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 500
+        }
+      }
+    },
+    "WsSyncResponse": {
+      "type": "object",
+      "required": [
+        "type",
+        "fromSeq",
+        "toSeq",
+        "complete",
+        "frames"
+      ],
+      "description": "Server → client. `frames` never contains a `presence` frame; the\nreplay buffer holds only replayable types.\n\n`complete: false` means the requested range fell off the replay\nbuffer — the client's gap is older than the server remembers, and it\nmust fall back to `GET /sync` and a history fetch rather than assume\nit is caught up.\n",
+      "properties": {
+        "type": {
+          "const": "sync_response"
+        },
+        "fromSeq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "toSeq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "frames": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/WsServerChatMessage"
+              },
+              {
+                "$ref": "#/$defs/WsDeliveryConfirmation"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "WsPing": {
+      "type": "object",
+      "required": [
+        "type",
+        "ts"
+      ],
+      "description": "Client → server. Application-level, above any transport ping.",
+      "properties": {
+        "type": {
+          "const": "ping"
+        },
+        "ts": {
+          "$ref": "#/$defs/Instant"
+        }
+      }
+    },
+    "WsPong": {
+      "type": "object",
+      "required": [
+        "type",
+        "ts",
+        "serverTime"
+      ],
+      "description": "Server → client.",
+      "properties": {
+        "type": {
+          "const": "pong"
+        },
+        "ts": {
+          "$ref": "#/$defs/Instant"
+        },
+        "serverTime": {
+          "$ref": "#/$defs/Instant"
+        }
+      }
+    },
+    "WsError": {
+      "type": "object",
+      "required": [
+        "type",
+        "error",
+        "fatal"
+      ],
+      "description": "Server → client. Not in the original frame list, and added because\nwithout it every squad invents its own shape for \"your token expired\"\nand they disagree. Carries the same `ApiError` as HTTP so one error\nrenderer serves both transports.\n\n`fatal: true` means the server is about to close the socket.\n",
+      "properties": {
+        "type": {
+          "const": "error"
+        },
+        "error": {
+          "$ref": "#/$defs/ApiError"
+        },
+        "fatal": {
+          "type": "boolean"
+        }
+      }
+    },
+    "WsClientFrame": {
+      "description": "Every frame a client may send.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/WsAuthResponse"
+        },
+        {
+          "$ref": "#/$defs/WsClientChatMessage"
+        },
+        {
+          "$ref": "#/$defs/WsSync"
+        },
+        {
+          "$ref": "#/$defs/WsPing"
+        }
+      ]
+    },
+    "WsServerFrame": {
+      "description": "Every frame a server may send.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/WsAuthChallenge"
+        },
+        {
+          "$ref": "#/$defs/WsConnected"
+        },
+        {
+          "$ref": "#/$defs/WsServerChatMessage"
+        },
+        {
+          "$ref": "#/$defs/WsDeliveryConfirmation"
+        },
+        {
+          "$ref": "#/$defs/WsPresence"
+        },
+        {
+          "$ref": "#/$defs/WsSyncResponse"
+        },
+        {
+          "$ref": "#/$defs/WsPong"
+        },
+        {
+          "$ref": "#/$defs/WsError"
+        }
+      ]
+    }
+  }
+}
