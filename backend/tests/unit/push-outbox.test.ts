@@ -83,6 +83,41 @@ describe("notificationFor", () => {
     expect(notification.environment).toBe("production");
     expect(notification.apnsId).toBe("0198f2c6-0001-7000-8000-000000010001");
   });
+
+  it("should carry every reminder a digest stands for", () => {
+    // `syl-xvx`. A digest names no single reminder on purpose, so the device
+    // had nothing to act on at all. The ids it speaks for travel with it now —
+    // the same set the ack path closes, so the two cannot disagree.
+    const notification = notificationFor(
+      {
+        id: "syl:delivery:0198f2c6-0001-7000-8000-000000010002",
+        channel: "apns",
+        messageClass: "reminder_delivery",
+        reminderId: null,
+        payload: { title: "Syl", body: "Two things came in overnight." },
+        idempotencyKey: "batch",
+        state: "pending",
+        attempts: 0,
+        nextAttemptAt: null,
+        deliveredAt: null,
+        ackedAt: null,
+        engagement: null,
+        late: true,
+        scheduledFor: null,
+        coalescedReminderIds: ["syl:reminder:one", "syl:reminder:two"],
+        apnsUniqueId: null,
+        lastError: null,
+        createdAt: "2026-08-09T21:00:00.000Z",
+      },
+      IPHONE,
+      "production",
+    );
+
+    expect(notification.data).toEqual({
+      deliveryId: "syl:delivery:0198f2c6-0001-7000-8000-000000010002",
+      coalescedReminderIds: ["syl:reminder:one", "syl:reminder:two"],
+    });
+  });
 });
 
 describe("pushDueDeliveries", () => {

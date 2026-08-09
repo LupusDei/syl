@@ -218,6 +218,15 @@ export function notificationFor(
     data: {
       deliveryId: delivery.id,
       ...(delivery.reminderId === null ? {} : { reminderId: delivery.reminderId }),
+      // Every reminder a digest stands for, so the device knows what it is
+      // holding rather than only that it is holding several. `syl-xvx`: a
+      // digest carries no `reminderId` by design, which is what left both
+      // notification actions with nothing to name — and this is the field a
+      // snooze-all would act on. It matches the set the ack path already
+      // closes, so the two can never disagree about what the digest covered.
+      ...(delivery.coalescedReminderIds.length === 0
+        ? {}
+        : { coalescedReminderIds: delivery.coalescedReminderIds }),
     },
     // Our own id, so a retry is recognisably the same notification to Apple
     // rather than a second one.
