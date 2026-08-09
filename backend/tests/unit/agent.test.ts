@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 
-import { SylAgent, type SessionStore } from "../../src/agent.js";
-import type { TurnOptions, TurnResult, TurnRunner } from "../../src/session.js";
+import { SylAgent, type SessionStore } from "../../src/harness/agent.js";
+import type { TurnOptions, TurnResult, TurnRunner } from "../../src/harness/session.js";
 
 function fakeResult(sessionId: string, text = "ok"): TurnResult {
   return {

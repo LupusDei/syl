@@ -5,17 +5,23 @@
   "type": "module",
   "description": "Syl — a personal assistant harness driving Claude Code over its native stream-json stdio protocol.",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
   },
+  "workspaces": [
+    "backend"
+  ],
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
-    "ping": "tsx src/cli/ping.ts",
-    "when": "tsx src/cli/when.ts"
+    "test:coverage": "vitest run --coverage",
+    "verify": "npm run typecheck && npm test",
+    "ping": "tsx backend/src/harness/cli/ping.ts",
+    "when": "tsx backend/src/harness/cli/when.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@vitest/coverage-v8": "^2.1.9",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

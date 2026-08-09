@@ -9,7 +9,7 @@ import {
   type InitEvent,
   type ResultEvent,
   type ToolUseEvent,
-} from "../../src/protocol.js";
+} from "../../src/harness/protocol.js";
 
 /**
  * Fixtures below are trimmed from REAL `claude -p --output-format stream-json`

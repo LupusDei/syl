@@ -41,12 +41,16 @@ stuck session has to be built on the transcript rather than inherited free.
 ## Architecture
 
 ```
-src/protocol.ts   pure codec — JSON lines <-> typed events. No I/O.
-src/session.ts    runTurn(): one subprocess per turn
-src/agent.ts      SylAgent: continuity across turns via --resume
-src/cli/ping.ts   end-to-end smoke test
-SOUL.md           standing orders, appended to the system prompt
+backend/src/harness/protocol.ts   pure codec — JSON lines <-> typed events. No I/O.
+backend/src/harness/session.ts    runTurn(): one subprocess per turn
+backend/src/harness/agent.ts      SylAgent: continuity across turns via --resume
+backend/src/harness/cli/ping.ts   end-to-end smoke test
+SOUL.md                           standing orders, appended to the system prompt
 ```
+
+The repo is an npm monorepo: `backend/` (the service), `frontend/` (web admin),
+`shared/` (the API contract), and `ios/` (SylKit + the app — Swift, not an npm
+workspace).
 
 The codec is deliberately I/O-free. The subtle bugs in this layer are wire-format
 bugs — chunk boundaries, errors disguised as replies — and keeping them testable

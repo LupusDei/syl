@@ -41,14 +41,23 @@ reaches EOF. Details and the measurement in `docs/CONTEXT.md` §3.
 
 ## Layout
 
+An npm monorepo. `ios/` is Swift and deliberately **not** an npm workspace.
+
 ```
-src/protocol.ts   pure codec — JSON lines <-> typed events. Zero I/O.
-src/session.ts    runTurn(): one subprocess per turn
-src/agent.ts      SylAgent: continuity + stale-session recovery
-src/schedule.ts   wall-clock scheduling + quiet hours
-src/cli/ping.ts   end-to-end smoke test
-SOUL.md           Syl's standing orders, appended to the system prompt
-docs/CONTEXT.md   exploration record and decision log
+backend/                          the Node 22 service (npm workspace)
+  src/harness/protocol.ts         pure codec — JSON lines <-> typed events. Zero I/O.
+  src/harness/session.ts          runTurn(): one subprocess per turn
+  src/harness/agent.ts            SylAgent: continuity + stale-session recovery
+  src/harness/schedule.ts         wall-clock scheduling + quiet hours
+  src/harness/cli/ping.ts         end-to-end smoke test
+  tests/unit/**                   vitest
+frontend/                         web admin — Vite + React (npm workspace)
+shared/                           THE CONTRACT — OpenAPI, generated types, fixtures (npm workspace)
+ios/                              SylKit (SPM) + the app target — Swift, not a workspace
+tsconfig.base.json                strict + noUncheckedIndexedAccess; every workspace extends it
+vitest.shared.ts                  base vitest config; every workspace merges it
+SOUL.md                           Syl's standing orders, appended to the system prompt
+docs/CONTEXT.md                   exploration record and decision log
 ```
 
 Keep the codec pure. The subtle bugs in this layer are wire-format bugs, and
@@ -70,11 +79,20 @@ keeping them testable without spawning a process is worth the seam.
 
 ## Commands
 
+All of these run from the repo root and cover every workspace.
+
 ```sh
-npm test          # unit tests
-npm run typecheck # tsc --noEmit
+npm test          # every workspace's unit tests, one pass
+npm run typecheck # root tooling + tsc --noEmit per workspace
+npm run verify    # typecheck + test — run this before pushing
+npm test -w backend             # one workspace, focused
 npm run ping -- "your prompt"   # live end-to-end check
 ```
+
+**Adding a workspace**: create `<name>/package.json` and a `<name>/tsconfig.json`
+extending `tsconfig.base.json`, then add `<name>` to `workspaces` in the root
+`package.json`. CI fails if a workspace has source under `src/` and no tests
+under `tests/` (`scripts/check-workspaces-tested.mjs`).
 
 ## Delivery today
 
@@ -94,7 +112,11 @@ to add is about *additional* surfaces and blocks nothing.
   server — measured at 44 turns and $0.39 for one question that should cost 3
   turns and $0.05. Constraining `--allowedTools` is the outstanding follow-up;
   it also bounds what `bypassPermissions` can reach.
-- The `claude` binary is resolved by `src/claude-bin.ts`, not by trusting `PATH`.
+- Node **22** is required (`.nvmrc` pins 22.23.1). Node 20 is end-of-life and
+  lacks `node:sqlite`. Verified on 22.23.1: `node:sqlite` imports without a flag
+  (SQLite 3.51.3) and **FTS5 is compiled in**, so keyword search needs no native
+  dependency. It still prints an `ExperimentalWarning`.
+- The `claude` binary is resolved by `backend/src/harness/claude-bin.ts`, not by trusting `PATH`.
   Claude Code installs to `~/.local/bin`, which shell profiles add for
   interactive use — so the same machine resolves under zsh and throws `ENOENT`
   under bash. Override with `CLAUDE_BIN=/full/path/to/claude` if resolution ever

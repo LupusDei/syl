@@ -1,20 +1,6 @@
+// Root-level tooling only. Workspace source is typechecked by each
+// workspace's own tsconfig.json — see `npm run typecheck`.
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "lib": ["ES2023"],
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "types": ["node"],
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-    "exactOptionalPropertyTypes": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "noEmit": true
-  },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+  "extends": "./tsconfig.base.json",
+  "include": ["vitest.config.ts", "vitest.shared.ts"]
 }

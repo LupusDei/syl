@@ -5,7 +5,7 @@ import {
   isWithinQuietHours,
   nextDailyOccurrence,
   type QuietHours,
-} from "../../src/schedule.js";
+} from "../../src/harness/schedule.js";
 
 const TZ = "America/Chicago";
 const QUIET: QuietHours = { start: "23:00", end: "08:00" };

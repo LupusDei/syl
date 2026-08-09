@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { resolveClaudeBin, type ResolveDeps } from "../../src/claude-bin.js";
+import { resolveClaudeBin, type ResolveDeps } from "../../src/harness/claude-bin.js";
 
 function deps(overrides: Partial<ResolveDeps> = {}): ResolveDeps {
   return {

@@ -16,7 +16,9 @@ import { fileURLToPath } from "node:url";
 import { SylAgent, fileSessionStore } from "../agent.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const root = join(here, "..", "..");
+// backend/src/harness/cli -> repo root. SOUL.md, .mcp.json and .syl/ live at
+// the root of the monorepo, not inside the backend workspace.
+const root = join(here, "..", "..", "..", "..");
 
 function readSoul(): string | undefined {
   try {

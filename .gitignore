@@ -1,5 +1,7 @@
 .syl/
 node_modules/
+coverage/
+dist/
 
 # Agent worktrees live inside the repo. Never track them: committing a
 # worktree's contents is how adj-204 broke the entire Adjutant fleet — a
