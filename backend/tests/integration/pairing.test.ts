@@ -1,10 +1,15 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { describePairing, issueBriefing, tailnetBaseURL } from "../../src/ops/cli/pair.js";
+import {
+  assertExistingStore,
+  describePairing,
+  issueBriefing,
+  tailnetBaseURL,
+} from "../../src/ops/cli/pair.js";
 import {
   ApiKeyService,
   PairingError,
@@ -249,6 +254,7 @@ describe("npm run pair", () => {
       expiresAt: "2026-08-09T07:10:00.000Z",
       baseURL: tailnetBaseURL(join(directory, "there-is-no-such-file.json")),
       pairedDevices: 0,
+      databasePath,
     };
 
     expect(briefing.baseURL).toBeNull();
@@ -256,6 +262,49 @@ describe("npm run pair", () => {
     expect(printed).toContain("unknown");
     expect(printed).not.toContain("localhost");
     expect(printed).not.toContain("127.0.0.1");
+  });
+
+  it("should refuse to issue a code into a store it would have had to create", () => {
+    // The sharpest edge on this command. The service gets `SYL_DB_PATH` from its
+    // launchd plist as an absolute path; a shell has no such variable, so the
+    // default is `.syl/syl.db` *relative to the working directory*. Run from the
+    // wrong place, this would silently create an empty database, migrate it, and
+    // print a perfectly valid code for a store nothing is serving — and the only
+    // symptom would be "that pairing code was not accepted", forever, with the
+    // command reporting success every time.
+    const absent = join(directory, "nowhere", "syl.db");
+
+    expect(() => assertExistingStore(absent, "/Users/commander")).toThrow(/no Syl database/);
+    // And it must say enough to fix it: the path it resolved, the variable that
+    // sets it, and how to read what the service is using.
+    try {
+      assertExistingStore(absent, "/Users/commander");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      const message = (error as Error).message;
+      expect(message).toContain(absent);
+      expect(message).toContain("SYL_DB_PATH");
+      expect(message).toContain("launchctl print");
+    }
+  });
+
+  it("should proceed against a store that already exists", () => {
+    const db = connect();
+    db.close();
+
+    expect(() => assertExistingStore(databasePath)).not.toThrow();
+  });
+
+  it("should name the store it wrote the code into", () => {
+    // Printed on every run rather than only on failure: it is the one field that
+    // can be quietly wrong, and a value you have seen every time is a value you
+    // notice changing.
+    const db = connect();
+    const briefing = issueBriefing(db, testConfig({ databasePath }));
+    db.close();
+
+    expect(briefing.databasePath).toBe(resolve(databasePath));
+    expect(describePairing(briefing).join("\n")).toContain(resolve(databasePath));
   });
 
   it("should count the devices already holding a live token", () => {

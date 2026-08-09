@@ -303,7 +303,20 @@ credential, so the first screen is the pairing screen — two fields, a server
 address and eight digits. Get both from the Mac:
 
 ```sh
-npm run pair
+SYL_DB_PATH=~/.syl/syl.db npm run pair
+```
+
+**Set `SYL_DB_PATH`, or run it from a shell that already has it.** The service
+gets that variable from its launchd plist as an absolute path; an interactive
+shell does not have it, and the fallback is `.syl/syl.db` *relative to the
+working directory*. A code written into the wrong store is a valid code for a
+database nothing is serving, and the only symptom is "that pairing code was not
+accepted" — forever, with the command reporting success every time. The command
+refuses outright rather than creating a store, and prints the one it used on
+every run, so check that line matches:
+
+```sh
+launchctl print gui/$(id -u)/com.jmm.syl | grep SYL_DB_PATH
 ```
 
 It prints the code, when it expires, and the exact URL to type into the app

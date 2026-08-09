@@ -44,11 +44,6 @@ struct PairingView: View {
         )
     }
 
-    /// For tests and previews, which supply a model with a scripted exchange.
-    init(model: PairingViewModel) {
-        _model = StateObject(wrappedValue: model)
-    }
-
     private enum Field: Hashable { case server, code }
 
     var body: some View {

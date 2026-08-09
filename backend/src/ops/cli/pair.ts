@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadConfig, type SylConfig } from "../../config.js";
@@ -44,6 +46,40 @@ export interface PairingBriefing {
   readonly baseURL: string | null;
   /** How many devices already hold a live token. */
   readonly pairedDevices: number;
+  /** Which store this code was written into. Printed so it can be checked. */
+  readonly databasePath: string;
+}
+
+/**
+ * Refuse to issue a code into a database that did not already exist.
+ *
+ * **The sharpest edge on this command, and it is silent without this check.**
+ * The running service gets `SYL_DB_PATH` from its launchd plist, as an absolute
+ * path. An interactive shell has no such variable, so `loadConfig` falls back
+ * to `.syl/syl.db` — *relative to the working directory*. Run from anywhere
+ * that is not where the service's store lives, this would create a new empty
+ * database, migrate it, and print a perfectly valid code for a database
+ * nothing is serving.
+ *
+ * The symptom would be "that pairing code was not accepted", forever, with the
+ * command reporting success every time. So a store this command had to create
+ * is treated as proof that it is pointed at the wrong one.
+ *
+ * @throws {Error} naming the path it resolved and how to correct it.
+ */
+export function assertExistingStore(databasePath: string, home?: string): void {
+  if (existsSync(databasePath)) return;
+  throw new Error(
+    `There is no Syl database at ${resolve(databasePath)}.\n\n` +
+      `A pairing code has to be written into the store the running service is\n` +
+      `using, and this command would have created a new empty one instead —\n` +
+      `which would print a code that can never work.\n\n` +
+      `The service takes its path from SYL_DB_PATH in its launchd plist. Set the\n` +
+      `same value here:\n\n` +
+      `  SYL_DB_PATH=${join(home ?? "~", ".syl", "syl.db")} npm run pair\n\n` +
+      `To read what the service is actually using:\n\n` +
+      `  launchctl print gui/$(id -u)/com.jmm.syl | grep SYL_DB_PATH`,
+  );
 }
 
 /** The contract's base path. Duplicated from `index.ts` to keep this leaf. */
@@ -73,6 +109,7 @@ export function issueBriefing(db: SylDatabase, config: SylConfig): PairingBriefi
     expiresAt: issued.expiresAt,
     baseURL: tailnetBaseURL(config.certStatusPath),
     pairedDevices: live,
+    databasePath: resolve(config.databasePath),
   };
 }
 
@@ -93,6 +130,10 @@ export function describePairing(briefing: PairingBriefing): readonly string[] {
   );
 
   lines.push(
+    // Named on every run, not only on failure. It is the one field that can be
+    // quietly wrong, and a value you have seen every time is a value you notice
+    // changing.
+    `  Store          ${briefing.databasePath}`,
     "",
     "  On the phone: open Syl, enter the server URL and the code above.",
     "  The code is good once, for ten minutes, and issuing another one",
@@ -115,6 +156,9 @@ export function describePairing(briefing: PairingBriefing): readonly string[] {
 /** Open the store, issue a code, say what to do with it. */
 export function main(argv: readonly string[] = []): number {
   const config = loadConfig();
+  // Before `openDatabase`, which would otherwise create the wrong store and
+  // then succeed at everything else. See `assertExistingStore`.
+  assertExistingStore(config.databasePath, process.env["HOME"]);
   const db = openDatabase({ path: config.databasePath });
   try {
     const briefing = issueBriefing(db, config);
