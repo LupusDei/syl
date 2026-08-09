@@ -324,6 +324,55 @@ export class Outbox {
     return { delivery, created: true };
   }
 
+  /**
+   * Fold more into a row that is still waiting for its window.
+   *
+   * A batch held by quiet hours is keyed on the instant it will be released,
+   * so every pass inside one night addresses the same row — and the runner
+   * wakes at least every sixty seconds, so a night is many passes. `enqueue`
+   * returns the existing row untouched, which is right for a retry and wrong
+   * for a batch that has grown: the reminders the later passes found would be
+   * marked delivered while being named by no row anybody will ever see.
+   *
+   * The predicate is the whole safety argument. A row that has been claimed,
+   * attempted, or whose release instant has arrived is **not** amendable: its
+   * words may already be on their way to Apple, and quietly changing them
+   * afterwards is the same silent drop by another route. The caller must then
+   * write its own row rather than assume it was covered.
+   *
+   * @returns the amended row, or `null` if it can no longer be amended.
+   */
+  amendHeld(
+    id: string,
+    input: {
+      readonly payload: DeliveryPayload;
+      readonly reminderId: string | null;
+      readonly coalescedReminderIds: readonly string[];
+      readonly scheduledFor: string | null;
+    },
+  ): Delivery | null {
+    const result = this.#db
+      .prepare(
+        `UPDATE deliveries
+            SET payload_json = ?, reminder_id = ?, coalesced_ids = ?, scheduled_for = ?
+          WHERE id = ?
+            AND state = 'pending'
+            AND attempts = 0
+            AND next_attempt_at IS NOT NULL
+            AND next_attempt_at > ?`,
+      )
+      .run(
+        JSON.stringify(input.payload),
+        input.reminderId,
+        JSON.stringify(input.coalescedReminderIds),
+        input.scheduledFor,
+        id,
+        instant(this.#clock()),
+      );
+
+    return Number(result.changes) === 0 ? null : this.get(id);
+  }
+
   /** One row by id, or `null`. */
   get(id: string): Delivery | null {
     const row = this.#db.prepare(`SELECT ${COLUMNS} FROM deliveries WHERE id = ?`).get(id);

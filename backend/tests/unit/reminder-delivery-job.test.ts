@@ -353,6 +353,97 @@ describe("delivery across a run of failures", () => {
   });
 });
 
+describe("a whole night, driven by the runner", () => {
+  let db: SylDatabase;
+  let now: number;
+  let reminders: ReminderService;
+  let outbox: Outbox;
+  let devices: DeviceTokenService;
+  let jobs: JobStore;
+
+  /** 22:00 Chicago on the 8th: the window closes. */
+  const NIGHT_STARTS = Date.UTC(2026, 7, 9, 3, 0, 0, 0);
+  /** 09:00 Chicago on the 9th: an hour after it lifts. */
+  const NEXT_MORNING = Date.UTC(2026, 7, 9, 14, 0, 0, 0);
+
+  beforeEach(() => {
+    db = testDatabase();
+    now = NIGHT_STARTS;
+    const clock = (): number => now;
+    reminders = new ReminderService({ db: db.handle, clock });
+    outbox = new Outbox({
+      db: db.handle,
+      clock,
+      quietHours: { quiet: { start: "22:00", end: "08:00" }, tz: CHICAGO },
+      jitter: () => 0,
+    });
+    devices = new DeviceTokenService({ db: db.handle, clock });
+    jobs = new JobStore({ db: db.handle, clock });
+    devices.register({
+      token: TOKEN,
+      environment: "production",
+      platform: "ios",
+      name: "iPhone",
+      appVersion: "1",
+      osVersion: "26.1",
+    });
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("should turn a night of reminders into one notification at 08:00", async () => {
+    // syl-yvi and syl-2il end to end, through the real runner rather than one
+    // hand-called pass. The runner wakes at least every sixty seconds, so this
+    // is roughly 660 passes — the shape under which the per-pass digest both
+    // burst and dropped, and which nothing in the suite ran.
+    for (const [text, wallTime] of [
+      ["The parcel is out for delivery.", "22:30"],
+      ["Priya replied.", "23:30"],
+      ["Rent cleared.", "01:30"],
+      ["The build went green.", "05:45"],
+    ] as const) {
+      reminders.create({
+        text,
+        wallTime,
+        tz: CHICAGO,
+        date: wallTime === "22:30" || wallTime === "23:30" ? "2026-08-08" : "2026-08-09",
+      });
+    }
+
+    defineReminderDeliveryJob(jobs, new Date(now).toISOString());
+    const apns = scriptedApns();
+    const runner = new JobRunner({
+      store: jobs,
+      handlers: new Map([
+        ["reminder_delivery", createReminderDeliveryHandler({ reminders, outbox, devices, apns })],
+      ]),
+      clock: () => now,
+      timers: { set: () => null, clear: () => undefined },
+      onError: () => undefined,
+    });
+
+    await runner.start();
+    for (; now <= NEXT_MORNING; now += 60_000) await runner.tick();
+
+    // One notification, not four in one second, and not two of them lost.
+    expect(apns.sent).toBe(1);
+    const rows = outbox.list().items;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.payload.body).toContain("Four things came in overnight");
+    expect(rows[0]?.coalescedReminderIds).toHaveLength(4);
+    expect(rows[0]?.state).toBe("delivered");
+
+    // And every reminder the night marked delivered is named by that row.
+    const named = new Set(rows[0]?.coalescedReminderIds ?? []);
+    for (const reminder of reminders.list().items) {
+      expect(reminder.deliveryState).toBe("delivered");
+      expect(named.has(reminder.id)).toBe(true);
+    }
+  });
+});
+
 describe("the delivery runtime", () => {
   let db: SylDatabase;
   let jobs: JobStore;
