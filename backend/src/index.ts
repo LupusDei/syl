@@ -17,6 +17,7 @@ import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/he
 import { ApiKeyService } from "./services/api-key-service.js";
 import { openDatabase, type SylDatabase } from "./services/database.js";
 import { MessageStore } from "./services/message-store.js";
+import { SylSocketServer, WS_PATH } from "./services/ws-server.js";
 
 /**
  * The Syl HTTP service.
@@ -137,23 +138,53 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   return app;
 }
 
+/** A listening service: HTTP and the WebSocket that shares its port. */
+export interface RunningService {
+  readonly server: Server;
+  readonly sockets: SylSocketServer;
+  /** Stop both. */
+  close(): Promise<void>;
+}
+
 /**
  * Start listening.
  *
  * Resolves only once the socket is accepting connections, and rejects instead
  * of hanging if the port is taken — a promise that settles either way is what
  * makes this safe to `await` in a test.
+ *
+ * The WebSocket shares the HTTP server rather than binding a second port. Same
+ * origin, same bearer token, one thing to expose over the tunnel.
  */
-export function startServer(config: SylConfig, deps: AppDependencies): Promise<Server> {
+export async function startServer(
+  config: SylConfig,
+  deps: AppDependencies,
+): Promise<RunningService> {
   const server = createServer(createApp(config, deps));
+  const sockets = new SylSocketServer({
+    server,
+    keys: deps.keys,
+    messages: deps.messages,
+  });
 
-  return new Promise<Server>((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(config.port, config.host, () => {
       server.removeListener("error", reject);
-      resolve(server);
+      resolve();
     });
   });
+
+  return {
+    server,
+    sockets,
+    close: async () => {
+      await sockets.close();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
 }
 
 /**
@@ -171,6 +202,7 @@ export function describeStartup(
 ): readonly string[] {
   const lines = [
     `[syl] v${config.version} listening on http://${config.host}:${config.port}${API_BASE_PATH} (${config.nodeEnv})`,
+    `[syl] websocket on ws://${config.host}:${config.port}${WS_PATH}`,
   ];
 
   if (!config.subscriptionRails) {

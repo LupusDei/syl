@@ -1,5 +1,3 @@
-import type { Server } from "node:http";
-
 import type { ApiError, HealthStatus } from "@syl/shared";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,10 +13,13 @@ import {
   startServer,
   toFailure,
   type AppDependencies,
+  type RunningService,
 } from "../../src/index.js";
 import { ApiFailure } from "../../src/routes/envelope.js";
 import type { SylDatabase } from "../../src/services/database.js";
+import { WS_PATH } from "../../src/services/ws-server.js";
 import { startTestApp, wrap, type RunningApp } from "../helpers/http.js";
+import { TestClient } from "../helpers/ws.js";
 import { testConfig, testDatabase, testDeps } from "../helpers/service.js";
 
 const config: SylConfig = testConfig();
@@ -30,7 +31,7 @@ interface Envelope<T = unknown> {
   readonly error?: ApiError;
 }
 
-const started: Server[] = [];
+const started: RunningService[] = [];
 let running: RunningApp | undefined;
 let db: SylDatabase | undefined;
 
@@ -46,14 +47,7 @@ afterEach(async () => {
   running = undefined;
   db?.close();
   db = undefined;
-  await Promise.all(
-    started.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        }),
-    ),
-  );
+  await Promise.all(started.splice(0).map((service) => service.close()));
 });
 
 async function serve(overrides: Partial<SylConfig> = {}): Promise<RunningApp> {
@@ -303,10 +297,11 @@ describe("describeStartup", () => {
   it("should announce version, address and environment on a clean start", () => {
     const lines = describeStartup({ ...config, port: 4201, version: "1.2.3" });
 
-    expect(lines).toHaveLength(1);
+    expect(lines).toHaveLength(2);
     expect(lines[0]).toContain("v1.2.3");
     expect(lines[0]).toContain("http://127.0.0.1:4201");
     expect(lines[0]).toContain("test");
+    expect(lines[1]).toContain("ws://127.0.0.1:4201/api/v1/ws");
   });
 
   it("should warn loudly when a metered key is in the environment", () => {
@@ -316,9 +311,9 @@ describe("describeStartup", () => {
       subscriptionRails: false,
     });
 
-    expect(lines).toHaveLength(2);
-    expect(lines[1]).toContain("WARNING");
-    expect(lines[1]).toContain("ANTHROPIC_API_KEY");
+    expect(lines).toHaveLength(3);
+    expect(lines.join("\n")).toContain("WARNING");
+    expect(lines.join("\n")).toContain("ANTHROPIC_API_KEY");
   });
 
   it("should never print a credential value, only the variable's name", () => {
@@ -368,19 +363,19 @@ describe("bootstrap", () => {
 
 describe("startServer", () => {
   it("should resolve only once the socket is accepting connections", async () => {
-    const server = await startServer(config, deps());
-    started.push(server);
+    const service = await startServer(config, deps());
+    started.push(service);
 
-    const response = await fetch(`${wrap(server).baseUrl}${API_BASE_PATH}/health`);
+    const response = await fetch(`${wrap(service.server).baseUrl}${API_BASE_PATH}/health`);
 
     expect(response.status).toBe(200);
   });
 
   it("should listen on the configured host and port", async () => {
-    const server = await startServer(config, deps());
-    started.push(server);
+    const service = await startServer(config, deps());
+    started.push(service);
 
-    const address = server.address();
+    const address = service.server.address();
 
     expect(address).not.toBeNull();
     expect(typeof address).toBe("object");
@@ -390,8 +385,22 @@ describe("startServer", () => {
   it("should reject rather than hang when the port is already taken", async () => {
     const first = await startServer(config, deps());
     started.push(first);
-    const taken = (first.address() as { port: number }).port;
+    const taken = (first.server.address() as { port: number }).port;
 
     await expect(startServer({ ...config, port: taken }, deps())).rejects.toThrow(/EADDRINUSE/);
+  });
+
+  it("should put the websocket on the same port as the API", async () => {
+    // Same origin, same bearer token, one thing to expose over the tunnel.
+    const service = await startServer(config, deps());
+    started.push(service);
+    const port = (service.server.address() as { port: number }).port;
+
+    const client = await TestClient.connect(`ws://127.0.0.1:${port}${WS_PATH}`);
+    try {
+      expect((await client.next()).type).toBe("auth_challenge");
+    } finally {
+      client.close();
+    }
   });
 });
