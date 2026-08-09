@@ -13,7 +13,7 @@
     "defect, had to be rewritten rather than deleted, and made a green suite",
     "claim the story worked.",
     "",
-    "HOW THE GATE USES THIS FILE — strict in BOTH directions:",
+    "HOW THE GATE USES THIS FILE \u2014 strict in BOTH directions:",
     "  - a failure NOT listed here breaks the build. The ordinary gate, kept.",
     "  - a test listed here that PASSES breaks the build too, demanding that it",
     "    be promoted out of this file. Without that half the list rots: entries",
@@ -27,7 +27,7 @@
     "",
     "Deliberately NOT using vitest's `it.fails`. It reports a green tick under",
     "the correct-behaviour name, which reads as 'that feature works' to anyone",
-    "scanning CI — and it passes when the test fails for ANY reason, including",
+    "scanning CI \u2014 and it passes when the test fails for ANY reason, including",
     "a typo or a bad import. That is the meaningless-green problem it was",
     "supposed to solve, wearing a different hat."
   ],
