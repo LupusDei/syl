@@ -87,7 +87,14 @@ export function parsePmset(output: string): readonly PowerSettings[] {
  * `pmset -g` gives on a desktop.
  */
 export function acPower(sections: readonly PowerSettings[]): PowerSettings | null {
-  return sections.find((section) => /^AC Power$/i.test(section.source)) ?? sections[0] ?? null;
+  const ac = sections.find((section) => /^AC Power$/i.test(section.source));
+  if (ac !== undefined) return ac;
+  // The first section *with settings in it*, not simply the first. `pmset -g`
+  // opens with two flush-left lines — "System-wide power settings:" and
+  // "Currently in use:" — and only the second has anything under it. Taking
+  // `sections[0]` there reported "pmset did not tell us about sleep" on a
+  // machine that had just said `sleep 15`.
+  return sections.find((section) => Object.keys(section.values).length > 0) ?? null;
 }
 
 /** Everything wrong with the machine's power configuration, in an operator's words. */

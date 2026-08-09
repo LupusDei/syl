@@ -27,7 +27,9 @@
     "mock": "tsx shared/src/cli/mock.ts",
     "contract:generate": "tsx shared/src/cli/generate.ts",
     "ping": "tsx backend/src/harness/cli/ping.ts",
-    "when": "tsx backend/src/harness/cli/when.ts"
+    "when": "tsx backend/src/harness/cli/when.ts",
+    "logs": "tsx backend/src/ops/cli/logs.ts",
+    "launchd": "tsx backend/src/ops/cli/launchd.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineReminderDeliveryJob } from "../../src/jobs/reminder-delivery-job.js";
 import { runTurn } from "../../src/harness/session.js";
+import { sylLaunchdJobs } from "../../src/ops/launchd.js";
 import { DEFAULT_LEASE_MS, JobRunner, type Timers } from "../../src/services/job-runner.js";
 import { makeFakeClaude, type FakeClaude } from "../helpers/fake-claude.js";
 import { BACKEND_SRC, sourceFiles } from "../helpers/sql-tables.js";
@@ -21,14 +22,17 @@ import { expectData, startLiveService } from "../helpers/live-service.js";
  *
  * Four acceptance criteria, and they divide cleanly. Two are properties of the
  * code and hold: state is durable across a real process-level restart, and a
- * turn that hangs is killed rather than blocking forever. Two are properties of
- * the *deployment* and do not exist yet: nothing supervises the service and
- * nothing watches for a wedged one.
+ * turn that hangs is killed rather than blocking forever. The other two were
+ * properties of the *deployment* and did not exist: nothing supervised the
+ * service and nothing watched for a wedged one. `syl-007.2.1` landed both, so
+ * the cases below assert their presence and — more usefully — that they are
+ * genuinely two different mechanisms rather than one with two names.
  *
  * The third criterion — "jobs in flight at shutdown are recovered on start
- * rather than lost or double-run" — half holds, and the half that does not is
- * `syl-iwb`. Recovery works. Releasing the lease on the way down does not,
- * because nothing runs on the way down.
+ * rather than lost or double-run" — was half true, and the missing half was
+ * `syl-iwb`: recovery worked, releasing the lease on the way down did not,
+ * because nothing ran on the way down. `syl-007.2.3` is the other half:
+ * `SIGTERM` is trapped and `JobRunner.drain()` waits for the pass in flight.
  */
 
 const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
@@ -321,25 +325,47 @@ describe("US5 — she survives a restart", () => {
 
   describe("supervision and the watchdog", () => {
     /**
-     * `syl-007.2.1` — neither exists yet.
+     * `syl-007.2.1` — both now exist, and this used to assert they did not.
      *
-     * "The service is supervised and restarts on failure" and "a watchdog
-     * notices a wedged process, not merely a dead one" are the two criteria
-     * that cannot be satisfied by code in this repository alone, and there is
-     * no artefact here that would satisfy them on the Mac either: no launchd
-     * plist, no keep-alive configuration, nothing that probes `/health` and
-     * acts on the answer.
+     * The previous version of this case asserted that the repository shipped no
+     * launchd plist and no supervision configuration, deliberately, so that
+     * landing one would turn it red and force somebody to delete the sentence
+     * saying it was missing. This is that deletion.
      *
-     * Recorded as a test rather than a note so that landing one turns this red
-     * and makes somebody delete the sentence that says it is missing.
+     * What replaces it is the same shape of claim in the other direction: both
+     * halves are present, and they are *different* halves. `KeepAlive` restarts
+     * a process that has died; only the watchdog notices one that is wedged.
+     * Shipping one and calling the criterion met is the failure this guards.
      */
-    it("should ship no launchd plist or supervision configuration", () => {
-      const supervision = trackedFiles().filter((file) => {
-        const name = file.toLowerCase();
-        return name.endsWith(".plist") || name.includes("launchd") || name.includes("watchdog");
+    it("should ship both a supervised service and a separate wedge detector", () => {
+      const tracked = trackedFiles();
+
+      // Rendered from code rather than checked in: every path in a Syl plist is
+      // absolute and machine-specific.
+      expect(tracked).toContain("backend/src/ops/launchd.ts");
+      expect(tracked).toContain("scripts/syl-watchdog.sh");
+      expect(tracked).toContain("scripts/syl-service.sh");
+    });
+
+    it("should keep the service alive and the watchdog on a timer, which are not the same thing", () => {
+      const jobs = sylLaunchdJobs({
+        repoRoot: "/repo",
+        home: "/home",
+        logDirectory: "/logs",
+        nodeBin: "/usr/bin/node",
+        databasePath: "/db/syl.db",
+        port: 4201,
       });
 
-      expect(supervision).toEqual([]);
+      const core = jobs.find((job) => job.label === "com.jmm.syl.core");
+      const watchdog = jobs.find((job) => job.label === "com.jmm.syl.watchdog");
+
+      // The core job restarts a DEAD process...
+      expect(core?.plist["KeepAlive"]).toBe(true);
+      // ...and nothing in launchd would ever notice a WEDGED one, which is why
+      // the second job exists and runs on an interval instead.
+      expect(watchdog?.plist["StartInterval"]).toBe(60);
+      expect(watchdog?.plist["KeepAlive"]).toBeUndefined();
     });
 
     it("should expose the health endpoint a watchdog would need, at least", async () => {
