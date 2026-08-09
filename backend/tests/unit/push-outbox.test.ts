@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  MAX_COALESCED_IDS_IN_PAYLOAD,
   apnsIdFor,
   notificationFor,
   pushDueDeliveries,
@@ -117,6 +118,46 @@ describe("notificationFor", () => {
       deliveryId: "syl:delivery:0198f2c6-0001-7000-8000-000000010002",
       coalescedReminderIds: ["syl:reminder:one", "syl:reminder:two"],
     });
+  });
+
+  it("should bound the ids it carries, because an oversized body is refused permanently", () => {
+    // Apple answers `PayloadTooLarge`, which is one of the few dispositions
+    // that consumes the row — so an unbounded list here would be a path from
+    // "a very busy night" to "the reminder is dropped".
+    const many = Array.from(
+      { length: MAX_COALESCED_IDS_IN_PAYLOAD + 20 },
+      (_, index) => `syl:reminder:${String(index)}`,
+    );
+    const notification = notificationFor(
+      {
+        id: "syl:delivery:0198f2c6-0001-7000-8000-000000010003",
+        channel: "apns",
+        messageClass: "reminder_delivery",
+        reminderId: null,
+        payload: { title: "Syl", body: "A great many things came in overnight." },
+        idempotencyKey: "big-batch",
+        state: "pending",
+        attempts: 0,
+        nextAttemptAt: null,
+        deliveredAt: null,
+        ackedAt: null,
+        engagement: null,
+        late: true,
+        scheduledFor: null,
+        coalescedReminderIds: many,
+        apnsUniqueId: null,
+        lastError: null,
+        createdAt: "2026-08-09T21:00:00.000Z",
+      },
+      IPHONE,
+      "production",
+    );
+
+    const carried = (notification.data as { coalescedReminderIds: string[] })
+      .coalescedReminderIds;
+    expect(carried).toHaveLength(MAX_COALESCED_IDS_IN_PAYLOAD);
+    // Comfortably inside Apple's 4 KB ceiling, with the alert still to come.
+    expect(JSON.stringify(notification.data).length).toBeLessThan(3_000);
   });
 });
 
@@ -294,6 +335,29 @@ describe("pushDueDeliveries", () => {
 
     expect(apns.sent).toHaveLength(1);
     expect(result.blocked).toHaveLength(3);
+  });
+
+  it("should not blame APNs credentials for a row that was never going over APNs", async () => {
+    // The pass-wide "Apple refused the provider" short-circuit must not reach a
+    // row on another channel: `lastError` is what the admin surface shows, and
+    // an APNs 403 on a websocket row sends whoever reads it somewhere useless.
+    const apnsRow = enqueue();
+    const { delivery: other } = outbox.enqueue({
+      channel: "websocket",
+      messageClass: "reminder_delivery",
+      payload: { title: "Syl", body: "x" },
+      idempotencyKey: "ws-row",
+    });
+    register(IPHONE);
+    const apns = scriptedApns([
+      { ok: false, status: 403, reason: "InvalidProviderToken", disposition: "blocked" },
+    ]);
+
+    await pushDueDeliveries({ outbox, devices, apns });
+
+    expect(outbox.get(apnsRow)?.lastError).toContain("InvalidProviderToken");
+    expect(outbox.get(other.id)?.lastError).toContain("websocket");
+    expect(outbox.get(other.id)?.lastError).not.toContain("InvalidProviderToken");
   });
 
   it("should keep the row when the last device was just unregistered", async () => {

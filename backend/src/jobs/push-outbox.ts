@@ -23,6 +23,23 @@ export interface ApnsSender {
   send(notification: ApnsNotification): Promise<ApnsResult>;
 }
 
+/**
+ * How many reminder ids a digest carries in its payload.
+ *
+ * Apple refuses a notification body over 4 KB, and answers `PayloadTooLarge` —
+ * which is `permanent`, because a notification we built wrong will not be
+ * accepted by building it again. That is the one disposition that consumes the
+ * row, so an unbounded list here would be a path from "a very busy night" to
+ * "the reminder is dropped": exactly the failure `syl-clc` was about, reached
+ * from the other end.
+ *
+ * Thirty-two ids is roughly 1.5 KB, comfortably inside the limit and far past
+ * any night the Commander will actually have. The row is the authority on what
+ * a digest stands for and the app reads it on foreground; the notification only
+ * needs enough to act on in the moment.
+ */
+export const MAX_COALESCED_IDS_IN_PAYLOAD = 32;
+
 export interface PushOutboxDeps {
   readonly outbox: Outbox;
   readonly devices: DeviceTokenService;
@@ -91,13 +108,7 @@ export async function pushDueDeliveries(
   let refusedProvider: string | null = null;
 
   for (const delivery of outbox.due(now)) {
-    if (refusedProvider !== null) {
-      outbox.deferBlocked(delivery.id, refusedProvider);
-      blocked.push(delivery.id);
-      continue;
-    }
-
-    // The three branches below are *blocked*, not failed: nothing was sent and
+    // The branches below are *blocked*, not failed: nothing was sent and
     // nothing refused us. `deferBlocked` holds the row without spending its
     // attempt budget and without leaving the loop spinning every thirty
     // seconds until the environment changes.
@@ -106,6 +117,16 @@ export async function pushDueDeliveries(
       // broken notification, and the row must survive until the build that
       // does know arrives.
       outbox.deferBlocked(delivery.id, `This build cannot deliver over "${delivery.channel}".`);
+      blocked.push(delivery.id);
+      continue;
+    }
+
+    // Checked after the channel, not before it: an APNs credential Apple
+    // refused says nothing about a row that was never going over APNs, and
+    // labelling one with the other's error would be a misleading `lastError` on
+    // the admin surface.
+    if (refusedProvider !== null) {
+      outbox.deferBlocked(delivery.id, refusedProvider);
       blocked.push(delivery.id);
       continue;
     }
@@ -224,9 +245,17 @@ export function notificationFor(
       // notification actions with nothing to name — and this is the field a
       // snooze-all would act on. It matches the set the ack path already
       // closes, so the two can never disagree about what the digest covered.
+      //
+      // Bounded: see `MAX_COALESCED_IDS_IN_PAYLOAD`. Apple refusing an
+      // oversized body is one of the few answers that consumes the row.
       ...(delivery.coalescedReminderIds.length === 0
         ? {}
-        : { coalescedReminderIds: delivery.coalescedReminderIds }),
+        : {
+            coalescedReminderIds: delivery.coalescedReminderIds.slice(
+              0,
+              MAX_COALESCED_IDS_IN_PAYLOAD,
+            ),
+          }),
     },
     // Our own id, so a retry is recognisably the same notification to Apple
     // rather than a second one.
