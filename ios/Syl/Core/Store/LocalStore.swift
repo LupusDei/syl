@@ -286,13 +286,19 @@ struct LocalStore: Sendable {
         }
     }
 
-    /// Writes the frame-stream sequence, and only that. See `setCursor`.
-    func setLastFrameSeq(_ seq: Int) throws {
+    /// Writes the frame-stream sequence **and the server run it belongs to**, and only
+    /// those two. See `setCursor` for why it is a targeted UPDATE.
+    ///
+    /// One statement, deliberately. A sequence and the run that issued it are a single
+    /// fact (`syl-47j`); written separately there is a window in which the row claims
+    /// a position in a stream it does not name, and a crash inside that window
+    /// restores exactly the state this column exists to prevent.
+    func setLastFrameSeq(_ seq: Int, serverEpoch: String?) throws {
         try database.queue.write { db in
             try SyncStateRecord().insert(db, onConflict: .ignore)
             try db.execute(
-                sql: "UPDATE syncState SET lastFrameSeq = ? WHERE id = ?",
-                arguments: [seq, SyncStateRecord.singletonID]
+                sql: "UPDATE syncState SET lastFrameSeq = ?, serverEpoch = ? WHERE id = ?",
+                arguments: [seq, serverEpoch, SyncStateRecord.singletonID]
             )
         }
     }

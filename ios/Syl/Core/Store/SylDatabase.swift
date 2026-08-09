@@ -173,6 +173,18 @@ struct SylDatabase: Sendable {
             }
         }
 
+        // `syl-47j`. A frame sequence only means anything inside one run of the
+        // server; restored on the next launch without the run it came from, it is a
+        // position in a stream that no longer exists, and the app goes deaf holding
+        // it. Nullable and separately migrated because a device upgrading into this
+        // has a mark whose run genuinely is unknown, and saying so is what lets the
+        // socket take the safe branch once.
+        migrator.registerMigration("v2-frame-sequence-knows-its-server-run") { db in
+            try db.alter(table: "syncState") { table in
+                table.add(column: "serverEpoch", .text)
+            }
+        }
+
         return migrator
     }
 }

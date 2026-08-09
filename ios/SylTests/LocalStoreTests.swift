@@ -188,7 +188,7 @@ final class LocalStoreTests: XCTestCase {
         // one to the other makes the client either replay everything or silently
         // believe it is caught up.
         try store.setCursor("eyJhdCI6IjIwMjYtMDgtMDlUMDc6MDA6MDMuMTE0WiJ9")
-        try store.setLastFrameSeq(4488)
+        try store.setLastFrameSeq(4488, serverEpoch: nil)
 
         let state = try store.syncState()
 
@@ -201,6 +201,43 @@ final class LocalStoreTests: XCTestCase {
 
         XCTAssertNil(state.cursor)
         XCTAssertEqual(state.lastFrameSeq, 0)
+        XCTAssertNil(state.serverEpoch)
+    }
+
+    func testShouldStoreTheServerRunTheFrameSequenceCameFrom() throws {
+        // `syl-47j`. A frame sequence is only meaningful inside one run of the
+        // server, and this is the only number in the app that outlives a launch. Kept
+        // without the run it belongs to, it is restored on the next launch and
+        // compared against a stream that never issued it.
+        try store.setLastFrameSeq(4488, serverEpoch: "boot-a")
+
+        let state = try store.syncState()
+
+        XCTAssertEqual(state.lastFrameSeq, 4488)
+        XCTAssertEqual(state.serverEpoch, "boot-a")
+    }
+
+    func testShouldWriteTheSequenceAndItsRunInOneGoSoTheyCannotDisagree() throws {
+        // Two writes would leave a window in which the mark belongs to a run the row
+        // does not name — which is precisely the state this field exists to prevent.
+        try store.setLastFrameSeq(4488, serverEpoch: "boot-a")
+        try store.setLastFrameSeq(3, serverEpoch: "boot-b")
+
+        let state = try store.syncState()
+
+        XCTAssertEqual(state.lastFrameSeq, 3, "the mark goes backwards across a restart")
+        XCTAssertEqual(state.serverEpoch, "boot-b")
+    }
+
+    func testShouldLeaveTheCursorAloneWhenWritingTheFrameSequence() throws {
+        // The sync engine writes the cursor from its own actor while the socket pump
+        // writes the frame position. A read-then-write-the-whole-row would roll one
+        // of them back.
+        try store.setCursor("eyJhdCI6IjIwMjYtMDgtMDlUMDc6MDA6MDMuMTE0WiJ9")
+
+        try store.setLastFrameSeq(12, serverEpoch: "boot-a")
+
+        XCTAssertEqual(try store.syncState().cursor, "eyJhdCI6IjIwMjYtMDgtMDlUMDc6MDA6MDMuMTE0WiJ9")
     }
 
     // MARK: - Deletes
