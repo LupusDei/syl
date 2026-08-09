@@ -271,7 +271,7 @@ The three jobs and why there are three:
 bash scripts/syl-verify.sh status
 ```
 
-prints PASS for every check, including `http://127.0.0.1:4220/api/v1/health
+prints PASS for every check, including `http://127.0.0.1:8888/api/v1/health
 answers`.
 
 Then read the startup line:

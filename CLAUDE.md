@@ -109,11 +109,20 @@ to add is about *additional* surfaces and blocks nothing.
 - **Two different backends, two different ports, and confusing them has already
   cost a real failure.** `.mcp.json` points at **4201** — that is *Adjutant's*
   backend, the MCP server Syl's agents use for messaging. **Syl's own service
-  runs on 4220.** The line here used to say only "backend runs on 4201", which
+  runs on 8888.** The line here used to say only "backend runs on 4201", which
   predated Syl having a backend at all; an agent read it as Syl's port, and Syl
   would have failed to bind on every boot forever with Adjutant already holding
-  4201. Ports in use around here: Adjutant 4200/4201, contract mock 4210, Syl
-  admin dev 4211, **Syl service 4220**.
+  4201 — and worse, a by-hand run bound `*:4201` *alongside* Adjutant's
+  `127.0.0.1:4201`, which do not collide but coexist, so MCP calls landed on a
+  server with no `/mcp` route and took Adjutant's connection down. A collision
+  that fails loudly costs a boot; one that half-succeeds takes out the
+  neighbour.
+  **Never start the Syl service by hand without an explicit port.** The
+  integration tests are safe — they bind a random high port — which is also why
+  no test could ever have caught this.
+  Ports around here: Adjutant 4200/4201, contract mock 4210, Syl admin dev 4211,
+  and **Syl's service on 8888**, deliberately outside the 42xx block rather than
+  merely free within it.
 - The shell has `noclobber` set — a plain `>` fails if the file exists. Use `>|`.
 - `--verbose` is mandatory alongside `--output-format stream-json` in `-p` mode.
 - Headless sessions are pre-authorised (`--permission-mode bypassPermissions`)

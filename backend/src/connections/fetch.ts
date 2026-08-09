@@ -176,7 +176,7 @@ function parseUrl(raw: string, isAllowed: (address: string) => boolean): URL {
 
   // A literal IP host NEVER reaches the guarded `lookup`: Node connects
   // directly when the host is already an address, so the hook that exists to
-  // vet the destination is simply not called. `http://100.100.42.7:4220/`
+  // vet the destination is simply not called. `http://100.100.42.7:8888/`
   // would sail straight through. Checking here is what closes that.
   const literal = literalAddress(url);
   if (literal !== null && !isAllowed(literal)) {

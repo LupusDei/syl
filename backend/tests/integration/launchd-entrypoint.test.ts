@@ -78,7 +78,18 @@ function scratch(): string {
 async function start(env: Readonly<Record<string, string>> = {}): Promise<Started> {
   const directory = scratch();
   const logDirectory = join(directory, "logs");
-  const port = 43_000 + Math.floor(Math.random() * 15_000);
+  // 43000-49000, and the ceiling matters: macOS hands out EPHEMERAL ports from
+  // 49152 upward (`sysctl net.inet.ip.portrange.first`). This was
+  // `43_000 + random * 15_000`, topping out at 58000 — so well over half its
+  // range sat inside the pool the OS assigns to every outbound connection on
+  // the machine, including the ones this very suite makes. It failed exactly
+  // that way, with `EADDRINUSE 127.0.0.1:50622` on an unrelated run.
+  //
+  // Staying strictly below 49152 means the only thing that can hold this port
+  // is something that deliberately bound it. Binding port 0 would be stronger
+  // still, but the port has to be known before the subprocess is spawned,
+  // because it is passed in through the environment.
+  const port = 43_000 + Math.floor(Math.random() * 6_000);
 
   const child = spawn("/bin/bash", [script], {
     cwd: directory,

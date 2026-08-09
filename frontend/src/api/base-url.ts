@@ -2,7 +2,7 @@
  * Where the admin sends its requests.
  *
  * The default is the relative path `/api/v1`, which the dev server proxies to
- * the backend on 4220 (see `vite.config.ts`). Relative by default means the
+ * the backend on 8888 (see `vite.config.ts`). Relative by default means the
  * browser stays same-origin, so there is no CORS configuration to get wrong
  * and the same build works behind any reverse proxy. Point it somewhere else
  * with `VITE_API_BASE_URL`.

@@ -52,13 +52,24 @@ export const DEFAULT_HOST = "127.0.0.1";
  * Not a degraded assistant: an assistant that never starts, and therefore every
  * delivery guarantee in the system silently void.
  *
- * Found by running the launchd entrypoint on the target machine rather than in
- * a test with an ephemeral port, which is the only place it could have shown up.
+ * The damage was not hypothetical and not limited to Syl. Running the service
+ * by hand on 4201 bound `*:4201` **alongside** Adjutant's `127.0.0.1:4201` —
+ * the two do not collide, they coexist, and MCP calls then land on whichever
+ * socket the kernel picks. Syl serves no `/mcp` route, so Adjutant's MCP
+ * connection simply died. A port collision that fails loudly costs a boot; one
+ * that half-succeeds takes down the neighbour, which is the worse outcome and
+ * the one that actually happened.
  *
- * Neighbours to stay clear of: Adjutant 4200/4201, the contract mock 4210, the
- * Syl admin dev server 4211.
+ * Found by running the launchd entrypoint on the target machine rather than in
+ * a test. Nothing in the suite could have caught it: the integration tests bind
+ * a random high port, correctly, and are therefore blind to it by construction.
+ *
+ * 8888 is deliberately outside the 42xx block entirely, chosen by the Commander
+ * after the above. Everything else here lives in that block — Adjutant 4200 and
+ * 4201, the contract mock 4210, the Syl admin dev server 4211 — so picking a
+ * free number *inside* it only buys the next collision. Distance is the point.
  */
-export const DEFAULT_PORT = 4220;
+export const DEFAULT_PORT = 8888;
 
 /**
  * The operational store, under the repo's own dot-directory.

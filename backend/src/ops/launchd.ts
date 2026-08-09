@@ -29,7 +29,7 @@ import { join } from "node:path";
  * ## Two jobs, not one
  *
  * `KeepAlive` restarts a process that has **died**. Nothing in launchd notices
- * one that is **wedged** — still running, still holding port 4220, answering
+ * one that is **wedged** — still running, still holding port 8888, answering
  * nothing. That is the 3am failure, and it is why `com.jmm.syl.watchdog` exists
  * on a `StartInterval` and probes health over the loopback like a client would.
  */

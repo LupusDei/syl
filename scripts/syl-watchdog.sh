@@ -28,7 +28,7 @@
 
 set -uo pipefail
 
-PORT="${SYL_PORT:-4220}"
+PORT="${SYL_PORT:-8888}"
 LABEL="${SYL_CORE_LABEL:-com.jmm.syl.core}"
 LOG_DIR="${SYL_LOG_DIR:-$HOME/Library/Logs/Syl}"
 STATE_FILE="${SYL_WATCHDOG_STATE:-$LOG_DIR/watchdog.state}"

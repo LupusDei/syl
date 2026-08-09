@@ -96,7 +96,7 @@ describe("loadConfig", () => {
       expect(config.nodeEnv).toBe("production");
     });
 
-    it("should default the port to 4220, which is Syl's own and not Adjutant's", () => {
+    it("should default the port to 8888, which is Syl's own and not Adjutant's", () => {
       // This asserted 4201 and named `.mcp.json` as the reason. Both were
       // wrong: that file configures the ADJUTANT MCP server Syl's agents talk
       // to, and Adjutant's backend holds 4201 on this machine. Installed as a
@@ -105,7 +105,7 @@ describe("loadConfig", () => {
       // The test name carried the misconception, which is why it survived — it read
       // as a documented decision rather than a mistake. Asserting the number
       // alone would have been safer than asserting a wrong reason for it.
-      expect(loadConfig({}).port).toBe(4220);
+      expect(loadConfig({}).port).toBe(8888);
       expect(loadConfig({}).port).not.toBe(4201);
     });
 
