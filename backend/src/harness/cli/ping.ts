@@ -14,7 +14,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { autoMemoryAt } from "../../memory/auto-memory.js";
+import { withMemoryIndex } from "../../memory/index-guarantee.js";
 import { SylAgent, fileSessionStore } from "../agent.js";
+import { runTurn } from "../session.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 // backend/src/harness/cli -> repo root. SOUL.md, .mcp.json and .syl/ live at
@@ -40,6 +42,19 @@ async function main(): Promise<void> {
     // One directory, shared by every lane. `--session-id` partitions the
     // transcripts; nothing should partition what Syl knows.
     autoMemory: autoMemoryAt(join(root, ".syl", "memory")),
+    // The index is Syl's job, not the model's (`syl-03d`). Printed rather than
+    // silent, because the whole bug was that nothing said anything.
+    runner: withMemoryIndex(runTurn, {
+      onRebuild: (index) => {
+        if (index.indexed.length > 0 || index.dropped.length > 0) {
+          console.log(
+            `  [index] ${index.indexed.length} unfiled memor${index.indexed.length === 1 ? "y" : "ies"} indexed` +
+              `${index.dropped.length > 0 ? `, ${index.dropped.length} over budget` : ""}` +
+              `${index.changed ? "" : " (already current)"}`,
+          );
+        }
+      },
+    }),
     ...(soul ? { soul } : {}),
     turnOptions: {
       model: "claude-haiku-4-5",
