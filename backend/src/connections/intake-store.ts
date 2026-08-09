@@ -84,6 +84,30 @@ CREATE TABLE intake_extracts (
   created_at      TEXT    NOT NULL,
   UNIQUE (source_id, chunk_index)
 ) STRICT;
+
+-- Which intake emails have already been handled.
+--
+-- The key has to be ours. Marking a message read or labelling it in Gmail
+-- would need the gmail.modify scope, which also grants send, and Syl is
+-- never getting the ability to send as him for the sake of a checkbox. So the
+-- provider's message id is recorded here instead, and a mail that arrives
+-- twice through a re-poll is one submission.
+CREATE TABLE intake_mail (
+  message_id   TEXT    NOT NULL PRIMARY KEY,
+  received_at  TEXT    NOT NULL,
+  sender       TEXT    NOT NULL,
+  subject      TEXT,
+  disposition  TEXT    NOT NULL,
+  link_count   INTEGER NOT NULL,
+  processed_at TEXT    NOT NULL
+) STRICT;
+
+-- Where the incremental mail sync got to. One row per watched address.
+CREATE TABLE intake_mail_cursor (
+  address    TEXT NOT NULL PRIMARY KEY,
+  history_id TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+) STRICT;
 `;
 
 /**
