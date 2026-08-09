@@ -371,6 +371,19 @@ code,
   font-weight: 400;
 }
 
+.detail__note {
+  margin: 0 0 var(--syl-space-3);
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+}
+
+/* Message text is prose and wraps; every other cell in these tables is a
+   value that must not. */
+.cell--wrap {
+  white-space: pre-wrap;
+  min-width: 24rem;
+}
+
 /* ---------------------------------------------------------------- status */
 
 .status {

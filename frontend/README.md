@@ -61,6 +61,8 @@ src/ui/Badge.tsx           a state chip, coloured by token reference
 src/ui/feedback.tsx        Loading / Empty / ErrorNotice
 src/features/jobs/         the job and run viewer (syl-004.2.1)
 src/features/delivery/     the outbox viewer (syl-004.2.2)
+src/features/conversations/  lanes and transcripts (syl-004.2.3)
+src/features/devices/      registered push targets (syl-004.2.3)
 tests/helpers/fixtures.ts  the shared fixtures, read off disk
 tests/unit/**              vitest
 ```
@@ -133,6 +135,17 @@ So `state: delivered` is coloured as a *warning*, the standing column says
 `unconfirmed` and for how long, the banner leads with the unconfirmed count,
 and the default filter is `unacknowledged` — stated in words above the table,
 so an empty table is never mistaken for an empty outbox.
+
+## Known gaps in the contract, reported not patched
+
+- **There is no server-side message search.**
+  `GET /conversations/{id}/messages` takes a cursor, a limit and a direction.
+  The conversation viewer therefore filters the page it has loaded, and says
+  so above the table — a search box that silently covered only the last
+  hundred messages would be worse than none.
+- **There is no "all runs" endpoint.** Runs are reachable only per job
+  (`GET /jobs/{id}/runs`), so "everything that ran overnight, across jobs" is
+  a job-by-job walk rather than one query.
 
 ## Auth
 

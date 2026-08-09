@@ -3,7 +3,9 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { ApiKeyGate } from "../auth/ApiKeyGate";
 import { AuthProvider, useAuth } from "../auth/AuthProvider";
+import { ConversationsView } from "../features/conversations/ConversationsView";
 import { DeliveryView } from "../features/delivery/DeliveryView";
+import { DevicesView } from "../features/devices/DevicesView";
 import { JobsView } from "../features/jobs/JobsView";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import type { StorageLike } from "../storage";
@@ -20,6 +22,8 @@ import { NotFoundView, OverviewView, PlaceholderView } from "./views";
 const VIEWS: Readonly<Record<string, ReactElement>> = {
   "/jobs": <JobsView />,
   "/delivery": <DeliveryView />,
+  "/conversations": <ConversationsView />,
+  "/devices": <DevicesView />,
 };
 
 /**
@@ -28,6 +32,7 @@ const VIEWS: Readonly<Record<string, ReactElement>> = {
  */
 const DETAIL_ROUTES: readonly { readonly path: string; readonly element: ReactElement }[] = [
   { path: "/jobs/:jobId", element: <JobsView /> },
+  { path: "/conversations/:conversationId", element: <ConversationsView /> },
 ];
 
 /** The route table. Generated from `NAV_ITEMS` plus the detail routes above. */

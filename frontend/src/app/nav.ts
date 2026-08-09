@@ -43,15 +43,15 @@ export const NAV_ITEMS: readonly NavItem[] = [
   {
     path: "/conversations",
     label: "Conversations",
-    summary: "Turn-by-turn transcripts per lane, with the session id behind each one.",
+    summary: "Transcripts per lane — the Commander's thread and each background run, kept apart.",
     bead: "syl-004.2.3",
-    status: "planned",
+    status: "ready",
   },
   {
     path: "/devices",
     label: "Devices",
-    summary: "Registered push targets and when each last acknowledged anything.",
+    summary: "Registered push targets, their APNs environment, and when each was last seen.",
     bead: "syl-004.2.3",
-    status: "planned",
+    status: "ready",
   },
 ];
