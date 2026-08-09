@@ -532,7 +532,11 @@ export class IntakeStore {
       createdAt: instant(this.#clock()),
     };
 
-    this.#db
+    // `RETURNING id` rather than trusting the id we minted: on conflict the
+    // existing row keeps its own, and handing the caller an id that is not in
+    // the table is the kind of thing that is only discovered by a dangling
+    // reference much later.
+    const row = this.#db
       .prepare(
         `INSERT INTO intake_extracts
            (id, source_id, chunk_index, start_off, end_off, origin, retention_class, body, created_at)
@@ -542,9 +546,10 @@ export class IntakeStore {
            end_off = excluded.end_off,
            retention_class = excluded.retention_class,
            body = excluded.body,
-           created_at = excluded.created_at`,
+           created_at = excluded.created_at
+         RETURNING id`,
       )
-      .run(
+      .get(
         stored.id,
         stored.sourceId,
         stored.chunkIndex,
@@ -556,7 +561,8 @@ export class IntakeStore {
         stored.createdAt,
       );
 
-    return stored;
+    // Safe assertion: one TEXT NOT NULL column, named in the RETURNING clause.
+    return { ...stored, id: (row as unknown as { id: string }).id };
   }
 
   /** A source's extracts, in chunk order. */
@@ -610,9 +616,12 @@ export class IntakeStore {
    * year is covered by the same call as long as it references the source.
    */
   purge(sourceId: string): { readonly chunks: number; readonly extracts: number } {
+    // Counted rather than loaded: a thirty-chapter book is megabytes of chunk
+    // text, and reading all of it back to report a number before deleting it
+    // would be an odd way to spend a delete.
     const before = {
-      chunks: this.chunks(sourceId).length,
-      extracts: this.#countExtracts(sourceId),
+      chunks: this.#count("intake_chunks", sourceId),
+      extracts: this.#count("intake_extracts", sourceId),
     };
     this.#db.prepare("DELETE FROM intake_sources WHERE id = ?").run(sourceId);
     return before;
@@ -631,9 +640,17 @@ export class IntakeStore {
     return ids;
   }
 
-  #countExtracts(sourceId: string): number {
+  /**
+   * How many rows in one of this module's child tables belong to a source.
+   *
+   * `table` is interpolated because a table name cannot be bound as a
+   * parameter. It is safe here and must stay safe: this method is private and
+   * both call sites pass a string literal. Do not widen it, and never pass it
+   * anything that came from outside this file.
+   */
+  #count(table: "intake_chunks" | "intake_extracts", sourceId: string): number {
     const row = this.#db
-      .prepare("SELECT count(*) AS n FROM intake_extracts WHERE source_id = ?")
+      .prepare(`SELECT count(*) AS n FROM ${table} WHERE source_id = ?`)
       .get(sourceId);
     // Safe assertion: `count(*)` is always an integer.
     return (row as unknown as { n: number }).n;

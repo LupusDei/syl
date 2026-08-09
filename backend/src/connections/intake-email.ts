@@ -110,14 +110,46 @@ export const MAX_LINKS_PER_MESSAGE = 10;
 /** An address, as it appears in a header: `Name <local+tag@domain>`. */
 const ANGLE_ADDRESS = /<([^<>]+)>/;
 
-/** Bare `http(s)://…` in plain text. Stops at whitespace and common enclosures. */
-const BARE_URL = /https?:\/\/[^\s<>"'`\]),]+/gi;
+/**
+ * Bare `http(s)://…` in plain text.
+ *
+ * Closing brackets are allowed through rather than excluded, because
+ * `…/wiki/Mercury_(planet)` is a real URL and cutting it at the `(` produces a
+ * link to the wrong page. {@link trimUrl} puts back the distinction between a
+ * bracket that belongs to the URL and one that belongs to the sentence.
+ */
+const BARE_URL = /https?:\/\/[^\s<>"'`]+/gi;
 
 /** `href="…"` in an HTML part. */
 const HREF = /href\s*=\s*["']([^"']+)["']/gi;
 
-/** Trailing punctuation a sentence leaves stuck to a URL. */
-const TRAILING_PUNCTUATION = /[.,;:!?)]+$/;
+/** Punctuation a sentence leaves stuck to a URL. */
+const TRAILING_PUNCTUATION = /[.,;:!?]+$/;
+
+/**
+ * Strip the sentence off a URL without stripping the URL.
+ *
+ * Trailing sentence punctuation goes first, then any closing bracket that has
+ * no opening partner inside the URL — which is what tells `(planet)` apart
+ * from `(see https://example.com/a)`.
+ */
+function trimUrl(candidate: string): string {
+  let url = candidate.trim().replace(TRAILING_PUNCTUATION, "");
+
+  for (;;) {
+    const last = url.at(-1);
+    if (last !== ")" && last !== "]") break;
+
+    const open = last === ")" ? "(" : "[";
+    const opened = url.split(open).length - 1;
+    const closed = url.split(last).length - 1;
+    if (opened >= closed) break;
+
+    url = url.slice(0, -1).replace(TRAILING_PUNCTUATION, "");
+  }
+
+  return url;
+}
 
 /**
  * Split an address into local, tag and domain, or `null` if it is not one.
@@ -169,7 +201,7 @@ export function extractLinks(
   const seen = new Set<string>();
 
   const consider = (candidate: string): void => {
-    const trimmed = candidate.trim().replace(TRAILING_PUNCTUATION, "");
+    const trimmed = trimUrl(candidate);
     if (!/^https?:\/\//i.test(trimmed)) return;
 
     let key: string;

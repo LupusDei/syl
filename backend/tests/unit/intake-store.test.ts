@@ -244,6 +244,33 @@ describe("IntakeStore extracts", () => {
     expect(extracts[0]?.extract.summary).toBe("re-read");
   });
 
+  it("should hand back the id that is actually in the table after a re-read", () => {
+    // On conflict the existing row keeps its own id. Returning the one we
+    // minted and discarded would be a dangling reference nobody notices until
+    // something tries to follow it.
+    const id = submit();
+    const first = store.putExtract({
+      sourceId: id,
+      chunkIndex: 0,
+      start: 0,
+      end: 10,
+      retention: "standard",
+      extract: EXTRACT,
+    });
+
+    const second = store.putExtract({
+      sourceId: id,
+      chunkIndex: 0,
+      start: 0,
+      end: 10,
+      retention: "standard",
+      extract: { ...EXTRACT, summary: "re-read" },
+    });
+
+    expect(second.id).toBe(first.id);
+    expect(store.extracts(id)[0]?.id).toBe(second.id);
+  });
+
   it("should re-validate on the way out rather than trusting the row", () => {
     // A row edited on disk is untrusted input arriving through a second door.
     const id = submit();

@@ -156,6 +156,17 @@ describe("extractLinks", () => {
     ]);
   });
 
+  it("should keep a bracket that belongs to the URL and drop one that belongs to the sentence", () => {
+    // `…/wiki/Mercury_(planet)` is a real URL, and cutting it at the `(` links
+    // to a different page entirely.
+    expect(extractLinks(message({ text: "see https://en.wikipedia.org/wiki/Mercury_(planet)" }))).toEqual(
+      ["https://en.wikipedia.org/wiki/Mercury_(planet)"],
+    );
+    expect(extractLinks(message({ text: "(see https://example.com/a)" }))).toEqual([
+      "https://example.com/a",
+    ]);
+  });
+
   it("should take only http and https", () => {
     const links = extractLinks(
       message({ text: "file:///etc/passwd and mailto:x@y.com and https://example.com/ok" }),

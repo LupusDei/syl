@@ -88,9 +88,6 @@ const DEFAULT_INTENSITY: Readonly<Record<PresenceState, number>> = {
   manifest: 1,
 };
 
-/** States the service holds for a while and then lets go of. */
-const TRANSIENT: readonly PresenceState[] = ["alert", "manifest", "delighted", "concerned"];
-
 /** The two states an affect hint may ask for. Anything else is ignored. */
 const AFFECT_STATES: readonly PresenceState[] = ["delighted", "concerned"];
 
@@ -255,6 +252,8 @@ export class PresenceService {
   #lastDelightedAt: number | null = null;
 
   #frame: PresenceFrame;
+  /** When the current state must be re-announced, or null if it never must. */
+  #refreshAt: number | null = null;
   #timer: NodeJS.Timeout | null = null;
   #closed = false;
 
@@ -406,7 +405,13 @@ export class PresenceService {
     };
   }
 
-  /** Recompute, emit if a client would notice, and re-arm the timer. */
+  /**
+   * Recompute, emit if a client would notice, and re-arm the timer.
+   *
+   * The only path. A separate "just refresh" path would have to decide which
+   * of two coinciding deadlines it was serving, and a tie there is a state
+   * change that arrives half a TTL late.
+   */
   #settle(): void {
     if (this.#closed) return;
 
@@ -418,23 +423,25 @@ export class PresenceService {
       // A new state begins now, so `since` is re-stamped. This is the only
       // place it moves.
       this.#frame = { ...derived, since: instant(now) };
-      this.#publish();
+      this.#publish(now);
     } else if (Math.abs(derived.intensity - previous.intensity) >= INTENSITY_EPSILON) {
       this.#frame = { ...derived, since: previous.since };
-      this.#publish();
+      this.#publish(now);
+    } else if (this.#refreshAt !== null && now >= this.#refreshAt) {
+      // Nothing changed, but the state has to be re-announced before its TTL
+      // runs out — a three-minute turn must not leave the client falling back
+      // to idle after fifteen seconds.
+      this.#publish(now);
     }
 
     this.#arm();
   }
 
-  /** Re-emit the state that is already current, without moving `since`. */
-  #refresh(): void {
-    if (this.#closed) return;
-    this.#publish();
-    this.#arm();
-  }
-
-  #publish(): void {
+  #publish(now: number): void {
+    const ttl = this.#frame.ttlMs;
+    // Half the TTL leaves room for one lost frame. A state with no TTL —
+    // `absent` — is the resting state and needs no keepalive.
+    this.#refreshAt = ttl > 0 ? now + Math.max(1, Math.floor(ttl / 2)) : null;
     this.#emit?.(this.#frame);
   }
 
@@ -452,27 +459,20 @@ export class PresenceService {
     const now = this.#clock();
     const deadlines: number[] = [now + MAX_TICK_MS];
 
+    // A transient state stops applying the instant its window closes, and the
+    // state underneath it has to appear then rather than at the next tick.
     for (const at of [this.#alertUntil, this.#manifestUntil, this.#affect?.until ?? null]) {
       if (at !== null && at > now) deadlines.push(at + 1);
     }
 
-    // A live state has to be re-announced before its TTL runs out, or a turn
-    // that takes three minutes leaves the client falling back to idle after
-    // fifteen seconds. Half the TTL leaves room for one lost frame.
-    const ttl = this.#frame.ttlMs;
-    const refreshing = ttl > 0 && !TRANSIENT.includes(this.#frame.state);
-    if (refreshing) deadlines.push(now + Math.max(1, Math.floor(ttl / 2)));
-
-    const next = Math.min(...deadlines);
-    const isRefresh = refreshing && next === now + Math.max(1, Math.floor(ttl / 2));
+    if (this.#refreshAt !== null) deadlines.push(this.#refreshAt);
 
     this.#timer = setTimeout(
       () => {
         this.#timer = null;
-        if (isRefresh) this.#refresh();
-        else this.#settle();
+        this.#settle();
       },
-      Math.max(0, next - now),
+      Math.max(0, Math.min(...deadlines) - now),
     );
     // A pending timer must not hold the process open on its own.
     this.#timer.unref?.();

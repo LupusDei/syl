@@ -74,6 +74,13 @@ export interface GraftSink {
   }): void | Promise<void>;
 }
 
+/**
+ * Reader options an intake caller may set.
+ *
+ * Everything except the one that could disarm the boundary.
+ */
+export type SafeReaderOptions = Omit<ReaderTurnOptions, "requireEmptyToolSurface">;
+
 /** How long to wait before retrying a step that failed for a transient reason. */
 export const RETRY_DELAY_MS = 5 * 60_000;
 
@@ -90,10 +97,14 @@ export interface ArticleIntakeOptions {
   readonly fetch?: (url: string) => Promise<FetchResult>;
   /**
    * Passed through to the reader turn — a `claudeBin` override, a model, a
-   * timeout. It cannot re-enable tools: `runReaderTurn` sets `--tools ""`
-   * itself and throws if the surface comes back non-empty.
+   * timeout.
+   *
+   * `requireEmptyToolSurface` is deliberately **not** in this type and is not
+   * forwarded. `runReaderTurn` accepts it so its own tests can reach the checks
+   * further down; letting an intake caller set it would turn the one assertion
+   * that survives a CLI change into an option somebody can switch off.
    */
-  readonly readerOptions?: ReaderTurnOptions;
+  readonly readerOptions?: SafeReaderOptions;
   readonly scheduler?: IntakeScheduler;
   readonly graft?: GraftSink;
   /** Characters per reader turn. Defaults to {@link DEFAULT_CHUNK_CHARS}. */
@@ -142,7 +153,7 @@ export class ArticleIntake {
   readonly #store: IntakeStore;
   readonly #clock: Clock;
   readonly #fetch: (url: string) => Promise<FetchResult>;
-  readonly #readerOptions: ReaderTurnOptions;
+  readonly #readerOptions: SafeReaderOptions;
   readonly #scheduler: IntakeScheduler | null;
   readonly #graft: GraftSink | null;
   readonly #chunkChars: number;
