@@ -185,9 +185,18 @@ to add is about *additional* surfaces and blocks nothing.
   is the Commander's own trusted conversation, and `runReaderTurn` does not.
 - **Reading anything fetched goes through `runReaderTurn`** (`harness/reader.ts`),
   never `runTurn`: `--tools ""`, `--strict-mcp-config` with no MCP config, no
-  pre-authorisation, a session that is never resumed or persisted, and output
-  that is schema-validated or discarded. It throws if the tool surface comes
-  back non-empty, so a CLI change cannot silently reopen the hole.
+  pre-authorisation, **auto-memory off**, a session that is never resumed or
+  persisted, and output that is schema-validated or discarded. It throws if the
+  tool surface comes back non-empty, so a CLI change cannot silently reopen the
+  hole.
+  **Auto-memory is ON BY DEFAULT in headless `-p`**, so until `syl-005.1.2` the
+  reader was loading Syl's `MEMORY.md` into the same context as untrusted text —
+  everything known about the Commander, handed to whatever an article told the
+  model to do. The captured `reader-direct` and `reader-injection` fixtures still
+  show `memory_paths` in their init frames; that is the evidence, not a theory.
+  `runReaderTurn` now passes `autoMemoryOff()` unconditionally and it is
+  deliberately **not** exposed on `ReaderTurnOptions`, so no call site can turn
+  it back on. A quarantine you have to remember to switch on is not a quarantine.
 - Every turn gets its session id **before** the spawn, via `--session-id <uuid>`
   (honoured exactly on 2.1.226; both init and result echo it). `TurnOptions.
   onSessionId` fires pre-spawn so the id can be persisted first — a crash
