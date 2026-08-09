@@ -1,0 +1,33 @@
+{
+  "success": true,
+  "data": {
+    "id": "syl:job:0198f2c4-0001-7000-8000-00000000e001",
+    "kind": "reminder_delivery",
+    "state": "pending",
+    "priority": "reminder",
+    "trigger": {
+      "type": "event",
+      "event": "reminder.due"
+    },
+    "deliveryClass": "at_least_once",
+    "catchUp": {
+      "policy": "never_expires"
+    },
+    "budget": {
+      "maxTurns": 0,
+      "maxWallClockMs": 5000,
+      "allowedTools": []
+    },
+    "lease": null,
+    "circuitBreaker": {
+      "state": "closed",
+      "consecutiveFailures": 0,
+      "openedAt": null
+    },
+    "nextRunAt": "2026-08-09T21:00:00.000Z",
+    "lastRunId": "syl:run:0198f2c7-0001-7000-8000-000000011001",
+    "speaks": true,
+    "createdAt": "2026-07-01T14:00:00.000Z",
+    "updatedAt": "2026-08-09T07:00:00.000Z"
+  }
+}

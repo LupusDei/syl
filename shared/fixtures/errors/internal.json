@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "error": {
+    "code": "INTERNAL",
+    "message": "Something went wrong on the server.",
+    "retryable": true,
+    "details": null,
+    "retryAfterMs": 1000
+  }
+}

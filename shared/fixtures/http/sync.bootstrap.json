@@ -1,0 +1,45 @@
+{
+  "success": true,
+  "data": {
+    "cursor": "eyJhdCI6IjIwMjYtMDgtMDJUMDA6MDA6MDAuMDAwWiJ9",
+    "hasMore": true,
+    "changes": [
+      {
+        "type": "conversation",
+        "op": "upsert",
+        "id": "syl:conversation:00000000-0000-7000-8000-000000000001",
+        "at": "2026-08-02T00:00:00.000Z",
+        "resource": {
+          "id": "syl:conversation:00000000-0000-7000-8000-000000000001",
+          "lane": "interactive",
+          "title": null,
+          "createdAt": "2026-07-01T14:02:00.000Z",
+          "updatedAt": "2026-08-02T00:00:00.000Z",
+          "lastMessageAt": "2026-08-02T00:00:00.000Z",
+          "messageCount": 1102
+        }
+      },
+      {
+        "type": "goal",
+        "op": "upsert",
+        "id": "syl:goal:0198f2c3-0001-7000-8000-00000000d001",
+        "at": "2026-08-02T00:00:00.000Z",
+        "resource": {
+          "id": "syl:goal:0198f2c3-0001-7000-8000-00000000d001",
+          "parentId": null,
+          "title": "Ship Syl to my own phone",
+          "why": "So the assistant is something I actually use, not something I maintain.",
+          "targetDate": "2026-10-31",
+          "metricKey": null,
+          "targetValue": null,
+          "cadenceDays": 7,
+          "status": "active",
+          "statusReason": null,
+          "createdAt": "2026-07-01T14:10:00.000Z",
+          "updatedAt": "2026-08-09T06:00:00.000Z"
+        }
+      }
+    ],
+    "serverTime": "2026-08-09T07:00:05.000Z"
+  }
+}

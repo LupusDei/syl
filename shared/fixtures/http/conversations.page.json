@@ -1,0 +1,27 @@
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "syl:conversation:00000000-0000-7000-8000-000000000001",
+        "lane": "interactive",
+        "title": null,
+        "createdAt": "2026-07-01T14:02:00.000Z",
+        "updatedAt": "2026-08-09T07:00:03.114Z",
+        "lastMessageAt": "2026-08-09T07:00:03.114Z",
+        "messageCount": 1284
+      },
+      {
+        "id": "syl:conversation:0198f2d0-1111-7000-8000-00000000a001",
+        "lane": "job",
+        "title": "Research brief: local-first sync on iOS",
+        "createdAt": "2026-08-08T19:40:00.000Z",
+        "updatedAt": "2026-08-08T20:11:52.400Z",
+        "lastMessageAt": "2026-08-08T20:11:52.400Z",
+        "messageCount": 17
+      }
+    ],
+    "nextCursor": null,
+    "hasMore": false
+  }
+}

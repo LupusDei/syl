@@ -1,0 +1,7 @@
+{
+  "type": "presence",
+  "state": "alert",
+  "intensity": 0.9,
+  "since": "2026-08-09T21:00:00.480Z",
+  "ttl_ms": 8000
+}

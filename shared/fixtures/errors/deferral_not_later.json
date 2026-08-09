@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "error": {
+    "code": "DEFERRAL_NOT_LATER",
+    "message": "That snooze resolves to 2026-08-09T20:59:00Z, which is not after the current fire time.",
+    "retryable": false,
+    "details": null,
+    "retryAfterMs": null
+  }
+}

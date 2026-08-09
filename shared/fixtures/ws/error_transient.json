@@ -1,0 +1,11 @@
+{
+  "type": "error",
+  "error": {
+    "code": "RATE_LIMITED",
+    "message": "Slow down.",
+    "retryable": true,
+    "details": null,
+    "retryAfterMs": 1000
+  },
+  "fatal": false
+}

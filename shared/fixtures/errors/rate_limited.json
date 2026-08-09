@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "error": {
+    "code": "RATE_LIMITED",
+    "message": "Too many writes. Back off.",
+    "retryable": true,
+    "details": null,
+    "retryAfterMs": 2000
+  }
+}

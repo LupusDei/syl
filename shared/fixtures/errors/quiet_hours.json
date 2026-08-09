@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "error": {
+    "code": "QUIET_HOURS",
+    "message": "It is 02:14 in America/Chicago. This will go out at 08:00.",
+    "retryable": false,
+    "details": null,
+    "retryAfterMs": null
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_FAILED",
+    "message": "The request body did not match the contract.",
+    "retryable": false,
+    "details": {
+      "fields": [
+        {
+          "field": "wallTime",
+          "reason": "expected HH:MM in 24-hour form"
+        },
+        {
+          "field": "tz",
+          "reason": "expected an IANA zone name, not a UTC offset"
+        }
+      ]
+    },
+    "retryAfterMs": null
+  }
+}

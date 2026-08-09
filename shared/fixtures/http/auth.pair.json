@@ -1,0 +1,12 @@
+{
+  "success": true,
+  "data": {
+    "token": "syl_pat_9f2c41d8b7e04a6f8c1d3e5a7b9c0d2e",
+    "tokenType": "Bearer",
+    "expiresAt": "2027-08-09T07:00:00.000Z",
+    "principal": {
+      "id": "syl:principal:0198f100-0000-7000-8000-000000000001",
+      "name": "The Commander"
+    }
+  }
+}

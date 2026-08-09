@@ -1,0 +1,31 @@
+{
+  "success": true,
+  "data": {
+    "status": "ok",
+    "version": "0.1.0",
+    "startedAt": "2026-08-09T05:12:44.001Z",
+    "now": "2026-08-09T07:00:03.114Z",
+    "checks": [
+      {
+        "name": "database",
+        "status": "ok",
+        "detail": null
+      },
+      {
+        "name": "scheduler",
+        "status": "ok",
+        "detail": "next wake 2026-08-09T07:30:00.000Z"
+      },
+      {
+        "name": "apns",
+        "status": "ok",
+        "detail": "production"
+      },
+      {
+        "name": "claude-binary",
+        "status": "ok",
+        "detail": "/Users/commander/.local/bin/claude"
+      }
+    ]
+  }
+}

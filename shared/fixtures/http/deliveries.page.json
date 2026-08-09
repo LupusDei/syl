@@ -1,0 +1,91 @@
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "syl:delivery:0198f2c6-0001-7000-8000-000000010001",
+        "channel": "apns",
+        "messageClass": "reminder_delivery",
+        "reminderId": "syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f",
+        "payload": {
+          "title": "Syl",
+          "body": "Call the pharmacy — the refill lapses today.",
+          "interruptionLevel": "time-sensitive",
+          "categoryIdentifier": "reminder",
+          "threadIdentifier": "reminders"
+        },
+        "idempotencyKey": "5f8c1d3e-7b9c-4d2e-a041-9f2c41d8b7e0",
+        "state": "acknowledged",
+        "attempts": 1,
+        "nextAttemptAt": null,
+        "deliveredAt": "2026-08-09T21:00:00.480Z",
+        "ackedAt": "2026-08-09T21:00:07.220Z",
+        "engagement": "opened",
+        "late": false,
+        "scheduledFor": "2026-08-09T21:00:00.000Z",
+        "coalescedReminderIds": [],
+        "apnsUniqueId": "1B2C3D4E-5F60-4718-9A2B-3C4D5E6F7081",
+        "lastError": null,
+        "createdAt": "2026-08-09T21:00:00.100Z"
+      },
+      {
+        "id": "syl:delivery:0198f2c6-0002-7000-8000-000000010002",
+        "channel": "apns",
+        "messageClass": "reminder_delivery",
+        "reminderId": null,
+        "payload": {
+          "title": "Syl",
+          "body": "Three things came in overnight. They're in the app when you're ready.",
+          "interruptionLevel": "active",
+          "categoryIdentifier": "reminder",
+          "threadIdentifier": "reminders"
+        },
+        "idempotencyKey": "a041c9d1-0e44-4b77-8f30-2ab5c9d10e44",
+        "state": "delivered",
+        "attempts": 1,
+        "nextAttemptAt": null,
+        "deliveredAt": "2026-08-09T13:00:00.310Z",
+        "ackedAt": null,
+        "engagement": null,
+        "late": true,
+        "scheduledFor": "2026-08-09T13:00:00.000Z",
+        "coalescedReminderIds": [
+          "syl:reminder:0198f2c1-6c5d-7d21-9f00-1a2b3c4d5e71",
+          "syl:reminder:0198f2c1-7d6e-7d21-9f00-1a2b3c4d5e72",
+          "syl:reminder:0198f2c1-8e7f-7d21-9f00-1a2b3c4d5e73"
+        ],
+        "apnsUniqueId": "2C3D4E5F-6071-4829-AB3C-4D5E6F708192",
+        "lastError": null,
+        "createdAt": "2026-08-09T13:00:00.050Z"
+      },
+      {
+        "id": "syl:delivery:0198f2c6-0003-7000-8000-000000010003",
+        "channel": "apns",
+        "messageClass": "morning_agenda",
+        "reminderId": null,
+        "payload": {
+          "title": "Syl",
+          "body": "Two things today, and the design review moved to 14:00.",
+          "interruptionLevel": "active",
+          "categoryIdentifier": null,
+          "threadIdentifier": "agenda"
+        },
+        "idempotencyKey": "7b9c0d2e-41d8-4a6f-8c1d-3e5a7b9c0d2e",
+        "state": "pending",
+        "attempts": 3,
+        "nextAttemptAt": "2026-08-09T12:08:00.000Z",
+        "deliveredAt": null,
+        "ackedAt": null,
+        "engagement": null,
+        "late": false,
+        "scheduledFor": "2026-08-09T12:00:00.000Z",
+        "coalescedReminderIds": [],
+        "apnsUniqueId": null,
+        "lastError": "APNs 503 ServiceUnavailable; retrying with backoff",
+        "createdAt": "2026-08-09T12:00:00.020Z"
+      }
+    ],
+    "nextCursor": null,
+    "hasMore": false
+  }
+}

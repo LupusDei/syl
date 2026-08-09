@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "error": {
+    "code": "IDEMPOTENCY_KEY_REUSE",
+    "message": "That Idempotency-Key was used with a different body 4 minutes ago.",
+    "retryable": false,
+    "details": null,
+    "retryAfterMs": null
+  }
+}

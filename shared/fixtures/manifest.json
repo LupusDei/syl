@@ -1,0 +1,413 @@
+{
+  "$comment": "The shared fixtures. Both the TypeScript suite and the Swift suite decode every file listed here; a drift on either side fails the build. `envelope: \"ok\"` means the file is a full success envelope and `schema` names the type of its `data`. `envelope: \"raw\"` means the file IS the named schema.",
+  "fixtures": [
+    {
+      "file": "errors/deferral_not_later.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "A deferral must always return a strictly later instant. This is the guarantee refusing to be broken."
+    },
+    {
+      "file": "errors/idempotency_key_required.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "Every write takes a key. Absence is an error, not a default."
+    },
+    {
+      "file": "errors/idempotency_key_reuse.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "Same key, different body. The outbox must not silently write twice."
+    },
+    {
+      "file": "errors/internal.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "Retryable, and deliberately says nothing about internals."
+    },
+    {
+      "file": "errors/not_found.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "404. The code is the contract; the status is advisory."
+    },
+    {
+      "file": "errors/quiet_hours.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "Quiet hours gate speaking, not working."
+    },
+    {
+      "file": "errors/rate_limited.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "Retryable, with a server-suggested backoff floor."
+    },
+    {
+      "file": "errors/unauthorized.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "Never retried. Retrying an auth failure fifty times is the worst possible response."
+    },
+    {
+      "file": "errors/upstream_unavailable.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "The Mac is up but a dependency is not. Retryable."
+    },
+    {
+      "file": "errors/validation_failed.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "VALIDATION_FAILED carries { field, reason }[] in details."
+    },
+    {
+      "file": "http/auth.pair.json",
+      "schema": "TokenGrant",
+      "envelope": "ok",
+      "summary": "A paired device's bearer token."
+    },
+    {
+      "file": "http/auth.whoami.json",
+      "schema": "Principal",
+      "envelope": "ok",
+      "summary": "There is exactly one principal."
+    },
+    {
+      "file": "http/conversation.interactive.json",
+      "schema": "Conversation",
+      "envelope": "ok",
+      "summary": "The Commander's own durable thread, at the well-known id."
+    },
+    {
+      "file": "http/conversations.page.json",
+      "schema": "ConversationPage",
+      "envelope": "ok",
+      "summary": "The interactive lane plus one job lane."
+    },
+    {
+      "file": "http/deliveries.page.json",
+      "schema": "DeliveryPage",
+      "envelope": "ok",
+      "summary": "The outbox view: sent, retried, and never acknowledged."
+    },
+    {
+      "file": "http/delivery.acknowledged.json",
+      "schema": "Delivery",
+      "envelope": "ok",
+      "summary": "The only state that satisfies the guarantee: ackedAt is set, by the device."
+    },
+    {
+      "file": "http/delivery.coalesced.json",
+      "schema": "Delivery",
+      "envelope": "ok",
+      "summary": "One notification for a batch deferred past quiet hours. deliveredAt set, ackedAt still null."
+    },
+    {
+      "file": "http/delivery.failed.json",
+      "schema": "Delivery",
+      "envelope": "ok",
+      "summary": "APNs refused. The row survives, attempts climb, nextAttemptAt is set — nothing is dropped."
+    },
+    {
+      "file": "http/device.ios.json",
+      "schema": "Device",
+      "envelope": "ok",
+      "summary": "A TestFlight build: production token. The full token is never returned."
+    },
+    {
+      "file": "http/devices.page.json",
+      "schema": "DevicePage",
+      "envelope": "ok",
+      "summary": "Both environments at once — which is why routing is per token, not global."
+    },
+    {
+      "file": "http/goal.active.json",
+      "schema": "Goal",
+      "envelope": "ok",
+      "summary": "Goals self-nest; the horizon is derived from targetDate, not stored."
+    },
+    {
+      "file": "http/goals.page.json",
+      "schema": "GoalPage",
+      "envelope": "ok",
+      "summary": "Includes a dormant goal — a real state, not a soft delete."
+    },
+    {
+      "file": "http/health.degraded.json",
+      "schema": "HealthStatus",
+      "envelope": "ok",
+      "summary": "Reachable, but APNs is failing. Reminders still queue."
+    },
+    {
+      "file": "http/health.ok.json",
+      "schema": "HealthStatus",
+      "envelope": "ok",
+      "summary": "Everything up."
+    },
+    {
+      "file": "http/job.reminder_delivery.json",
+      "schema": "Job",
+      "envelope": "ok",
+      "summary": "maxTurns: 0. A job that cannot spawn a turn cannot be delayed by a rate limit or broken by a model declining to act."
+    },
+    {
+      "file": "http/job.research_brief.json",
+      "schema": "Job",
+      "envelope": "ok",
+      "summary": "Resumable, leased, background. The lease is what makes reboot recovery possible."
+    },
+    {
+      "file": "http/jobs.page.json",
+      "schema": "JobPage",
+      "envelope": "ok",
+      "summary": "Backs the admin's 'Next' view."
+    },
+    {
+      "file": "http/message.sent.json",
+      "schema": "DeliveryConfirmation",
+      "envelope": "ok",
+      "summary": "The HTTP half of optimistic-send reconciliation. `seq` here is the MESSAGE sequence."
+    },
+    {
+      "file": "http/messages.page.json",
+      "schema": "MessagePage",
+      "envelope": "ok",
+      "summary": "History, newest first, mid-pagination."
+    },
+    {
+      "file": "http/reminder.commitment.json",
+      "schema": "Reminder",
+      "envelope": "ok",
+      "summary": "A one-shot commitment. Fires late rather than vanishing."
+    },
+    {
+      "file": "http/reminder.deferred.json",
+      "schema": "Reminder",
+      "envelope": "ok",
+      "summary": "Pushed out of quiet hours. deferredFrom keeps the chain visible; nextFireAt is strictly later."
+    },
+    {
+      "file": "http/reminder.rhythm.json",
+      "schema": "Reminder",
+      "envelope": "ok",
+      "summary": "Recurring; supersedesPrevious, so yesterday's does not pile up."
+    },
+    {
+      "file": "http/reminders.page.json",
+      "schema": "ReminderPage",
+      "envelope": "ok",
+      "summary": "A page of reminders across states."
+    },
+    {
+      "file": "http/run.late.json",
+      "schema": "Run",
+      "envelope": "ok",
+      "summary": "Ran 6 minutes late after a reboot. latenessMs is the metric that says whether the trigger design works."
+    },
+    {
+      "file": "http/run.suspended.json",
+      "schema": "Run",
+      "envelope": "ok",
+      "summary": "Hit a budget ceiling. Suspended and asking — not killed silently."
+    },
+    {
+      "file": "http/run.zero_turn.json",
+      "schema": "Run",
+      "envelope": "ok",
+      "summary": "Reminder delivery: zero turns, zero cost, no summary. Lateness recorded regardless."
+    },
+    {
+      "file": "http/runs.page.json",
+      "schema": "RunPage",
+      "envelope": "ok",
+      "summary": "Backs the admin's 'Ran' and 'Failed' views."
+    },
+    {
+      "file": "http/sync.bootstrap.json",
+      "schema": "SyncResponse",
+      "envelope": "ok",
+      "summary": "A device back from a week away pages: hasMore is true."
+    },
+    {
+      "file": "http/sync.response.json",
+      "schema": "SyncResponse",
+      "envelope": "ok",
+      "summary": "Cursor sync — the device's 'pull since cursor' step. Not the WebSocket sync frame."
+    },
+    {
+      "file": "http/todo.open.json",
+      "schema": "Todo",
+      "envelope": "ok",
+      "summary": "An explicit ask. Never provisional."
+    },
+    {
+      "file": "http/todo.proposed.json",
+      "schema": "Todo",
+      "envelope": "ok",
+      "summary": "Inferred structure — provisional, visible, expires if unresolved."
+    },
+    {
+      "file": "http/todos.page.json",
+      "schema": "TodoPage",
+      "envelope": "ok",
+      "summary": "Includes the delegatedJobId seam between the life model and the job system."
+    },
+    {
+      "file": "requests/acknowledge_delivery.json",
+      "schema": "AcknowledgeDeliveryRequest",
+      "envelope": "raw",
+      "summary": "The only thing that marks a reminder delivered."
+    },
+    {
+      "file": "requests/create_goal.json",
+      "schema": "CreateGoalRequest",
+      "envelope": "raw",
+      "summary": "`why` is the only optional field Syl should ever push for."
+    },
+    {
+      "file": "requests/create_reminder_recurring.json",
+      "schema": "CreateReminderRequest",
+      "envelope": "raw",
+      "summary": "The RRULE subset is deliberate; anything outside it is rejected, not half-supported."
+    },
+    {
+      "file": "requests/create_reminder.json",
+      "schema": "CreateReminderRequest",
+      "envelope": "raw",
+      "summary": "Wall time plus IANA zone. Never a fixed offset."
+    },
+    {
+      "file": "requests/create_todo.json",
+      "schema": "CreateTodoRequest",
+      "envelope": "raw",
+      "summary": "An explicit ask lands as open, never proposed."
+    },
+    {
+      "file": "requests/pair.json",
+      "schema": "PairRequest",
+      "envelope": "raw",
+      "summary": "Exchanged once per device for a bearer token."
+    },
+    {
+      "file": "requests/register_device.json",
+      "schema": "RegisterDeviceRequest",
+      "envelope": "raw",
+      "summary": "environment travels with the token, because both exist at once during development."
+    },
+    {
+      "file": "requests/send_message.json",
+      "schema": "SendMessageRequest",
+      "envelope": "raw",
+      "summary": "clientId is required — without it an optimistic send cannot be reconciled."
+    },
+    {
+      "file": "requests/snooze_reminder.json",
+      "schema": "SnoozeReminderRequest",
+      "envelope": "raw",
+      "summary": "Exactly one of until or minutes. The result must be strictly later."
+    },
+    {
+      "file": "ws/auth_challenge.json",
+      "schema": "WsAuthChallenge",
+      "envelope": "raw",
+      "summary": "Server speaks first. A client that sends auth_response unprompted is closed on."
+    },
+    {
+      "file": "ws/auth_response.json",
+      "schema": "WsAuthResponse",
+      "envelope": "raw",
+      "summary": "Auth is a frame, not a header — the browser WebSocket API cannot set one."
+    },
+    {
+      "file": "ws/client_chat_message.json",
+      "schema": "WsClientChatMessage",
+      "envelope": "raw",
+      "summary": "clientId reconciles the optimistic bubble; idempotencyKey stops a retry becoming a second message."
+    },
+    {
+      "file": "ws/connected.json",
+      "schema": "WsConnected",
+      "envelope": "raw",
+      "summary": "lastSeq is the FRAME sequence, not a message sequence."
+    },
+    {
+      "file": "ws/delivery_confirmation.json",
+      "schema": "WsDeliveryConfirmation",
+      "envelope": "raw",
+      "summary": "Carries BOTH sequences: seq is the frame stream, messageSeq is the conversation."
+    },
+    {
+      "file": "ws/error_fatal.json",
+      "schema": "WsError",
+      "envelope": "raw",
+      "summary": "fatal:true means stop reconnecting and re-pair, rather than loop against a wall."
+    },
+    {
+      "file": "ws/error_transient.json",
+      "schema": "WsError",
+      "envelope": "raw",
+      "summary": "fatal:false is informational; the socket stays up."
+    },
+    {
+      "file": "ws/ping.json",
+      "schema": "WsPing",
+      "envelope": "raw",
+      "summary": "Application-level, above any transport ping."
+    },
+    {
+      "file": "ws/pong.json",
+      "schema": "WsPong",
+      "envelope": "raw",
+      "summary": "Echoes the client ts and adds the server's own clock."
+    },
+    {
+      "file": "ws/presence_absent.json",
+      "schema": "WsPresence",
+      "envelope": "raw",
+      "summary": "The default. During quiet hours it is absent unconditionally."
+    },
+    {
+      "file": "ws/presence_alert.json",
+      "schema": "WsPresence",
+      "envelope": "raw",
+      "summary": "Couples 1:1 to a time-sensitive reminder. If it is not worth breaking through Focus, it is not worth alert."
+    },
+    {
+      "file": "ws/presence_speaking.json",
+      "schema": "WsPresence",
+      "envelope": "raw",
+      "summary": "The frame quoted verbatim in the character proposal."
+    },
+    {
+      "file": "ws/presence_thinking.json",
+      "schema": "WsPresence",
+      "envelope": "raw",
+      "summary": "A turn is in flight. No seq — never replayed."
+    },
+    {
+      "file": "ws/server_chat_message.json",
+      "schema": "WsServerChatMessage",
+      "envelope": "raw",
+      "summary": "Numbered and replayable. `seq` is the frame stream; `message.seq` is the conversation."
+    },
+    {
+      "file": "ws/sync_response_incomplete.json",
+      "schema": "WsSyncResponse",
+      "envelope": "raw",
+      "summary": "complete:false — the gap aged out of the buffer. The client must fall back to GET /sync, not assume it is caught up."
+    },
+    {
+      "file": "ws/sync_response.json",
+      "schema": "WsSyncResponse",
+      "envelope": "raw",
+      "summary": "The gap, replayed. frames never contains a presence frame."
+    },
+    {
+      "file": "ws/sync.json",
+      "schema": "WsSync",
+      "envelope": "raw",
+      "summary": "sinceSeq, NOT since. Conflating it with the HTTP cursor is the bug this naming prevents."
+    }
+  ]
+}

@@ -1,0 +1,127 @@
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "syl:run:0198f2c7-0002-7000-8000-000000011002",
+        "jobId": "syl:job:0198f2c4-0003-7000-8000-00000000e003",
+        "kind": "morning_agenda",
+        "triggerInstant": "2026-08-09T12:00:00.000Z",
+        "actualInstant": "2026-08-09T12:06:31.000Z",
+        "latenessMs": 391000,
+        "outcome": "success",
+        "spoke": true,
+        "turns": 2,
+        "costUsd": 0.0412,
+        "summary": "Two commitments today; flagged that the design review moved.",
+        "error": null,
+        "attempts": 1,
+        "startedAt": "2026-08-09T12:06:31.000Z",
+        "finishedAt": "2026-08-09T12:06:45.800Z",
+        "steps": [
+          {
+            "id": "syl:step:0198f2c8-0001-7000-8000-000000012001",
+            "index": 0,
+            "sessionId": "1f4c9a2b-7d31-4e88-b0a5-6c2e9f0d3a17",
+            "numTurns": 1,
+            "costUsd": 0.0198,
+            "outcome": "success",
+            "summary": "Read today's reminders and open to-dos.",
+            "startedAt": "2026-08-09T12:06:31.000Z",
+            "finishedAt": "2026-08-09T12:06:38.200Z"
+          },
+          {
+            "id": "syl:step:0198f2c8-0002-7000-8000-000000012002",
+            "index": 1,
+            "sessionId": "1f4c9a2b-7d31-4e88-b0a5-6c2e9f0d3a17",
+            "numTurns": 1,
+            "costUsd": 0.0214,
+            "outcome": "success",
+            "summary": "Composed the agenda.",
+            "startedAt": "2026-08-09T12:06:38.300Z",
+            "finishedAt": "2026-08-09T12:06:45.800Z"
+          }
+        ]
+      },
+      {
+        "id": "syl:run:0198f2c7-0001-7000-8000-000000011001",
+        "jobId": "syl:job:0198f2c4-0001-7000-8000-00000000e001",
+        "kind": "reminder_delivery",
+        "triggerInstant": "2026-08-08T21:00:00.000Z",
+        "actualInstant": "2026-08-08T21:00:00.140Z",
+        "latenessMs": 140,
+        "outcome": "success",
+        "spoke": true,
+        "turns": 0,
+        "costUsd": 0,
+        "summary": null,
+        "error": null,
+        "attempts": 1,
+        "startedAt": "2026-08-08T21:00:00.140Z",
+        "finishedAt": "2026-08-08T21:00:00.610Z",
+        "steps": []
+      },
+      {
+        "id": "syl:run:0198f2c7-0003-7000-8000-000000011003",
+        "jobId": "syl:job:0198f2c4-0002-7000-8000-00000000e002",
+        "kind": "research_brief",
+        "triggerInstant": "2026-08-08T19:40:00.000Z",
+        "actualInstant": "2026-08-08T19:40:01.000Z",
+        "latenessMs": 1000,
+        "outcome": "suspended",
+        "spoke": false,
+        "turns": 40,
+        "costUsd": 0.8814,
+        "summary": "Hit the 40-turn ceiling mid-synthesis. Suspended rather than killed; asking before spending more.",
+        "error": null,
+        "attempts": 1,
+        "startedAt": "2026-08-08T19:40:01.000Z",
+        "finishedAt": null,
+        "steps": [
+          {
+            "id": "syl:step:0198f2c8-0003-7000-8000-000000012003",
+            "index": 0,
+            "sessionId": "6b2e9f0d-3a17-4c88-9d31-1f4c9a2b7d31",
+            "numTurns": 12,
+            "costUsd": 0.2401,
+            "outcome": "success",
+            "summary": "Gathered sources on local-first sync.",
+            "startedAt": "2026-08-08T19:40:01.000Z",
+            "finishedAt": "2026-08-08T19:52:44.000Z"
+          },
+          {
+            "id": "syl:step:0198f2c8-0004-7000-8000-000000012004",
+            "index": 1,
+            "sessionId": "6b2e9f0d-3a17-4c88-9d31-1f4c9a2b7d31",
+            "numTurns": 28,
+            "costUsd": 0.6413,
+            "outcome": "suspended",
+            "summary": "Reached the budget ceiling.",
+            "startedAt": "2026-08-08T19:52:45.000Z",
+            "finishedAt": "2026-08-08T20:11:52.400Z"
+          }
+        ]
+      },
+      {
+        "id": "syl:run:0198f2c7-0004-7000-8000-000000011004",
+        "jobId": "syl:job:0198f2c4-0004-7000-8000-00000000e004",
+        "kind": "nightly_consolidation",
+        "triggerInstant": "2026-08-07T07:30:00.000Z",
+        "actualInstant": "2026-08-07T07:30:00.900Z",
+        "latenessMs": 900,
+        "outcome": "failure",
+        "spoke": false,
+        "turns": 1,
+        "costUsd": 0.0071,
+        "summary": null,
+        "error": "Turn exceeded its wall-clock budget; the CLI never reached a result event.",
+        "attempts": 2,
+        "startedAt": "2026-08-07T07:30:00.900Z",
+        "finishedAt": "2026-08-07T07:31:00.900Z",
+        "steps": []
+      }
+    ],
+    "nextCursor": null,
+    "hasMore": false
+  }
+}

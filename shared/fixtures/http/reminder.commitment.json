@@ -1,0 +1,23 @@
+{
+  "success": true,
+  "data": {
+    "id": "syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f",
+    "kind": "commitment",
+    "text": "Call the pharmacy — the refill lapses today.",
+    "todoId": "syl:todo:0198f2c2-0001-7000-8000-00000000c001",
+    "eventId": null,
+    "wallTime": "16:00",
+    "tz": "America/Chicago",
+    "rrule": null,
+    "scheduledFor": "2026-08-09T21:00:00.000Z",
+    "nextFireAt": "2026-08-09T21:00:00.000Z",
+    "urgent": true,
+    "late": false,
+    "deferredFrom": null,
+    "supersedesPrevious": false,
+    "deliveryState": "scheduled",
+    "createdAt": "2026-08-09T06:59:48.400Z",
+    "updatedAt": "2026-08-09T06:59:48.400Z",
+    "completedAt": null
+  }
+}

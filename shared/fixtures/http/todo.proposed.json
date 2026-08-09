@@ -1,0 +1,16 @@
+{
+  "success": true,
+  "data": {
+    "id": "syl:todo:0198f2c2-0002-7000-8000-00000000c002",
+    "text": "Book the follow-up appointment",
+    "goalId": "syl:goal:0198f2c3-0001-7000-8000-00000000d001",
+    "dueAt": null,
+    "pinned": false,
+    "status": "proposed",
+    "source": "inferred",
+    "delegatedJobId": null,
+    "createdAt": "2026-08-08T18:22:00.000Z",
+    "updatedAt": "2026-08-08T18:22:00.000Z",
+    "completedAt": null
+  }
+}

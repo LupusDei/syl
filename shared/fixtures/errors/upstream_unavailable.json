@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "error": {
+    "code": "UPSTREAM_UNAVAILABLE",
+    "message": "APNs is not answering. The outbox is holding the row.",
+    "retryable": true,
+    "details": null,
+    "retryAfterMs": 5000
+  }
+}

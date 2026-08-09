@@ -1,0 +1,10 @@
+{
+  "text": "Morning agenda.",
+  "kind": "rhythm",
+  "wallTime": "07:00",
+  "tz": "America/Chicago",
+  "date": null,
+  "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+  "todoId": null,
+  "urgent": false
+}

@@ -1,0 +1,33 @@
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "syl:device:0198f2c5-0001-7000-8000-00000000f001",
+        "platform": "ios",
+        "environment": "production",
+        "tokenSuffix": "9c0d2e41",
+        "name": "Commander's iPhone",
+        "appVersion": "0.1.0 (14)",
+        "osVersion": "26.1",
+        "active": true,
+        "registeredAt": "2026-08-01T16:20:00.000Z",
+        "lastSeenAt": "2026-08-09T06:58:00.000Z"
+      },
+      {
+        "id": "syl:device:0198f2c5-0002-7000-8000-00000000f002",
+        "platform": "ios",
+        "environment": "sandbox",
+        "tokenSuffix": "1a2b3c4d",
+        "name": "iPhone (Xcode debug)",
+        "appVersion": "0.1.0 (dev)",
+        "osVersion": "26.1",
+        "active": false,
+        "registeredAt": "2026-08-05T10:02:00.000Z",
+        "lastSeenAt": "2026-08-07T21:44:00.000Z"
+      }
+    ],
+    "nextCursor": null,
+    "hasMore": false
+  }
+}
