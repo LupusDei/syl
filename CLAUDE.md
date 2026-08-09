@@ -30,6 +30,19 @@ without asking.
 5. **Store IANA timezones (`America/Chicago`), never fixed UTC offsets.** An
    offset is a property of an instant, not of a place, and a fixed one drifts an
    hour at every DST boundary.
+6. **Never delete an inferred edge. Demote it.** Confidence decays toward zero
+   asymptotically and never arrives — a dormant edge stays addressable, so if it
+   ever becomes relevant it can be promoted straight back to high confidence.
+   Commander's call, 2026-08-09, overruling the prune recommendation in proposal
+   `62329e61` §4 exactly where that proposal invited him to. This is the same
+   instinct as constraint 4: the system does not get to silently discard things.
+   **Nodes are superseded, edges are demoted, nothing is destroyed.**
+7. **Every dream session is logged permanently, and the log is not memory.**
+   Observability is a first principle of the memory build, not a later phase —
+   a memory system that cannot be inspected cannot be tuned. The dream log is
+   telemetry *about* the graph and must live in its own store; writing it into
+   the graph would make Syl dream about her own dreams. Err toward logging too
+   much; revisit only if it becomes burdensome at scale.
 
 ## Architecture in one line
 

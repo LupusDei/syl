@@ -56,6 +56,10 @@ initiative.
 | Quiet hours | **23:00–08:00**, configurable | Commander |
 | Timezone | **US Central**, configurable. Store IANA `America/Chicago`, never a fixed offset | Commander; offset choice is mine, for DST correctness |
 | Quiet-hours behavior | Defer, never drop. Per-reminder urgent override | My recommendation; Commander has not objected |
+| Inferred-edge lifecycle | **Demote, never prune.** Asymptotic decay toward zero that never arrives; a dormant edge stays addressable and can be promoted back to high relevance if it ever matters | Commander, 2026-08-09, overruling proposal `62329e61` §4 at the point that proposal invited him to |
+| Nightly dream budget | **Start large — on the order of six hours**, expressed as a token ceiling per session, not wall-clock. Tune down once the admin shows what it produces | Commander, 2026-08-09 |
+| Graph visualisation | **Yes, build it**, in the web admin, during development. He wants to watch the memory evolve and judge how relevant the inferred engine actually is | Commander, 2026-08-09 |
+| Memory observability | **First principle, not a phase.** Per-session dream metrics, current memory-system state, and a permanent per-session log. Maximise now; revisit only if it becomes burdensome at scale | Commander, 2026-08-09 |
 
 **The payment-rails constraint is the strongest one and it selects the
 architecture on its own.** When in doubt about a design question, check what it
