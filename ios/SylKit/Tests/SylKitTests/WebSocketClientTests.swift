@@ -209,6 +209,72 @@ final class WebSocketClientTests: XCTestCase {
         await client.stop()
     }
 
+    func testShouldKeepReceivingAfterTheServerRestartsUnderneathTheReconnect() async throws {
+        // `syl-47j`, driven through the client the app actually runs rather than the
+        // state machine underneath it. `SocketSessionTests` proves the rule; this
+        // proves the rule is reached — the client builds a fresh `SocketSession` on
+        // every reconnect, so a mark carried forward without the run it belongs to
+        // would be reinterpreted against the new stream and nothing would say so.
+        let first = FakeSocket()
+        let second = FakeSocket()
+        let connector = FakeConnector(sockets: [first, second])
+        let client = makeClient(connector: connector, lastSeq: 4471, serverEpoch: "boot-a")
+        let events = await client.events()
+
+        await client.start()
+        await first.push(challenge())
+        await first.push(connected(lastSeq: 4471, serverEpoch: "boot-a"))
+        await first.push(serverChatMessage(seq: 4472, messageSeq: 1000))
+        try await eventually { await client.lastSeq == 4472 }
+
+        // The Mac reboots. The socket drops, the client reconnects on its own, and the
+        // service on the other end has forgotten every frame it ever numbered.
+        await first.fail()
+        await second.push(challenge())
+        await second.push(connected(lastSeq: 0, serverEpoch: "boot-b"))
+        await second.push(serverChatMessage(seq: 1, messageSeq: 1001))
+
+        // Without the reset this hangs: `1 > 4472` is false, the frame is filed as
+        // already seen, and the socket stays green and silent forever. The stream also
+        // carries the pre-restart message, so this waits for the one after it rather
+        // than taking whatever arrives first.
+        let message = try await message(seq: 1001, in: events)
+        XCTAssertEqual(message.seq, 1001)
+
+        let mark = await client.lastSeq
+        XCTAssertEqual(mark, 1, "the mark now belongs to the run that is actually running")
+        let epoch = await client.serverEpoch
+        XCTAssertEqual(epoch, "boot-b")
+        await client.stop()
+    }
+
+    func testShouldCarryTheServerRunIntoTheSessionItBuildsOnReconnect() async throws {
+        // The ordinary reconnect, and the other half of the same wiring. The epoch has
+        // to reach the new `SocketSession` or every reconnect looks like a restart and
+        // replays the whole buffer.
+        let first = FakeSocket()
+        let second = FakeSocket()
+        let connector = FakeConnector(sockets: [first, second])
+        let client = makeClient(connector: connector, lastSeq: 4471, serverEpoch: "boot-a")
+
+        await client.start()
+        await first.push(challenge())
+        await first.push(connected(lastSeq: 4472, serverEpoch: "boot-a"))
+        await first.push(serverChatMessage(seq: 4472, messageSeq: 1000))
+        try await eventually { await client.lastSeq == 4472 }
+
+        await first.fail()
+        await second.push(challenge())
+        await second.push(connected(lastSeq: 4472, serverEpoch: "boot-a"))
+        _ = try await second.waitForSend(count: 1)
+
+        // Still 4472, and no sync asked for: same run, no gap, nothing to replay.
+        try await eventually { await client.connectionState == .connected }
+        let mark = await client.lastSeq
+        XCTAssertEqual(mark, 4472, "the same run's mark must survive an ordinary reconnect")
+        await client.stop()
+    }
+
     func testShouldStopReconnectingAfterAFatalError() async throws {
         let first = FakeSocket()
         let second = FakeSocket()
@@ -294,6 +360,7 @@ final class WebSocketClientTests: XCTestCase {
         socket: FakeSocket? = nil,
         connector: FakeConnector? = nil,
         lastSeq: Int = 0,
+        serverEpoch: String? = nil,
         clock: MutableClock? = nil
     ) -> WebSocketClient {
         let connector = connector ?? FakeConnector(sockets: [socket ?? FakeSocket()])
@@ -303,6 +370,7 @@ final class WebSocketClientTests: XCTestCase {
             connector: connector,
             tokenProvider: StaticTokenProvider(token),
             lastSeq: lastSeq,
+            serverEpoch: serverEpoch,
             reconnectPolicy: RetryPolicy(maxAttempts: .max, baseDelay: 0, maxDelay: 0),
             // Keepalive off: the ping loop is bookkeeping, tested directly above, and a
             // zero-delay timer here would spin the test process.
@@ -322,6 +390,42 @@ final class WebSocketClientTests: XCTestCase {
             if case .message(let message) = event { return message }
         }
         throw Timeout()
+    }
+
+    /// The message with a given conversation sequence, skipping any before it.
+    ///
+    /// A test that spans a reconnect sees everything from both connections, so
+    /// "the first message" is the wrong question — it answers about the session that
+    /// already ended.
+    ///
+    /// **Bounded, unlike `firstMessage`.** The stream stays open for the life of the
+    /// client, so a message that never arrives is a test that never finishes rather
+    /// than a test that fails — and a regression here is precisely "the message never
+    /// arrives". Verified by reverting the fix and watching this report a timeout
+    /// instead of hanging the suite.
+    private func message(
+        seq: Int,
+        in events: AsyncStream<SocketEvent>,
+        timeout: TimeInterval = 2
+    ) async throws -> Message {
+        let found = await withTaskGroup(of: Message?.self) { group in
+            group.addTask {
+                for await event in events {
+                    if case .message(let message) = event, message.seq == seq { return message }
+                }
+                return nil
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+
+        guard let found else { throw Timeout() }
+        return found
     }
 
     /// Polls a condition rather than sleeping a guessed interval. The run loop is a
@@ -346,10 +450,14 @@ final class WebSocketClientTests: XCTestCase {
         #"{"type":"auth_challenge","nonce":"b7e04a6f8c1d3e5a","protocolVersion":1}"#
     }
 
-    private func connected(lastSeq: Int) -> String {
-        """
+    /// Built as raw JSON on purpose, so these cases exercise the decoder too — a
+    /// `serverEpoch` the model failed to read would look exactly like a service that
+    /// does not send one, which is the failure mode with no symptom.
+    private func connected(lastSeq: Int, serverEpoch: String? = nil) -> String {
+        let epoch = serverEpoch.map { "\"serverEpoch\":\"\($0)\"," } ?? ""
+        return """
         {"type":"connected","lastSeq":\(lastSeq),"serverTime":"2026-08-09T07:00:05.000Z",
-         "protocolVersion":1,
+         "protocolVersion":1,\(epoch)
          "principal":{"id":"syl:principal:0198f100-0000-7000-8000-000000000001",
          "name":"The Commander"}}
         """
