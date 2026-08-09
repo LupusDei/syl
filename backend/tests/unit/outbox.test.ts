@@ -104,6 +104,33 @@ describe("Outbox", () => {
       const { delivery } = outbox.enqueue(reminderDelivery({ coalescedReminderIds: ids }));
       expect(delivery.coalescedReminderIds).toEqual(ids);
     });
+
+    it("should schedule a release for an explicitly null notBefore", () => {
+      // syl-jim. `notBefore` is typed `string | null`, and a null written
+      // straight through to `next_attempt_at` is a pending row that `due` and
+      // `nextDueAt` both filter out forever — a dropped reminder in a table
+      // that looks healthy. Nullish means "compute it", never "no instant".
+      const { delivery } = outbox.enqueue(reminderDelivery({ notBefore: null }));
+
+      expect(delivery.nextAttemptAt).toBe(new Date(now).toISOString());
+      expect(outbox.due(now)).toHaveLength(1);
+      expect(outbox.nextDueAt()).not.toBeNull();
+    });
+
+    it("should keep every enqueued row reachable by some query", () => {
+      // The invariant behind syl-jim, asserted over the whole surface rather
+      // than one field: nothing pending may be invisible to the drain loop.
+      const gated = new Outbox({ db: db.handle, clock: () => now, quietHours: QUIET });
+      for (const notBefore of [undefined, null, new Date(now + 60_000).toISOString()]) {
+        gated.enqueue(reminderDelivery({ idempotencyKey: `k-${String(notBefore)}`, notBefore }));
+      }
+
+      const pending = gated.list().items.filter((delivery) => delivery.state === "pending");
+      expect(pending).toHaveLength(3);
+      expect(pending.every((delivery) => delivery.nextAttemptAt !== null)).toBe(true);
+      // A year is longer than any release this system computes.
+      expect(gated.due(now + 365 * 86_400_000)).toHaveLength(3);
+    });
   });
 
   describe("quiet hours", () => {

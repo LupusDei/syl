@@ -231,7 +231,10 @@ function enqueueOne(
     late: options.late,
     scheduledFor: reminder.scheduledFor,
     urgent: reminder.urgent,
-    ...(options.notBefore === null ? {} : { notBefore: options.notBefore }),
+    // Null means "let the gate decide", which is what the outbox now does with
+    // it. This used to have to spread the field away to avoid writing a row
+    // that could never come due.
+    notBefore: options.notBefore,
   });
 
   reminders.markFired(reminder.id, { late: options.late });

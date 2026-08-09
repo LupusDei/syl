@@ -119,7 +119,15 @@ export interface EnqueueDelivery {
    * rationed by being coupled to something already scarce.
    */
   readonly urgent?: boolean;
-  /** Override the computed release instant. Used by the recovery paths. */
+  /**
+   * Override the computed release instant. Used by the recovery paths.
+   *
+   * Nullish means "compute it" — never "no instant at all". A pending row with
+   * a null `next_attempt_at` is invisible to `due` and to `nextDueAt` forever:
+   * a dropped reminder in a table that looks perfectly healthy. The one state
+   * this class exists to make impossible must not be reachable by passing a
+   * field the type already permits.
+   */
   readonly notBefore?: string | null;
 }
 
@@ -260,10 +268,10 @@ export class Outbox {
     const now = this.#clock();
     const id = newId("delivery");
     const createdAt = instant(now);
-    const nextAttemptAt =
-      input.notBefore === undefined
-        ? this.releaseAt(now, input.urgent ?? false)
-        : input.notBefore;
+    // Nullish, not just absent. `due` and `nextDueAt` both require a non-null
+    // `next_attempt_at`, so writing one straight through would produce a
+    // pending row no query in the system can ever return again.
+    const nextAttemptAt = input.notBefore ?? this.releaseAt(now, input.urgent ?? false);
 
     this.#db
       .prepare(
