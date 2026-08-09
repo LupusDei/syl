@@ -13,9 +13,17 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
   },
+  "//onnxruntime-node": [
+    "Pinned EXACTLY, and mirrored by an \"overrides\" entry in the root",
+    "package.json which carries the full explanation. Short version: 1.24.0",
+    "dropped darwin-x64 and this machine is an Intel iMac. The two must stay",
+    "identical or npm fails with EOVERRIDE. Do not widen this to a caret range."
+  ],
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "@syl/shared": "*",
     "express": "^5.2.1",
+    "onnxruntime-node": "1.23.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
