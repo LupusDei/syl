@@ -8,7 +8,9 @@ import express, {
   type RequestHandler,
 } from "express";
 
-import { createDeliveryRuntime, describeRuntime } from "./jobs/runtime.js";
+import type { Job, PushEnvironment } from "@syl/shared";
+
+import { createDeliveryRuntime, describeRuntime, type DeliveryRuntime } from "./jobs/runtime.js";
 import { loadConfig, type SylConfig } from "./config.js";
 import {
   createContentIngestionHandler,
@@ -28,7 +30,9 @@ import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/he
 import { createJobRouter } from "./routes/jobs.js";
 import { createReminderRouter } from "./routes/reminders.js";
 import { ApiKeyService } from "./services/api-key-service.js";
+import { systemClock, type Clock } from "./services/clock.js";
 import { openDatabase, type SylDatabase } from "./services/database.js";
+import type { Timers } from "./services/job-runner.js";
 import { DeviceTokenService } from "./services/device-token-service.js";
 import { IdempotencyStore } from "./services/idempotency.js";
 import { JobStore } from "./services/job-store.js";
@@ -320,27 +324,45 @@ export function describeStartup(
   return lines;
 }
 
+/** What `bootstrap` may be told that the configuration cannot say. */
+export interface BootstrapOptions {
+  /**
+   * The clock every store runs on. Omit for the real one.
+   *
+   * `syl-md5`: `bootstrap` took no clock, so `startLiveService` could not use
+   * it for any story about *when* something happens and kept a second copy of
+   * this constructor list instead. A duplicated wiring list guarded by a test
+   * that compares field names catches a *missing* store and cannot catch a
+   * differently-*configured* one, which is the failure that matters.
+   */
+  readonly clock?: Clock;
+}
+
 /** Open the store and build the services the app needs. */
-export function bootstrap(config: SylConfig): {
+export function bootstrap(
+  config: SylConfig,
+  options: BootstrapOptions = {},
+): {
   readonly database: SylDatabase;
   readonly deps: ServiceDependencies;
 } {
+  const clock = options.clock ?? systemClock;
   const database = openDatabase({ path: config.databasePath });
-  const keys = new ApiKeyService({ db: database.handle });
-  const messages = new MessageStore({ db: database.handle });
-  const devices = new DeviceTokenService({ db: database.handle });
-  const idempotency = new IdempotencyStore({ db: database.handle });
+  const keys = new ApiKeyService({ db: database.handle, clock });
+  const messages = new MessageStore({ db: database.handle, clock });
+  const devices = new DeviceTokenService({ db: database.handle, clock });
+  const idempotency = new IdempotencyStore({ db: database.handle, clock });
   // From the config, not from `process.env`. `loadConfig` has already refused
   // an unusable window, so nothing here can hand the outbox a quiet window
   // that throws the first time the delivery handler defers something.
-  const outbox = new Outbox({ db: database.handle, quietHours: config.quietHours });
-  const reminders = new ReminderService({ db: database.handle });
-  const jobs = new JobStore({ db: database.handle });
+  const outbox = new Outbox({ db: database.handle, clock, quietHours: config.quietHours });
+  const reminders = new ReminderService({ db: database.handle, clock });
+  const jobs = new JobStore({ db: database.handle, clock });
   // One zone for the whole service, and the one `loadConfig` has already
   // checked is a place rather than an offset. The quiet *window* stays
   // presence's own: `absent` is about whether Syl shows a character, which
   // starts later than the hour the outbox stops sending notifications.
-  const presence = new PresenceService({ timeZone: config.quietHours.tz });
+  const presence = new PresenceService({ clock, timeZone: config.quietHours.tz });
 
   // Intake, wired end to end: the store the migration now creates, the queue
   // that is `ArticleIntake`'s long-missing scheduler, and the ladder itself.
@@ -349,11 +371,11 @@ export function bootstrap(config: SylConfig): {
   // without a network, and a production caller substituting it would have
   // removed the control that stops a hostile link reaching the tailnet.
   const intakeQueue = new IntakeQueue();
-  const intakeStore = new IntakeStore({ db: database.handle });
-  const intake = new ArticleIntake({ store: intakeStore, scheduler: intakeQueue });
+  const intakeStore = new IntakeStore({ db: database.handle, clock });
+  const intake = new ArticleIntake({ store: intakeStore, clock, scheduler: intakeQueue });
   // Everything mid-ladder when the process died is due again now. Every step
   // is idempotent, so re-running one is safe; skipping one is not.
-  intakeQueue.recover(intake, Date.now());
+  intakeQueue.recover(intake, clock());
 
   return {
     database,
@@ -373,22 +395,78 @@ export function bootstrap(config: SylConfig): {
   };
 }
 
-/** Process entry point. */
-async function main(): Promise<void> {
-  const config = loadConfig();
-  const { deps } = bootstrap(config);
-  await startServer(config, deps);
+/**
+ * Overrides for the delivery runtime alone.
+ *
+ * The runtime is the one component that talks to a third party on a timer, so
+ * it is the one component whose *destination* and *cadence* a test has to be
+ * able to redirect. Everything else here is a function of the config.
+ */
+export interface DeliveryOverrides {
+  /**
+   * The runtime's own clock, when it must differ from the stores'.
+   *
+   * A story about *when* a reminder fires needs the stores frozen — so that
+   * what an HTTP write records is deterministic — while the loop that decides
+   * whether anything is due walks forward. That asymmetry is the whole shape of
+   * a timing test, and it is the reason this is separate from `clock`.
+   */
+  readonly clock?: Clock;
+  readonly timers?: Timers;
+  readonly origins?: Readonly<Record<PushEnvironment, string>>;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly warn?: (line: string) => void;
+  readonly onError?: (error: unknown, job: Job | null) => void;
+}
 
-  // Exactly one `content_ingestion` row exists, forever, and it reschedules
-  // itself. Defined before the runner starts so the first tick already sees
-  // whatever was mid-ladder when the process last died.
-  ensureContentIngestionJob(deps.jobs, Date.now());
+export interface StartSylOptions extends BootstrapOptions {
+  readonly delivery?: DeliveryOverrides;
+}
 
-  // The delivery runtime is started AFTER the socket is listening, and its
-  // first tick is awaited. Awaiting it means every instant that passed while
-  // the machine was down has been considered before the service claims to be
-  // up — a runner that starts scheduling before it has looked at what it
-  // missed silently swallows whatever was due.
+/** Syl, up: the store, the socket, and the loop that makes reminders arrive. */
+export interface RunningSyl {
+  readonly database: SylDatabase;
+  readonly deps: ServiceDependencies;
+  readonly service: RunningService;
+  readonly runtime: DeliveryRuntime;
+  /** The lines to print. Returned rather than printed, so a test can read them. */
+  readonly startupLines: readonly string[];
+  /** Stop the loop, then the socket. Leaves the database open. */
+  close(): Promise<void>;
+}
+
+/**
+ * Start the whole of Syl.
+ *
+ * **This is what `main` is.** `syl-md5`: the six lines that decide whether
+ * reminders run on the Commander's machine used to live inside `main`, which
+ * reads `process.env`, binds the real port and returns nothing — so no test
+ * could call it, and the most critical path in the system could only ever run
+ * for the first time in front of him. They are here now, and every journey
+ * boots through this function.
+ *
+ * Order is load-bearing and each step is here rather than in `bootstrap`
+ * because it needs the one before it:
+ *
+ * 1. the socket, so the service can answer before it starts working;
+ * 2. `ensureContentIngestionJob`, **before** the first tick, so that tick
+ *    already sees whatever was mid-ladder when the process last died;
+ * 3. `runner.start()`, awaited — awaiting it means every instant that passed
+ *    while the machine was down has been considered before the service claims
+ *    to be up. A runner that starts scheduling before it has looked at what it
+ *    missed silently swallows whatever was due.
+ */
+export async function startSyl(
+  config: SylConfig,
+  options: StartSylOptions = {},
+): Promise<RunningSyl> {
+  const { database, deps } = bootstrap(config, options);
+  const service = await startServer(config, deps);
+  const delivery = options.delivery ?? {};
+  const clock = delivery.clock ?? options.clock ?? systemClock;
+
+  ensureContentIngestionJob(deps.jobs, clock());
+
   const runtime = createDeliveryRuntime({
     jobs: deps.jobs,
     reminders: deps.reminders,
@@ -400,6 +478,12 @@ async function main(): Promise<void> {
         createContentIngestionHandler({ intake: deps.intake, queue: deps.intakeQueue }),
       ],
     ]),
+    clock,
+    ...(delivery.timers === undefined ? {} : { timers: delivery.timers }),
+    ...(delivery.origins === undefined ? {} : { origins: delivery.origins }),
+    ...(delivery.env === undefined ? {} : { env: delivery.env }),
+    ...(delivery.warn === undefined ? {} : { warn: delivery.warn }),
+    ...(delivery.onError === undefined ? {} : { onError: delivery.onError }),
   });
   await runtime.runner.start();
 
@@ -411,7 +495,25 @@ async function main(): Promise<void> {
     ? describeStartup(config, { pairingCode: deps.keys.issuePairingCode().code })
     : describeStartup(config);
 
-  for (const line of [...startup, ...describeRuntime(runtime)]) console.log(line);
+  return {
+    database,
+    deps,
+    service,
+    runtime,
+    startupLines: [...startup, ...describeRuntime(runtime)],
+    close: async () => {
+      // The loop first. A tick that begins while the socket is closing has
+      // nothing to gain and a database underneath it that may be going away.
+      await runtime.stop();
+      await service.close();
+    },
+  };
+}
+
+/** Process entry point. */
+async function main(): Promise<void> {
+  const syl = await startSyl(loadConfig());
+  for (const line of syl.startupLines) console.log(line);
 }
 
 // Run only when executed directly, so importing this module in a test starts

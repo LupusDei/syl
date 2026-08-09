@@ -13,16 +13,25 @@ import WebSocket from "ws";
 export class TestClient {
   readonly #socket: WebSocket;
   readonly #queue: WsServerFrame[] = [];
+  readonly #ignorePresence: boolean;
   #waiting: ((frame: WsServerFrame) => void) | null = null;
   #closed = false;
   #closeCode: number | null = null;
 
-  private constructor(socket: WebSocket) {
+  private constructor(socket: WebSocket, ignorePresence: boolean) {
     this.#socket = socket;
+    this.#ignorePresence = ignorePresence;
     socket.on("message", (raw) => {
       // Safe assertion: everything this server sends is a server frame, and
       // any test that cares re-checks the fields it reads.
       const frame = JSON.parse(String(raw)) as WsServerFrame;
+      // Presence is unsolicited and asynchronous: attaching flips Syl from
+      // `absent` to `idle` and announces it, but only outside quiet hours. A
+      // test that reads frames positionally on the real clock therefore passes
+      // before 08:00 Chicago and fails after — which is a statement about the
+      // hour the suite ran, exactly what this repo has been bitten by before.
+      // Tests that are not *about* presence drop it here.
+      if (this.#ignorePresence && frame.type === "presence") return;
       const waiting = this.#waiting;
       if (waiting !== null) {
         this.#waiting = null;
@@ -45,9 +54,15 @@ export class TestClient {
    * subscribes can miss the `auth_challenge` entirely — and a lost first frame
    * looks exactly like a server that never sent one.
    */
-  static async connect(url: string): Promise<TestClient> {
+  static async connect(
+    url: string,
+    options: {
+      /** Drop presence announcements, for a test that is not about presence. */
+      readonly ignorePresence?: boolean;
+    } = {},
+  ): Promise<TestClient> {
     const socket = new WebSocket(url);
-    const client = new TestClient(socket);
+    const client = new TestClient(socket, options.ignorePresence === true);
 
     await new Promise<void>((resolve, reject) => {
       socket.once("open", () => resolve());

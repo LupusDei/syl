@@ -51,7 +51,7 @@ describe("US2 — he can talk to her", () => {
     readonly client: TestClient;
     readonly connected: WsConnected;
   }> {
-    const client = await TestClient.connect(syl.wsUrl);
+    const client = await TestClient.connect(syl.wsUrl, { ignorePresence: true });
     clients.push(client);
 
     const challenge = (await client.next()) as WsAuthChallenge;
@@ -70,7 +70,7 @@ describe("US2 — he can talk to her", () => {
 
   describe("the connection itself", () => {
     it("should speak first, and refuse a client that answers before it has heard the challenge", async () => {
-      const client = await TestClient.connect(syl.wsUrl);
+      const client = await TestClient.connect(syl.wsUrl, { ignorePresence: true });
       clients.push(client);
 
       const challenge = (await client.next()) as WsAuthChallenge;
@@ -91,7 +91,7 @@ describe("US2 — he can talk to her", () => {
     });
 
     it("should close fatally on a bad token, so the client re-pairs instead of looping", async () => {
-      const client = await TestClient.connect(syl.wsUrl);
+      const client = await TestClient.connect(syl.wsUrl, { ignorePresence: true });
       clients.push(client);
       await client.next(); // the challenge
 
@@ -332,7 +332,7 @@ describe("US2 — he can talk to her", () => {
     // both.
     const frozen = await startLiveService({ clock: () => CHICAGO_MORNING });
     try {
-      const client = await TestClient.connect(frozen.wsUrl);
+      const client = await TestClient.connect(frozen.wsUrl, { ignorePresence: true });
       const challenge = (await client.next()) as WsAuthChallenge;
       client.send({ type: "auth_response", token: frozen.token, nonce: challenge.nonce });
       const connected = (await client.next()) as WsConnected;

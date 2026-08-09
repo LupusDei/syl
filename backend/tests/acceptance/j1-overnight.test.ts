@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { fixedClock } from "../../src/services/clock.js";
 import type { JobRunner } from "../../src/services/job-runner.js";
-import { deliveryRig, type DeliveryRig } from "../helpers/delivery-runner.js";
 import { startFakeApns, type FakeApns } from "../helpers/fake-apns.js";
 import { expectData, startLiveService, type LiveService } from "../helpers/live-service.js";
 
@@ -45,8 +44,13 @@ describe("the Commander's night", () => {
 
   beforeEach(async () => {
     now = ASKED_AT;
-    syl = await startLiveService({ clock: fixedClock(ASKED_AT) });
     apple = await startFakeApns();
+    // Syl, booted the way `main` boots her, with Apple's address changed and
+    // her timer in this test's hand.
+    syl = await startLiveService({
+      clock: fixedClock(ASKED_AT),
+      delivery: { apple, clock: () => now },
+    });
   });
 
   afterEach(async () => {
@@ -83,15 +87,10 @@ describe("the Commander's night", () => {
     );
   }
 
-  /**
-   * The runner the service builds, with Apple replaced.
-   *
-   * See the docstring on `deliveryRig`: `createDeliveryRuntime` has no seam for
-   * the APNs origin (`syl-md5`), so the assembly `main` actually ships is
-   * exercised against a real Apple by nothing in this suite.
-   */
-  function runnerAgainst(target: FakeApns): DeliveryRig {
-    return deliveryRig({ syl, apple: target, clock: () => now, owner: "journeys" });
+  /** The service's own delivery runner. Apple was redirected when it booted. */
+  function runnerAgainst(target: FakeApns): { runner: JobRunner; close: () => Promise<void> } {
+    if (target !== apple) throw new Error("this journey boots against one Apple");
+    return { runner: syl.runtime.runner, close: async () => undefined };
   }
 
   /** Advance the clock to `until`, ticking every half hour on the way. */

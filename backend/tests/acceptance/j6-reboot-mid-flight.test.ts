@@ -3,7 +3,6 @@ import { rmSync } from "node:fs";
 import type { Delivery, Job, Reminder } from "@syl/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { deliveryRig } from "../helpers/delivery-runner.js";
 import { startFakeApns } from "../helpers/fake-apns.js";
 import { expectData, startLiveService } from "../helpers/live-service.js";
 
@@ -44,12 +43,17 @@ describe("Journey 6 — a reboot mid-flight", () => {
   it("should recover a notification that was on the wire when the machine died, without sending it twice", async () => {
     let now = Date.parse(FIRE_AT) - HOUR;
 
-    const first = await startLiveService({ clock: () => now });
+    const apple = await startFakeApns();
+    // `onError` is swallowed because the kill below leaves this service's tick
+    // executing against a closed database. That death rattle is the simulation
+    // working, not a failure worth printing over the run.
+    const first = await startLiveService({
+      clock: () => now,
+      delivery: { apple, clock: () => now, onError: () => undefined },
+    });
     const path = first.databasePath;
     const directory = first.directory;
     cleanup.push(() => rmSync(directory ?? path, { recursive: true, force: true }));
-
-    const apple = await startFakeApns();
 
     await first.api("/devices", {
       method: "POST",
@@ -74,16 +78,7 @@ describe("Journey 6 — a reboot mid-flight", () => {
       }),
     );
 
-    // `silent`, because the kill below leaves this runner's tick executing
-    // against a closed database. That death rattle is the simulation working,
-    // not a failure worth printing over the run.
-    const before = deliveryRig({
-      syl: first,
-      apple,
-      clock: () => now,
-      owner: "syl-before-the-reboot",
-      silent: true,
-    });
+    const before = first.runtime;
     await before.runner.start();
 
     // Apple takes the request and then says nothing at all — the machine dies
@@ -111,22 +106,23 @@ describe("Journey 6 — a reboot mid-flight", () => {
       "a claimed row with no deadline can never be reclaimed",
     ).not.toBeNull();
 
-    // The power goes. Nothing runs on the way down.
+    // The power goes. Nothing runs on the way down — no graceful stop of the
+    // delivery loop, because a rebooting Mac does not offer one (`syl-iwb`).
     before.runner.stop();
-    await first.close({ keepDatabase: true });
+    await first.service.close();
+    first.database.close();
 
     // ---- She comes back, five minutes later. ----
     now = Date.parse(FIRE_AT) + 5 * MINUTE;
     // Paired afresh, because a rebooted Mac is a new process and the Commander
     // is not at the keyboard — but the *device* row, the APNs token, and the
     // outbox all come back off the disk untouched.
-    const second = await startLiveService({ databasePath: path, clock: () => now });
-    const after = deliveryRig({
-      syl: second,
-      apple,
+    const second = await startLiveService({
+      databasePath: path,
       clock: () => now,
-      owner: "syl-after-the-reboot",
+      delivery: { apple, clock: () => now },
     });
+    const after = second.runtime;
     try {
       await after.runner.start();
 
@@ -155,7 +151,7 @@ describe("Journey 6 — a reboot mid-flight", () => {
       const jobs = await expectData<{ items: Job[] }>(await second.api("/jobs"));
       expect(jobs.items.filter((job) => job.kind === "reminder_delivery")).toHaveLength(1);
     } finally {
-      await after.close();
+      await after.stop();
       await second.close({ keepDatabase: true });
       await apple.close();
     }

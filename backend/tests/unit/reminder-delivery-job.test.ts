@@ -1,3 +1,5 @@
+import { generateKeyPairSync } from "node:crypto";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -571,6 +573,59 @@ describe("the delivery runtime", () => {
     const result = await runtime.runner.start();
     // Due from boot, so the first tick runs it and finds nothing to do.
     expect(result.ran).toEqual([runtime.job.id]);
+    await runtime.stop();
+  });
+
+  it("should refuse to let a caller replace the reminder-delivery handler", async () => {
+    // The docstring on `handlers` says reminder delivery "is built here and
+    // cannot be overridden — the never-drop guarantee is not a thing a caller
+    // gets to replace". Nothing asserted it, and the property depends entirely
+    // on the order of a spread.
+    let hijacked = false;
+    const runtime = createDeliveryRuntime({
+      ...runtimeDeps({}),
+      handlers: new Map([
+        [
+          "reminder_delivery",
+          () => {
+            hijacked = true;
+            return { outcome: "success" as const };
+          },
+        ],
+      ]),
+    });
+
+    await runtime.runner.start();
+    expect(hijacked, "a caller replaced the delivery handler").toBe(false);
+    await runtime.stop();
+  });
+
+  it("should send where it was told to, rather than only ever to Apple", async () => {
+    // `syl-md5`. `origins` had no seam, so no test could obtain a runtime from
+    // this function whose pushes went anywhere but api.push.apple.com — and
+    // five journeys rebuilt the runner by hand because of it.
+    // A real P-256 key, because the provider token is signed for real on the
+    // way out and a placeholder PEM fails before the origin is ever used.
+    const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const runtime = createDeliveryRuntime({
+      ...runtimeDeps({
+        SYL_APNS_KEY_ID: "ABCD123456",
+        SYL_APNS_TEAM_ID: "TEAM123456",
+        SYL_APNS_BUNDLE_ID: "com.jmm.syl",
+        SYL_APNS_PRIVATE_KEY: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      }),
+      origins: { production: "http://127.0.0.1:1", sandbox: "http://127.0.0.1:1" },
+    });
+
+    // Nothing is listening on port 1, so a send fails at the transport — which
+    // is the observable difference between "went to the given origin" and
+    // "went to Apple", without this unit test opening a socket to the internet.
+    const result = await runtime.apns?.send({
+      token: TOKEN,
+      environment: "production",
+      payload: { title: "Syl", body: "x" },
+    });
+    expect(result?.ok).toBe(false);
     await runtime.stop();
   });
 });

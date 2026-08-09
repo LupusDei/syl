@@ -6,14 +6,17 @@ import { startLiveService, type LiveService } from "../helpers/live-service.js";
 /**
  * The harness's own gate.
  *
- * `startLiveService` can build Syl two ways: through `bootstrap`, which is what
- * `main` calls, or through a hand-written copy of it on a frozen clock, which is
- * the only way a story about *when* something happens can be deterministic.
+ * `startLiveService` used to build Syl two ways: through `bootstrap`, which is
+ * what `main` called, or through a hand-written copy of that constructor list
+ * on a frozen clock — the only way a story about *when* something happens could
+ * be deterministic. The copy was guarded by a test comparing the two field for
+ * field, which caught a *missing* store and could not catch a differently
+ * *configured* one.
  *
- * A duplicated wiring list is a seam of exactly the kind this whole pass exists
- * to find, so it gets the same treatment: a test that fails the moment the two
- * stop agreeing. Without it, a dependency added to `bootstrap` alone would leave
- * every timing story running against a service that is quietly not Syl.
+ * `bootstrap` takes a clock now (`syl-md5`), so there is one list, and
+ * `startLiveService` is `startSyl` — the whole of `main` — on a chosen clock.
+ * What is left to gate is that the boot really produces the working service and
+ * not merely the app: the delivery runtime and the jobs it schedules.
  */
 
 const FROZEN = Date.UTC(2026, 7, 10, 12, 0, 0, 0);
@@ -34,7 +37,7 @@ describe("startLiveService", () => {
     return service;
   }
 
-  it("should wire the same dependencies on a frozen clock as bootstrap does", async () => {
+  it("should wire the same dependencies on a frozen clock as on the real one", async () => {
     const production = await boot();
     const frozen = await boot(FROZEN);
 
@@ -47,6 +50,23 @@ describe("startLiveService", () => {
       // path and not the other cannot pass.
       expect(right?.constructor.name).toBe(left?.constructor.name);
     }
+  });
+
+  it("should bring up the delivery runtime, not merely the app", async () => {
+    // The distinction that mattered: `bootstrap` + `startServer` answers every
+    // request and delivers nothing, and that is what every test booted for
+    // months. A service with no runtime accepts a reminder and holds it forever.
+    const syl = await boot(FROZEN);
+
+    expect(syl.runtime.job.kind).toBe("reminder_delivery");
+    expect(syl.runtime.runner.started).toBe(true);
+    // No `.p8` was supplied, so push is off — and the service came up anyway,
+    // which is the documented behaviour for a machine without credentials.
+    expect(syl.runtime.pushEnabled).toBe(false);
+
+    const kinds = syl.deps.jobs.list().items.map((job) => job.kind);
+    expect(kinds).toContain("reminder_delivery");
+    expect(kinds).toContain("content_ingestion");
   });
 
   it("should actually freeze time when asked", async () => {

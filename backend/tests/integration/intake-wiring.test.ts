@@ -286,7 +286,10 @@ describe("article intake against a live, migrated service", () => {
       // A source Syl refused to fetch is intake working, not intake broken.
       // Five "failures" in a row would otherwise open a circuit breaker that
       // stops every other source too.
-      expect(runs.map((run) => run.outcome)).toEqual(["success"]);
+      //
+      // Every outcome, not a count: the service now runs its own first pass at
+      // boot, so how many runs exist by here is not this test's business.
+      expect([...new Set(runs.map((run) => run.outcome))]).toEqual(["success"]);
     });
 
     it("should have a registered handler, unlike every other kind in the catalogue", async () => {

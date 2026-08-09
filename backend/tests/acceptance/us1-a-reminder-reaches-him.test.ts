@@ -1,18 +1,17 @@
-import { generateKeyPairSync } from "node:crypto";
-
 import type { Delivery, Device, Job, Reminder } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  createReminderDeliveryHandler,
-  defineReminderDeliveryJob,
-} from "../../src/jobs/reminder-delivery-job.js";
 import { createDeliveryRuntime } from "../../src/jobs/runtime.js";
-import { ApnsClient } from "../../src/services/apns-service.js";
 import { fixedClock } from "../../src/services/clock.js";
-import { JobRunner, type Timers } from "../../src/services/job-runner.js";
+import type { JobRunner } from "../../src/services/job-runner.js";
 import { startFakeApns, type FakeApns } from "../helpers/fake-apns.js";
-import { expectData, startLiveService, type LiveService } from "../helpers/live-service.js";
+import {
+  apnsEnv,
+  expectData,
+  inertTimers,
+  startLiveService,
+  type LiveService,
+} from "../helpers/live-service.js";
 
 /**
  * **US1 — a reminder reaches him.**
@@ -36,11 +35,10 @@ import { expectData, startLiveService, type LiveService } from "../helpers/live-
  * 2. A reminder created over real HTTP travels to a real notification and back
  *    through a real acknowledgement.
  *
- * The Apple leg needs the runner's `ApnsClient` pointed at a stand-in, and
- * `createDeliveryRuntime` has no seam for that — `APNS_ORIGINS` is a module
- * constant with no environment override. So the second half rebuilds the runner
- * from the same two exported pieces the runtime uses, and the first half exists
- * precisely because it has to.
+ * Both halves run against the runtime the service built for itself.
+ * `createDeliveryRuntime` takes its `origins` now (`syl-md5`), so the Apple leg
+ * no longer needs a runner assembled by hand out of the pieces the runtime
+ * uses — which was a test of an assembly nothing ships.
  */
 
 const { spawnCalls } = vi.hoisted(() => ({ spawnCalls: [] as unknown[][] }));
@@ -63,20 +61,6 @@ const MORNING = Date.UTC(2026, 7, 10, 12, 0, 0, 0);
 /** 16:00 the same day, in Chicago. */
 const FIRE_AT = "2026-08-10T21:00:00.000Z";
 
-/** A timer the test drives by hand, so no wall-clock second is ever spent. */
-const inertTimers: Timers = { set: () => 0, clear: () => undefined };
-
-/** A throwaway APNs configuration, in the shape the environment supplies it. */
-function apnsEnv(): NodeJS.ProcessEnv {
-  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
-  return {
-    SYL_APNS_KEY_ID: "ABCD123456",
-    SYL_APNS_TEAM_ID: "TEAM123456",
-    SYL_APNS_BUNDLE_ID: "com.jmm.syl",
-    SYL_APNS_PRIVATE_KEY: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
-  };
-}
-
 describe("US1 — a reminder reaches him", () => {
   let syl: LiveService;
   let apple: FakeApns;
@@ -85,10 +69,14 @@ describe("US1 — a reminder reaches him", () => {
   beforeEach(async () => {
     spawnCalls.length = 0;
     now = MORNING;
+    apple = await startFakeApns();
     // Frozen, so "fires at the right instant" and "fired five hours late" are
     // statements about the reminder rather than about the hour the suite ran.
-    syl = await startLiveService({ clock: fixedClock(MORNING) });
-    apple = await startFakeApns();
+    // The delivery loop is the one thing that moves, and it pushes at `apple`.
+    syl = await startLiveService({
+      clock: fixedClock(MORNING),
+      delivery: { apple, clock: () => now },
+    });
   });
 
   afterEach(async () => {
@@ -128,55 +116,10 @@ describe("US1 — a reminder reaches him", () => {
     );
   }
 
-  /**
-   * The runner the service builds, with Apple replaced.
-   *
-   * The handler comes from the same exported factory `createDeliveryRuntime`
-   * uses, over the same store instances `bootstrap` built, so the only thing
-   * differing from production is where the HTTP/2 connection goes.
-   */
-  function runnerAgainst(apple: FakeApns): { runner: JobRunner; close: () => Promise<void> } {
-    const env = apnsEnv();
-    // The job row is state the service creates once and keeps. `bootstrap`
-    // does not create it — `main` does, when it builds the runtime — so a test
-    // driving the runner directly has to stand in for that one line.
-    defineReminderDeliveryJob(syl.deps.jobs, new Date(now - 24 * 60 * 60_000).toISOString());
-    const apns = new ApnsClient({
-      credentials: {
-        keyId: env["SYL_APNS_KEY_ID"] ?? "",
-        teamId: env["SYL_APNS_TEAM_ID"] ?? "",
-        bundleId: env["SYL_APNS_BUNDLE_ID"] ?? "",
-        privateKeyPem: env["SYL_APNS_PRIVATE_KEY"] ?? "",
-      },
-      origins: { production: apple.origin, sandbox: apple.origin },
-      clock: () => now,
-    });
-
-    const runner = new JobRunner({
-      store: syl.deps.jobs,
-      handlers: new Map([
-        [
-          "reminder_delivery",
-          createReminderDeliveryHandler({
-            reminders: syl.deps.reminders,
-            outbox: syl.deps.outbox,
-            devices: syl.deps.devices,
-            apns,
-          }),
-        ],
-      ]),
-      clock: () => now,
-      timers: inertTimers,
-      owner: "us1",
-    });
-
-    return {
-      runner,
-      close: async () => {
-        runner.stop();
-        await apns.close();
-      },
-    };
+  /** The service's own delivery runner. Apple was redirected when it booted. */
+  function runnerAgainst(target: FakeApns): { runner: JobRunner; close: () => Promise<void> } {
+    if (target !== apple) throw new Error("this story boots against one Apple");
+    return { runner: syl.runtime.runner, close: async () => undefined };
   }
 
   describe("the service Syl actually boots", () => {
