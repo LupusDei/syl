@@ -5,7 +5,11 @@ is reachable from the repo-root `npm test`.
 
 ```
 Syl.xcodeproj            the app project — iOS 17, SwiftUI, bundle id com.jmm.syl
+Syl.entitlements         aps-environment, as a build setting rather than a literal
 Syl/                     app target sources
+  App/AppDelegate.swift       APNs device token; there is no SwiftUI equivalent
+  Core/Services/              notifications, push registration, network monitor
+  Core/Storage/               server profiles (UserDefaults), token (Keychain)
 SylTests/                app-target unit tests (wiring only; see below)
 SylKit/                  local SPM package — the client wire layer, ZERO dependencies
   Sources/SylKit/Model/       the wire types, hand-written from shared/openapi.yaml
@@ -113,6 +117,37 @@ The three rules worth knowing before touching it:
 - **`sinceSeq` is not `since`.** The frame recovers a socket by sequence number; the
   endpoint rebuilds a device store by opaque cursor. The names differ so they cannot
   be conflated.
+
+## The app shell, and four scars it is shaped around
+
+Each of these cost a real debugging cycle in Adjutant. They are load-bearing, not
+stylistic.
+
+- **The base URL comes from `UserDefaults`, never from app state.** Push registration
+  runs off whatever launch path iOS chose — a cold start from a notification, a
+  background wake — and at that moment there may be no view model and no configured
+  client. Adjutant read app state there, found nothing, fell back to a default, and
+  registered its device token against `localhost`; every push then failed with no
+  symptom but silence. `SylBackend` therefore builds a client *per call* from the
+  stored URL. There is no cached base URL to go stale.
+- **The notification delegate uses the completion-handler variants.** The `async`
+  overloads crash on cold start with a main-thread assertion even when the delegate is
+  `@MainActor` — and cold start from a notification is the single most important path
+  in this app. Do not "modernise" them.
+- **Snooze is server-side.** The category and its actions are Adjutant's, and they are
+  most of what Syl needs for free. The *authority* is not: Adjutant reschedules on the
+  device, and a phone that is wiped, restored or replaced takes those deferrals with
+  it. Every action here is a call to the service, which must return a strictly later
+  instant or refuse with `DEFERRAL_NOT_LATER`.
+- **`aps-environment` is `$(APS_ENVIRONMENT)`, not a literal** — `development` in
+  Debug, `production` in Release — and `PushRegistration.environment` is derived from
+  the same `#if DEBUG`. TestFlight builds always produce production tokens and
+  Xcode-installed builds always produce sandbox ones; pinning either value makes one
+  path wrong, and the only symptom is `BadDeviceToken` on every send.
+
+Deliberately absent: `UIBackgroundModes = remote-notification`. Syl never makes a
+reminder depend on a silent push — they are throttled, dropped in Low Power Mode, and
+Apple's own guidance is that you may receive none at all.
 
 ## Not built yet
 

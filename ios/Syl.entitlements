@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  aps-environment is a build setting, not a literal, and that is the point.
+
+  A TestFlight or App Store build always produces production APNs tokens; an
+  Xcode-installed build always produces sandbox tokens. Pinning one value here means
+  one of those two paths is wrong, and the only symptom is BadDeviceToken on every
+  send — no crash, no log, just silence where a reminder should have been.
+
+  Adjutant pinned it to `development` while shipping through TestFlight. Its push
+  works only because an environment variable elsewhere happens to compensate. Deriving
+  it from the configuration makes the two impossible to disagree: APS_ENVIRONMENT is
+  `development` in Debug and `production` in Release, and PushRegistration.environment
+  is derived from the same #if DEBUG, so the token the app registers and the
+  entitlement it was signed with always match.
+
+  Deliberately absent: UIBackgroundModes = remote-notification. Syl never makes a
+  reminder depend on a silent push — they are throttled to a couple an hour, dropped
+  entirely in Low Power Mode or with Background App Refresh off, and Apple's guidance
+  is that you may receive none at all. A capability we do not rely on is one we should
+  not ask for.
+-->
+<plist version="1.0">
+<dict>
+	<key>aps-environment</key>
+	<string>$(APS_ENVIRONMENT)</string>
+</dict>
+</plist>
