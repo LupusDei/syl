@@ -3,6 +3,7 @@ import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api
 import { fixedClock, type Clock } from "../../src/services/clock.js";
 import { IN_MEMORY, openDatabase, type SylDatabase } from "../../src/services/database.js";
 import type { Entropy } from "../../src/services/id.js";
+import { MessageStore } from "../../src/services/message-store.js";
 
 /**
  * The pieces a service-level test needs, assembled the way `bootstrap` does.
@@ -51,6 +52,19 @@ export interface TestKeyOptions {
   readonly entropy?: Entropy;
   readonly tokenTtlMs?: number;
   readonly pairingCodeTtlMs?: number;
+}
+
+/** A `MessageStore` on a fixed clock. */
+export function testMessages(db: SylDatabase, clock: Clock = fixedClock(TEST_NOW)): MessageStore {
+  return new MessageStore({ db: db.handle, clock });
+}
+
+/** Everything `createApp` needs, on one in-memory store. */
+export function testDeps(db: SylDatabase): {
+  readonly keys: ApiKeyService;
+  readonly messages: MessageStore;
+} {
+  return { keys: testKeys(db), messages: testMessages(db) };
 }
 
 /** An `ApiKeyService` on a fixed clock and predictable entropy. */

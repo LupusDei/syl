@@ -6,7 +6,7 @@ import { bearerToken } from "../../src/middleware/auth.js";
 import { THE_COMMANDER, type ApiKeyService } from "../../src/services/api-key-service.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import { startTestApp, type RunningApp } from "../helpers/http.js";
-import { testConfig, testDatabase, testKeys } from "../helpers/service.js";
+import { testConfig, testDatabase, testDeps } from "../helpers/service.js";
 
 let db: SylDatabase;
 let keys: ApiKeyService;
@@ -14,8 +14,9 @@ let running: RunningApp;
 
 beforeEach(async () => {
   db = testDatabase();
-  keys = testKeys(db);
-  running = await startTestApp(createApp(testConfig(), { keys }));
+  const deps = testDeps(db);
+  keys = deps.keys;
+  running = await startTestApp(createApp(testConfig(), deps));
 });
 
 afterEach(async () => {

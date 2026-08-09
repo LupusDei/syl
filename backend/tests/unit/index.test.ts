@@ -14,12 +14,12 @@ import {
   onError,
   startServer,
   toFailure,
+  type AppDependencies,
 } from "../../src/index.js";
 import { ApiFailure } from "../../src/routes/envelope.js";
-import type { ApiKeyService } from "../../src/services/api-key-service.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import { startTestApp, wrap, type RunningApp } from "../helpers/http.js";
-import { testConfig, testDatabase, testKeys } from "../helpers/service.js";
+import { testConfig, testDatabase, testDeps } from "../helpers/service.js";
 
 const config: SylConfig = testConfig();
 
@@ -35,10 +35,10 @@ let running: RunningApp | undefined;
 let db: SylDatabase | undefined;
 
 /** The dependencies `createApp` needs, on a fresh in-memory store. */
-function deps(): { keys: ApiKeyService } {
+function deps(): AppDependencies {
   db?.close();
   db = testDatabase();
-  return { keys: testKeys(db) };
+  return testDeps(db);
 }
 
 afterEach(async () => {

@@ -11,10 +11,12 @@ import express, {
 import { loadConfig, type SylConfig } from "./config.js";
 import { requireBearerToken } from "./middleware/auth.js";
 import { createAuthRouter } from "./routes/auth.js";
+import { createConversationRouter } from "./routes/conversations.js";
 import { ApiFailure, sendFailure } from "./routes/envelope.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
 import { ApiKeyService } from "./services/api-key-service.js";
 import { openDatabase, type SylDatabase } from "./services/database.js";
+import { MessageStore } from "./services/message-store.js";
 
 /**
  * The Syl HTTP service.
@@ -101,6 +103,8 @@ export const onError: ErrorRequestHandler = (error, _request, response, _next) =
 export interface AppDependencies {
   /** Bearer tokens. Required: an app with no auth is not a thing Syl ships. */
   readonly keys: ApiKeyService;
+  /** Conversation history. */
+  readonly messages: MessageStore;
   /** Extra health probes. The billing check is always present. */
   readonly probes?: readonly HealthProbe[];
 }
@@ -124,6 +128,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     ),
   );
   api.use(createAuthRouter({ keys: deps.keys, authenticate }));
+  api.use(createConversationRouter({ messages: deps.messages, authenticate }));
 
   app.use(API_BASE_PATH, api);
   app.use(notFound);
@@ -193,10 +198,11 @@ export function bootstrap(config: SylConfig): {
 } {
   const database = openDatabase({ path: config.databasePath });
   const keys = new ApiKeyService({ db: database.handle });
+  const messages = new MessageStore({ db: database.handle });
 
   return {
     database,
-    deps: { keys, probes: [databaseProbe(database.handle)] },
+    deps: { keys, messages, probes: [databaseProbe(database.handle)] },
   };
 }
 
