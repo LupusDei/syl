@@ -581,6 +581,35 @@ describe("the invariant that must always be zero", () => {
     expect(log.session(broken.id)?.duplicateEdgeInserts).toBe(1);
   });
 
+  it("should tell a partition-blind lookup apart from reflection defeating a rejection", () => {
+    // Three tiers, three different bugs. `cold` is the expected failure — an
+    // existence check that skipped the cold partition. `suppressed` is
+    // categorically worse: reflection trying to resurrect a connection the
+    // Commander explicitly rejected, which is the suppression force being
+    // defeated rather than a lookup being narrow. A bare count cannot separate
+    // them and the response to each is different.
+    const session = openSession();
+    log.recordDuplicateEdgeInsert({
+      sessionId: session.id,
+      sourceNode: NODE_A,
+      targetNode: NODE_B,
+      existingEdgeId: EDGE_1,
+      existingTier: "cold",
+    });
+    log.recordDuplicateEdgeInsert({
+      sessionId: session.id,
+      sourceNode: NODE_B,
+      targetNode: NODE_C,
+      existingEdgeId: EDGE_2,
+      existingTier: "suppressed",
+    });
+
+    expect(log.duplicatesOf(session.id).map((breach) => breach.existingTier)).toEqual([
+      "cold",
+      "suppressed",
+    ]);
+  });
+
   it("should surface every breach across all of history, not only tonight's", () => {
     const first = openSession({ night: "2026-08-08" });
     log.recordDuplicateEdgeInsert({

@@ -179,6 +179,26 @@ CREATE TABLE dream_sessions (
   -- is the other half of the reactivation story: "reactivated 0, demoted 900"
   -- and "reactivated 0, demoted 0" are very different nights, and without this
   -- column they read the same.
+  --
+  -- THE SWEEP MUST NULL THE STAMP AS IT MOVES THE ROW, or this number stops
+  -- being trustworthy:
+  --
+  --   UPDATE memory_edges SET tier = 'cold', demote_after = NULL, updated_at = :now
+  --    WHERE tier = 'hot' AND demote_after IS NOT NULL AND demote_after <= :now
+  --
+  -- Not `SET tier = 'cold'` alone. `changes` is honest either way tonight —
+  -- the `tier = 'hot'` predicate stops a demoted row being re-selected
+  -- tomorrow — but a cold row that kept its stamp claims to be scheduled to
+  -- cross a floor it has already crossed, and the first person to write
+  -- `WHERE demote_after <= :now` without also writing `tier = 'hot'` gets a
+  -- wrong answer that reads as a bug in THIS column rather than a stale one in
+  -- 0012. It also matters for cost: `memory_edges_demote_idx` is partial on
+  -- `demote_after IS NOT NULL` and not on `tier`, so a cold row that keeps its
+  -- stamp stays in that index forever, accumulating exactly the history the
+  -- partitioning exists to keep out of the hot path. 0012's CHECK permits the
+  -- NULL by design, and `memory-core-migration.test.ts` pins the statement in
+  -- this form under "demotion moves a row between partitions and loses
+  -- nothing". Credit: memory-schema, syl-005.1.1.
   edges_demoted       INTEGER NOT NULL DEFAULT 0 CHECK (edges_demoted >= 0),
 
   -- ---- Checkpoint: where to pick the night back up ----
@@ -362,6 +382,15 @@ CREATE TABLE dream_duplicate_edges (
 
   -- The edge that was already there and should have been reactivated.
   existing_edge_id TEXT NOT NULL,
+  -- The tier is what turns a count into a diagnosis, and the three values are
+  -- three different bugs:
+  --   `cold`       — the existence check ran against the hot index only. The
+  --                  failure syl-005.4.2 describes, and the expected one.
+  --   `suppressed` — CATEGORICALLY WORSE, and it should be loud. Reflection is
+  --                  trying to resurrect a connection the Commander explicitly
+  --                  rejected, which is the suppression force being defeated
+  --                  rather than a lookup being narrow.
+  --   `hot`        — the check is broken outright, not merely partition-blind.
   existing_tier    TEXT CHECK (
                      existing_tier IS NULL OR existing_tier IN ('hot', 'cold', 'suppressed')
                    ),
