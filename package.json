@@ -16,6 +16,8 @@
     "check:node": "node scripts/check-node.mjs",
     "pretypecheck": "npm run check:node",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
+    "prebuild": "npm run check:node",
+    "build": "npm run build --workspaces --if-present",
     "pretest": "npm run check:node",
     "test": "vitest run",
     "test:watch": "vitest",

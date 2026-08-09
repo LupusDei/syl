@@ -1,141 +1,192 @@
+import type { HealthStatus } from "@syl/shared";
 import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { SylConfig } from "../../src/config.js";
-import { createHealthRouter, type HealthBody } from "../../src/routes/health.js";
+import {
+  createHealthRouter,
+  databaseProbe,
+  subscriptionRailsProbe,
+  worstStatus,
+  type HealthProbe,
+} from "../../src/routes/health.js";
+import { fixedClock } from "../../src/services/clock.js";
+import type { SylDatabase } from "../../src/services/database.js";
 import { startTestApp, type RunningApp } from "../helpers/http.js";
-
-const baseConfig: SylConfig = {
-  host: "127.0.0.1",
-  port: 4201,
-  nodeEnv: "test",
-  version: "0.1.0",
-  credentialSource: "none",
-  subscriptionRails: true,
-};
+import { TEST_NOW, testConfig, testDatabase } from "../helpers/service.js";
 
 let running: RunningApp | undefined;
+let db: SylDatabase | undefined;
 
 afterEach(async () => {
   await running?.close();
   running = undefined;
+  db?.close();
+  db = undefined;
 });
 
 /** Mount the health router alone, so nothing else can colour the result. */
 async function serve(
-  config: SylConfig = baseConfig,
-  now: () => number = Date.now,
-): Promise<RunningApp> {
+  config: SylConfig = testConfig(),
+  probes: readonly HealthProbe[] = [],
+  clock = fixedClock(TEST_NOW),
+): Promise<HealthStatus> {
   const app = express();
-  app.use("/api", createHealthRouter(config, now));
+  app.use("/api/v1", createHealthRouter({ config, probes, clock }));
   running = await startTestApp(app);
-  return running;
+
+  const response = await fetch(`${running.baseUrl}/api/v1/health`);
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { success: boolean; data: HealthStatus };
+  expect(body.success).toBe(true);
+  return body.data;
 }
 
-describe("GET /api/health", () => {
-  it("should return 200 with status, version and uptime", async () => {
-    const app = await serve();
+/** A probe with a fixed answer. */
+function probe(name: string, status: "ok" | "degraded" | "down", detail?: string): HealthProbe {
+  return { name, run: () => (detail === undefined ? { status } : { status, detail }) };
+}
 
-    const response = await fetch(`${app.baseUrl}/api/health`);
-    const body = (await response.json()) as HealthBody;
+describe("GET /api/v1/health", () => {
+  it("should answer in the contract's envelope with every required field", async () => {
+    const data = await serve();
 
-    expect(response.status).toBe(200);
-    expect(body.status).toBe("ok");
-    expect(body.version).toBe("0.1.0");
-    expect(body.uptimeSeconds).toBeGreaterThanOrEqual(0);
+    expect(data.status).toBe("ok");
+    expect(data.version).toBe("0.1.0");
+    expect(data.startedAt).toBe("2026-08-09T07:00:00.000Z");
+    expect(data.now).toBe("2026-08-09T07:00:00.000Z");
+    expect(Array.isArray(data.checks)).toBe(true);
   });
 
-  it("should answer as JSON", async () => {
-    const app = await serve();
+  it("should always include the subscription-rails check, since that is the one that is ours", async () => {
+    const data = await serve();
 
-    const response = await fetch(`${app.baseUrl}/api/health`);
-
-    expect(response.headers.get("content-type")).toMatch(/application\/json/);
+    expect(data.checks.map((check) => check.name)).toContain("subscription-rails");
   });
 
-  it("should report uptime measured from when the router was created", async () => {
-    let clock = 1_000_000;
-    const app = await serve(baseConfig, () => clock);
+  it("should report degraded when a credential variable would reroute billing", async () => {
+    // A health check that could only say "ok" would report perfect health
+    // while the Commander's billing was being rerouted to the metered API.
+    const data = await serve(
+      testConfig({ credentialSource: "ANTHROPIC_API_KEY", subscriptionRails: false }),
+    );
 
-    clock += 2_500;
-    const body = (await (await fetch(`${app.baseUrl}/api/health`)).json()) as HealthBody;
-
-    expect(body.uptimeSeconds).toBe(2.5);
+    expect(data.status).toBe("degraded");
+    const check = data.checks.find((c) => c.name === "subscription-rails");
+    expect(check?.status).toBe("degraded");
+    expect(check?.detail).toContain("ANTHROPIC_API_KEY");
   });
 
-  it("should report a non-negative uptime on the very first request", async () => {
-    const app = await serve(baseConfig, () => 42);
+  it("should never print a credential value, only the variable's name", async () => {
+    const data = await serve(
+      testConfig({ credentialSource: "ANTHROPIC_API_KEY", subscriptionRails: false }),
+    );
 
-    const body = (await (await fetch(`${app.baseUrl}/api/health`)).json()) as HealthBody;
-
-    expect(body.uptimeSeconds).toBe(0);
+    expect(JSON.stringify(data)).not.toMatch(/sk-ant/);
   });
 
-  describe("credential source", () => {
-    it("should report subscription rails when no key is in the environment", async () => {
-      const app = await serve();
+  it("should carry every extra probe through with a null detail when it gave none", async () => {
+    const data = await serve(testConfig(), [probe("scheduler", "ok")]);
 
-      const body = (await (await fetch(`${app.baseUrl}/api/health`)).json()) as HealthBody;
+    expect(data.checks).toContainEqual({ name: "scheduler", status: "ok", detail: null });
+  });
 
-      expect(body.credentialSource).toBe("none");
-      expect(body.subscriptionRails).toBe(true);
-    });
+  it("should take the worst check as the top-line status", async () => {
+    const data = await serve(testConfig(), [probe("apns", "down", "BadDeviceToken")]);
 
-    it("should name the variable that would reroute billing to the metered API", async () => {
-      const app = await serve({
-        ...baseConfig,
-        credentialSource: "ANTHROPIC_API_KEY",
-        subscriptionRails: false,
-      });
+    expect(data.status).toBe("down");
+  });
 
-      const body = (await (await fetch(`${app.baseUrl}/api/health`)).json()) as HealthBody;
+  it("should still answer 200 when a dependency is down", async () => {
+    // The status inside the body is the answer. A non-200 is indistinguishable
+    // from the proxy in front of Syl being unhappy, and "degraded" is
+    // information a monitor should read, not a failure it should retry.
+    const app = express();
+    app.use("/api/v1", createHealthRouter({ config: testConfig(), probes: [probe("x", "down")] }));
+    running = await startTestApp(app);
 
-      expect(body.credentialSource).toBe("ANTHROPIC_API_KEY");
-      expect(body.subscriptionRails).toBe(false);
-    });
+    expect((await fetch(`${running.baseUrl}/api/v1/health`)).status).toBe(200);
+  });
 
-    it("should stay 200 even when the rails are wrong, so monitoring can read the detail", async () => {
-      const app = await serve({
-        ...baseConfig,
-        credentialSource: "ANTHROPIC_API_KEY",
-        subscriptionRails: false,
-      });
+  it("should advance `now` while `startedAt` stays put", async () => {
+    let ms = TEST_NOW;
+    const app = express();
+    app.use("/api/v1", createHealthRouter({ config: testConfig(), clock: () => ms }));
+    running = await startTestApp(app);
 
-      const response = await fetch(`${app.baseUrl}/api/health`);
+    ms += 90_000;
+    const body = (await (await fetch(`${running.baseUrl}/api/v1/health`)).json()) as {
+      data: HealthStatus;
+    };
 
-      expect(response.status).toBe(200);
+    expect(body.data.startedAt).toBe("2026-08-09T07:00:00.000Z");
+    expect(body.data.now).toBe("2026-08-09T07:01:30.000Z");
+  });
+});
+
+describe("worstStatus", () => {
+  it("should be ok when there is nothing to report", () => {
+    expect(worstStatus([])).toBe("ok");
+  });
+
+  it("should prefer degraded over ok", () => {
+    expect(
+      worstStatus([
+        { name: "a", status: "ok", detail: null },
+        { name: "b", status: "degraded", detail: null },
+      ]),
+    ).toBe("degraded");
+  });
+
+  it("should prefer down over degraded, whatever the order", () => {
+    expect(
+      worstStatus([
+        { name: "a", status: "down", detail: null },
+        { name: "b", status: "degraded", detail: null },
+      ]),
+    ).toBe("down");
+    expect(
+      worstStatus([
+        { name: "a", status: "degraded", detail: null },
+        { name: "b", status: "down", detail: null },
+      ]),
+    ).toBe("down");
+  });
+});
+
+describe("subscriptionRailsProbe", () => {
+  it("should name the login when billing is safe", () => {
+    expect(subscriptionRailsProbe(testConfig()).run()).toEqual({
+      status: "ok",
+      detail: "claude.ai subscription",
     });
   });
 
-  describe("error path", () => {
-    it("should not answer a POST to the health path", async () => {
-      const app = await serve();
+  it("should be degraded rather than down, because the service still works", () => {
+    const result = subscriptionRailsProbe(
+      testConfig({ credentialSource: "ANTHROPIC_AUTH_TOKEN", subscriptionRails: false }),
+    ).run();
 
-      const response = await fetch(`${app.baseUrl}/api/health`, { method: "POST" });
+    expect(result.status).toBe("degraded");
+  });
+});
 
-      expect(response.status).not.toBe(200);
-    });
+describe("databaseProbe", () => {
+  it("should be ok against a migrated database", () => {
+    db = testDatabase();
 
-    it("should not answer a sibling path it does not own", async () => {
-      const app = await serve();
+    expect(databaseProbe(db.handle).run()).toEqual({ status: "ok", detail: null });
+  });
 
-      const response = await fetch(`${app.baseUrl}/api/health/deep`);
+  it("should be down rather than throwing when the store cannot be read", () => {
+    // A probe that throws takes the health endpoint down with it, and a health
+    // endpoint that 500s is indistinguishable from the service being gone.
+    db = testDatabase();
+    db.handle.exec("DROP TABLE schema_migrations");
 
-      expect(response.status).toBe(404);
-    });
+    const result = databaseProbe(db.handle).run();
 
-    it("should expose nothing beyond the documented fields", async () => {
-      const app = await serve();
-
-      const body = (await (await fetch(`${app.baseUrl}/api/health`)).json()) as HealthBody;
-
-      expect(Object.keys(body).sort()).toEqual([
-        "credentialSource",
-        "status",
-        "subscriptionRails",
-        "uptimeSeconds",
-        "version",
-      ]);
-    });
+    expect(result.status).toBe("down");
+    expect(result.detail).toBeTruthy();
   });
 });

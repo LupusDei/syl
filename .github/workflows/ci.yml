@@ -38,6 +38,14 @@ jobs:
       - name: Typecheck (root + every workspace)
         run: npm run typecheck
 
+      # The build is a gate, not a convenience. tsc emits JavaScript and copies
+      # nothing else, so backend/scripts/copy-assets.mjs is the only thing that
+      # puts the .sql migrations into dist/ — and it exits non-zero if it
+      # copied none. Without this step that guard never runs, and a build that
+      # silently lost its migrations reaches production intact.
+      - name: Build (every workspace)
+        run: npm run build
+
       - name: Test (every workspace)
         run: npm test
 

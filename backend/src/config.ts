@@ -26,6 +26,15 @@ export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PORT = 4201;
 
 /**
+ * The operational store, under the repo's own dot-directory.
+ *
+ * `.syl/` is already where session ids live and is already gitignored, so a
+ * developer cannot accidentally commit the Commander's to-dos. A production
+ * deployment sets `SYL_DB_PATH` to somewhere that gets backed up.
+ */
+export const DEFAULT_DATABASE_PATH = ".syl/syl.db";
+
+/**
  * Environment variables that supply Anthropic credentials, in the order the
  * CLI resolves them. `session.ts` deletes both before spawning `claude`.
  */
@@ -50,8 +59,10 @@ export interface SylConfig {
   /** TCP port to listen on. */
   readonly port: number;
   readonly nodeEnv: NodeEnv;
-  /** Service version, reported on `/api/health`. */
+  /** Service version, reported on `/api/v1/health`. */
   readonly version: string;
+  /** Where the SQLite operational store lives. */
+  readonly databasePath: string;
   /**
    * Which environment variable would hand credentials to a child `claude`
    * process, in the CLI's own `apiKeySource` vocabulary. `"none"` means the
@@ -175,6 +186,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SylConfig {
     port,
     nodeEnv,
     version: SERVICE_VERSION,
+    databasePath: read(env, "SYL_DB_PATH") ?? DEFAULT_DATABASE_PATH,
     credentialSource,
     subscriptionRails: credentialSource === "none",
   };
