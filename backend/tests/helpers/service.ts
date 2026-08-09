@@ -19,9 +19,35 @@ import { ReminderService } from "../../src/services/reminder-service.js";
  * `:memory:` makes that free.
  */
 
-/** A migrated, empty database. Close it in `afterEach`. */
+/**
+ * A migrated, empty database with its seeded rows pinned to the test clock.
+ *
+ * Migration `0001` seeds the interactive conversation using SQLite's own
+ * `strftime('now')` — the REAL wall clock at migration time. That makes the
+ * seeded row's timestamps different in every database and, worse, later than
+ * anything a fixed-clock test writes once real time passes `TEST_NOW`.
+ *
+ * It failed exactly that way: `TEST_NOW` is 2026-08-09T07:00Z, so on the day
+ * it was written every ordering assertion passed, and from 07:00 UTC the next
+ * morning the seeded row sorted first and the suite went red with no change to
+ * any code. A time bomb with a one-day fuse, latent from the moment it was
+ * committed.
+ *
+ * Normalising here rather than in the test keeps every future ordering test
+ * safe, and keeps the fix in the fixture where the non-determinism enters
+ * rather than scattered across the assertions that trip over it.
+ *
+ * The migration itself is the deeper problem — seeded data should not carry a
+ * non-deterministic timestamp — but it has shipped and is checksummed, so that
+ * belongs in a follow-up migration rather than an edit. See `syl-1t7`.
+ */
 export function testDatabase(): SylDatabase {
-  return openDatabase({ path: IN_MEMORY });
+  const db = openDatabase({ path: IN_MEMORY });
+  const seeded = new Date(TEST_NOW - 60_000).toISOString();
+  db.handle
+    .prepare("UPDATE conversations SET created_at = ?, updated_at = ? WHERE updated_at > ?")
+    .run(seeded, seeded, seeded);
+  return db;
 }
 
 /** A config with every field set, so a new field breaks tests loudly. */
