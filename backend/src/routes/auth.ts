@@ -83,6 +83,13 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
    * credentials for one pairing, and refusing the retry is the bug being
    * fixed. Anyone who can read this table can already read the Commander's
    * entire message history from the row beside it.
+   *
+   * It opens no new door over HTTP, and that is worth being precise about on
+   * the one unauthenticated write. A replay is matched on key *and*
+   * fingerprint, and the fingerprint covers the body — which contains the
+   * pairing code. A caller holding a stolen key and nothing else gets
+   * `IDEMPOTENCY_KEY_REUSE`; a caller who also has the pairing code could have
+   * paired anyway.
    */
   router.post("/auth/pair", (request, response) => {
     sendIdempotent(

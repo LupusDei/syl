@@ -229,6 +229,30 @@ describe("POST /api/v1/auth/pair", () => {
       expect(body.error?.code).toBe("IDEMPOTENCY_KEY_REUSE");
     });
 
+    it("should not hand the grant to a caller holding only the key", async () => {
+      // The one unauthenticated write, so the replay rule has to be precise: a
+      // replay is matched on key *and* fingerprint, and the fingerprint covers the
+      // body, which carries the pairing code. A stolen key alone must buy nothing.
+      const key = "pair-retry-0005";
+      const first = await post(
+        "/auth/pair",
+        { pairingCode: keys.issuePairingCode().code, deviceName: "Commander's iPhone" },
+        { idempotencyKey: key },
+      );
+      const granted = (await first.json()) as Envelope<TokenGrant>;
+
+      const stolen = await post(
+        "/auth/pair",
+        { pairingCode: "0000-0000", deviceName: "Commander's iPhone" },
+        { idempotencyKey: key },
+      );
+      const body = (await stolen.json()) as Envelope<TokenGrant>;
+
+      expect(body.error?.code).toBe("IDEMPOTENCY_KEY_REUSE");
+      expect(body.data).toBeUndefined();
+      expect(JSON.stringify(body)).not.toContain(granted.data?.token ?? "<none>");
+    });
+
     it("should refuse a pairing that carries no Idempotency-Key at all", async () => {
       const response = await post(
         "/auth/pair",

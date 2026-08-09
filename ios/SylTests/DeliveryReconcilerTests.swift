@@ -276,6 +276,45 @@ final class DeliveryReconcilerTests: XCTestCase {
         XCTAssertEqual(calls, [], "a quiet reconcile is a quiet network")
     }
 
+    // MARK: - The outbox lookup the reconcile remembers with
+
+    func testShouldFindAQueuedIntentByItsKey() throws {
+        let record = OutboxRecord(
+            idempotencyKey: "ack-syl:delivery:1",
+            kind: .acknowledgeDelivery,
+            targetId: "syl:delivery:1",
+            createdAt: Date(timeIntervalSince1970: 1_786_000_000)
+        )
+        try outbox.enqueue(record)
+
+        let found = try outbox.queued(idempotencyKey: "ack-syl:delivery:1")
+
+        XCTAssertEqual(found?.idempotencyKey, "ack-syl:delivery:1")
+        XCTAssertEqual(found?.targetId, "syl:delivery:1")
+    }
+
+    func testShouldFindNothingForAKeyItHasNeverSeen() throws {
+        XCTAssertNil(try outbox.queued(idempotencyKey: "ack-syl:delivery:nothing"))
+    }
+
+    func testShouldStopFindingAQueuedIntentOnceItReachesTheServer() throws {
+        // The lookup is the reconcile's memory, so it has to forget at the same moment
+        // the server starts answering for the row — or a delivery whose ack landed
+        // would be treated as still awaiting push forever.
+        let record = try outbox.enqueue(
+            OutboxRecord(
+                idempotencyKey: "ack-syl:delivery:1",
+                kind: .acknowledgeDelivery,
+                targetId: "syl:delivery:1",
+                createdAt: Date(timeIntervalSince1970: 1_786_000_000)
+            )
+        )
+
+        try outbox.complete(record)
+
+        XCTAssertNil(try outbox.queued(idempotencyKey: "ack-syl:delivery:1"))
+    }
+
     func testShouldKnowWhichStatesTheDeviceHasToAnswerFor() {
         XCTAssertTrue(DeliveryReconciler.needsDeviceRecovery(.delivered))
         XCTAssertTrue(DeliveryReconciler.needsDeviceRecovery(.failed))
