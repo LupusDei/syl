@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ConfigError,
+  DEFAULT_DATABASE_PATH,
   DEFAULT_HOST,
   DEFAULT_PORT,
   SERVICE_VERSION,
@@ -53,9 +54,25 @@ describe("loadConfig", () => {
         port: DEFAULT_PORT,
         nodeEnv: "development",
         version: SERVICE_VERSION,
+        databasePath: DEFAULT_DATABASE_PATH,
         credentialSource: "none",
         subscriptionRails: true,
       });
+    });
+
+    it("should read the database path from SYL_DB_PATH", () => {
+      expect(loadConfig({ SYL_DB_PATH: "/var/lib/syl/syl.db" }).databasePath).toBe(
+        "/var/lib/syl/syl.db",
+      );
+    });
+
+    it("should keep the store under .syl/ by default, which is already gitignored", () => {
+      // The Commander's to-dos must not be one `git add .` away from a commit.
+      expect(loadConfig({}).databasePath.startsWith(".syl/")).toBe(true);
+    });
+
+    it("should treat a blank SYL_DB_PATH as unset rather than as the empty path", () => {
+      expect(loadConfig({ SYL_DB_PATH: "   " }).databasePath).toBe(DEFAULT_DATABASE_PATH);
     });
 
     it("should read HOST, PORT and NODE_ENV from the environment", () => {
