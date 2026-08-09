@@ -1,15 +1,11 @@
-import { generateKeyPairSync } from "node:crypto";
 import { rmSync } from "node:fs";
 
 import type { Delivery, Job, Reminder } from "@syl/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createReminderDeliveryHandler } from "../../src/jobs/reminder-delivery-job.js";
-import { ensureReminderDeliveryJob } from "../../src/jobs/runtime.js";
-import { ApnsClient } from "../../src/services/apns-service.js";
-import { JobRunner, type Timers } from "../../src/services/job-runner.js";
-import { startFakeApns, type FakeApns } from "../helpers/fake-apns.js";
-import { expectData, startLiveService, type LiveService } from "../helpers/live-service.js";
+import { deliveryRig } from "../helpers/delivery-runner.js";
+import { startFakeApns } from "../helpers/fake-apns.js";
+import { expectData, startLiveService } from "../helpers/live-service.js";
 
 /**
  * **Journey 6 — a reboot mid-flight.**
@@ -35,61 +31,8 @@ const FIRE_AT = "2026-08-10T21:00:00.000Z";
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
-const inertTimers: Timers = { set: () => 0, clear: () => undefined };
-
-function apnsEnv(): NodeJS.ProcessEnv {
-  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
-  return {
-    SYL_APNS_KEY_ID: "ABCD123456",
-    SYL_APNS_TEAM_ID: "TEAM123456",
-    SYL_APNS_BUNDLE_ID: "com.jmm.syl",
-    SYL_APNS_PRIVATE_KEY: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
-  };
-}
-
-interface Rig {
-  readonly runner: JobRunner;
-  close(): Promise<void>;
-}
-
-function runnerFor(syl: LiveService, apple: FakeApns, clock: () => number, owner: string): Rig {
-  const env = apnsEnv();
-  ensureReminderDeliveryJob(syl.deps.jobs, clock());
-  const apns = new ApnsClient({
-    credentials: {
-      keyId: env["SYL_APNS_KEY_ID"] ?? "",
-      teamId: env["SYL_APNS_TEAM_ID"] ?? "",
-      bundleId: env["SYL_APNS_BUNDLE_ID"] ?? "",
-      privateKeyPem: env["SYL_APNS_PRIVATE_KEY"] ?? "",
-    },
-    origins: { production: apple.origin, sandbox: apple.origin },
-    clock,
-  });
-
-  const runner = new JobRunner({
-    store: syl.deps.jobs,
-    handlers: new Map([
-      [
-        "reminder_delivery",
-        createReminderDeliveryHandler({
-          reminders: syl.deps.reminders,
-          outbox: syl.deps.outbox,
-          devices: syl.deps.devices,
-          apns,
-        }),
-      ],
-    ]),
-    clock,
-    timers: inertTimers,
-    owner,
-    // The kill leaves a tick running against a closed database, which is the
-    // whole point of the simulation. Its death rattle is expected, so it is
-    // swallowed rather than printed over the run.
-    onError: () => undefined,
-  });
-
-  return { runner, close: async () => { runner.stop(); await apns.close(); } };
-}
+/** How long to wait on the fake Apple. Generous: this suite runs in parallel. */
+const SETTLE_MS = 15_000;
 
 describe("Journey 6 — a reboot mid-flight", () => {
   const cleanup: (() => void)[] = [];
@@ -131,7 +74,16 @@ describe("Journey 6 — a reboot mid-flight", () => {
       }),
     );
 
-    const before = runnerFor(first, apple, () => now, "syl-before-the-reboot");
+    // `silent`, because the kill below leaves this runner's tick executing
+    // against a closed database. That death rattle is the simulation working,
+    // not a failure worth printing over the run.
+    const before = deliveryRig({
+      syl: first,
+      apple,
+      clock: () => now,
+      owner: "syl-before-the-reboot",
+      silent: true,
+    });
     await before.runner.start();
 
     // Apple takes the request and then says nothing at all — the machine dies
@@ -139,12 +91,13 @@ describe("Journey 6 — a reboot mid-flight", () => {
     apple.reply({ status: 200, delayMs: 10 * MINUTE });
 
     now = Date.parse(FIRE_AT);
-    // Deliberately not awaited: this tick never completes.
-    const stranded = before.runner.tick().catch(() => undefined);
+    // Deliberately neither awaited nor kept: this tick never completes, and the
+    // `catch` is only here so its eventual rejection is not unhandled.
+    void before.runner.tick().catch(() => undefined);
 
     await vi.waitFor(() => {
       expect(apple.pushes, "the push never reached Apple").toHaveLength(1);
-    }, 5_000);
+    }, SETTLE_MS);
 
     // The row is claimed and in flight, exactly as production would have it.
     const inFlight = (await expectData<{ items: Delivery[] }>(await first.api("/deliveries")))
@@ -161,7 +114,6 @@ describe("Journey 6 — a reboot mid-flight", () => {
     // The power goes. Nothing runs on the way down.
     before.runner.stop();
     await first.close({ keepDatabase: true });
-    void stranded;
 
     // ---- She comes back, five minutes later. ----
     now = Date.parse(FIRE_AT) + 5 * MINUTE;
@@ -169,14 +121,19 @@ describe("Journey 6 — a reboot mid-flight", () => {
     // is not at the keyboard — but the *device* row, the APNs token, and the
     // outbox all come back off the disk untouched.
     const second = await startLiveService({ databasePath: path, clock: () => now });
-    const after = runnerFor(second, apple, () => now, "syl-after-the-reboot");
+    const after = deliveryRig({
+      syl: second,
+      apple,
+      clock: () => now,
+      owner: "syl-after-the-reboot",
+    });
     try {
       await after.runner.start();
 
       // The stale claim is reclaimed and retried.
       await vi.waitFor(() => {
         expect(apple.pushes, "the stranded notification was never retried").toHaveLength(2);
-      }, 5_000);
+      }, SETTLE_MS);
 
       // Same `apns-id` both times, so Apple treats the retry as the same
       // notification rather than a second one. This is the only thing standing

@@ -1,12 +1,8 @@
-import { generateKeyPairSync } from "node:crypto";
-
 import type { Delivery, Reminder } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createReminderDeliveryHandler } from "../../src/jobs/reminder-delivery-job.js";
-import { ensureReminderDeliveryJob } from "../../src/jobs/runtime.js";
-import { ApnsClient } from "../../src/services/apns-service.js";
-import { JobRunner, type Timers } from "../../src/services/job-runner.js";
+import type { JobRunner } from "../../src/services/job-runner.js";
+import { deliveryRig, type DeliveryRig } from "../helpers/delivery-runner.js";
 import { startFakeApns, type FakeApns } from "../helpers/fake-apns.js";
 import { expectData, startLiveService, type LiveService } from "../helpers/live-service.js";
 
@@ -45,18 +41,6 @@ const MORNING_CST = "2027-03-13T15:00:00.000Z";
 const MORNING_CDT = "2027-03-14T14:00:00.000Z";
 const MORNING_AFTER = "2027-03-15T14:00:00.000Z";
 
-const inertTimers: Timers = { set: () => 0, clear: () => undefined };
-
-function apnsEnv(): NodeJS.ProcessEnv {
-  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
-  return {
-    SYL_APNS_KEY_ID: "ABCD123456",
-    SYL_APNS_TEAM_ID: "TEAM123456",
-    SYL_APNS_BUNDLE_ID: "com.jmm.syl",
-    SYL_APNS_PRIVATE_KEY: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
-  };
-}
-
 describe("across days", () => {
   let syl: LiveService;
   let apple: FakeApns;
@@ -84,37 +68,9 @@ describe("across days", () => {
     await syl.close();
   });
 
-  function runnerAgainst(target: FakeApns): { runner: JobRunner; close: () => Promise<void> } {
-    const env = apnsEnv();
-    ensureReminderDeliveryJob(syl.deps.jobs, now);
-    const apns = new ApnsClient({
-      credentials: {
-        keyId: env["SYL_APNS_KEY_ID"] ?? "",
-        teamId: env["SYL_APNS_TEAM_ID"] ?? "",
-        bundleId: env["SYL_APNS_BUNDLE_ID"] ?? "",
-        privateKeyPem: env["SYL_APNS_PRIVATE_KEY"] ?? "",
-      },
-      origins: { production: target.origin, sandbox: target.origin },
-      clock: () => now,
-    });
-    const runner = new JobRunner({
-      store: syl.deps.jobs,
-      handlers: new Map([
-        [
-          "reminder_delivery",
-          createReminderDeliveryHandler({
-            reminders: syl.deps.reminders,
-            outbox: syl.deps.outbox,
-            devices: syl.deps.devices,
-            apns,
-          }),
-        ],
-      ]),
-      clock: () => now,
-      timers: inertTimers,
-      owner: "dst",
-    });
-    return { runner, close: async () => { runner.stop(); await apns.close(); } };
+  /** See the docstring on `deliveryRig`, and `syl-md5`. */
+  function runnerAgainst(target: FakeApns): DeliveryRig {
+    return deliveryRig({ syl, apple: target, clock: () => now, owner: "dst" });
   }
 
   /** Advance to `until`, ticking every fifteen minutes on the way. */

@@ -1,13 +1,8 @@
-import { generateKeyPairSync } from "node:crypto";
-
 import type { Delivery, Device, Job, Reminder } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createReminderDeliveryHandler } from "../../src/jobs/reminder-delivery-job.js";
-import { ensureReminderDeliveryJob } from "../../src/jobs/runtime.js";
-import { ApnsClient } from "../../src/services/apns-service.js";
 import { fixedClock } from "../../src/services/clock.js";
-import { JobRunner, type Timers } from "../../src/services/job-runner.js";
+import { deliveryRig, type DeliveryRig } from "../helpers/delivery-runner.js";
 import { startFakeApns, type FakeApns } from "../helpers/fake-apns.js";
 import { expectData, startLiveService, type LiveService } from "../helpers/live-service.js";
 
@@ -35,18 +30,6 @@ const AFTERNOON = Date.parse("2026-08-10T18:00:00.000Z");
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
-
-const inertTimers: Timers = { set: () => 0, clear: () => undefined };
-
-function apnsEnv(): NodeJS.ProcessEnv {
-  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
-  return {
-    SYL_APNS_KEY_ID: "ABCD123456",
-    SYL_APNS_TEAM_ID: "TEAM123456",
-    SYL_APNS_BUNDLE_ID: "com.jmm.syl",
-    SYL_APNS_PRIVATE_KEY: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
-  };
-}
 
 describe("Journey 4 — a bad week", () => {
   let syl: LiveService;
@@ -92,47 +75,12 @@ describe("Journey 4 — a bad week", () => {
   /**
    * The runner the service builds, with Apple replaced.
    *
-   * `createDeliveryRuntime` has no seam for the APNs origin — `APNS_ORIGINS` is
-   * a module constant and the runtime does not forward an override — so this
-   * rebuilds the runner from the same two exported pieces the runtime uses.
-   * That is itself a finding, filed as `syl-md5`; every reminder journey in the
-   * suite has to do this, so the assembly `main` actually ships is exercised
-   * against a real Apple by nothing.
+   * See the docstring on `deliveryRig`: `createDeliveryRuntime` has no seam for
+   * the APNs origin (`syl-md5`), so every reminder journey has to assemble the
+   * runner out of the pieces the runtime uses rather than calling it.
    */
-  function runnerAgainst(target: FakeApns): { runner: JobRunner; close: () => Promise<void> } {
-    const env = apnsEnv();
-    // The exact call `createDeliveryRuntime` makes at boot.
-    ensureReminderDeliveryJob(syl.deps.jobs, now);
-    const apns = new ApnsClient({
-      credentials: {
-        keyId: env["SYL_APNS_KEY_ID"] ?? "",
-        teamId: env["SYL_APNS_TEAM_ID"] ?? "",
-        bundleId: env["SYL_APNS_BUNDLE_ID"] ?? "",
-        privateKeyPem: env["SYL_APNS_PRIVATE_KEY"] ?? "",
-      },
-      origins: { production: target.origin, sandbox: target.origin },
-      clock: () => now,
-    });
-
-    const runner = new JobRunner({
-      store: syl.deps.jobs,
-      handlers: new Map([
-        [
-          "reminder_delivery",
-          createReminderDeliveryHandler({
-            reminders: syl.deps.reminders,
-            outbox: syl.deps.outbox,
-            devices: syl.deps.devices,
-            apns,
-          }),
-        ],
-      ]),
-      clock: () => now,
-      timers: inertTimers,
-      owner: "j4",
-    });
-
-    return { runner, close: async () => { runner.stop(); await apns.close(); } };
+  function runnerAgainst(target: FakeApns): DeliveryRig {
+    return deliveryRig({ syl, apple: target, clock: () => now, owner: "j4" });
   }
 
   /** Every delivery the service is holding, newest first. */
