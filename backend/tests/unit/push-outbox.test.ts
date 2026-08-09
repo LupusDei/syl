@@ -1,0 +1,265 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  apnsIdFor,
+  notificationFor,
+  pushDueDeliveries,
+  type ApnsSender,
+} from "../../src/jobs/push-outbox.js";
+import type { ApnsNotification, ApnsResult } from "../../src/services/apns-service.js";
+import { fixedClock } from "../../src/services/clock.js";
+import type { SylDatabase } from "../../src/services/database.js";
+import { DeviceTokenService } from "../../src/services/device-token-service.js";
+import { Outbox } from "../../src/services/outbox.js";
+import { TEST_NOW, testDatabase } from "../helpers/service.js";
+
+const IPHONE = "9c0d2e41".repeat(8);
+const IPAD = "11111111".repeat(8);
+
+/** An APNs client that answers from a script rather than over a wire. */
+function scriptedApns(results: readonly ApnsResult[]): ApnsSender & {
+  readonly sent: ApnsNotification[];
+} {
+  const sent: ApnsNotification[] = [];
+  let index = 0;
+  return {
+    sent,
+    send: (notification) => {
+      sent.push(notification);
+      const result = results[index] ?? results[results.length - 1] ?? { ok: true, apnsUniqueId: null, apnsId: "x" };
+      index += 1;
+      return Promise.resolve(result);
+    },
+  };
+}
+
+const ACCEPTED: ApnsResult = { ok: true, apnsUniqueId: "UNIQUE-1", apnsId: "APNS-1" };
+
+describe("apnsIdFor", () => {
+  it("should reuse the uuid already inside our id", () => {
+    // A retry must send the same apns-id, so Apple sees one notification.
+    expect(apnsIdFor("syl:delivery:0198f2c6-0001-7000-8000-000000010001")).toBe(
+      "0198f2c6-0001-7000-8000-000000010001",
+    );
+  });
+
+  it("should fall back to the whole id if it is not shaped that way", () => {
+    expect(apnsIdFor("odd")).toBe("odd");
+  });
+});
+
+describe("notificationFor", () => {
+  it("should carry the delivery id so the device can acknowledge", () => {
+    // Without this the acknowledgement has nothing to name, and the
+    // acknowledgement is the only evidence of delivery that exists.
+    const notification = notificationFor(
+      {
+        id: "syl:delivery:0198f2c6-0001-7000-8000-000000010001",
+        channel: "apns",
+        messageClass: "reminder_delivery",
+        reminderId: "syl:reminder:abc",
+        payload: { title: "Syl", body: "x", interruptionLevel: "time-sensitive" },
+        idempotencyKey: "k",
+        state: "pending",
+        attempts: 0,
+        nextAttemptAt: null,
+        deliveredAt: null,
+        ackedAt: null,
+        engagement: null,
+        late: false,
+        scheduledFor: null,
+        coalescedReminderIds: [],
+        apnsUniqueId: null,
+        lastError: null,
+        createdAt: "2026-08-09T21:00:00.000Z",
+      },
+      IPHONE,
+      "production",
+    );
+
+    expect(notification.data).toEqual({
+      deliveryId: "syl:delivery:0198f2c6-0001-7000-8000-000000010001",
+      reminderId: "syl:reminder:abc",
+    });
+    expect(notification.environment).toBe("production");
+    expect(notification.apnsId).toBe("0198f2c6-0001-7000-8000-000000010001");
+  });
+});
+
+describe("pushDueDeliveries", () => {
+  let db: SylDatabase;
+  let outbox: Outbox;
+  let devices: DeviceTokenService;
+
+  function enqueue(): string {
+    return outbox.enqueue({
+      channel: "apns",
+      messageClass: "reminder_delivery",
+      reminderId: "syl:reminder:abc",
+      payload: { title: "Syl", body: "Call the pharmacy.", interruptionLevel: "time-sensitive" },
+      idempotencyKey: `k-${Math.random()}`,
+    }).delivery.id;
+  }
+
+  function register(token: string, environment: "sandbox" | "production" = "production"): void {
+    devices.register({
+      token,
+      environment,
+      platform: "ios",
+      name: "device",
+      appVersion: "1",
+      osVersion: "26.1",
+    });
+  }
+
+  beforeEach(() => {
+    db = testDatabase();
+    const clock = fixedClock(TEST_NOW);
+    outbox = new Outbox({ db: db.handle, clock, jitter: () => 0 });
+    devices = new DeviceTokenService({ db: db.handle, clock });
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("should push a due row and record acceptance, not delivery", () => {
+    const id = enqueue();
+    register(IPHONE);
+    const apns = scriptedApns([ACCEPTED]);
+
+    return pushDueDeliveries({ outbox, devices, apns }).then((result) => {
+      expect(result.accepted).toEqual([id]);
+
+      const delivery = outbox.get(id);
+      expect(delivery?.state).toBe("delivered");
+      expect(delivery?.apnsUniqueId).toBe("UNIQUE-1");
+      // Apple taking the request is not the phone receiving it.
+      expect(delivery?.ackedAt).toBeNull();
+      expect(delivery?.attempts).toBe(1);
+    });
+  });
+
+  it("should route each token to its own environment", async () => {
+    enqueue();
+    register(IPHONE, "production");
+    register(IPAD, "sandbox");
+    const apns = scriptedApns([ACCEPTED]);
+
+    await pushDueDeliveries({ outbox, devices, apns });
+
+    expect(apns.sent.map((n) => n.environment).sort()).toEqual(["production", "sandbox"]);
+  });
+
+  it("should unregister a token Apple says is gone", async () => {
+    const id = enqueue();
+    register(IPHONE);
+    register(IPAD);
+    const apns = scriptedApns([
+      { ok: false, status: 410, reason: "Unregistered", disposition: "unregister" },
+      ACCEPTED,
+    ]);
+
+    const result = await pushDueDeliveries({ outbox, devices, apns });
+
+    expect(result.unregistered).toHaveLength(1);
+    expect(devices.targets()).toHaveLength(1);
+    // One device took it, so the row is accepted rather than failed.
+    expect(outbox.get(id)?.state).toBe("delivered");
+  });
+
+  it("should retry when every device failed transiently", async () => {
+    const id = enqueue();
+    register(IPHONE);
+    const apns = scriptedApns([
+      { ok: false, status: 503, reason: "ServiceUnavailable", disposition: "retry" },
+    ]);
+
+    const result = await pushDueDeliveries({ outbox, devices, apns });
+
+    expect(result.failed).toEqual([id]);
+    const delivery = outbox.get(id);
+    expect(delivery?.state).toBe("pending");
+    expect(delivery?.nextAttemptAt).not.toBeNull();
+    expect(delivery?.lastError).toContain("503");
+  });
+
+  it("should fail permanently on a configuration error", async () => {
+    const id = enqueue();
+    register(IPHONE);
+    const apns = scriptedApns([
+      { ok: false, status: 400, reason: "BadTopic", disposition: "permanent" },
+    ]);
+
+    await pushDueDeliveries({ outbox, devices, apns });
+    expect(outbox.get(id)?.state).toBe("failed");
+  });
+
+  it("should keep the row when the last device was just unregistered", async () => {
+    // The phone re-registering is exactly the case the outbox exists to
+    // survive, so the row waits rather than failing outright.
+    const id = enqueue();
+    register(IPHONE);
+    const apns = scriptedApns([
+      { ok: false, status: 410, reason: "Unregistered", disposition: "unregister" },
+    ]);
+
+    await pushDueDeliveries({ outbox, devices, apns });
+    expect(outbox.get(id)?.state).toBe("pending");
+  });
+
+  it("should hold a row when no device has registered yet", async () => {
+    const id = enqueue();
+    const result = await pushDueDeliveries({ outbox, devices, apns: scriptedApns([ACCEPTED]) });
+
+    expect(result.failed).toEqual([id]);
+    expect(outbox.get(id)?.state).toBe("pending");
+    expect(outbox.get(id)?.lastError).toContain("No device");
+  });
+
+  it("should hold a row when APNs is not configured on this machine", async () => {
+    const id = enqueue();
+    register(IPHONE);
+
+    await pushDueDeliveries({ outbox, devices, apns: null });
+    expect(outbox.get(id)?.state).toBe("pending");
+    expect(outbox.get(id)?.lastError).toContain("not configured");
+  });
+
+  it("should hold a row on a channel this build cannot deliver", async () => {
+    const { delivery } = outbox.enqueue({
+      channel: "websocket",
+      messageClass: "reminder_delivery",
+      payload: { title: "Syl", body: "x" },
+      idempotencyKey: "ws",
+    });
+    register(IPHONE);
+
+    await pushDueDeliveries({ outbox, devices, apns: scriptedApns([ACCEPTED]) });
+    expect(outbox.get(delivery.id)?.state).toBe("pending");
+    expect(outbox.get(delivery.id)?.lastError).toContain("websocket");
+  });
+
+  it("should leave a row that is not yet due alone", async () => {
+    outbox.enqueue({
+      channel: "apns",
+      messageClass: "reminder_delivery",
+      payload: { title: "Syl", body: "x" },
+      idempotencyKey: "later",
+      notBefore: new Date(TEST_NOW + 60_000).toISOString(),
+    });
+    register(IPHONE);
+
+    const result = await pushDueDeliveries({ outbox, devices, apns: scriptedApns([ACCEPTED]) });
+    expect(result.accepted).toHaveLength(0);
+  });
+
+  it("should record that the device was heard from", async () => {
+    enqueue();
+    register(IPHONE);
+    await pushDueDeliveries({ outbox, devices, apns: scriptedApns([ACCEPTED]) });
+
+    const device = devices.list().items[0];
+    expect(device?.lastSeenAt).toBe(new Date(TEST_NOW).toISOString());
+  });
+});

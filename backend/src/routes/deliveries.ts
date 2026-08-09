@@ -6,6 +6,7 @@ import { parseInstant } from "../services/clock.js";
 import { isId } from "../services/id.js";
 import type { IdempotencyStore } from "../services/idempotency.js";
 import type { Outbox } from "../services/outbox.js";
+import type { ReminderService } from "../services/reminder-service.js";
 import { ApiFailure, sendOk } from "./envelope.js";
 import { asDeviceFailure, pageOptionsOf } from "./devices.js";
 import { runIdempotent, sendIdempotent } from "./idempotency.js";
@@ -38,12 +39,14 @@ const ENGAGEMENTS: readonly DeliveryEngagement[] = [
 
 export interface DeliveryRouterOptions {
   readonly outbox: Outbox;
+  /** So an acknowledgement closes the loop on the reminder as well. */
+  readonly reminders: ReminderService;
   readonly idempotency: IdempotencyStore;
   readonly authenticate: RequestHandler;
 }
 
 export function createDeliveryRouter(options: DeliveryRouterOptions): Router {
-  const { outbox, idempotency, authenticate } = options;
+  const { outbox, reminders, idempotency, authenticate } = options;
   const router = Router();
 
   router.use("/deliveries", authenticate);
@@ -128,6 +131,16 @@ export function createDeliveryRouter(options: DeliveryRouterOptions): Router {
           ...(engagement === undefined ? {} : { engagement }),
         });
         if (acknowledged === null) throw new ApiFailure("NOT_FOUND", "There is no such delivery.");
+
+        // Close the loop on the reminders this notification stood for. A
+        // coalesced digest stands for several, and every one of them has been
+        // seen the moment the device says the digest was.
+        const covered =
+          acknowledged.reminderId === null
+            ? acknowledged.coalescedReminderIds
+            : [acknowledged.reminderId, ...acknowledged.coalescedReminderIds];
+        for (const reminderId of covered) reminders.markAcknowledged(reminderId);
+
         return { status: 200, data: acknowledged };
       }),
     );

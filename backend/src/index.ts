@@ -16,12 +16,14 @@ import { createDeliveryRouter } from "./routes/deliveries.js";
 import { createDeviceRouter } from "./routes/devices.js";
 import { ApiFailure, sendFailure } from "./routes/envelope.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
+import { createReminderRouter } from "./routes/reminders.js";
 import { ApiKeyService } from "./services/api-key-service.js";
 import { openDatabase, type SylDatabase } from "./services/database.js";
 import { DeviceTokenService } from "./services/device-token-service.js";
 import { IdempotencyStore } from "./services/idempotency.js";
 import { MessageStore } from "./services/message-store.js";
 import { Outbox, quietHoursFromEnv } from "./services/outbox.js";
+import { ReminderService } from "./services/reminder-service.js";
 import { SylSocketServer, WS_PATH } from "./services/ws-server.js";
 
 /**
@@ -115,6 +117,8 @@ export interface AppDependencies {
   readonly devices: DeviceTokenService;
   /** The delivery outbox — where the never-drop guarantee lives. */
   readonly outbox: Outbox;
+  /** Reminders, and the deferral invariant. */
+  readonly reminders: ReminderService;
   /** The ledger that makes every write safe to retry. */
   readonly idempotency: IdempotencyStore;
   /** Extra health probes. The billing check is always present. */
@@ -145,7 +149,19 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     createDeviceRouter({ devices: deps.devices, idempotency: deps.idempotency, authenticate }),
   );
   api.use(
-    createDeliveryRouter({ outbox: deps.outbox, idempotency: deps.idempotency, authenticate }),
+    createDeliveryRouter({
+      outbox: deps.outbox,
+      reminders: deps.reminders,
+      idempotency: deps.idempotency,
+      authenticate,
+    }),
+  );
+  api.use(
+    createReminderRouter({
+      reminders: deps.reminders,
+      idempotency: deps.idempotency,
+      authenticate,
+    }),
   );
 
   app.use(API_BASE_PATH, api);
@@ -251,6 +267,7 @@ export function bootstrap(config: SylConfig): {
   const devices = new DeviceTokenService({ db: database.handle });
   const idempotency = new IdempotencyStore({ db: database.handle });
   const outbox = new Outbox({ db: database.handle, quietHours: quietHoursFromEnv(process.env) });
+  const reminders = new ReminderService({ db: database.handle });
 
   return {
     database,
@@ -259,6 +276,7 @@ export function bootstrap(config: SylConfig): {
       messages,
       devices,
       outbox,
+      reminders,
       idempotency,
       probes: [databaseProbe(database.handle)],
     },
