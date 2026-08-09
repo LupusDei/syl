@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import type { PushEnvironment } from "@syl/shared";
 
 import type { QuietHours } from "./harness/schedule.js";
+import { defaultAdminDir } from "./ops/admin-bundle.js";
 import { defaultLogDirectory } from "./ops/logging.js";
 import { defaultCertStatusPath } from "./ops/tailnet-cert.js";
 
@@ -162,6 +163,14 @@ export interface SylConfig {
   readonly logDirectory: string;
   /** Where the certificate renewal job leaves its status. */
   readonly certStatusPath: string;
+  /**
+   * The built web admin, served at `/admin`.
+   *
+   * Defaults to the frontend workspace's own `dist/`, which is what
+   * `npm run build` already produces — so there is no extra copy step to
+   * forget. `ops/admin-bundle.ts` says what happens when it is not there.
+   */
+  readonly adminDir: string;
 }
 
 /** Thrown when the environment cannot produce a usable configuration. */
@@ -408,5 +417,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SylConfig {
     allowSandboxPush: read(env, "SYL_APNS_ALLOW_SANDBOX") !== undefined,
     logDirectory: defaultLogDirectory(env),
     certStatusPath: defaultCertStatusPath(env),
+    adminDir: defaultAdminDir(env),
   };
 }

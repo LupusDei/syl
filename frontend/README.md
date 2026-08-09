@@ -10,8 +10,8 @@ and clarity; polish is not the goal, and neither is Adjutant's CRT aesthetic.
 ## Commands
 
 ```sh
-npm run dev -w frontend        # vite dev server on 4211, /api proxied to 4201
-npm run build -w frontend
+npm run dev -w frontend        # vite dev server on 4211/admin/, /api proxied to Syl on 8888
+npm run build -w frontend      # vite build, then the bundle gate (see below)
 npm test -w frontend
 npm run typecheck -w frontend
 ```
@@ -30,6 +30,27 @@ with the thing it is pointed at.
 
 `npm test` and `npm run typecheck` from the repo root cover this workspace too,
 and the root run is what CI gates on.
+
+## Where this is served: `/admin`, from Syl's own origin
+
+`npm run build` puts the bundle in `dist/`, and Syl serves that directory at
+`/admin` (`backend/src/routes/admin.ts`, `SYL_ADMIN_DIR` to move it). So
+`https://<tailnet-host>/admin` loads the admin over the certificate the phone
+already trusts — no CORS, no second certificate, no App Transport Security
+exception in the iOS app, and `/api/v1` is the same string everywhere.
+
+That is why `base` is `/admin/` in `vite.config.ts` and why the router's
+basename comes from `src/app/basename.ts` rather than a literal: the prefix has
+to be one value that Vite, React Router and Express all agree on. The dev
+server picks it up too, so `npm run dev` serves at
+`http://localhost:4211/admin/`.
+
+**`scripts/check-bundle.mjs` runs after every build and fails it** if
+`index.html` is missing, references nothing, or references a file that is not
+under `/admin/` or was not emitted. Same discipline as
+`backend/scripts/copy-assets.mjs`, for the same reason: a build that quietly
+omits its output produces a 404 hours later, on a phone, and it reads as a
+routing bug rather than as a build step that did nothing.
 
 ## Layout
 
@@ -52,6 +73,7 @@ src/api/client.ts          the typed read client, shapes from @syl/shared/types
 src/api/use-admin-client.ts  the client, wired to the stored key
 src/api/use-resource.ts    one request's lifecycle: data, error, loading, reload
 src/app/nav.ts             the section list, as data
+src/app/basename.ts        the router's basename, from the base this was built with
 src/app/App.tsx            providers, router, and the route table
 src/app/AppLayout.tsx      the chrome
 src/app/views.tsx          overview, placeholders, not-found

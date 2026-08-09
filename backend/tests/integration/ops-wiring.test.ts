@@ -59,6 +59,8 @@ function config(overrides: Partial<SylConfig> = {}): SylConfig {
     allowSandboxPush: false,
     logDirectory: join(directory, "logs"),
     certStatusPath: join(directory, "cert-status.json"),
+    // Not built, on purpose — see the note in `tests/helpers/service.ts`.
+    adminDir: join(directory, "admin-not-built"),
     ...overrides,
   };
 }

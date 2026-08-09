@@ -260,6 +260,10 @@ export async function startLiveService(
     // `~/Library/Logs` and no suite can read another's log.
     logDirectory: join(directory ?? tmpdir(), "logs"),
     certStatusPath: options.certStatusPath ?? join(directory ?? tmpdir(), "cert-status.json"),
+    // Deliberately a directory that does not exist: a live service in a test
+    // must not serve whatever `frontend/dist` happens to hold on this machine,
+    // or the suite's answer depends on whether somebody ran a build.
+    adminDir: join(directory ?? tmpdir(), "admin-not-built"),
   };
 
   // When a fake `claude` is asked for it is a real executable replaying a real

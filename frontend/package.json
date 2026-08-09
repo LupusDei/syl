@@ -6,7 +6,7 @@
   "description": "Syl's web admin: the development instrument we inspect and tune her with.",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/check-bundle.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

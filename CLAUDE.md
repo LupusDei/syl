@@ -63,6 +63,8 @@ backend/                          the Node 22 service (npm workspace)
                                   never silence
   tests/helpers/fake-claude.ts    a real fake `claude` executable, for driving runTurn
   tests/fixtures/*.jsonl          captured CLI transcripts — never hand-written
+  src/routes/admin.ts             serves the built web admin at /admin
+  src/ops/admin-bundle.ts         where that bundle is, and what a missing one does
   src/harness/schedule.ts         wall-clock scheduling + quiet hours
   src/harness/cli/ping.ts         end-to-end smoke test
   tests/unit/**                   vitest
@@ -196,6 +198,17 @@ to add is about *additional* surfaces and blocks nothing.
   lacks `node:sqlite`. Verified on 22.23.1: `node:sqlite` imports without a flag
   (SQLite 3.51.3) and **FTS5 is compiled in**, so keyword search needs no native
   dependency. It still prints an `ExperimentalWarning`.
+- **The web admin is served by Syl herself at `/admin`**, from `frontend/dist`
+  (`SYL_ADMIN_DIR` to move it). Same origin as `/api/v1`, so there is no CORS,
+  no second certificate and no ATS exception in the iOS app. `npm run build`
+  produces the bundle and **fails loudly if it is not emitted** — a missing
+  bundle must never degrade into a 404, which reads as a routing bug. The
+  frontend's Vite `base` and `ADMIN_BASE_PATH` must be the same string;
+  `backend/tests/integration/admin-bundle.test.ts` builds for real and checks it.
+- **`res.sendFile` with an ABSOLUTE path 404s if any directory in it starts with
+  a dot.** `send` cannot tell caller-supplied path from request-supplied path,
+  so it refuses the lot — a bundle under `~/.syl/` or an agent worktree in
+  `.claude/` silently disappears. Always `sendFile(name, { root })`.
 - The `claude` binary is resolved by `backend/src/harness/claude-bin.ts`, not by trusting `PATH`.
   Claude Code installs to `~/.local/bin`, which shell profiles add for
   interactive use — so the same machine resolves under zsh and throws `ENOENT`

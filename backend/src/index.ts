@@ -20,6 +20,8 @@ import {
   IntakeQueue,
 } from "./connections/intake-job.js";
 import { createIntakeRouter } from "./connections/intake-route.js";
+import { ADMIN_BASE_PATH, createAdminRouter } from "./routes/admin.js";
+import { describeAdmin, inspectAdminBundle } from "./ops/admin-bundle.js";
 import { ArticleIntake } from "./connections/intake.js";
 import { IntakeStore } from "./connections/intake-store.js";
 import { requireBearerToken } from "./middleware/auth.js";
@@ -263,6 +265,14 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   api.use(createIntakeRouter({ intake, idempotency, authenticate }));
 
   app.use(API_BASE_PATH, api);
+
+  // The admin, AFTER the contract and scoped to its own prefix. Static serving
+  // is strictly additive: the SPA's history fallback lives inside this router,
+  // so Express cannot dispatch to it for a URL outside `/admin` — which is what
+  // stops a catch-all answering `/api/v1/anything` with an HTML page. See
+  // `routes/admin.ts`, and the ordering cases in `tests/unit/admin.test.ts`.
+  app.use(ADMIN_BASE_PATH, createAdminRouter({ root: config.adminDir }));
+
   app.use(notFound);
   app.use(onError);
 
@@ -800,6 +810,10 @@ export async function startSyl(
     : describeStartup(config);
 
   const power = assessPower();
+  // Looked at once, for the startup lines. The route re-checks per request, so
+  // this is a report rather than a decision — a build that lands while the
+  // service is running still serves.
+  const admin = inspectAdminBundle(config.adminDir);
 
   return {
     database,
@@ -812,6 +826,7 @@ export async function startSyl(
       ...describeRuntime(runtime),
       ...describePushEnvironment(push, { pushConfigured: runtime.pushEnabled }),
       ...describePower(power),
+      ...describeAdmin(admin),
     ],
     startupFields: {
       version: config.version,
@@ -827,6 +842,8 @@ export async function startSyl(
       pushEnvironment: push.environment,
       pushEnvironmentDeclared: push.declared,
       powerOk: power.ok,
+      adminDir: admin.root,
+      adminBundlePresent: admin.present,
     },
     close: async () => {
       // The loop first. A tick that begins while the socket is closing has
