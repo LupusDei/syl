@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -21,17 +21,87 @@ import { startLiveService, type LiveService } from "../helpers/live-service.js";
  *
  * **Opt-in, behind `SYL_IOS_LIVE=1`.** It needs a Swift toolchain and it builds
  * a package, which is minutes rather than milliseconds and is not something
- * `npm test` should do on a machine without Xcode. It is wired into
- * `ios/scripts/test.sh` territory rather than the unit gate, and the report from
- * running it is in the beads.
+ * `npm test` should do on a machine without Xcode — the flag exists so the Linux
+ * gate can skip it, and for no other reason.
  *
  * ```sh
  * SYL_IOS_LIVE=1 npx vitest run backend/tests/integration/ios-live-server.test.ts
  * ```
+ *
+ * **Where it actually runs** (`syl-e4f`; for a year it ran nowhere at all, and
+ * three of the four open iOS P0s came out of its first execution):
+ *
+ * - `ios/scripts/test.sh`, so a human running the iOS suite runs this too;
+ * - `.github/workflows/ios.yml`, which runs that script, for changes under `ios/`;
+ * - `.github/workflows/ios-live.yml`, for changes under `backend/` and `shared/` —
+ *   the side `ios.yml` does not watch, and the side that drifts.
+ *
+ * The first case in this file is the guard on all of that. A gate that can be
+ * disconnected by deleting one line from one script is not a gate, so the
+ * connection is asserted from inside the ordinary unit run, where it holds even
+ * on a machine that cannot execute anything below it.
  */
 
+const REPO = fileURLToPath(new URL("../../..", import.meta.url));
 const SYLKIT = fileURLToPath(new URL("../../../ios/SylKit", import.meta.url));
 const ENABLED = process.env["SYL_IOS_LIVE"] === "1";
+
+/** The files that are supposed to run this suite, and what makes them count. */
+const WIRING: readonly { readonly path: string; readonly why: string }[] = [
+  {
+    path: "ios/scripts/test.sh",
+    why: "the script a human runs, and the one ios.yml runs",
+  },
+  {
+    path: ".github/workflows/ios-live.yml",
+    why: "the automated run for backend and shared changes, which ios.yml does not watch",
+  },
+];
+
+/**
+ * A file's executable text: every line with the comments taken off.
+ *
+ * Both file types here comment with `#`, and both of them **talk about**
+ * `SYL_IOS_LIVE` at length in those comments. Searching the raw text would pass
+ * on the prose alone — the check would survive the very edit it exists to catch,
+ * which is its own entry in the list of tests that cannot fail. Verified by
+ * deleting the variable from the command and watching this go red.
+ */
+function executableText(path: string): string {
+  return readFileSync(`${REPO}${path}`, "utf8")
+    .split("\n")
+    .map((line) => line.replace(/(^|\s)#.*$/u, ""))
+    .join("\n");
+}
+
+describe("the wiring that makes this file run at all", () => {
+  // Deliberately outside the `skipIf`. This is the check that would have caught
+  // `syl-e4f`, and a check that only runs when the thing it guards is already
+  // running is not a check.
+  it.each(WIRING)("should be run by $path — $why", ({ path }) => {
+    const runnable = executableText(path);
+
+    expect(
+      runnable,
+      `${path} no longer sets SYL_IOS_LIVE=1 on a command. This file is the only
+place shipping Swift meets a real backend, and without that variable it skips
+itself and reports success having checked nothing.`,
+    ).toContain("SYL_IOS_LIVE=1");
+    expect(runnable, `${path} no longer names this suite`).toContain(
+      "ios-live-server.test.ts",
+    );
+  });
+
+  it("should be reachable from a workflow that watches the backend", () => {
+    // The drift this suite exists to catch is mostly the service moving under a
+    // client that was written from the same document. A gate that only fires on
+    // `ios/**` cannot see it.
+    const workflow = executableText(".github/workflows/ios-live.yml");
+
+    expect(workflow).toContain("backend/**");
+    expect(workflow).toContain("shared/**");
+  });
+});
 
 /** The one case that touches `URLSessionWebSocketConnector`. */
 const SOCKET_TEST = "testShouldCompleteTheHandshakeAgainstTheRealSocket";

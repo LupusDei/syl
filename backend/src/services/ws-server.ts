@@ -47,6 +47,41 @@ import type { AttachmentSink } from "./presence.js";
 export const PROTOCOL_VERSION = 1;
 
 /**
+ * `connected`, plus the identity of the frame stream it is announcing.
+ *
+ * ## Why the field exists
+ *
+ * `FrameLog` numbers frames in memory from 1, and `lastSeq` on `connected` is
+ * how a client decides whether it has a gap. Both are correct in isolation and
+ * jointly deaf across a restart (`syl-47j`): the new run says `lastSeq: 0`, a
+ * phone holding 57 reads `0 > 57` as "nothing new", and then discards frames 1,
+ * 2, 3 … under its own `seq > lastSeq` rule. The socket stays open, the
+ * keepalive passes, the indicator stays green, and nothing arrives until the app
+ * is relaunched.
+ *
+ * A sequence is only meaningful inside the run that issued it, so the run has to
+ * be named. `connected` is the only frame that can carry it: by the time
+ * anything else arrives the client has already drawn its conclusion.
+ *
+ * Minted per `SylSocketServer`, not per service and not persisted, because what
+ * it identifies is the **frame stream** — and that is exactly as old as the
+ * `FrameLog` holding it.
+ *
+ * ## Why the type is declared here rather than in `@syl/shared`
+ *
+ * It belongs in the shared contract and is not there yet — `shared/**` is owned
+ * elsewhere, so this addition is reported rather than made. The field is
+ * additive and both directions tolerate it: `WsConnected` in `shared/schemas/ws.json`
+ * does not close `additionalProperties`, and the iOS model decodes it with
+ * `decodeIfPresent`. Nothing breaks while the contract catches up, and the
+ * client keeps a weaker rewound-sequence fallback for a server that does not
+ * send it at all.
+ *
+ * **When it lands in `@syl/shared`, delete this type and the intersection.**
+ */
+export type WsConnectedFrame = WsConnected & { readonly serverEpoch: string };
+
+/**
  * How long an unauthenticated socket may stay open.
  *
  * Without this, anyone who can reach the port can hold connections open
@@ -88,6 +123,12 @@ export interface SylSocketServerOptions {
   readonly path?: string;
   readonly capacity?: number;
   readonly authTimeoutMs?: number;
+  /**
+   * The name this run announces on `connected`. Minted at random when omitted,
+   * which is what production always does; a test that needs two runs to be
+   * distinguishable by name rather than by luck can say so.
+   */
+  readonly serverEpoch?: string;
 }
 
 /** A frame the server refuses to act on, with the reason a client may see. */
@@ -128,6 +169,8 @@ export class SylSocketServer {
   readonly #log: FrameLog;
   readonly #authTimeoutMs: number;
   readonly #connections = new Set<Connection>();
+  /** This run's name. Minted beside the log it identifies. See `WsConnectedFrame`. */
+  readonly #epoch: string;
 
   constructor(options: SylSocketServerOptions) {
     this.#keys = options.keys;
@@ -136,6 +179,9 @@ export class SylSocketServer {
     this.#clock = options.clock ?? systemClock;
     this.#log = new FrameLog(options.capacity ?? DEFAULT_CAPACITY);
     this.#authTimeoutMs = options.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
+    // On the same line as the log, deliberately: the two are born together and a
+    // future refactor that separates them reintroduces `syl-47j`.
+    this.#epoch = options.serverEpoch ?? randomBytes(16).toString("hex");
 
     this.#wss = new WebSocketServer({
       server: options.server,
@@ -159,6 +205,16 @@ export class SylSocketServer {
   /** The newest frame sequence this server has issued. */
   get lastSeq(): number {
     return this.#log.lastSeq;
+  }
+
+  /**
+   * The name of this run's frame stream.
+   *
+   * `lastSeq` means nothing without it: the two are only comparable across a
+   * reconnect when they came from the same run.
+   */
+  get serverEpoch(): string {
+    return this.#epoch;
   }
 
   /** How many authenticated clients are attached. */
@@ -364,9 +420,13 @@ export class SylSocketServer {
       connection.authTimer = null;
     }
 
-    const connected: WsConnected = {
+    const connected: WsConnectedFrame = {
       type: "connected",
       lastSeq: this.#log.lastSeq,
+      // Beside the sequence it qualifies. A client comparing marks across a
+      // reconnect must check this first, or it is comparing two numbers from
+      // two unrelated streams.
+      serverEpoch: this.#epoch,
       serverTime: instant(this.#clock()),
       protocolVersion: PROTOCOL_VERSION,
       principal: result.principal,

@@ -45,6 +45,11 @@ public actor WebSocketClient {
     /// "the phone was in a tunnel" a non-event rather than lost messages.
     public private(set) var lastSeq: Int
 
+    /// The server run `lastSeq` belongs to. **Persist it with the mark, not instead of
+    /// it** — a mark restored on the next launch without the run it came from is
+    /// `syl-47j` again, one relaunch later.
+    public private(set) var serverEpoch: String?
+
     /// The state the app should show. Offline is a state to design, not an error.
     public private(set) var connectionState: SocketConnectionState = .idle
 
@@ -53,6 +58,7 @@ public actor WebSocketClient {
         connector: any WebSocketConnecting = URLSessionWebSocketConnector(),
         tokenProvider: TokenProviding,
         lastSeq: Int = 0,
+        serverEpoch: String? = nil,
         reconnectPolicy: RetryPolicy = .socketReconnect,
         keepaliveInterval: TimeInterval = 30,
         missedPongsBeforeDead: Int = 2,
@@ -68,6 +74,7 @@ public actor WebSocketClient {
         self.connector = connector
         self.tokenProvider = tokenProvider
         self.lastSeq = lastSeq
+        self.serverEpoch = serverEpoch
         self.reconnectPolicy = reconnectPolicy
         self.keepaliveInterval = keepaliveInterval
         self.keepalive = Keepalive(
@@ -216,7 +223,7 @@ public actor WebSocketClient {
         }
 
         self.connection = connection
-        var session = SocketSession(token: token, lastSeq: lastSeq)
+        var session = SocketSession(token: token, lastSeq: lastSeq, serverEpoch: serverEpoch)
         self.session = session
         keepalive.reset()
         startKeepalive()
@@ -240,7 +247,11 @@ public actor WebSocketClient {
 
             let outcomes = session.receive(frame)
             self.session = session
+            // Both, together. The mark can go *backwards* here — that is the whole
+            // point of `syl-47j` — and a mark carried into the next reconnect without
+            // the run it belongs to would be reinterpreted against the wrong stream.
             lastSeq = session.lastSeq
+            serverEpoch = session.serverEpoch
             if session.phase == .ready { reachedReady = true }
 
             for outcome in outcomes {

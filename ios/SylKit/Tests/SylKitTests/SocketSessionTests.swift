@@ -157,6 +157,159 @@ final class SocketSessionTests: XCTestCase {
         XCTAssertEqual(session.lastSeq, 20)
     }
 
+    // MARK: - The server is not the same server
+
+    func testShouldStillReceiveFramesAfterTheServerRestartedUnderneathIt() {
+        // `syl-47j`, and the whole reason this section exists.
+        //
+        // The frame sequence is a property of one server *run*. A restart begins it
+        // again at 1 while the phone still holds 57 — and every rule in this file is
+        // written on the assumption that the number only ever goes up. Left alone the
+        // two are jointly deaf: `connected.lastSeq (0) > lastSeq (57)` is false so
+        // nothing asks for a replay, and `guard seq > lastSeq` then discards 1, 2,
+        // 3 … forever. The socket stays open, the keepalive keeps passing, and not one
+        // frame reaches the app until it is relaunched.
+        var session = ready(lastSeq: 57, serverEpoch: "boot-a")
+
+        // The reconnect. Same client object, same mark, a server that has forgotten
+        // everything and says so by naming a run the client has never seen.
+        _ = session.receive(.authChallenge(WsAuthChallenge(nonce: "n", protocolVersion: 1)))
+        _ = session.receive(.connected(connected(lastSeq: 0, serverEpoch: "boot-b")))
+
+        let outcomes = session.receive(.chatMessage(chatMessage(seq: 1, messageSeq: 1)))
+
+        XCTAssertEqual(
+            outcomes,
+            [.emit(.message(chatMessage(seq: 1, messageSeq: 1).message))],
+            "the first frame of the new run must reach the app, not be filed as already seen"
+        )
+        XCTAssertEqual(session.lastSeq, 1)
+    }
+
+    func testShouldForgetItsMarkTheMomentTheServerNamesADifferentRun() {
+        var session = ready(lastSeq: 57, serverEpoch: "boot-a")
+
+        _ = session.receive(.authChallenge(WsAuthChallenge(nonce: "n", protocolVersion: 1)))
+        _ = session.receive(.connected(connected(lastSeq: 0, serverEpoch: "boot-b")))
+
+        XCTAssertEqual(session.lastSeq, 0, "a sequence from a run that ended means nothing")
+        XCTAssertEqual(session.serverEpoch, "boot-b")
+    }
+
+    func testShouldReplayFromZeroWhenTheRestartedServerIsAlreadyAhead() {
+        // The restart happened a while ago and the new run has issued frames of its
+        // own. Syncing from 57 would fetch 58… of a stream whose 1…57 the client has
+        // never seen — silent loss dressed up as being caught up. From zero is the
+        // only range that means anything.
+        var session = ready(lastSeq: 57, serverEpoch: "boot-a")
+
+        _ = session.receive(.authChallenge(WsAuthChallenge(nonce: "n", protocolVersion: 1)))
+        let outcomes = session.receive(.connected(connected(lastSeq: 12, serverEpoch: "boot-b")))
+
+        XCTAssertEqual(
+            outcomes,
+            [
+                .emit(.connectionState(.connected)),
+                .send(.sync(WsSync(sinceSeq: 0))),
+            ]
+        )
+    }
+
+    func testShouldKeepItsMarkWhenTheServerNamesTheSameRun() {
+        // The ordinary reconnect — a tunnel, a sleeping phone — must not be turned into
+        // a full replay by the restart rule.
+        var session = ready(lastSeq: 57, serverEpoch: "boot-a")
+
+        _ = session.receive(.authChallenge(WsAuthChallenge(nonce: "n", protocolVersion: 1)))
+        let outcomes = session.receive(.connected(connected(lastSeq: 57, serverEpoch: "boot-a")))
+
+        XCTAssertEqual(outcomes, [.emit(.connectionState(.connected))])
+        XCTAssertEqual(session.lastSeq, 57)
+    }
+
+    func testShouldAdoptTheRunAndStartOverWhenItHasNoEpochOfItsOwn() {
+        // An app upgraded across this change holds a mark and no epoch. It cannot know
+        // which run the mark belongs to, and the two possible answers are "one wasted
+        // replay" and "permanently deaf". It takes the replay, once.
+        var session = SocketSession(token: token, lastSeq: 57)
+        _ = session.receive(.authChallenge(WsAuthChallenge(nonce: "n", protocolVersion: 1)))
+
+        let outcomes = session.receive(.connected(connected(lastSeq: 57, serverEpoch: "boot-a")))
+
+        XCTAssertEqual(session.serverEpoch, "boot-a")
+        XCTAssertEqual(session.lastSeq, 0)
+        XCTAssertEqual(
+            outcomes,
+            [
+                .emit(.connectionState(.connected)),
+                .send(.sync(WsSync(sinceSeq: 0))),
+            ]
+        )
+    }
+
+    func testShouldStartOverWhenAServerWithNoEpochReportsFewerFramesThanItHolds() {
+        // The fallback for a service too old to name its run. A sequence never goes
+        // backwards within one run, so a server reporting less than we hold is proof —
+        // not a guess — that it is not the server that issued our mark.
+        var session = ready(lastSeq: 57)
+
+        _ = session.receive(.authChallenge(WsAuthChallenge(nonce: "n", protocolVersion: 1)))
+        let outcomes = session.receive(.connected(connected(lastSeq: 3)))
+
+        XCTAssertEqual(session.lastSeq, 0)
+        XCTAssertEqual(
+            outcomes,
+            [
+                .emit(.connectionState(.connected)),
+                .send(.sync(WsSync(sinceSeq: 0))),
+            ]
+        )
+    }
+
+    func testShouldNotResyncWhenAnEpochlessServerIsExactlyWhereWeAre() {
+        // The same fallback must not fire on the ordinary case, or every reconnect to
+        // an older service becomes a full replay.
+        var session = ready(lastSeq: 57)
+
+        _ = session.receive(.authChallenge(WsAuthChallenge(nonce: "n", protocolVersion: 1)))
+        let outcomes = session.receive(.connected(connected(lastSeq: 57)))
+
+        XCTAssertEqual(outcomes, [.emit(.connectionState(.connected))])
+        XCTAssertEqual(session.lastSeq, 57)
+    }
+
+    func testShouldNotChaseTheOldRunsSequenceAfterARestart() {
+        // `serverLastSeq` is the other number carried across reconnects, and the
+        // truncation rule compares the mark against it. Left at 57 from the run that
+        // ended, the first frame of the new run would satisfy `lastSeq < serverLastSeq`
+        // and the client would ask for a range no server has.
+        var session = ready(lastSeq: 57, serverEpoch: "boot-a")
+
+        _ = session.receive(.authChallenge(WsAuthChallenge(nonce: "n", protocolVersion: 1)))
+        _ = session.receive(.connected(connected(lastSeq: 0, serverEpoch: "boot-b")))
+
+        XCTAssertEqual(session.serverLastSeq, 0)
+
+        let outcomes = session.receive(
+            .syncResponse(
+                WsSyncResponse(
+                    fromSeq: 1,
+                    toSeq: 1,
+                    complete: true,
+                    frames: [.chatMessage(chatMessage(seq: 1, messageSeq: 1))]
+                )
+            )
+        )
+
+        XCTAssertFalse(
+            outcomes.contains { outcome in
+                if case .send = outcome { return true }
+                return false
+            },
+            "nothing left to ask for; got \(outcomes)"
+        )
+    }
+
     // MARK: - Presence is the exception
 
     func testShouldNeverAdvanceTheHighWaterMarkOnAPresenceFrame() {
@@ -386,18 +539,19 @@ final class SocketSessionTests: XCTestCase {
 
     // MARK: - Builders
 
-    private func ready(lastSeq: Int) -> SocketSession {
-        var session = makeSession(lastSeq: lastSeq)
+    private func ready(lastSeq: Int, serverEpoch: String? = nil) -> SocketSession {
+        var session = SocketSession(token: token, lastSeq: lastSeq, serverEpoch: serverEpoch)
         _ = session.receive(.authChallenge(WsAuthChallenge(nonce: "n", protocolVersion: 1)))
-        _ = session.receive(.connected(connected(lastSeq: lastSeq)))
+        _ = session.receive(.connected(connected(lastSeq: lastSeq, serverEpoch: serverEpoch)))
         return session
     }
 
-    private func connected(lastSeq: Int) -> WsConnected {
+    private func connected(lastSeq: Int, serverEpoch: String? = nil) -> WsConnected {
         WsConnected(
             lastSeq: lastSeq,
             serverTime: instant("2026-08-09T07:00:05.000Z"),
             protocolVersion: 1,
+            serverEpoch: serverEpoch,
             principal: Principal(
                 id: "syl:principal:0198f100-0000-7000-8000-000000000001",
                 name: "The Commander"

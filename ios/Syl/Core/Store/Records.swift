@@ -121,4 +121,11 @@ struct SyncStateRecord: Codable, FetchableRecord, PersistableRecord, Equatable {
     var id: String = SyncStateRecord.singletonID
     var cursor: String?
     var lastFrameSeq: Int = 0
+    /// **Which run of the server `lastFrameSeq` came from** (`syl-47j`).
+    ///
+    /// The frame sequence is held in the server's memory and begins again at zero on
+    /// every restart, so the number alone does not survive one — and this row is
+    /// exactly the thing that carries it across. Nil on a database written before this
+    /// column existed, and on one that has never held a socket connection.
+    var serverEpoch: String?
 }

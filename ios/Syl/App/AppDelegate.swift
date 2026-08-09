@@ -77,7 +77,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         let socket = WebSocketClient(
             configuration: ServerConfiguration(baseURL: backend.baseURL),
             tokenProvider: TokenStoreProvider(store: KeychainTokenStore()),
-            lastSeq: (try? store.syncState().lastFrameSeq) ?? 0
+            lastSeq: (try? store.syncState().lastFrameSeq) ?? 0,
+            // Restored together. A mark without the run it came from is `syl-47j` one
+            // launch later: the socket compares it against a stream that never issued
+            // it, concludes it is caught up, and discards everything that follows.
+            serverEpoch: (try? store.syncState().serverEpoch) ?? nil
         )
 
         let chat = ChatViewModel(
@@ -142,7 +146,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
             let events = await socket.events()
             await socket.start()
 
-            var persistedSeq = (try? store.syncState().lastFrameSeq) ?? 0
+            let restored = try? store.syncState()
+            var persisted: (seq: Int, epoch: String?) =
+                (restored?.lastFrameSeq ?? 0, restored?.serverEpoch)
 
             for await event in events {
                 await chat.apply(event)
@@ -157,11 +163,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
                 // connection-state events do not advance the mark at all, and a
                 // synchronous SQLite write per frame during a `speaking` burst is a
                 // main-thread stall on the busiest path in the app.
+                //
+                // **The epoch is part of "moved".** A restarted server resets the mark
+                // to zero and names a new run; watching the number alone would miss
+                // the reconnect where the mark happens to land back on the same value,
+                // and the row would keep pointing at a run that has ended.
                 let seq = await socket.lastSeq
-                guard seq != persistedSeq else { continue }
-                persistedSeq = seq
+                let epoch = await socket.serverEpoch
+                guard (seq, epoch) != persisted else { continue }
+                persisted = (seq, epoch)
                 await Task.detached(priority: .utility) {
-                    try? store.setLastFrameSeq(seq)
+                    try? store.setLastFrameSeq(seq, serverEpoch: epoch)
                 }.value
             }
         }
@@ -203,7 +215,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         let socket = WebSocketClient(
             configuration: ServerConfiguration(baseURL: backend.baseURL),
             tokenProvider: TokenStoreProvider(store: KeychainTokenStore()),
-            lastSeq: (try? store.syncState().lastFrameSeq) ?? 0
+            lastSeq: (try? store.syncState().lastFrameSeq) ?? 0,
+            // Restored together. A mark without the run it came from is `syl-47j` one
+            // launch later: the socket compares it against a stream that never issued
+            // it, concludes it is caught up, and discards everything that follows.
+            serverEpoch: (try? store.syncState().serverEpoch) ?? nil
         )
         self.socket = socket
         self.socketBaseURL = backend.baseURL

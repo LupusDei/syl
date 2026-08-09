@@ -91,17 +91,38 @@ public struct WsConnected: Codable, Equatable, Sendable {
     public let lastSeq: Int
     public let serverTime: Date
     public let protocolVersion: Int
+    /// **Which run of the server this is** — the identity of the frame stream, not of
+    /// the service.
+    ///
+    /// `lastSeq` alone is meaningless without it. The sequence is held in memory and
+    /// begins again at zero on every restart, so a number from a run that has ended
+    /// names nothing: a client holding 57 that reconnects to a fresh run is told
+    /// `lastSeq: 0`, concludes there is no gap, and then discards every frame the new
+    /// run sends as already-seen. Green indicator, live keepalive, no messages —
+    /// `syl-47j`.
+    ///
+    /// Optional because a service older than this field is still a service the app
+    /// must talk to; `SocketSession` has a weaker fallback for that case. New services
+    /// always send it.
+    public let serverEpoch: String?
     public let principal: Principal
 
-    public init(lastSeq: Int, serverTime: Date, protocolVersion: Int, principal: Principal) {
+    public init(
+        lastSeq: Int,
+        serverTime: Date,
+        protocolVersion: Int,
+        serverEpoch: String? = nil,
+        principal: Principal
+    ) {
         self.lastSeq = lastSeq
         self.serverTime = serverTime
         self.protocolVersion = protocolVersion
+        self.serverEpoch = serverEpoch
         self.principal = principal
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, lastSeq, serverTime, protocolVersion, principal
+        case type, lastSeq, serverTime, protocolVersion, serverEpoch, principal
     }
 
     public init(from decoder: Decoder) throws {
@@ -110,6 +131,7 @@ public struct WsConnected: Codable, Equatable, Sendable {
         lastSeq = try container.decode(Int.self, forKey: .lastSeq)
         serverTime = try container.decode(Date.self, forKey: .serverTime)
         protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
+        serverEpoch = try container.decodeIfPresent(String.self, forKey: .serverEpoch)
         principal = try container.decode(Principal.self, forKey: .principal)
     }
 
@@ -119,6 +141,10 @@ public struct WsConnected: Codable, Equatable, Sendable {
         try container.encode(lastSeq, forKey: .lastSeq)
         try container.encode(serverTime, forKey: .serverTime)
         try container.encode(protocolVersion, forKey: .protocolVersion)
+        // `encodeIfPresent`, not `encodeRequiredNullable`. A frame from a service that
+        // does not send this field must round-trip byte-for-byte through the model, and
+        // the contract fixtures are the gate that says so.
+        try container.encodeIfPresent(serverEpoch, forKey: .serverEpoch)
         try container.encode(principal, forKey: .principal)
     }
 }

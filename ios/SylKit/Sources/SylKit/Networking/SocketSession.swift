@@ -79,12 +79,27 @@ public struct SocketSession: Sendable {
     /// to reveal the hole.
     public private(set) var serverLastSeq: Int = 0
 
+    /// **Which run of the server `lastSeq` belongs to.**
+    ///
+    /// A frame sequence is only meaningful inside one server run, and the client is the
+    /// only party that carries a number across runs — so the client is the only party
+    /// that can notice the number has stopped meaning anything. Kept beside the mark
+    /// and persisted with it, because a mark restored from disk without the run it came
+    /// from is the same problem one launch later.
+    public private(set) var serverEpoch: String?
+
     private let token: String
     private let supportedProtocolVersion: Int
 
-    public init(token: String, lastSeq: Int = 0, supportedProtocolVersion: Int = 1) {
+    public init(
+        token: String,
+        lastSeq: Int = 0,
+        serverEpoch: String? = nil,
+        supportedProtocolVersion: Int = 1
+    ) {
         self.token = token
         self.lastSeq = lastSeq
+        self.serverEpoch = serverEpoch
         self.supportedProtocolVersion = supportedProtocolVersion
     }
 
@@ -154,6 +169,15 @@ public struct SocketSession: Sendable {
     private mutating func handle(_ connected: WsConnected) -> [Outcome] {
         protocolVersion = connected.protocolVersion
         phase = .ready
+
+        // **Before anything reads the mark.** `syl-47j`: a mark from a run that has
+        // ended is not a small number, it is a wrong one, and every comparison below
+        // would draw the wrong conclusion from it.
+        if isADifferentRun(than: connected) {
+            lastSeq = 0
+            serverLastSeq = 0
+        }
+        serverEpoch = connected.serverEpoch ?? serverEpoch
         serverLastSeq = max(serverLastSeq, connected.lastSeq)
 
         var outcomes: [Outcome] = [.emit(.connectionState(.connected))]
@@ -163,6 +187,29 @@ public struct SocketSession: Sendable {
             outcomes.append(.send(.sync(WsSync(sinceSeq: lastSeq))))
         }
         return outcomes
+    }
+
+    /// Whether the server on the other end of this handshake is a different run from
+    /// the one that issued our high-water mark.
+    ///
+    /// A mark of zero is not from any run, so nothing can invalidate it — saying so
+    /// explicitly keeps a fresh install and an upgraded one on the same path.
+    ///
+    /// Two signals, and they are not equally strong:
+    ///
+    /// - **The epoch**, which is proof. Different name, different run; same name, same
+    ///   run. A client that holds no epoch yet cannot match, and takes the safe branch:
+    ///   one replay costs a few hundred deduplicated frames, once, whereas guessing the
+    ///   other way costs every frame until the app is relaunched.
+    /// - **A rewound sequence**, for a service too old to name its run. Within a run
+    ///   the number only ever goes up, so a server reporting fewer frames than we hold
+    ///   cannot be the server that issued ours. It is a strictly weaker check — a
+    ///   restarted server that has since passed our mark looks ordinary to it — which
+    ///   is exactly why it is the fallback and not the mechanism.
+    private func isADifferentRun(than connected: WsConnected) -> Bool {
+        guard lastSeq > 0 else { return false }
+        if let epoch = connected.serverEpoch { return epoch != serverEpoch }
+        return connected.lastSeq < lastSeq
     }
 
     // MARK: - Numbered frames

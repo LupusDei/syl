@@ -3,7 +3,6 @@ import type { AddressInfo } from "node:net";
 
 import type {
   WsAuthChallenge,
-  WsConnected,
   WsDeliveryConfirmation,
   WsError,
   WsPong,
@@ -16,7 +15,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ApiKeyService } from "../../src/services/api-key-service.js";
 import { INTERACTIVE_CONVERSATION_ID, type SylDatabase } from "../../src/services/database.js";
 import type { MessageStore } from "../../src/services/message-store.js";
-import { PROTOCOL_VERSION, SylSocketServer, WS_PATH } from "../../src/services/ws-server.js";
+import {
+  PROTOCOL_VERSION,
+  SylSocketServer,
+  WS_PATH,
+  type WsConnectedFrame,
+} from "../../src/services/ws-server.js";
 import { testDatabase, testDeps } from "../helpers/service.js";
 import { TestClient } from "../helpers/ws.js";
 
@@ -70,7 +74,9 @@ async function connect(): Promise<{ client: TestClient; challenge: WsAuthChallen
 }
 
 /** Connect, authenticate, and return the client plus the `connected` frame. */
-async function join(lastSeq?: number): Promise<{ client: TestClient; connected: WsConnected }> {
+async function join(
+  lastSeq?: number,
+): Promise<{ client: TestClient; connected: WsConnectedFrame }> {
   const { client, challenge } = await connect();
   client.send({
     type: "auth_response",
@@ -78,7 +84,7 @@ async function join(lastSeq?: number): Promise<{ client: TestClient; connected: 
     nonce: challenge.nonce,
     ...(lastSeq === undefined ? {} : { lastSeq }),
   });
-  const connected = (await client.next()) as WsConnected;
+  const connected = (await client.next()) as WsConnectedFrame;
   return { client, connected };
 }
 
@@ -107,6 +113,46 @@ describe("the handshake", () => {
     expect(connected.protocolVersion).toBe(PROTOCOL_VERSION);
     expect(connected.principal.name).toBe("The Commander");
     expect(connected.lastSeq).toBe(0);
+  });
+
+  it("should name the run its sequence belongs to", async () => {
+    // `syl-47j`. `lastSeq` is held in memory and starts again at zero on every
+    // restart, so the number on its own is not enough for a client to tell
+    // "nothing new" from "everything you hold is from a server that no longer
+    // exists". The run has to be named, and this is the only place to name it:
+    // the client's mark is already stale by the time any other frame arrives.
+    const { connected } = await join();
+
+    expect(connected.serverEpoch).toEqual(expect.any(String));
+    expect(connected.serverEpoch).not.toBe("");
+    // The accessor and the wire are the same fact. A caller that logged one while
+    // clients keyed on the other would make a restart untraceable in exactly the
+    // incident where the log is the only evidence.
+    expect(connected.serverEpoch).toBe(sockets.serverEpoch);
+  });
+
+  it("should give every connection to one run the same epoch", async () => {
+    // Nothing restarted between these two, so a client that reset its mark on
+    // the strength of a changed epoch would replay the whole buffer on every
+    // ordinary reconnect.
+    const first = await join();
+    const second = await join();
+
+    expect(second.connected.serverEpoch).toBe(first.connected.serverEpoch);
+  });
+
+  it("should mint a different epoch for a different run", async () => {
+    // The point of the field. Two servers over the same store are two frame
+    // streams, and the sequences in them are unrelated.
+    const before = (await join()).connected.serverEpoch;
+
+    for (const client of clients.splice(0)) client.close();
+    await sockets.close();
+    await new Promise<void>((resolve) => http.close(() => resolve()));
+    db.close();
+    await start();
+
+    expect((await join()).connected.serverEpoch).not.toBe(before);
   });
 
   it("should take the token in a frame, never from the URL", async () => {
