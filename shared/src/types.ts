@@ -48,8 +48,17 @@ export type ErrorEnvelope = {
 /**
  * The typed code is the contract; the HTTP status is advisory. Clients
  * branch on this, never on the status line.
+ *
+ * `PAIRING_CODE_EXPIRED` and `PAIRING_CODE_ALREADY_USED` are the only
+ * places the service tells one authentication failure from another, and
+ * they are safe because **both are reachable only by presenting a code
+ * that matches a stored one**. A wrong guess, and an attempt made while
+ * no code is live, are the same `UNAUTHORIZED`. So the extra detail
+ * reaches the person holding the code and nobody else — which is what
+ * lets a pairing screen on a phone say something more useful than "that
+ * did not work".
  */
-export type ErrorCode = "VALIDATION_FAILED" | "UNAUTHORIZED" | "FORBIDDEN" | "NOT_FOUND" | "CONFLICT" | "IDEMPOTENCY_KEY_REUSE" | "IDEMPOTENCY_KEY_REQUIRED" | "DEFERRAL_NOT_LATER" | "RRULE_UNSUPPORTED" | "UNKNOWN_JOB_KIND" | "DEVICE_TOKEN_INVALID" | "QUIET_HOURS" | "RATE_LIMITED" | "UPSTREAM_UNAVAILABLE" | "INTERNAL";
+export type ErrorCode = "VALIDATION_FAILED" | "UNAUTHORIZED" | "PAIRING_CODE_EXPIRED" | "PAIRING_CODE_ALREADY_USED" | "FORBIDDEN" | "NOT_FOUND" | "CONFLICT" | "IDEMPOTENCY_KEY_REUSE" | "IDEMPOTENCY_KEY_REQUIRED" | "DEFERRAL_NOT_LATER" | "RRULE_UNSUPPORTED" | "UNKNOWN_JOB_KIND" | "DEVICE_TOKEN_INVALID" | "QUIET_HOURS" | "RATE_LIMITED" | "UPSTREAM_UNAVAILABLE" | "INTERNAL";
 
 export type ApiError = {
   readonly code: ErrorCode;
@@ -78,6 +87,18 @@ export type HealthCheck = {
   readonly detail?: string | null;
 };
 
+/**
+ * How a device gets its first credential, and the only unauthenticated
+ * write in the contract.
+ *
+ * The human types the *short-lived* secret and the app keeps the
+ * *long-lived* one: eight digits, good for ten minutes and for exactly
+ * one device, exchanged for a bearer token the app puts in the Keychain
+ * and never shows anyone. Nothing is ever baked into the build.
+ *
+ * Get a code by running `npm run pair` on the machine Syl runs on. It is
+ * also printed at startup while no device is paired.
+ */
 export type PairRequest = {
   readonly pairingCode: string;
   readonly deviceName: string;

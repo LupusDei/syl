@@ -294,10 +294,19 @@ describe("describeStartup", () => {
     expect(describeStartup(config).join("\n")).not.toContain("Pairing code");
   });
 
+  it("should say how to get a code once a device is paired", () => {
+    // `syl-q1f`. A code is printed only while nothing is paired, which left
+    // every later case — a second device, a reinstall, a revoked token — with
+    // no way to obtain one: the service had already decided not to offer a
+    // code and there was nothing to ask. Naming the command is the whole fix
+    // for discoverability, and it belongs on the boot the Commander reads.
+    expect(describeStartup(config).join("\n")).toContain("npm run pair");
+  });
+
   it("should announce version, address and environment on a clean start", () => {
     const lines = describeStartup({ ...config, port: 4201, version: "1.2.3" });
 
-    expect(lines).toHaveLength(3);
+    expect(lines).toHaveLength(4);
     expect(lines[0]).toContain("v1.2.3");
     expect(lines[0]).toContain("http://127.0.0.1:4201");
     expect(lines[0]).toContain("test");
@@ -321,7 +330,7 @@ describe("describeStartup", () => {
       subscriptionRails: false,
     });
 
-    expect(lines).toHaveLength(4);
+    expect(lines).toHaveLength(5);
     expect(lines.join("\n")).toContain("WARNING");
     expect(lines.join("\n")).toContain("ANTHROPIC_API_KEY");
     expect(lines.join("\n")).toContain("METERED API");

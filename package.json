@@ -30,6 +30,7 @@
     "contract:generate": "tsx shared/src/cli/generate.ts",
     "ping": "tsx backend/src/harness/cli/ping.ts",
     "when": "tsx backend/src/harness/cli/when.ts",
+    "pair": "tsx backend/src/ops/cli/pair.ts",
     "logs": "tsx backend/src/ops/cli/logs.ts",
     "launchd": "tsx backend/src/ops/cli/launchd.ts"
   },

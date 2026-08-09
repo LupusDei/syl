@@ -298,13 +298,44 @@ manual step is adding `com.jmm.syl` to the match repository by running
 Expect the first run to fail on something environmental. That is what a first
 run is for.
 
-Then, on the phone: install from TestFlight, open it, pair it. The pairing code
-is printed in the startup log the first time the service boots with no paired
-device:
+Then, on the phone: install from TestFlight and open it. A fresh install has no
+credential, so the first screen is the pairing screen — two fields, a server
+address and eight digits. Get both from the Mac:
+
+```sh
+SYL_DB_PATH=~/.syl/syl.db npm run pair
+```
+
+**Set `SYL_DB_PATH`, or run it from a shell that already has it.** The service
+gets that variable from its launchd plist as an absolute path; an interactive
+shell does not have it, and the fallback is `.syl/syl.db` *relative to the
+working directory*. A code written into the wrong store is a valid code for a
+database nothing is serving, and the only symptom is "that pairing code was not
+accepted" — forever, with the command reporting success every time. The command
+refuses outright rather than creating a store, and prints the one it used on
+every run, so check that line matches:
+
+```sh
+launchctl print gui/$(id -u)/com.jmm.syl | grep SYL_DB_PATH
+```
+
+It prints the code, when it expires, and the exact URL to type into the app
+(read from the tailnet certificate's own hostname, so it is the address the
+phone can actually reach over TLS). Run it whenever a device needs pairing: a
+second phone, a reinstall onto a restored device, a token that was revoked.
+
+The first boot on a machine with nothing paired also prints a code in the
+startup log, which is the same thing arriving earlier:
 
 ```sh
 npm run logs -- --event service.notice | grep -i pairing
 ```
+
+A code lasts ten minutes, pairs exactly one device, and is superseded the
+moment another is issued. If the app says the code **expired** or was **already
+used**, run `npm run pair` again — retyping the old one will never work. If it
+says it could not **reach** the Mac, the code is not the problem: check
+Tailscale on both ends and the address in the first field.
 
 **Worked if**: `/health` reports the `apns-environment` check as `ok`, and the
 device appears in the store. If it says `degraded` and names a device from the

@@ -10,6 +10,7 @@ Syl/                     app target sources
   App/AppDelegate.swift       APNs device token; there is no SwiftUI equivalent
   Core/Services/              notifications, push registration, network monitor
   Core/Storage/               server profiles (UserDefaults), token (Keychain)
+  Features/Pairing/           the first screen: server address + eight digits
 SylTests/                app-target unit tests (wiring only; see below)
 SylKit/                  local SPM package — the client wire layer, ZERO dependencies
   Sources/SylKit/Model/       the wire types, hand-written from shared/openapi.yaml
@@ -270,6 +271,43 @@ xcodebuild build -project ios/Syl.xcodeproj -scheme Syl -configuration Release \
 **Never commit `fastlane/AuthKey.p8` or `fastlane/api_key.json`.** The workflow writes
 them from secrets and deletes them on `always()`. Adjutant's repository does contain
 real ones; that is a mistake worth not copying.
+
+## Pairing — how a credential gets into the app
+
+Nothing is baked into the build. A fresh install holds no token, so the first
+screen is `Features/Pairing`: a server address and eight digits.
+
+The **short-lived** secret is the one the Commander handles — a code from
+`npm run pair` on the Mac, good for ten minutes and for one device. The
+**long-lived** one is the bearer token he never sees; it comes back from
+`POST /auth/pair` and goes straight into the Keychain
+(`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` — see `TokenStore.swift`
+for what that costs on a device restore, which is a deliberate trade).
+
+`syl-q1f`: none of this existed. `SylAPI.pair` had no callers, nothing ever
+wrote to the Keychain, and the base URL was hardcoded to the mock in two
+places — so every request went out with no `Authorization` header, the socket
+answered `.unauthenticated` and stopped, and the app was inert against a real
+backend while looking perfectly healthy.
+
+**The failure states are the part to keep.** `PairingViewModel.Failure` tells
+four situations apart, because each has a different next action:
+
+| | what it means | what he does |
+|---|---|---|
+| wrong code | the digits are wrong | check and retype |
+| expired code | ten minutes passed, or another code superseded it | `npm run pair` again |
+| already used | that code paired something already | `npm run pair` again — retyping cannot work |
+| unreachable | nothing answered | the code is fine; check Tailscale and the address |
+
+The last one is the one that must never be rendered as the first: under
+Tailscale the first request after a wake genuinely fails while the tunnel
+establishes, so "cannot reach" is routine and "your code is wrong" would be a
+lie that sends him back to the Mac for nothing.
+
+All four are reachable against `npm run mock`, which publishes fixed codes for
+exactly this reason — a mock that only produces the happy path produces a
+client that only handles the happy path. It prints them at startup.
 
 ## Not built yet
 

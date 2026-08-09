@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_PAIRING_CODE_TTL_MS,
   hashToken,
+  PAIRING_CODE_RETENTION_MS,
   PairingError,
   THE_COMMANDER,
   TOKEN_PREFIX,
@@ -49,11 +50,24 @@ describe("issuePairingCode", () => {
     expect(issued.expiresAt).toBe(new Date(now + DEFAULT_PAIRING_CODE_TTL_MS).toISOString());
   });
 
-  it("should return the same code while it is live, not a moving target", () => {
+  it("should supersede the previous code rather than leave two windows open", () => {
+    // This reverses the old behaviour, which returned the same code while it
+    // was live so an operator did not chase a moving target. That only worked
+    // while the code lived in one process's memory; it is in the store now,
+    // because `npm run pair` is a *different process* from the service and the
+    // database file is the only thing they share. A memo in the service would
+    // keep handing out a code another process had already replaced.
+    //
+    // One live code at any instant is also the safer invariant on its own
+    // terms: asking twice because the first slip got lost must not leave the
+    // first code working.
     const first = keys.issuePairingCode();
     now += 1_000;
+    const second = keys.issuePairingCode();
 
-    expect(keys.issuePairingCode().code).toBe(first.code);
+    expect(second.code).not.toBe(first.code);
+    expect(() => keys.pair(first.code, "Late device")).toThrow(/expired/);
+    expect(keys.pair(second.code, "Commander's iPhone").tokenType).toBe("Bearer");
   });
 
   it("should mint a fresh code once the last one has expired", () => {
@@ -61,6 +75,30 @@ describe("issuePairingCode", () => {
     now += DEFAULT_PAIRING_CODE_TTL_MS + 1;
 
     expect(keys.issuePairingCode().code).not.toBe(first.code);
+  });
+
+  it("should forget codes that have been dead for longer than the retention window", () => {
+    // Bounds the table, and bounds the scan: every candidate a redemption
+    // compares against costs a scrypt, so an unbounded history would turn one
+    // request into a minute of CPU.
+    keys.issuePairingCode();
+    now += PAIRING_CODE_RETENTION_MS + DEFAULT_PAIRING_CODE_TTL_MS + 1;
+    keys.issuePairingCode();
+
+    const rows = db.handle.prepare("SELECT id FROM pairing_codes").all();
+    expect(rows).toHaveLength(1);
+  });
+
+  it("should never write the code itself, only a salted hash of it", () => {
+    // Eight digits is 10^8. A SHA-256 of one is reversible in seconds by
+    // anyone who can read this file, which would turn read access to syl.db —
+    // which yields no usable credential today — into the ability to mint one.
+    const issued = keys.issuePairingCode();
+
+    const stored = JSON.stringify(db.handle.prepare("SELECT * FROM pairing_codes").all());
+
+    expect(stored).not.toContain(issued.code);
+    expect(stored).not.toContain(issued.code.replace("-", ""));
   });
 });
 
@@ -81,7 +119,16 @@ describe("pair", () => {
     const code = keys.issuePairingCode().code;
     keys.pair(code, "Commander's iPhone");
 
-    expect(() => keys.pair(code, "Somebody else's iPhone")).toThrow(PairingError);
+    try {
+      keys.pair(code, "Somebody else's iPhone");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PairingError);
+      // Not "wrong code". Telling the Commander to retype eight digits he has
+      // already spent is how a person ends up doing it four times.
+      expect((error as PairingError).reason).toBe("already_used");
+    }
+    expect(db.handle.prepare("SELECT id FROM api_keys").all()).toHaveLength(1);
   });
 
   it("should refuse a code that is not the current one", () => {
@@ -115,6 +162,102 @@ describe("pair", () => {
     } catch (error) {
       expect((error as PairingError).reason).toBe("unknown");
     }
+  });
+
+  it("should give a guess and a dead window the same answer, and a held code a better one", () => {
+    // The security property that lets pairing distinguish its failures at all.
+    //
+    // `expired` and `already_used` are reachable *only* by presenting a code
+    // that matches a stored one. Everything else — a wrong guess, an attempt
+    // made while nothing is live — is one indistinguishable `unknown`. So an
+    // attacker cannot learn when a pairing window is open, and the Commander,
+    // who does hold the code, is told which of the four things went wrong.
+    const wrongGuessWithNoWindow = reasonFor(() => keys.pair("1234-5678", "Attacker"));
+
+    const live = keys.issuePairingCode().code;
+    const wrongGuessWithAWindowOpen = reasonFor(() =>
+      keys.pair(live === "0000-0000" ? "1111-1111" : "0000-0000", "Attacker"),
+    );
+
+    expect(wrongGuessWithAWindowOpen).toBe(wrongGuessWithNoWindow);
+    expect(wrongGuessWithAWindowOpen).toBe("unknown");
+
+    // And the holder of the code gets the useful answer.
+    now += DEFAULT_PAIRING_CODE_TTL_MS + 1;
+    expect(reasonFor(() => keys.pair(live, "Commander's iPhone"))).toBe("expired");
+  });
+});
+
+/** The reason a pairing attempt failed with, for tests that compare them. */
+function reasonFor(attempt: () => unknown): string {
+  try {
+    attempt();
+  } catch (error) {
+    if (error instanceof PairingError) return error.reason;
+    throw error;
+  }
+  throw new Error("that pairing attempt was expected to fail and did not");
+}
+
+describe("single use, as the store enforces it", () => {
+  /**
+   * The constraint, reached directly.
+   *
+   * `pair` marks a code redeemed and inserts the key inside one transaction,
+   * so the ordinary path never gets here. This is the backstop under it: a
+   * UNIQUE index on `api_keys.pairing_code_id` means one pairing code can mint
+   * at most one key **whatever the calling code does** — including a future
+   * refactor that reintroduces a read-modify-write, and including a second
+   * process that never runs any of this file.
+   */
+  it("should refuse two keys claiming the same pairing code", () => {
+    keys.pair(keys.issuePairingCode().code, "Commander's iPhone");
+    const pairingCodeId = (
+      db.handle.prepare("SELECT pairing_code_id FROM api_keys").get() as {
+        pairing_code_id: string;
+      }
+    ).pairing_code_id;
+
+    expect(pairingCodeId).not.toBeNull();
+    expect(() =>
+      db.handle
+        .prepare(
+          `INSERT INTO api_keys (id, token_hash, token_suffix, device_name, created_at, pairing_code_id)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "syl:apikey:00000000-0000-7000-8000-000000000003",
+          "not-a-real-hash",
+          "bbbb",
+          "Somebody else's iPhone",
+          "2026-08-09T07:00:00.000Z",
+          pairingCodeId,
+        ),
+    ).toThrow(/UNIQUE/i);
+  });
+
+  it("should still allow many keys minted without a pairing code", () => {
+    // SQLite treats NULLs as distinct in a UNIQUE index. If it did not, the
+    // console bootstrap path would break the second time it was used, and the
+    // constraint above would be unshippable.
+    keys.mint("Console bootstrap");
+    keys.mint("Console bootstrap, again");
+
+    expect(db.handle.prepare("SELECT id FROM api_keys").all()).toHaveLength(2);
+  });
+
+  it("should let a redeemed code be forgotten without disturbing the key it granted", () => {
+    // `ON DELETE SET NULL`. The retention purge has to be able to run without
+    // the foreign key refusing it, or the table grows forever.
+    const token = keys.pair(keys.issuePairingCode().code, "Commander's iPhone").token;
+    db.handle.prepare("DELETE FROM pairing_codes").run();
+
+    expect(keys.verify(token).ok).toBe(true);
+    expect(
+      (db.handle.prepare("SELECT pairing_code_id FROM api_keys").get() as {
+        pairing_code_id: string | null;
+      }).pairing_code_id,
+    ).toBeNull();
   });
 });
 

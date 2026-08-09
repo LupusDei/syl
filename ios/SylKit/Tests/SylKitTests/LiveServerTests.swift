@@ -51,6 +51,90 @@ final class LiveServerTests: XCTestCase {
         )
     }
 
+    // MARK: - Pairing, against the real service
+
+    /// `syl-q1f` — the app's own pairing call, at the real backend.
+    ///
+    /// Everything else about pairing is checked against the mock or in isolation,
+    /// which is a strong check on the contract and no check at all on the service: the
+    /// client, the mock and the backend were all written from the same document and
+    /// all three can agree on paper while disagreeing on the wire. This is the one
+    /// place `SylAPI.pair` and `POST /auth/pair` actually meet.
+    ///
+    /// **One test, deliberately, because there is only one code.** Two cases would
+    /// have to run in a particular order against a credential that survives being
+    /// spent exactly once, and XCTest orders by name rather than by declaration —
+    /// which is how an order-dependent suite quietly becomes an order-dependent suite
+    /// that only fails when somebody renames a method.
+    func testShouldPairWithARealCodeAndThenRefuseToPairAgain() async throws {
+        let live = try live()
+        let anonymous = APIClient(configuration: ServerConfiguration(baseURL: live.url))
+        let code = try live.code()
+
+        let grant = try await anonymous.send(
+            try SylAPI.pair(
+                PairRequest(pairingCode: code, deviceName: "SylKit pairing check"),
+                idempotencyKey: IdempotencyKey.generate()
+            )
+        )
+
+        XCTAssertEqual(grant.tokenType, "Bearer")
+        XCTAssertTrue(grant.token.hasPrefix("syl_pat_"))
+        XCTAssertTrue(SylIDs.isWellFormed(grant.principal.id))
+
+        // The thing that actually matters: the token it just minted is accepted by
+        // the header `APIClient` puts it in.
+        let paired = APIClient(
+            configuration: ServerConfiguration(baseURL: live.url),
+            tokenProvider: StaticTokenProvider(grant.token)
+        )
+        _ = try await paired.send(SylAPI.whoami())
+
+        // And the refusal a phone has to render as "stop retyping that one". A new
+        // `ErrorCode` the service emits and the client cannot decode arrives as
+        // `.decoding` rather than as a typed failure, and this is the only test
+        // anywhere that would catch it.
+        do {
+            _ = try await anonymous.send(
+                try SylAPI.pair(
+                    PairRequest(pairingCode: code, deviceName: "A second device"),
+                    idempotencyKey: IdempotencyKey.generate()
+                )
+            )
+            XCTFail("the real service must not pair twice from one code")
+        } catch let error as APIError {
+            guard case .api(let api, let status) = error else {
+                return XCTFail("expected a typed refusal, got \(error)")
+            }
+            XCTAssertEqual(api.code, .pairingCodeAlreadyUsed)
+            XCTAssertEqual(status, 401)
+            XCTAssertFalse(api.retryable)
+        }
+    }
+
+    /// A wrong guess must stay indistinguishable, and it must stay decodable.
+    func testShouldRefuseAWrongCodeWithTheOrdinaryUnauthorized() async throws {
+        let live = try live()
+        let anonymous = APIClient(configuration: ServerConfiguration(baseURL: live.url))
+
+        do {
+            _ = try await anonymous.send(
+                try SylAPI.pair(
+                    PairRequest(pairingCode: "0000-0000", deviceName: "Attacker"),
+                    idempotencyKey: IdempotencyKey.generate()
+                )
+            )
+            XCTFail("the real service must not accept a guessed code")
+        } catch let error as APIError {
+            guard case .api(let api, _) = error else {
+                return XCTFail("expected a typed refusal, got \(error)")
+            }
+            // Not "expired", not "already used". Those two require holding the code,
+            // which is the whole reason they are safe to distinguish.
+            XCTAssertEqual(api.code, .unauthorized)
+        }
+    }
+
     // MARK: - The surfaces the app actually uses
 
     func testShouldReadHealthWithoutATokenFromTheRealService() async throws {

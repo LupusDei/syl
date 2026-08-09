@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "error": {
+    "code": "PAIRING_CODE_EXPIRED",
+    "message": "That pairing code has expired. Run `npm run pair` on the server for a new one.",
+    "retryable": false,
+    "details": null,
+    "retryAfterMs": null
+  }
+}

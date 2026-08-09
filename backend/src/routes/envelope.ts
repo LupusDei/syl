@@ -29,6 +29,11 @@ export const STATUS_FOR_CODE: Readonly<Record<ErrorCode, number>> = {
   VALIDATION_FAILED: 400,
   IDEMPOTENCY_KEY_REQUIRED: 400,
   UNAUTHORIZED: 401,
+  // 401 and not 410/409: these are still "you may not have a token", and a
+  // client that branches on the status line rather than the code should be
+  // pushed towards the same conclusion as an ordinary refusal.
+  PAIRING_CODE_EXPIRED: 401,
+  PAIRING_CODE_ALREADY_USED: 401,
   FORBIDDEN: 403,
   NOT_FOUND: 404,
   CONFLICT: 409,

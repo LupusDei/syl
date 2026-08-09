@@ -2,7 +2,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 
 import { API_BASE, specRoutes, WS_PATH } from "../src/mock/router.js";
-import { MockServer, startMockServer } from "../src/mock/server.js";
+import {
+  MOCK_EXPIRED_PAIRING_CODE,
+  MOCK_PAIRING_CODE,
+  MOCK_USED_PAIRING_CODE,
+  MockServer,
+  startMockServer,
+} from "../src/mock/server.js";
 import { MockStore } from "../src/mock/store.js";
 import { loadSchemas, loadSpec } from "../src/spec.js";
 import { validate } from "../src/validate.js";
@@ -31,6 +37,15 @@ afterAll(async () => {
 beforeEach(async () => {
   await fetch(`${base}/__mock/reset`, { method: "POST" });
 });
+
+/** One pairing attempt, with a caller-named key so replays are deliberate. */
+async function pair(pairingCode: string, idempotencyKey: string): Promise<Response> {
+  return fetch(`${base}${API_BASE}/auth/pair`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify({ pairingCode, deviceName: "Test" }),
+  });
+}
 
 async function get(path: string): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(`${base}${API_BASE}${path}`, { headers: TOKEN });
@@ -151,12 +166,59 @@ describe("authentication", () => {
   });
 
   it("should let pairing through, since that is how a token is obtained", async () => {
-    const res = await fetch(`${base}${API_BASE}/auth/pair`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Idempotency-Key": "pair-key-1" },
-      body: JSON.stringify({ pairingCode: "4821-9930", deviceName: "Test" }),
-    });
+    const res = await pair(MOCK_PAIRING_CODE, "pair-key-1");
     expect(res.status).toBe(200);
+  });
+});
+
+/**
+ * `syl-q1f` — the mock has to be able to refuse.
+ *
+ * It used to hand a token to anything that asked, which made three of the four
+ * states a pairing screen must render unreachable: they got written once and
+ * never looked at. A mock that only produces the happy path produces clients
+ * that only handle the happy path, which is the same argument that made
+ * `Scenario` worth building in the first place.
+ */
+describe("pairing, as a client has to handle it", () => {
+  const codeOf = async (res: Response): Promise<string> =>
+    ((await res.json()) as { error: { code: string } }).error.code;
+
+  it("should refuse a code it never published, without saying more", async () => {
+    const res = await pair("1357-2468", "pair-wrong-1");
+
+    expect(res.status).toBe(401);
+    expect(await codeOf(res)).toBe("UNAUTHORIZED");
+  });
+
+  it("should have a code that always answers expired", async () => {
+    const res = await pair(MOCK_EXPIRED_PAIRING_CODE, "pair-expired-1");
+
+    expect(res.status).toBe(401);
+    expect(await codeOf(res)).toBe("PAIRING_CODE_EXPIRED");
+  });
+
+  it("should have a code that always answers already used", async () => {
+    const res = await pair(MOCK_USED_PAIRING_CODE, "pair-used-1");
+
+    expect(res.status).toBe(401);
+    expect(await codeOf(res)).toBe("PAIRING_CODE_ALREADY_USED");
+  });
+
+  it("should spend the working code, so the honest path reaches that state too", async () => {
+    // A different idempotency key each time: replaying a stored response would
+    // hide exactly the behaviour under test.
+    expect((await pair(MOCK_PAIRING_CODE, "pair-once-1")).status).toBe(200);
+    const second = await pair(MOCK_PAIRING_CODE, "pair-once-2");
+
+    expect(second.status).toBe(401);
+    expect(await codeOf(second)).toBe("PAIRING_CODE_ALREADY_USED");
+  });
+
+  it("should answer every refusal in the contract's error envelope", async () => {
+    const res = await pair("0000-9999", "pair-envelope-1");
+
+    expect(validate(registry, "ErrorEnvelope", await res.json())).toEqual([]);
   });
 });
 
