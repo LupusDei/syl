@@ -41,6 +41,32 @@ export const EXIT_SHUTDOWN_TIMEOUT = 75;
 /** Exit status when the close threw. `EX_SOFTWARE`, from sysexits. */
 export const EXIT_SHUTDOWN_FAILED = 70;
 
+/** Exit status when a human insisted: 128 + SIGINT, the shell's convention. */
+export const EXIT_FORCED = 130;
+
+/**
+ * Signals whose REPEAT means "I meant it" rather than "the supervisor is
+ * retrying".
+ *
+ * Only `SIGINT`, and the asymmetry with `SIGTERM` is the whole point.
+ *
+ * The obvious design — a second signal of any kind forces the exit, the way
+ * Ctrl-C twice works in an interactive program — is wrong for a service under
+ * launchd, because **launchd re-sends `SIGTERM` to a job it is stopping as a
+ * matter of course**. A repeated `SIGTERM` therefore carries no intent at all,
+ * and treating it as intent means dying mid-write during an ordinary stop:
+ * every reboot, every reload. That is precisely the ungraceful kill this
+ * module exists to prevent, and a job lease abandoned that way is
+ * indistinguishable from one abandoned by a crash.
+ *
+ * `SIGINT` is different in kind. Nothing auto-repeats it — it comes from a
+ * terminal, so a second one is unambiguously a person who has decided not to
+ * wait. Honouring it there gives the familiar escape hatch exactly where the
+ * intent is real. `SIGKILL` remains the guaranteed answer for everything else,
+ * and the deadline above bounds a close that will not finish.
+ */
+export const FORCE_ON_REPEAT = ["SIGINT"] as const;
+
 /**
  * The part of `process` this module touches.
  *
@@ -86,6 +112,8 @@ export interface ShutdownOptions {
   readonly close: () => Promise<void>;
   /** Which signals to honour. Defaults to {@link SHUTDOWN_SIGNALS}. */
   readonly signals?: readonly string[];
+  /** Whose repeat forces an immediate exit. Defaults to {@link FORCE_ON_REPEAT}. */
+  readonly forceOnRepeat?: readonly string[];
   /** Where signals come from. Defaults to `process`. */
   readonly source?: SignalSource;
   /** How the process ends. Defaults to `process.exit`. */
@@ -126,6 +154,7 @@ export function installShutdownHandlers(options: ShutdownOptions): ShutdownHandl
   const log = options.log ?? (() => undefined);
   const timeoutMs = options.timeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
   const timers = options.timers ?? systemDeadlineTimers;
+  const forceOnRepeat = options.forceOnRepeat ?? FORCE_ON_REPEAT;
 
   let inFlight: Promise<void> | null = null;
   const listeners = new Map<string, () => void>();
@@ -133,6 +162,39 @@ export function installShutdownHandlers(options: ShutdownOptions): ShutdownHandl
   const dispose = (): void => {
     for (const [signal, listener] of listeners) source.removeListener(signal, listener);
     listeners.clear();
+  };
+
+  /**
+   * Stop shutting down twice, without ever leaving the process unguarded.
+   *
+   * `dispose` used to be called here, at the end of the teardown, on the
+   * reasoning that there was nothing left to protect. There was: the process's
+   * own exit path. Between removing the handlers and `exit` actually taking
+   * effect the service still has to write `shutdown.complete` to a log file,
+   * and in that window a `SIGTERM` had no listener and therefore took Node's
+   * default action — death by signal, status 143, mid-write.
+   *
+   * launchd RE-SENDS `SIGTERM` to a job it is stopping, so this is the normal
+   * case rather than an exotic one, and the failure is exactly the ungraceful
+   * kill this module exists to prevent, arriving one signal later.
+   *
+   * It surfaced as `expected 143 to be +0`, intermittently and only under load
+   * — because an idle machine finishes the log write before the second signal
+   * is delivered, and a busy one does not. Widening the window is all that
+   * "load" ever meant here.
+   *
+   * Swapping in no-ops rather than removing keeps the process covered until it
+   * is genuinely gone, while still making a repeat signal do nothing. `dispose`
+   * stays as the caller-facing cleanup and removes whichever of the two is
+   * currently installed.
+   */
+  const ignore = (): void => {
+    for (const [signal, listener] of [...listeners]) {
+      source.removeListener(signal, listener);
+      const swallow = (): void => undefined;
+      listeners.set(signal, swallow);
+      source.on(signal, swallow);
+    }
   };
 
   const run = async (signal: string): Promise<void> => {
@@ -161,7 +223,7 @@ export function installShutdownHandlers(options: ShutdownOptions): ShutdownHandl
       await Promise.race([options.close(), deadline]);
     } catch (error) {
       timers.clear(handle);
-      dispose();
+      ignore();
       log("shutdown.failed", {
         signal,
         error: error instanceof Error ? error.message : String(error),
@@ -170,9 +232,9 @@ export function installShutdownHandlers(options: ShutdownOptions): ShutdownHandl
       return;
     }
     timers.clear(handle);
-    // Only now, once nothing is left to protect. Removing them earlier would
-    // hand the next signal to Node's default action, which is a kill.
-    dispose();
+    // Not `dispose`: there IS something left to protect — the log write below
+    // and the exit itself. See `ignore`.
+    ignore();
 
     if (timedOut) {
       log("shutdown.timeout", { signal, timeoutMs });
@@ -191,6 +253,14 @@ export function installShutdownHandlers(options: ShutdownOptions): ShutdownHandl
 
   for (const signal of signals) {
     const listener = (): void => {
+      // A repeat of a forceable signal abandons the close rather than waiting
+      // it out. Only reachable once a shutdown is already under way, so the
+      // first Ctrl-C is still graceful and only the second is impatient.
+      if (inFlight !== null && forceOnRepeat.includes(signal)) {
+        log("shutdown.forced", { signal });
+        exit(EXIT_FORCED);
+        return;
+      }
       void requestShutdown(signal);
     };
     listeners.set(signal, listener);

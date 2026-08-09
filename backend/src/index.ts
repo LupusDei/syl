@@ -619,28 +619,52 @@ export async function startSyl(
 export async function main(options: { readonly logger?: Logger } = {}): Promise<RunningSyl> {
   const config = loadConfig();
   const logger = options.logger ?? createLogger({ directory: config.logDirectory });
+
+  /**
+   * What a shutdown closes, late-bound — because the HANDLERS have to be
+   * installed before there is anything to close.
+   *
+   * This used to run after `startSyl`, which was a real hole rather than a
+   * stylistic detail. `startSyl` starts the HTTP listener, so between it
+   * returning and this line the service ANSWERED HEALTH CHECKS while a
+   * `SIGTERM` still took Node's default action and killed it outright.
+   * Readiness advertised a guarantee that was not yet true.
+   *
+   * It showed up as `expected 143 to be +0` in the process-level test —
+   * intermittently, and only under load, because load is what widens the
+   * window. Installing first collapses it: by the time anything can observe
+   * the service at all, the signal is already honoured.
+   *
+   * A signal arriving while `startSyl` is still constructing therefore finds a
+   * no-op close and exits promptly, which is correct — there is no in-flight
+   * work to drain, and exiting 0 beats dying by signal.
+   */
+  let close = async (): Promise<void> => undefined;
+
+  installShutdownHandlers({
+    close: () => close(),
+    log: (event, fields) => {
+      logger.log(event === "shutdown.complete" || event === "shutdown.begin" ? "info" : "error", event, fields);
+    },
+  });
+
   const syl = await startSyl(config);
+
+  close = async () => {
+    await syl.close();
+    syl.database.close();
+    // The logger is deliberately left open. Closing it here closed the file
+    // descriptor *before* `shutdown.complete` was written, so the log ended
+    // at `shutdown.begin` and every clean stop was indistinguishable from a
+    // hang. Found by the process-level test, which is the only place it was
+    // visible. `process.exit` flushes and closes it a moment later.
+  };
 
   logger.info("service.start", { ...syl.startupFields, logPath: logger.path });
   for (const line of syl.startupLines) {
     const level = line.includes("WARNING") ? "warn" : "info";
     logger.log(level, "service.notice", { message: line });
   }
-
-  installShutdownHandlers({
-    close: async () => {
-      await syl.close();
-      syl.database.close();
-      // The logger is deliberately left open. Closing it here closed the file
-      // descriptor *before* `shutdown.complete` was written, so the log ended
-      // at `shutdown.begin` and every clean stop was indistinguishable from a
-      // hang. Found by the process-level test, which is the only place it was
-      // visible. `process.exit` flushes and closes it a moment later.
-    },
-    log: (event, fields) => {
-      logger.log(event === "shutdown.complete" || event === "shutdown.begin" ? "info" : "error", event, fields);
-    },
-  });
 
   return syl;
 }

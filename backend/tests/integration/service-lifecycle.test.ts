@@ -1,11 +1,11 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createConnection } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { queryLog } from "../../src/ops/log-query.js";
 
@@ -20,21 +20,55 @@ import { queryLog } from "../../src/ops/log-query.js";
  * *installed*, and "the component was never actually executed" is the shape of
  * nearly every serious defect this project has found.
  *
- * So this spawns the real entry point with `tsx`, waits until it answers a real
- * health request on a real port, sends a real signal, and reads the real log
- * file it left behind.
+ * So this spawns the real entry point, waits until it answers a real health
+ * request on a real port, sends a real signal, and reads the real log file it
+ * left behind.
  *
  * Slower than every other file here, and worth it: this is the only test that
  * would have caught a service that traps nothing.
+ *
+ * IT MUST BE THE SERVICE'S OWN PID, which is why this runs the built
+ * `dist/index.js` under node rather than `src/index.ts` under `tsx`. `tsx` is a
+ * WRAPPER: `child.kill()` signalled the wrapper and `child.exitCode` reported
+ * the wrapper's status, so the assertions were about tsx's signal forwarding
+ * and not about Syl at all. It failed as `expected 143 to be +0`,
+ * intermittently and only under load — the second `SIGTERM` killing the wrapper
+ * while it was still waiting on a child that had not finished shutting down.
+ *
+ * That is this project's recurring defect in a new costume: a test that looks
+ * like it exercises the real thing while measuring something else. Three
+ * separate "fixes" went into the service's shutdown path chasing it before the
+ * wrapper turned out to be what was dying. (Two of those found genuine bugs,
+ * which is luck, not vindication.)
  */
 
 const repoRoot = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
-const entry = join(repoRoot, "backend", "src", "index.ts");
-const tsx = join(repoRoot, "node_modules", ".bin", "tsx");
+const entry = join(repoRoot, "backend", "dist", "index.js");
 
-/** A high port nothing else is likely to hold. */
+/**
+ * Build first, EVERY time, rather than only when `dist` is missing.
+ *
+ * A conditional build is how a suite ends up validating last week's code: the
+ * artifact exists, so the build is skipped, and the test passes against
+ * something the source no longer says. Since this file's entire purpose is
+ * process-level truth, testing a stale binary would defeat it completely.
+ */
+beforeAll(() => {
+  execFileSync("npm", ["run", "build", "-w", "backend"], { cwd: repoRoot, stdio: "inherit" });
+}, 300_000);
+
+/**
+ * A port below 49152.
+ *
+ * The ceiling is the point: macOS hands out EPHEMERAL ports from 49152 up
+ * (`sysctl net.inet.ip.portrange.first`). This was `39_000 + random * 20_000`,
+ * topping out at 59000, so a third of its range sat inside the pool the OS
+ * assigns to every outbound connection on the machine — including this suite's
+ * own. Its twin in `launchd-entrypoint.test.ts` failed exactly that way, with
+ * `EADDRINUSE 127.0.0.1:50622`.
+ */
 function freePort(): number {
-  return 39_000 + Math.floor(Math.random() * 20_000);
+  return 39_000 + Math.floor(Math.random() * 10_000);
 }
 
 interface Spawned {
@@ -76,7 +110,7 @@ async function startProcess(
   delete inherited["ANTHROPIC_API_KEY"];
   delete inherited["ANTHROPIC_AUTH_TOKEN"];
 
-  const child = spawn(tsx, [entry], {
+  const child = spawn(process.execPath, [entry], {
     cwd: repoRoot,
     env: {
       ...inherited,
@@ -229,7 +263,7 @@ describe("the service as a process", () => {
 
   it("should refuse to start, loudly, when the environment is not a configuration", async () => {
     const directory = mkdtempSync(join(tmpdir(), "syl-proc-"));
-    const child = spawn(tsx, [entry], {
+    const child = spawn(process.execPath, [entry], {
       cwd: repoRoot,
       env: {
         ...process.env,

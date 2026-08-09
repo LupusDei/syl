@@ -136,6 +136,38 @@ async function start(env: Readonly<Record<string, string>> = {}): Promise<Starte
   return started;
 }
 
+/**
+ * Poll the log until an event shows up, rather than reading it once.
+ *
+ * `start()` proves the service is READY by polling the health endpoint. That
+ * says nothing about the LOG, and the two have no happens-before relationship:
+ * the service can be answering HTTP while its `service.start` line is still
+ * sitting in a buffer. Reading the file once, immediately, therefore passes on
+ * an idle machine and fails under load — `expected undefined to be 'none'`,
+ * because `queryLog` returned an empty array and `[0]?.[...]` is `undefined`.
+ *
+ * That is worth more care than a sleep. This is the assertion that enforces
+ * non-negotiable constraint 3 at the outermost layer, and a guard that fails
+ * intermittently is worse than no guard — a red that moves around teaches
+ * everyone to re-run until green, which is exactly how a real credential leak
+ * would get waved through.
+ */
+async function awaitLog(
+  logDirectory: string,
+  filter: Parameters<typeof queryLog>[1],
+  timeoutMs = 10_000,
+): Promise<ReturnType<typeof queryLog>> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const found = queryLog(logDirectory, filter);
+    if (found.length > 0) return found;
+    if (Date.now() > deadline) {
+      throw new Error(`no log event matched ${JSON.stringify(filter)} within ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 describe("scripts/syl-service.sh", () => {
   it("should find a usable node with only launchd's PATH", async () => {
     const started = await start();
@@ -156,7 +188,10 @@ describe("scripts/syl-service.sh", () => {
 
     expect(signal).toBeNull();
     expect(code).toBe(0);
-    expect(queryLog(started.logDirectory, { event: "shutdown.complete" })).toHaveLength(1);
+    // Safer than it looks — the process has exited, so its buffers are flushed
+    // — but polled anyway, for the same reason as `awaitLog` itself: nothing in
+    // this file should assert on a log it merely hopes has been written.
+    expect(await awaitLog(started.logDirectory, { event: "shutdown.complete" })).toHaveLength(1);
   }, 90_000);
 
   it("should strip a credential variable it was handed", async () => {
@@ -166,7 +201,7 @@ describe("scripts/syl-service.sh", () => {
     // this makes it true of the entire process tree.
     const started = await start({ ANTHROPIC_API_KEY: "sk-ant-not-a-real-key" });
 
-    const start_ = queryLog(started.logDirectory, { event: "service.start" });
+    const start_ = await awaitLog(started.logDirectory, { event: "service.start" });
     expect(start_[0]?.["credentialSource"]).toBe("none");
     expect(start_[0]?.["subscriptionRails"]).toBe(true);
     // And it is nowhere in what the script printed, either.

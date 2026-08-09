@@ -417,6 +417,34 @@ done
 
 ---
 
+## Stopping her, and how to insist
+
+```sh
+launchctl kickstart -k gui/$(id -u)/com.syl.service   # restart, the normal way
+launchctl bootout gui/$(id -u)/com.syl.service        # stop until next login
+kill -9 <pid>                                         # guaranteed, uncatchable
+```
+
+`SIGTERM` and `SIGINT` are both trapped and drain in-flight work first. A
+shutdown that will not finish is bounded twice over: the service abandons its
+own close after 15 seconds and exits saying why, and launchd escalates to
+`SIGKILL` at 20 regardless. So she cannot hang forever.
+
+**A repeated `SIGTERM` is deliberately ignored, and a repeated `SIGINT` is
+deliberately honoured.** That asymmetry is not an oversight:
+
+- **launchd re-sends `SIGTERM`** to a job it is stopping, as a matter of course.
+  A repeat therefore carries no intent, and acting on it would kill the service
+  mid-write on every ordinary reboot — abandoning a job lease in a state
+  indistinguishable from a crash. Repeats are swallowed.
+- **Nothing auto-repeats `SIGINT`.** It comes from a terminal, so a second
+  Ctrl-C is unambiguously a person who has decided not to wait. It abandons the
+  close and exits `130` immediately.
+
+So: **Ctrl-C twice** when you are running her by hand and mean it, **`kill -9`**
+when you want a guarantee. Do not reach for repeated `SIGTERM` — it is the one
+signal that will not do what you want.
+
 ## What is checked automatically, and what is not
 
 Automated, in `npm run verify`:
