@@ -118,6 +118,14 @@ export interface JobResult {
   readonly costUsd?: number;
   readonly summary?: string | null;
   readonly error?: string | null;
+  /**
+   * When this job next needs to run, if it knows better than its trigger.
+   *
+   * The reminder job is the reason this exists: what it needs is `min(next
+   * reminder, next outbox attempt, one minute)`, which no trigger expression
+   * can know and only the job itself can compute.
+   */
+  readonly nextRunAt?: string | null;
 }
 
 /** A job kind's implementation. */
@@ -299,7 +307,7 @@ export class JobRunner {
         now,
       });
       this.#store.finishRun(run.id, result);
-      this.#store.release(leased.id, result.outcome, run.id);
+      this.#store.release(leased.id, result.outcome, run.id, result.nextRunAt);
       return result.outcome;
     } catch (error) {
       // A failing job must never stop the loop: the next reminder is behind it.

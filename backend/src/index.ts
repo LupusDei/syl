@@ -8,6 +8,7 @@ import express, {
   type RequestHandler,
 } from "express";
 
+import { createDeliveryRuntime, describeRuntime } from "./jobs/runtime.js";
 import { loadConfig, type SylConfig } from "./config.js";
 import { requireBearerToken } from "./middleware/auth.js";
 import { createAuthRouter } from "./routes/auth.js";
@@ -296,6 +297,19 @@ async function main(): Promise<void> {
   const { deps } = bootstrap(config);
   await startServer(config, deps);
 
+  // The delivery runtime is started AFTER the socket is listening, and its
+  // first tick is awaited. Awaiting it means every instant that passed while
+  // the machine was down has been considered before the service claims to be
+  // up — a runner that starts scheduling before it has looked at what it
+  // missed silently swallows whatever was due.
+  const runtime = createDeliveryRuntime({
+    jobs: deps.jobs,
+    reminders: deps.reminders,
+    outbox: deps.outbox,
+    devices: deps.devices,
+  });
+  await runtime.runner.start();
+
   // A pairing code is only printed when there is nothing paired. Printing one
   // on every boot would train the Commander to ignore it, and a code shown
   // repeatedly is a code that is eventually shown to somebody else.
@@ -304,7 +318,7 @@ async function main(): Promise<void> {
     ? describeStartup(config, { pairingCode: deps.keys.issuePairingCode().code })
     : describeStartup(config);
 
-  for (const line of startup) console.log(line);
+  for (const line of [...startup, ...describeRuntime(runtime)]) console.log(line);
 }
 
 // Run only when executed directly, so importing this module in a test starts

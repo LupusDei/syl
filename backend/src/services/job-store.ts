@@ -395,8 +395,17 @@ export class JobStore {
    * Rescheduling is computed from `now` rather than from the instant that was
    * missed, so a machine that was asleep for a day does not wake up and fire a
    * day's worth of triggers.
+   *
+   * `nextRunAt` lets a handler name its own next instant. The reminder job is
+   * the reason: what it needs is `min(next reminder, next outbox attempt)`,
+   * which no trigger expression can know and only the job itself can compute.
    */
-  release(id: string, outcome: RunOutcome, runId: string | null): Job | null {
+  release(
+    id: string,
+    outcome: RunOutcome,
+    runId: string | null,
+    nextRunAt?: string | null,
+  ): Job | null {
     const job = this.get(id);
     if (job === null) return null;
 
@@ -416,7 +425,7 @@ export class JobStore {
           WHERE id = ?`,
       )
       .run(
-        nextRunAtFor(job.trigger, now),
+        nextRunAt === undefined ? nextRunAtFor(job.trigger, now) : nextRunAt,
         runId ?? job.lastRunId,
         failures,
         breakerState,

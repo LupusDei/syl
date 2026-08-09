@@ -1,0 +1,103 @@
+import type { Job } from "@syl/shared";
+
+import { ApnsClient, apnsCredentialsFromEnv } from "../services/apns-service.js";
+import { instant, systemClock, type Clock } from "../services/clock.js";
+import type { DeviceTokenService } from "../services/device-token-service.js";
+import { JobRunner, type JobHandler, type Timers } from "../services/job-runner.js";
+import type { JobStore } from "../services/job-store.js";
+import type { Outbox } from "../services/outbox.js";
+import type { ReminderService } from "../services/reminder-service.js";
+import { createReminderDeliveryHandler, defineReminderDeliveryJob } from "./reminder-delivery-job.js";
+
+/**
+ * The delivery runtime: the pieces that make a reminder actually arrive,
+ * assembled once at boot.
+ *
+ * Separated from `createApp` because they fail differently. The HTTP surface
+ * is up or it is not; the runtime is a loop that must survive everything —
+ * Apple being down, the tunnel dropping, the machine sleeping — and keep the
+ * outbox moving. Nothing here is required for the service to answer requests,
+ * which is why an unconfigured APNs key degrades to "rows accumulate in the
+ * outbox" rather than to a service that will not start.
+ */
+
+export interface DeliveryRuntimeDeps {
+  readonly jobs: JobStore;
+  readonly reminders: ReminderService;
+  readonly outbox: Outbox;
+  readonly devices: DeviceTokenService;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly clock?: Clock;
+  readonly timers?: Timers;
+}
+
+export interface DeliveryRuntime {
+  readonly runner: JobRunner;
+  /** `null` when APNs is not configured on this machine. */
+  readonly apns: ApnsClient | null;
+  /** The reminder-delivery job row, created on first boot. */
+  readonly job: Job;
+  /** Whether push can actually leave this machine. */
+  readonly pushEnabled: boolean;
+  stop(): Promise<void>;
+}
+
+/**
+ * Find the reminder-delivery job, or create it.
+ *
+ * Exactly one exists, forever. It is not defined per boot, because its
+ * `nextRunAt` is state — the instant the last pass decided it next needed to
+ * wake — and redefining it on every start would throw that away along with its
+ * circuit breaker.
+ */
+export function ensureReminderDeliveryJob(jobs: JobStore, now: number): Job {
+  const existing = jobs.list({ kind: "reminder_delivery", limit: 1 }).items[0];
+  if (existing !== undefined) return existing;
+  return defineReminderDeliveryJob(jobs, instant(now));
+}
+
+/** Assemble the runtime. Does not start it. */
+export function createDeliveryRuntime(deps: DeliveryRuntimeDeps): DeliveryRuntime {
+  const clock = deps.clock ?? systemClock;
+  const credentials = apnsCredentialsFromEnv(deps.env ?? process.env);
+  const apns = credentials === null ? null : new ApnsClient({ credentials, clock });
+
+  const job = ensureReminderDeliveryJob(deps.jobs, clock());
+
+  const handler: JobHandler = createReminderDeliveryHandler({
+    reminders: deps.reminders,
+    outbox: deps.outbox,
+    devices: deps.devices,
+    apns,
+  });
+
+  const runner = new JobRunner({
+    store: deps.jobs,
+    handlers: new Map([["reminder_delivery", handler]]),
+    clock,
+    ...(deps.timers === undefined ? {} : { timers: deps.timers }),
+  });
+
+  return {
+    runner,
+    apns,
+    job,
+    pushEnabled: apns !== null,
+    stop: async () => {
+      runner.stop();
+      await apns?.close();
+    },
+  };
+}
+
+/** The lines to print about the delivery runtime once it is up. */
+export function describeRuntime(runtime: DeliveryRuntime): readonly string[] {
+  if (runtime.pushEnabled) {
+    return [`[syl] delivery runtime up; next wake ${runtime.job.nextRunAt ?? "unscheduled"}`];
+  }
+  return [
+    "[syl] delivery runtime up, but APNs is NOT configured " +
+      "(SYL_APNS_KEY_ID, SYL_APNS_TEAM_ID, SYL_APNS_BUNDLE_ID, SYL_APNS_PRIVATE_KEY). " +
+      "Reminders will be written to the outbox and held there, not pushed.",
+  ];
+}
