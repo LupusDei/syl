@@ -60,7 +60,16 @@ export interface DeadlineTimers {
   clear(handle: unknown): void;
 }
 
-const systemDeadlineTimers: DeadlineTimers = {
+/**
+ * The real timers, used when a caller supplies none.
+ *
+ * Exported so a test can execute these two functions rather than always
+ * substituting a hand-driven pair. They were uncovered in the first draft of
+ * this module — the default closure that a production shutdown would use had
+ * never run — which is the same shape as the defects `syl-w40` found in the
+ * socket connector and the default reconnect closure.
+ */
+export const systemDeadlineTimers: DeadlineTimers = {
   set: (callback, ms) => {
     const handle = setTimeout(callback, ms);
     // A shutdown deadline must never be the reason a process is still running.

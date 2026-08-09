@@ -235,7 +235,15 @@ npm run launchd -- --install --host "$SYL_TAILNET_HOSTNAME"
 ```
 
 It writes three plists into `~/Library/LaunchAgents` and prints the `launchctl`
-lines to run. Run them:
+lines to run.
+
+> The core plist **contains the `.p8`**, because that is how launchd hands the
+> service its environment. It is written `0600` for that reason. If you ever
+> copy, back up or share one of these files, you are copying an Apple signing
+> key. `ls -l ~/Library/LaunchAgents/com.jmm.syl.core.plist` should show
+> `-rw-------`.
+
+Run them:
 
 ```sh
 launchctl bootout  gui/$(id -u)/com.jmm.syl.core 2>/dev/null || true

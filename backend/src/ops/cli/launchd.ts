@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,7 +75,16 @@ if (!install) {
   mkdirSync(paths.logDirectory, { recursive: true });
   for (const job of jobs) {
     const path = join(outDir, job.filename);
-    writeFileSync(path, toPlistXml(job.plist));
+    // 0600, and the mode is re-applied because `writeFileSync`'s `mode` only
+    // applies when it creates the file — re-running the installer over an
+    // existing plist would otherwise leave whatever permissions it already had.
+    //
+    // The core job's `EnvironmentVariables` contains `SYL_APNS_PRIVATE_KEY`,
+    // which is the contents of the `.p8`. A plist at the default 0644 puts an
+    // Apple signing key where every process running as any user on this machine
+    // can read it, in a directory nobody thinks of as a secret store.
+    writeFileSync(path, toPlistXml(job.plist), { mode: 0o600 });
+    chmodSync(path, 0o600);
     console.log(`wrote ${path}`);
   }
   console.log("");

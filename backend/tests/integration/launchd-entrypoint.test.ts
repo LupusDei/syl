@@ -1,5 +1,14 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -155,6 +164,46 @@ describe("scripts/syl-service.sh", () => {
     started.child.kill("SIGTERM");
     await started.exited;
   }, 90_000);
+
+  it("should write plists only its owner can read", () => {
+    // The core job's EnvironmentVariables carries SYL_APNS_PRIVATE_KEY — the
+    // contents of the `.p8`. At the default 0644 that puts an Apple signing key
+    // where every process on the machine can read it, in a directory nobody
+    // thinks of as a secret store.
+    const outDir = join(scratch(), "agents");
+    const secret = "-----BEGIN PRIVATE KEY-----\\nnot-a-real-key\\n-----END PRIVATE KEY-----";
+
+    const install = (): void => {
+      execFileSync("npx", ["tsx", join(repoRoot, "backend", "src", "ops", "cli", "launchd.ts"), "--out", outDir], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          SYL_APNS_KEY_ID: "ABCD123456",
+          SYL_APNS_TEAM_ID: "TEAM123456",
+          SYL_APNS_BUNDLE_ID: "com.jmm.syl",
+          SYL_APNS_PRIVATE_KEY: secret,
+          SYL_APNS_ENVIRONMENT: "production",
+        },
+      });
+    };
+
+    install();
+    const core = join(outDir, "com.jmm.syl.core.plist");
+
+    // It really did carry the key...
+    expect(readFileSync(core, "utf8")).toContain("not-a-real-key");
+    // ...and nobody but the owner can read it.
+    expect(statSync(core).mode & 0o777).toBe(0o600);
+    // Every file it wrote is a plist launchd can parse.
+    execFileSync("/usr/bin/plutil", ["-lint", core], { encoding: "utf8" });
+
+    // Re-running the installer over an existing file keeps the mode, which
+    // `writeFileSync`'s own `mode` option would not: it applies on create only.
+    chmodSync(core, 0o644);
+    install();
+    expect(statSync(core).mode & 0o777).toBe(0o600);
+  }, 120_000);
 
   it("should refuse with EX_CONFIG when the service has not been built", async () => {
     // The script deliberately runs built output rather than tsx, so an

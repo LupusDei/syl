@@ -8,6 +8,7 @@ import {
   EXIT_SHUTDOWN_TIMEOUT,
   installShutdownHandlers,
   SHUTDOWN_SIGNALS,
+  systemDeadlineTimers,
   type DeadlineTimers,
 } from "../../src/ops/shutdown.js";
 
@@ -179,6 +180,53 @@ describe("installShutdownHandlers", () => {
     release();
     await shutdown;
     expect(source.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  describe("the real timers", () => {
+    // The default closure a production shutdown uses. It was uncovered in the
+    // first draft of this module: every case substituted a hand-driven pair, so
+    // the two functions that would actually run at 3am had never executed. That
+    // is the same shape as the defects found in the socket connector and the
+    // default reconnect closure, and it is worth four cheap cases.
+
+    it("should not hold the process open", () => {
+      const handle = systemDeadlineTimers.set(() => undefined, 60_000);
+
+      // `unref` is what stops a shutdown deadline from being the reason an
+      // otherwise-finished process is still running.
+      expect((handle as { hasRef?: () => boolean }).hasRef?.()).toBe(false);
+      systemDeadlineTimers.clear(handle);
+    });
+
+    it("should fire", async () => {
+      const fired = new Promise<void>((resolve) => systemDeadlineTimers.set(resolve, 1));
+      await expect(fired).resolves.toBeUndefined();
+    });
+
+    it("should not fire once cleared", async () => {
+      let fired = false;
+      const handle = systemDeadlineTimers.set(() => (fired = true), 1);
+      systemDeadlineTimers.clear(handle);
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(fired).toBe(false);
+    });
+
+    it("should bound a hanging close with no timers supplied at all", async () => {
+      // End to end on the default path: real timers, a close that never
+      // resolves, and the deadline is what settles it.
+      const exit = vi.fn();
+      const handle = installShutdownHandlers({
+        close: () => new Promise<void>(() => undefined),
+        exit,
+        source: new EventEmitter(),
+        timeoutMs: 20,
+      });
+
+      await handle.requestShutdown("SIGTERM");
+
+      expect(exit).toHaveBeenCalledWith(EXIT_SHUTDOWN_TIMEOUT);
+    });
   });
 
   it("should remove its listeners on dispose", () => {
