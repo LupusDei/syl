@@ -46,8 +46,9 @@ import { createReminderRouter } from "./routes/reminders.js";
 import { createSyncRouter } from "./routes/sync.js";
 import { createTodoRouter } from "./routes/todos.js";
 import { fileSessionStore, memorySessionStore, SylAgent } from "./harness/agent.js";
-import type { TurnOptions, TurnRunner } from "./harness/session.js";
+import { runTurn, type TurnOptions, type TurnRunner } from "./harness/session.js";
 import { autoMemoryAt } from "./memory/auto-memory.js";
+import { withMemoryIndex } from "./memory/index-guarantee.js";
 import { apnsCredentialsFromEnv } from "./services/apns-service.js";
 import { ApiKeyService } from "./services/api-key-service.js";
 import { systemClock, type Clock } from "./services/clock.js";
@@ -518,7 +519,12 @@ export function bootstrap(
     autoMemory: autoMemoryAt(config.autoMemoryDirectory),
     ...(soul === undefined ? {} : { soul }),
     ...(options.turn === undefined ? {} : { turnOptions: options.turn }),
-    ...(options.runner === undefined ? {} : { runner: options.runner }),
+    // Wrapped, never bypassed — including when a test substitutes the runner,
+    // because "was the index maintained?" is a question about the service and
+    // not about which runner ran. Whether a memory can be found again is a
+    // guarantee this service holds; leaving it to the model lost the
+    // Commander's canary on a haiku turn (`syl-03d`).
+    runner: withMemoryIndex(options.runner ?? runTurn),
   });
   const chat = new ConversationService({ messages, agent, presence });
 

@@ -394,11 +394,39 @@ is compacting what the others learned — could otherwise only ever see its own.
 The index budget agrees: 200 lines / 25 KB is loaded per *directory*, so sharding
 would multiply the total and quarter what any one lane can recall.
 
-**The index is the model's job, and a cheaper model skips it.** Only `MEMORY.md`
-is loaded at session start; a topic file with no entry in it is on disk and
-unreachable. An opus turn wrote both files; a haiku turn wrote the topic file
-only, and the next session answered "NONE" to the fact it had just been told to
-remember. Filed as `syl-03d`. Do not assume a written memory is a recallable one.
+**The index was the model's job, and a cheaper model skipped it.** Only
+`MEMORY.md` is loaded at session start; a topic file with no entry in it is on
+disk and unreachable. An opus turn wrote both files; a haiku turn wrote the topic
+file only, and the next session answered "NONE" to the fact it had just been told
+to remember. Filed as `syl-03d`.
+
+**Resolved by `memory/index-guarantee.ts`: Syl writes the index herself.** The
+governing rule decided it — *the service holds the guarantees, the model holds
+the judgment* — and reachability is a guarantee, the same call already made for
+notification delivery. Instructing it in `SOUL.md` was rejected explicitly: a
+behavioural instruction drifts, and it would have worked perfectly in testing,
+which is what made it the dangerous option.
+
+Three things about the shape are worth keeping, because each was a real choice:
+
+- **It reconciles, it does not clobber.** Syl owns one delimited block and
+  nothing outside it. A filename named anywhere else in the file — link,
+  backticks, prose — counts as reachable and is left alone; a line already in the
+  block is reused verbatim, so a summary the model improved survives; moving a
+  line out of the block retires it permanently. The block is self-liquidating.
+- **The block goes directly under the H1, not at the end.** Appending past the
+  200-line cliff is the same silent failure one level up: the entry exists and is
+  never loaded. Bounded to 60 lines / 8 KB so "indexed" always means "loaded",
+  which still leaves the model triple what a real hand-written index uses.
+- **When it overflows, the oldest lose their entry and the block says so** — a
+  visible line naming the count, not a silent truncation. Constraint 4's
+  principle applies to memories as much as to reminders.
+
+Verified live on 2.1.226, same shape as the original capture: a haiku turn wrote
+`index-guarantee-canary.md` and no index; Syl wrote the index; a **fresh** haiku
+session answered `VESPENE-7741` instead of `NONE`. The second rebuild was a
+no-op, which is the steady state — the cost of running it after every turn is one
+`readdir`, no tokens and no subprocess.
 
 ## 8. Design principles to hold
 
