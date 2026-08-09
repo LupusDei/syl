@@ -67,7 +67,18 @@ jobs:
       # they can run at all. Without this line the skip would be silent and
       # nothing would validate the files launchd reads at boot.
       - name: Backend tests that require macOS
-        run: npx vitest run --root backend tests/unit/launchd.test.ts
+        # Every file here tests something that DOES NOT EXIST on Linux — launchd,
+        # plutil, `tailscale cert`, BSD shell tooling — so they skip on the ubuntu
+        # runner `verify` uses. This job is the only macOS runner, which makes it
+        # the only place they can run at all. Without this step those skips would
+        # be silent and nothing would validate the files launchd reads at boot or
+        # the script that renews the certificate Syl is reached through.
+        run: |
+          npx vitest run --root backend \
+            tests/unit/launchd.test.ts \
+            tests/integration/launchd-entrypoint.test.ts \
+            tests/integration/cert-renew.test.ts \
+            tests/integration/watchdog.test.ts
 
       - name: Run every phase of the suite
         run: ios/scripts/test.sh
