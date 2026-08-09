@@ -8,7 +8,7 @@ import {
   API_BASE_PATH,
   bootstrap,
   startServer,
-  type AppDependencies,
+  type ServiceDependencies,
   type RunningService,
 } from "../../src/index.js";
 import { ApiKeyService } from "../../src/services/api-key-service.js";
@@ -19,7 +19,8 @@ import { databaseProbe } from "../../src/routes/health.js";
 import { IdempotencyStore } from "../../src/services/idempotency.js";
 import { JobStore } from "../../src/services/job-store.js";
 import { MessageStore } from "../../src/services/message-store.js";
-import { Outbox, quietHoursFromEnv } from "../../src/services/outbox.js";
+import { Outbox } from "../../src/services/outbox.js";
+import { PresenceService } from "../../src/services/presence.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
 import { WS_PATH } from "../../src/services/ws-server.js";
 
@@ -51,7 +52,7 @@ export interface LiveService {
   /** A bearer token obtained over HTTP, by pairing exactly as a device does. */
   readonly token: string;
   readonly config: SylConfig;
-  readonly deps: AppDependencies;
+  readonly deps: ServiceDependencies;
   readonly database: SylDatabase;
   readonly service: RunningService;
   /** The database file, so a restart can reopen the same store. */
@@ -87,22 +88,23 @@ export interface LiveRequest extends RequestInit {
  *
  * The constructor list is duplicated here, which is a real cost, so
  * `live-service.test.ts` asserts it against `bootstrap`'s own output. A field
- * added to `AppDependencies` and wired in only one of the two turns the suite
+ * added to `ServiceDependencies` and wired in only one of the two turns the suite
  * red rather than quietly making this a different service.
  */
-function dependenciesOn(database: SylDatabase, clock: Clock): AppDependencies {
+function dependenciesOn(
+  config: SylConfig,
+  database: SylDatabase,
+  clock: Clock,
+): ServiceDependencies {
   return {
     keys: new ApiKeyService({ db: database.handle, clock }),
     messages: new MessageStore({ db: database.handle, clock }),
     devices: new DeviceTokenService({ db: database.handle, clock }),
     idempotency: new IdempotencyStore({ db: database.handle, clock }),
-    outbox: new Outbox({
-      db: database.handle,
-      clock,
-      quietHours: quietHoursFromEnv(process.env),
-    }),
+    outbox: new Outbox({ db: database.handle, clock, quietHours: config.quietHours }),
     reminders: new ReminderService({ db: database.handle, clock }),
     jobs: new JobStore({ db: database.handle, clock }),
+    presence: new PresenceService({ clock, timeZone: config.quietHours.tz }),
     probes: [databaseProbe(database.handle)],
   };
 }
@@ -144,7 +146,7 @@ export async function startLiveService(
   };
 
   let database: SylDatabase;
-  let deps: AppDependencies;
+  let deps: ServiceDependencies;
   if (options.clock === undefined) {
     ({ database, deps } = bootstrap(config));
   } else {
@@ -157,7 +159,7 @@ export async function startLiveService(
     database.handle
       .prepare("UPDATE conversations SET created_at = ?, updated_at = ? WHERE updated_at > ?")
       .run(seeded, seeded, seeded);
-    deps = dependenciesOn(database, options.clock);
+    deps = dependenciesOn(config, database, options.clock);
   }
   const service = await startServer(config, deps);
 

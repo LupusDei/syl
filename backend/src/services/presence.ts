@@ -153,6 +153,21 @@ export interface PresenceFrame {
 /** Where a frame goes. `SylSocketServer.announcePresence` has this shape. */
 export type PresenceSink = (frame: PresenceFrame) => void;
 
+/**
+ * The half of {@link PresenceService} the socket is allowed to reach.
+ *
+ * Narrow on purpose, and it is the interface `SylSocketServer` depends on
+ * rather than the class. The socket knows one fact — whether anybody is
+ * attached — and this is the only thing it can say about presence. Handing it
+ * the whole service would let a transport start deciding what Syl's character
+ * is doing, which is precisely the inversion `derivePresence` exists to
+ * prevent.
+ */
+export interface AttachmentSink {
+  /** Whether any authenticated client is attached. */
+  setAttached(attached: boolean): void;
+}
+
 /** State and amplitude, before `since` is attached. */
 export interface DerivedPresence {
   readonly state: PresenceState;
@@ -234,9 +249,9 @@ export interface PresenceServiceOptions {
  * Every mutator recomputes and emits only if something a client would notice
  * has changed, so a busy turn does not produce a frame per event.
  */
-export class PresenceService {
+export class PresenceService implements AttachmentSink {
   readonly #clock: Clock;
-  readonly #emit: PresenceSink | null;
+  #emit: PresenceSink | null;
   readonly #window: PresenceWindow;
   readonly #affectHints: boolean;
 
@@ -278,6 +293,25 @@ export class PresenceService {
   /** The frame a client would currently be showing. */
   get current(): PresenceFrame {
     return this.#frame;
+  }
+
+  /**
+   * Point this service at a sink.
+   *
+   * Settable after construction because of an ordering that cannot be avoided:
+   * the sink is `SylSocketServer.announcePresence`, and the socket server does
+   * not exist until an HTTP server is listening, while the presence state
+   * machine is constructed in `bootstrap` alongside every other store. Passing
+   * the sink at construction would mean either building presence twice or
+   * threading a mutable box through the bootstrap, and both are worse than one
+   * honest setter.
+   *
+   * Deliberately does not emit. The current frame is `absent` on a fresh boot
+   * and no client is attached yet; announcing on connect would put a frame on
+   * a wire nobody is listening to.
+   */
+  setSink(sink: PresenceSink | null): void {
+    this.#emit = sink;
   }
 
   /** A turn started. Counted, so two overlapping turns end at the second result. */

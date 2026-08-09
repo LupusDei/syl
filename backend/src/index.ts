@@ -26,6 +26,7 @@ import { IdempotencyStore } from "./services/idempotency.js";
 import { JobStore } from "./services/job-store.js";
 import { MessageStore } from "./services/message-store.js";
 import { Outbox } from "./services/outbox.js";
+import { PresenceService } from "./services/presence.js";
 import { ReminderService } from "./services/reminder-service.js";
 import { SylSocketServer, WS_PATH } from "./services/ws-server.js";
 
@@ -110,7 +111,17 @@ export const onError: ErrorRequestHandler = (error, _request, response, _next) =
   sendFailure(response, failure);
 };
 
-/** What `createApp` needs that configuration cannot supply. */
+/**
+ * What `createApp` needs that configuration cannot supply.
+ *
+ * Every field here is destructured in full by `createApp`. That is not a
+ * style choice: `noUnusedLocals` is on, so a dependency declared here and
+ * never handed to a router is a **compile error** rather than something a
+ * reader has to notice. Three separate seams in this service were "constructed
+ * and connected to nothing" at once (`syl-1o7`, `syl-c5q`, and idempotency
+ * reaching three routers of five); a convention that bootstrap should wire
+ * everything is what allowed all three, so this is a rule the compiler holds.
+ */
 export interface AppDependencies {
   /** Bearer tokens. Required: an app with no auth is not a thing Syl ships. */
   readonly keys: ApiKeyService;
@@ -130,45 +141,50 @@ export interface AppDependencies {
   readonly probes?: readonly HealthProbe[];
 }
 
+/**
+ * Everything `bootstrap` constructs: the app's dependencies, plus the ones only
+ * the live socket has a use for.
+ *
+ * Split from {@link AppDependencies} so the exhaustive destructure in
+ * `createApp` stays exhaustive. `presence` has no HTTP surface — it exists to
+ * put frames on the WebSocket — so listing it there would force `createApp` to
+ * name a dependency it cannot use, which would defeat the check.
+ */
+export interface ServiceDependencies extends AppDependencies {
+  /**
+   * Syl's character, derived from facts the service already owns.
+   *
+   * Constructed here rather than inside `startServer` because it is state: it
+   * holds `since`, the affect window and the delighted-once-a-day interval,
+   * and a socket server that restarts must not reset what Syl was doing.
+   */
+  readonly presence: PresenceService;
+}
+
 /** Build the Express application. */
 export function createApp(config: SylConfig, deps: AppDependencies): Express {
+  // Destructured in full, and reached through the names below rather than
+  // through `deps.` — see the note on `AppDependencies`. Removing a use here
+  // without removing the field does not compile.
+  const { keys, messages, devices, outbox, reminders, jobs, idempotency, probes } = deps;
   const app = express();
 
   // Nothing gains from telling the world which framework to look up CVEs for.
   app.disable("x-powered-by");
   app.use(express.json({ limit: MAX_BODY_BYTES }));
 
-  const authenticate = requireBearerToken({ keys: deps.keys });
+  const authenticate = requireBearerToken({ keys });
 
   // Mounted onto one router so the base path appears exactly once, and so a
   // route added later cannot land outside it by forgetting the prefix.
   const api = Router();
-  api.use(
-    createHealthRouter(
-      deps.probes === undefined ? { config } : { config, probes: deps.probes },
-    ),
-  );
-  api.use(createAuthRouter({ keys: deps.keys, authenticate }));
-  api.use(createConversationRouter({ messages: deps.messages, authenticate }));
-  api.use(
-    createDeviceRouter({ devices: deps.devices, idempotency: deps.idempotency, authenticate }),
-  );
-  api.use(
-    createDeliveryRouter({
-      outbox: deps.outbox,
-      reminders: deps.reminders,
-      idempotency: deps.idempotency,
-      authenticate,
-    }),
-  );
-  api.use(
-    createReminderRouter({
-      reminders: deps.reminders,
-      idempotency: deps.idempotency,
-      authenticate,
-    }),
-  );
-  api.use(createJobRouter({ jobs: deps.jobs, authenticate }));
+  api.use(createHealthRouter(probes === undefined ? { config } : { config, probes }));
+  api.use(createAuthRouter({ keys, authenticate }));
+  api.use(createConversationRouter({ messages, authenticate }));
+  api.use(createDeviceRouter({ devices, idempotency, authenticate }));
+  api.use(createDeliveryRouter({ outbox, reminders, idempotency, authenticate }));
+  api.use(createReminderRouter({ reminders, idempotency, authenticate }));
+  api.use(createJobRouter({ jobs, authenticate }));
 
   app.use(API_BASE_PATH, api);
   app.use(notFound);
@@ -181,7 +197,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
 export interface RunningService {
   readonly server: Server;
   readonly sockets: SylSocketServer;
-  /** Stop both. */
+  /** Stop both, and stop the character's timer. */
   close(): Promise<void>;
 }
 
@@ -197,13 +213,28 @@ export interface RunningService {
  */
 export async function startServer(
   config: SylConfig,
-  deps: AppDependencies,
+  deps: ServiceDependencies,
 ): Promise<RunningService> {
-  const server = createServer(createApp(config, deps));
+  // `presence` named, everything else forwarded. A field added to
+  // `ServiceDependencies` and not named here lands in `createApp`, which
+  // destructures exhaustively and will not compile without a use for it.
+  const { presence, ...app } = deps;
+
+  const server = createServer(createApp(config, app));
   const sockets = new SylSocketServer({
     server,
-    keys: deps.keys,
-    messages: deps.messages,
+    keys: app.keys,
+    messages: app.messages,
+    // The socket tells presence that somebody arrived...
+    presence,
+  });
+  // ...and presence tells the socket what to say about it. Two directions, one
+  // join, made here because this is the first moment both halves exist. Every
+  // presence frame the Commander will ever see passes through these two lines;
+  // without them both components work perfectly and no frame is ever sent
+  // (`syl-c5q`).
+  presence.setSink((frame) => {
+    sockets.announcePresence(frame);
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -218,6 +249,11 @@ export async function startServer(
     server,
     sockets,
     close: async () => {
+      // The sink goes first. `sockets.close()` drops every client, which is a
+      // presence change, and settling it into a socket server that is halfway
+      // through closing is not a frame anybody wants.
+      presence.setSink(null);
+      presence.close();
       await sockets.close();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -265,7 +301,7 @@ export function describeStartup(
 /** Open the store and build the services the app needs. */
 export function bootstrap(config: SylConfig): {
   readonly database: SylDatabase;
-  readonly deps: AppDependencies;
+  readonly deps: ServiceDependencies;
 } {
   const database = openDatabase({ path: config.databasePath });
   const keys = new ApiKeyService({ db: database.handle });
@@ -278,6 +314,11 @@ export function bootstrap(config: SylConfig): {
   const outbox = new Outbox({ db: database.handle, quietHours: config.quietHours });
   const reminders = new ReminderService({ db: database.handle });
   const jobs = new JobStore({ db: database.handle });
+  // One zone for the whole service, and the one `loadConfig` has already
+  // checked is a place rather than an offset. The quiet *window* stays
+  // presence's own: `absent` is about whether Syl shows a character, which
+  // starts later than the hour the outbox stops sending notifications.
+  const presence = new PresenceService({ timeZone: config.quietHours.tz });
 
   return {
     database,
@@ -289,6 +330,7 @@ export function bootstrap(config: SylConfig): {
       reminders,
       jobs,
       idempotency,
+      presence,
       probes: [databaseProbe(database.handle)],
     },
   };

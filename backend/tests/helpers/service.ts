@@ -8,6 +8,7 @@ import { IdempotencyStore } from "../../src/services/idempotency.js";
 import { JobStore } from "../../src/services/job-store.js";
 import { MessageStore } from "../../src/services/message-store.js";
 import { Outbox } from "../../src/services/outbox.js";
+import { PresenceService } from "../../src/services/presence.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
 
 /**
@@ -91,7 +92,7 @@ export function testMessages(db: SylDatabase, clock: Clock = fixedClock(TEST_NOW
   return new MessageStore({ db: db.handle, clock });
 }
 
-/** Everything `createApp` needs, on one in-memory store. */
+/** Everything `createApp` and `startServer` need, on one in-memory store. */
 export function testDeps(db: SylDatabase): {
   readonly keys: ApiKeyService;
   readonly messages: MessageStore;
@@ -100,6 +101,7 @@ export function testDeps(db: SylDatabase): {
   readonly reminders: ReminderService;
   readonly jobs: JobStore;
   readonly idempotency: IdempotencyStore;
+  readonly presence: PresenceService;
 } {
   const clock = fixedClock(TEST_NOW);
   return {
@@ -112,6 +114,9 @@ export function testDeps(db: SylDatabase): {
     reminders: new ReminderService({ db: db.handle, clock }),
     jobs: new JobStore({ db: db.handle, clock }),
     idempotency: new IdempotencyStore({ db: db.handle, clock }),
+    // No sink. `startServer` attaches one; a test that wants to watch frames
+    // hands its own to `PresenceService` directly.
+    presence: new PresenceService({ clock }),
   };
 }
 

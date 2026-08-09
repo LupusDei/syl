@@ -22,6 +22,7 @@ import type { ApiKeyService } from "./api-key-service.js";
 import { instant, systemClock, type Clock } from "./clock.js";
 import { FrameLog, DEFAULT_CAPACITY } from "./frame-log.js";
 import type { MessageStore } from "./message-store.js";
+import type { AttachmentSink } from "./presence.js";
 
 /**
  * The live socket.
@@ -71,6 +72,18 @@ export interface SylSocketServerOptions {
   readonly server: Server;
   readonly keys: ApiKeyService;
   readonly messages: MessageStore;
+  /**
+   * Told whether anybody is attached.
+   *
+   * The socket is the only component that knows this, and `idle` is defined as
+   * "present but silent" — so without this parameter Syl can never leave
+   * `absent`, which is what the running service did: both halves of presence
+   * worked and nothing joined them (`syl-c5q`).
+   *
+   * Optional, because a socket with no character attached is still a working
+   * socket and every frame-level test wants one.
+   */
+  readonly presence?: AttachmentSink;
   readonly clock?: Clock;
   readonly path?: string;
   readonly capacity?: number;
@@ -110,6 +123,7 @@ export class SylSocketServer {
   readonly #wss: WebSocketServer;
   readonly #keys: ApiKeyService;
   readonly #messages: MessageStore;
+  readonly #presence: AttachmentSink | null;
   readonly #clock: Clock;
   readonly #log: FrameLog;
   readonly #authTimeoutMs: number;
@@ -118,6 +132,7 @@ export class SylSocketServer {
   constructor(options: SylSocketServerOptions) {
     this.#keys = options.keys;
     this.#messages = options.messages;
+    this.#presence = options.presence ?? null;
     this.#clock = options.clock ?? systemClock;
     this.#log = new FrameLog(options.capacity ?? DEFAULT_CAPACITY);
     this.#authTimeoutMs = options.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
@@ -162,9 +177,22 @@ export class SylSocketServer {
       connection.socket.terminate();
     }
     this.#connections.clear();
+    this.#reportAttachment();
     await new Promise<void>((resolve, reject) => {
       this.#wss.close((error) => (error ? reject(error) : resolve()));
     });
+  }
+
+  /**
+   * Tell presence whether anybody is watching.
+   *
+   * Derived from the connection set rather than asserted by whichever handler
+   * happened to run, so two clients attaching and one leaving does not read as
+   * "nobody is here". Called from every place the set changes; a fact that is
+   * recomputed cannot drift from the thing it describes.
+   */
+  #reportAttachment(): void {
+    this.#presence?.setAttached(this.clientCount > 0);
   }
 
   /**
@@ -232,6 +260,7 @@ export class SylSocketServer {
     socket.on("close", () => {
       if (connection.authTimer !== null) clearTimeout(connection.authTimer);
       this.#connections.delete(connection);
+      this.#reportAttachment();
     });
     socket.on("error", () => {
       // A transport error is not something the peer can be told about; the
@@ -343,6 +372,10 @@ export class SylSocketServer {
       principal: result.principal,
     };
     this.#send(connection.socket, connected);
+
+    // After `connected`, never before it. A client that has not been told the
+    // handshake succeeded has no business being told what Syl is doing.
+    this.#reportAttachment();
   }
 
   #onChatMessage(connection: Connection, frame: Record<string, unknown>): void {

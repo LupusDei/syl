@@ -12,8 +12,8 @@ import {
   onError,
   startServer,
   toFailure,
-  type AppDependencies,
   type RunningService,
+  type ServiceDependencies,
 } from "../../src/index.js";
 import { ApiFailure } from "../../src/routes/envelope.js";
 import type { SylDatabase } from "../../src/services/database.js";
@@ -36,7 +36,7 @@ let running: RunningApp | undefined;
 let db: SylDatabase | undefined;
 
 /** The dependencies `createApp` needs, on a fresh in-memory store. */
-function deps(): AppDependencies {
+function deps(): ServiceDependencies {
   db?.close();
   db = testDatabase();
   return testDeps(db);
