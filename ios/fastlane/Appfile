@@ -1,0 +1,12 @@
+# Fastlane app configuration.
+# https://docs.fastlane.tools/advanced/Appfile/
+
+app_identifier ENV["APP_IDENTIFIER"] || "com.jmm.syl"
+
+apple_id ENV["APPLE_ID"]
+
+itc_team_id ENV["ITC_TEAM_ID"]
+
+# The same team as Adjutant. That is what makes this nearly free: the existing APNs
+# auth key covers a second app in the same team, and only the bundle id changes.
+team_id ENV["TEAM_ID"] || "2BRYAM5Q52"

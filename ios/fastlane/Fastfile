@@ -1,0 +1,102 @@
+# Fastfile for Syl.
+#
+# Adapted from Adjutant's, which already ships through this exact pipeline. The
+# differences are all subtractions: Syl has one target and no widget extension, so
+# there is one profile rather than two and no chance of the app/extension
+# CFBundleVersion mismatch that fails validation *after* a successful build.
+
+default_platform(:ios)
+
+APP_IDENTIFIER = ENV["APP_IDENTIFIER"] || "com.jmm.syl"
+TEAM = ENV["TEAM_ID"] || "2BRYAM5Q52"
+PROJECT = "Syl.xcodeproj"
+
+platform :ios do
+  before_all do
+    # Creates a temporary keychain and makes match's certificates usable on a fresh
+    # runner. Without it, signing fails with a keychain prompt nobody can answer.
+    setup_ci if ENV["CI"]
+  end
+
+  desc "Sync certificates and provisioning profiles"
+  lane :sync_certs do
+    # readonly on CI: a runner must never mint a new certificate. The team has a
+    # limited number and a runaway job would exhaust them.
+    match(type: "appstore", readonly: is_ci)
+  end
+
+  desc "Set the build number to one past the newest on TestFlight"
+  lane :bump_build do
+    increment_build_number(
+      build_number: latest_testflight_build_number(
+        api_key: connect_api_key,
+        app_identifier: APP_IDENTIFIER
+      ) + 1,
+      xcodeproj: PROJECT
+    )
+  end
+
+  desc "Build the app for TestFlight"
+  lane :build_beta do
+    sync_certs
+    bump_build
+
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: PROJECT,
+      team_id: TEAM,
+      profile_name: "match AppStore #{APP_IDENTIFIER}",
+      code_sign_identity: "iPhone Distribution",
+      targets: ["Syl"]
+    )
+
+    # Release, deliberately and always. Optionals and type shadowing that compile in
+    # Debug have failed in Release before; a TestFlight build is the first place that
+    # would show up if the pipeline built anything else.
+    #
+    # The APS_ENVIRONMENT build setting resolves to `production` here, which is what
+    # TestFlight tokens are. That pairing is the whole reason it is a setting rather
+    # than a literal in the entitlements file.
+    build_app(
+      scheme: "Syl",
+      configuration: "Release",
+      export_method: "app-store",
+      export_options: {
+        provisioningProfiles: {
+          APP_IDENTIFIER => "match AppStore #{APP_IDENTIFIER}"
+        }
+      },
+      output_directory: "./build",
+      output_name: "Syl.ipa"
+    )
+  end
+
+  desc "Upload to TestFlight for internal testing"
+  lane :beta do
+    build_beta
+
+    upload_to_testflight(
+      api_key: connect_api_key,
+      skip_waiting_for_build_processing: true,
+      # One user. There is no external group and there never will be.
+      distribute_external: false,
+      changelog: ENV["CHANGELOG"] || "New build from CI"
+    )
+  end
+
+  # There is deliberately no `test` lane. `ios/scripts/test.sh` is the single entry
+  # point — both workflows and every developer call it directly — and a second way to
+  # run the suite is a second thing that can drift out of step with the first.
+
+  def connect_api_key
+    app_store_connect_api_key(
+      key_id: ENV["APP_STORE_CONNECT_API_KEY_ID"],
+      issuer_id: ENV["APP_STORE_CONNECT_API_ISSUER_ID"],
+      key_filepath: ENV["APP_STORE_CONNECT_API_KEY_PATH"] || "./fastlane/AuthKey.p8"
+    )
+  end
+
+  error do |lane, exception|
+    UI.error("Error in lane #{lane}: #{exception.message}")
+  end
+end

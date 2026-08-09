@@ -1,0 +1,149 @@
+name: TestFlight
+
+# Adapted from Adjutant's, which already ships through this exact path. Everything
+# here is reused: the same Apple team, the same App Store Connect key, the same match
+# repository and password, the same six GitHub secrets. Only the bundle id and two
+# paths differ.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ios/**'
+  workflow_dispatch:
+    inputs:
+      changelog:
+        description: 'Changelog for TestFlight'
+        required: false
+        default: 'New build from CI'
+
+concurrency:
+  # Two uploads racing for the same build number is a rejected upload and a confusing
+  # afternoon.
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  check-version:
+    name: Has the version changed?
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 2
+
+      # macOS runner minutes bill at 10x, and a full Release build plus a signing
+      # round-trip plus an upload is the expensive part of this repository's CI. A
+      # TestFlight build per commit is not worth that; a build per version bump is.
+      #
+      # The iOS test workflow deliberately does NOT share this gate — see ios.yml.
+      - name: Compare MARKETING_VERSION with the previous commit
+        if: github.event_name == 'push'
+        id: diff
+        run: |
+          # Every occurrence, sorted and deduplicated, not just the first. Debug and
+          # Release each carry one, and `head -1` reads whichever configuration happens
+          # to appear first in the pbxproj — which changes when Xcode rewrites the file.
+          extract() { grep 'MARKETING_VERSION' | sed 's/.*= *//;s/;.*//' | sort -u | tr '\n' ' '; }
+          CURRENT=$(extract < ios/Syl.xcodeproj/project.pbxproj)
+          PREVIOUS=$(git show HEAD~1:ios/Syl.xcodeproj/project.pbxproj 2>/dev/null | extract || echo "")
+          echo "current=$CURRENT previous=$PREVIOUS"
+          if [ "$CURRENT" != "$PREVIOUS" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Version changed: $PREVIOUS -> $CURRENT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Version unchanged ($CURRENT) — skipping the TestFlight deploy"
+          fi
+
+  deploy:
+    name: Build and upload
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
+    # macos-26 is REQUIRED, not preferred. Older runners build against an SDK that
+    # App Store Connect rejects with a 409 — and it rejects it *after* a successful
+    # build and a successful sign, so the failure arrives at the end of the slowest
+    # step in the pipeline with nothing before it having complained.
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: ios
+
+    env:
+      APP_IDENTIFIER: com.jmm.syl
+      TEAM_ID: 2BRYAM5Q52
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # `bundler-cache: true` installs from the COMMITTED Gemfile.lock. Do not
+      # regenerate that lockfile: without `arm64-darwin` in its PLATFORMS section,
+      # bundler fails about 25 seconds in — before Swift compiles anything, and with
+      # an error that says nothing about the architecture.
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+          working-directory: ios
+
+      - name: Run both halves of the test suite
+        # Before signing anything. A build that ships untested is worse than one that
+        # does not ship, and this is the last point at which stopping is cheap.
+        run: scripts/test.sh
+
+      - name: Write the App Store Connect key
+        env:
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        run: |
+          mkdir -p fastlane
+          echo "$APP_STORE_CONNECT_API_KEY_BASE64" | base64 --decode > fastlane/AuthKey.p8
+          KEY_CONTENT=$(awk 'NF {sub(/\r/, ""); printf "%s\\n",$0;}' fastlane/AuthKey.p8)
+          printf '{"key_id":"%s","issuer_id":"%s","key":"%s","in_house":false}' \
+            "$APP_STORE_CONNECT_API_KEY_ID" "$APP_STORE_CONNECT_API_ISSUER_ID" "$KEY_CONTENT" \
+            > fastlane/api_key.json
+
+      - name: Configure fastlane
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          # Through `env`, never interpolated into the script body. `changelog` is
+          # attacker-controlled on `workflow_dispatch`, and this runner is holding a
+          # decoded App Store Connect key and the match password — a `${{ }}` splice
+          # into a shell command is a remote code execution with those in reach.
+          CHANGELOG_INPUT: ${{ github.event.inputs.changelog || 'CI build from commit' }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          printf '%s\n' \
+            "APP_STORE_CONNECT_API_KEY_ID=$APP_STORE_CONNECT_API_KEY_ID" \
+            "APP_STORE_CONNECT_API_ISSUER_ID=$APP_STORE_CONNECT_API_ISSUER_ID" \
+            "APP_STORE_CONNECT_API_KEY_PATH=./fastlane/AuthKey.p8" \
+            "APP_IDENTIFIER=$APP_IDENTIFIER" \
+            "TEAM_ID=$TEAM_ID" \
+            "MATCH_GIT_URL=$MATCH_GIT_URL" \
+            "MATCH_PASSWORD=$MATCH_PASSWORD" \
+            "CHANGELOG=$CHANGELOG_INPUT $COMMIT_SHA" \
+            > fastlane/.env
+
+      - name: Setup SSH for match
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.MATCH_DEPLOY_KEY }}
+
+      - name: Build and upload to TestFlight
+        run: bundle exec fastlane beta
+
+      - name: Remove the credentials
+        # `always()`: a failed build must not leave a decoded signing key on the
+        # runner's disk.
+        if: always()
+        run: |
+          rm -f fastlane/AuthKey.p8
+          rm -f fastlane/api_key.json
+          rm -f fastlane/.env

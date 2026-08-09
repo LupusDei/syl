@@ -16,7 +16,7 @@ import {
   type Scenario,
   scenarioFromHeaders,
 } from "./scenario.js";
-import { type Broadcast, MockStore, nowIso, page } from "./store.js";
+import { type Broadcast, MockCursorError, MockStore, nowIso, page } from "./store.js";
 
 /**
  * The mock server.
@@ -36,6 +36,20 @@ import { type Broadcast, MockStore, nowIso, page } from "./store.js";
 
 const PROTOCOL_VERSION = 1;
 const REPLAY_BUFFER_SIZE = 200;
+
+/**
+ * The mock's published pairing codes.
+ *
+ * The real service prints a random one on a console; a mock has no console the
+ * client's developer is sitting at, so these are constants and are documented
+ * as such. They exist so all four outcomes of the pairing screen — granted,
+ * wrong, expired, already used — can be driven without a Mac in the loop.
+ */
+export const MOCK_PAIRING_CODE = "4821-9930";
+/** Always answers `PAIRING_CODE_EXPIRED`. */
+export const MOCK_EXPIRED_PAIRING_CODE = "0000-0001";
+/** Always answers `PAIRING_CODE_ALREADY_USED`. */
+export const MOCK_USED_PAIRING_CODE = "0000-0002";
 
 export interface MockServerOptions {
   readonly port?: number;
@@ -143,16 +157,65 @@ export class MockServer {
     if (!this.quiet) console.log(line);
   }
 
+  // ------------------------------------------------------------- pairing ---
+
+  /**
+   * Pairing, with the four outcomes a client has to render.
+   *
+   * The mock used to hand a token to anything that asked, which made it
+   * impossible to build a pairing screen against: three of the four states the
+   * app must show were unreachable, so they got written once and never looked
+   * at. A mock that only produces the happy path produces clients that only
+   * handle the happy path — the same reasoning that made `Scenario` worth
+   * building.
+   *
+   * The real service issues codes out of band, which a mock cannot do, so it
+   * publishes fixed ones instead. Each stands for one outcome, and
+   * {@link PAIRING_CODE} is additionally single-use for the life of the
+   * process, so the "already used" state is reachable the honest way as well.
+   */
+  pair(pairingCode: string, deviceName: string, store: MockStore): Result {
+    if (this.redeemed.has(pairingCode) || pairingCode === MOCK_USED_PAIRING_CODE) {
+      return {
+        ok: false,
+        status: 401,
+        code: "PAIRING_CODE_ALREADY_USED",
+        message: "That pairing code has already paired a device. Issue a new one.",
+      };
+    }
+    if (pairingCode === MOCK_EXPIRED_PAIRING_CODE) {
+      return {
+        ok: false,
+        status: 401,
+        code: "PAIRING_CODE_EXPIRED",
+        message: "That pairing code has expired. Ask for a new one.",
+      };
+    }
+    if (pairingCode !== MOCK_PAIRING_CODE) {
+      return {
+        ok: false,
+        status: 401,
+        code: "UNAUTHORIZED",
+        message: "That pairing code was not accepted.",
+      };
+    }
+
+    this.redeemed.add(pairingCode);
+    return ok({
+      ...(fixture("http/auth.pair") as { data: Record<string, unknown> }).data,
+      principal: store.principal,
+      token: `syl_pat_mock_${deviceName.replace(/\W+/g, "_")}`,
+    });
+  }
+
+  /** Codes this process has already granted a token for. */
+  private readonly redeemed = new Set<string>();
+
   // ------------------------------------------------------------- routing ---
 
   private readonly handlers: Readonly<Record<string, Handler>> = {
     getHealth: ({ store }) => ok(store.health()),
-    pairDevice: ({ body, store }) =>
-      ok({
-        ...(fixture("http/auth.pair") as { data: Record<string, unknown> }).data,
-        principal: store.principal,
-        token: `syl_pat_mock_${String(body["deviceName"] ?? "device").replace(/\W+/g, "_")}`,
-      }),
+    pairDevice: ({ body, store, server }) => server.pair(String(body["pairingCode"] ?? ""), String(body["deviceName"] ?? "device"), store),
     whoami: ({ store }) => ok(store.principal),
 
     listConversations: ({ store, query }) => {
@@ -307,7 +370,26 @@ export class MockServer {
 
     syncSinceCursor: ({ query, store }) => {
       const limit = Number(query.get("limit") ?? "50");
-      return ok(store.sync(query.get("since") ?? undefined, Number.isFinite(limit) ? limit : 50));
+      if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+        return {
+          ok: false,
+          status: 400,
+          code: "VALIDATION_FAILED",
+          message: "limit must be a whole number between 1 and 200.",
+        };
+      }
+      try {
+        return ok(store.sync(query.get("since") ?? undefined, limit));
+      } catch (error) {
+        // The mock used to read an unknown cursor as "start from the
+        // beginning". The real service refuses, and a client built against the
+        // forgiving version ships without ever handling the refusal — which is
+        // the whole failure mode `syl-c1m` is about, one layer in.
+        if (error instanceof MockCursorError) {
+          return { ok: false, status: 400, code: "VALIDATION_FAILED", message: error.message };
+        }
+        throw error;
+      }
     },
   };
 
@@ -572,6 +654,10 @@ export class MockServer {
       case "POST /__mock/reset":
         this.store.reset();
         this.idempotency.clear();
+        // The published pairing code is single-use, so a reset that did not
+        // unspend it would leave the mock permanently unable to pair — which
+        // is the one state a developer resets *in order to* get out of.
+        this.redeemed.clear();
         this.scenario = DEFAULT_SCENARIO;
         this.send(res, 200, { reset: true });
         return;

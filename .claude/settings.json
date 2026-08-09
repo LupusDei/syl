@@ -6,9 +6,22 @@
           {
             "command": "bd prime --hook-json",
             "type": "command"
+          },
+          {
+            "type": "command",
+            "command": "scripts/hooks/persona-inject.sh"
           }
         ],
         "matcher": ""
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "scripts/hooks/persona-inject.sh"
+          }
+        ]
       }
     ]
   }

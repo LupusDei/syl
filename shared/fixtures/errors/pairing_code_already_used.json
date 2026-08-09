@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "error": {
+    "code": "PAIRING_CODE_ALREADY_USED",
+    "message": "That pairing code has already paired a device. Run `npm run pair` on the server for a new one.",
+    "retryable": false,
+    "details": null,
+    "retryAfterMs": null
+  }
+}

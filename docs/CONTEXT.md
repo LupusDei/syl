@@ -308,6 +308,62 @@ local files, prints green CREATED lines, reports success, and skips registration
 — so the project is invisible to the dashboard. Syl had to be registered by hand
 as project `3ba5667d`. Filed as `adj-125`, assigned to abathur.
 
+**Syl's port is 8888, and `.mcp.json`'s 4201 is Adjutant's.** This entry exists
+because a line in `CLAUDE.md` — "Backend runs on port 4201, read it from
+`.mcp.json`" — predated Syl having a backend at all. It was describing
+*Adjutant's*. An agent read it as Syl's, wrote 4201 into `config.ts` with the
+reasoning attached as a comment, and a unit test locked it in with the
+misconception **in the test name**: "should default the port to 4201, the port
+`.mcp.json` already points at". That is why it survived review — it read as a
+documented decision rather than a mistake.
+
+Two lessons worth more than the port number:
+
+- **Asserting a wrong REASON is more durable than asserting a wrong value.** A
+  bare `toBe(4201)` would have been changed without argument. The rationale in
+  the name made every reader defer to it.
+- **A half-successful port collision is worse than a loud one.** Running the
+  service by hand bound `*:4201` *alongside* Adjutant's `127.0.0.1:4201` —
+  those do not collide, they coexist — so MCP calls landed on whichever socket
+  the kernel picked, and Adjutant's connection died mid-session. A collision
+  that fails with `EADDRINUSE` costs a boot; one that half-succeeds takes out
+  the neighbour and looks like the neighbour's fault.
+
+**Ports in tests must stay below 49152.** macOS hands out ephemeral ports from
+49152 up (`sysctl net.inet.ip.portrange.first`). Two separate test helpers
+picked from ranges topping out at 58000 and 59000, so a third to a half of each
+range sat inside the pool the OS assigns to every outbound connection on the
+machine — including the suite's own. Observed as `EADDRINUSE 127.0.0.1:50622`
+on an unrelated run.
+
+**A process-level test must spawn the process, not a wrapper.** The lifecycle
+suite spawned `src/index.ts` through `tsx`. `tsx` is a wrapper, so `kill()`
+signalled the wrapper and `exitCode` reported the wrapper's status: every
+assertion in the file was about tsx's signal forwarding rather than about Syl.
+It surfaced as an intermittent `expected 143 to be +0` under load, and **two
+real production bugs were fixed in the service before the wrapper turned out to
+be what was dying** — both genuine, which is luck rather than vindication. Run
+the built `dist` under `process.execPath` when the pid is the point.
+
+**Build every time, not only when `dist` is missing.** A `beforeAll` that skips
+the build when the artifact exists is how a suite ends up validating last
+week's code and reporting green.
+
+**Readiness must not advertise a guarantee that is not yet true.** Two bugs of
+this exact shape landed on the same afternoon. `main()` started the HTTP
+listener and installed signal handlers *after*, so the service answered health
+checks during a window where `SIGTERM` still killed it outright. And a test
+proved readiness via the health endpoint and then asserted on the **log file**,
+which has no happens-before relationship with it — the service was serving
+before its first line had flushed. Whenever something says "ready", ask ready
+*for what*, and make the check cover exactly that.
+
+**Load-dependent test failures are races, not flakiness.** Every intermittent
+failure chased on 2026-08-09 was a real race with a real window; load only
+widened it. The instinct to re-run until green would have shipped all of them.
+Vitest's 5s default timeout is also not a valid assumption for a suite whose
+job is spawning subprocesses — raised to 20s.
+
 ---
 
 ## 8. Design principles to hold

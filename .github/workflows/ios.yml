@@ -1,0 +1,73 @@
+name: iOS
+
+# The iOS half of CI. `ci.yml` covers the Node workspaces and cannot run any of this:
+# `ios/` is not an npm workspace and nothing there is reachable from the repo-root
+# `npm test`.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - 'shared/fixtures/**'
+      - 'shared/openapi.yaml'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - 'shared/fixtures/**'
+      - 'shared/openapi.yaml'
+      - '.github/workflows/ios.yml'
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: SylKit and the app target
+    # macos-26 for the same reason the deploy job uses it: one runner image, one SDK,
+    # one set of simulator runtimes. Adjutant tests on macos-15 and deploys on
+    # macos-26, so its test run does not exercise the SDK its release is built with.
+    runs-on: macos-26
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # `shared/fixtures` is referenced by the contract suite, not copied, so the
+      # whole repository has to be here — a sparse checkout of `ios/` would fail with
+      # "could not find shared/fixtures".
+
+      # Node, because `scripts/test.sh` now boots a real backend for SylKit to talk to
+      # (`syl-e4f`). That phase spawns `swift test` from a vitest harness, so both
+      # toolchains have to be present in this one job.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ALL THREE commands, and this is the point of the job.
+      #
+      # A scheme's TestAction CANNOT run a local SPM package's test target. A
+      # TestableReference pointing at SylKitTests parses fine and is then silently
+      # skipped — xcodebuild reports SUCCESS having run NOTHING, which is the worst
+      # possible failure for a test gate: green CI, zero tests executed.
+      #
+      # `scripts/test.sh` runs `swift test` (SylKit and the contract suite, on the
+      # host, no simulator), then the live-backend phase, then `xcodebuild test` (the
+      # app target, on a simulator). Running any one alone leaves the rest unexecuted
+      # and nothing says so.
+      - name: Run every phase of the suite
+        run: ios/scripts/test.sh
+
+  # Deliberately NOT gated on a version change.
+  #
+  # Adjutant gates its iOS test workflow on MARKETING_VERSION changing, to save macOS
+  # minutes — which bill at 10x. The effect is that most iOS commits merge untested,
+  # which is a strange thing for a test gate to do. The deploy job below keeps the
+  # version gate, because that is where the cost actually is: a full Release build,
+  # a signing round-trip and an upload, for every commit, forever.

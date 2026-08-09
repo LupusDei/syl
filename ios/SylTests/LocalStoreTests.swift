@@ -1,0 +1,354 @@
+import SylKit
+import XCTest
+
+@testable import Syl
+
+/// The local-first store. Every test runs against an in-memory database, so none of
+/// them touch the disk and none of them need a simulator's filesystem to behave.
+final class LocalStoreTests: XCTestCase {
+    private var database: SylDatabase!
+    private var store: LocalStore!
+    private var outbox: Outbox!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        database = try SylDatabase.inMemory()
+        store = LocalStore(database: database)
+        outbox = Outbox(database: database)
+    }
+
+    override func tearDown() {
+        outbox = nil
+        store = nil
+        database = nil
+        super.tearDown()
+    }
+
+    // MARK: - Rendering from disk
+
+    func testShouldReturnMessagesOldestFirstWhichIsTheOrderAChatRendersIn() throws {
+        try store.upsert([
+            message(id: "syl:message:0198f2c0-0002-7000-8000-00000000b002", seq: 2, offset: 10),
+            message(id: "syl:message:0198f2c0-0001-7000-8000-00000000b001", seq: 1, offset: 0),
+        ])
+
+        let messages = try store.messages(conversationId: SylIDs.interactiveConversation)
+
+        XCTAssertEqual(messages.map(\.seq), [1, 2])
+    }
+
+    func testShouldReplaceARowRatherThanDuplicateItWhenTheSameMessageArrivesTwice() throws {
+        // Sync pages overlap by design; a device that duplicated on re-delivery would
+        // show the same message twice after every reconnect.
+        let message = message(id: "syl:message:0198f2c0-0001-7000-8000-00000000b001", seq: 1)
+
+        try store.upsert([message])
+        try store.upsert([message])
+
+        XCTAssertEqual(try store.messages(conversationId: SylIDs.interactiveConversation).count, 1)
+    }
+
+    func testShouldReportNoMessagesForAConversationItHasNeverSeen() throws {
+        XCTAssertTrue(try store.messages(conversationId: "syl:conversation:unknown").isEmpty)
+    }
+
+    func testShouldTrackTheHighestConversationSequenceItHolds() throws {
+        try store.upsert([
+            message(id: "syl:message:0198f2c0-0001-7000-8000-00000000b001", seq: 1),
+            message(id: "syl:message:0198f2c0-0002-7000-8000-00000000b002", seq: 9),
+        ])
+
+        XCTAssertEqual(
+            try store.highestMessageSeq(conversationId: SylIDs.interactiveConversation),
+            9
+        )
+    }
+
+    func testShouldOrderUpcomingRemindersBySoonestFirstAndSkipClosedOnes() throws {
+        let now = instant("2026-08-09T07:00:00.000Z")
+        try store.upsert([
+            reminder(id: "syl:reminder:0198f2c1-0001-7d21-9f00-1a2b3c4d5e01", fireOffset: 7200),
+            reminder(id: "syl:reminder:0198f2c1-0002-7d21-9f00-1a2b3c4d5e02", fireOffset: 60),
+            reminder(
+                id: "syl:reminder:0198f2c1-0003-7d21-9f00-1a2b3c4d5e03",
+                fireOffset: 30,
+                state: .cancelled
+            ),
+        ])
+
+        let upcoming = try store.upcomingReminders(after: now)
+
+        XCTAssertEqual(
+            upcoming.map(\.id),
+            [
+                "syl:reminder:0198f2c1-0002-7d21-9f00-1a2b3c4d5e02",
+                "syl:reminder:0198f2c1-0001-7d21-9f00-1a2b3c4d5e01",
+            ]
+        )
+    }
+
+    func testShouldPutPinnedTodosFirst() throws {
+        // The one durable bit of "this one matters". There is no priority ladder.
+        try store.upsert([
+            todo(id: "syl:todo:0198f2c2-0001-7000-8000-00000000c001", pinned: false),
+            todo(id: "syl:todo:0198f2c2-0002-7000-8000-00000000c002", pinned: true),
+        ])
+
+        XCTAssertEqual(
+            try store.openTodos().first?.id,
+            "syl:todo:0198f2c2-0002-7000-8000-00000000c002"
+        )
+    }
+
+    // MARK: - Optimistic send
+
+    func testShouldRenderTheBubbleAndQueueTheIntentInOneStep() throws {
+        // A pending bubble with no outbox row is a message that will never be sent; an
+        // outbox row with no bubble is a message he cannot see he sent.
+        let optimistic = try store.enqueueSend(
+            conversationId: SylIDs.interactiveConversation,
+            clientId: "c8f41d02-6b1e-4a77-9f30-2ab5c9d10e44",
+            idempotencyKey: "9f2c41d8-b7e0-4a6f-8c1d-3e5a7b9c0d2e",
+            text: "Remind me to call the pharmacy at 4 today.",
+            now: instant("2026-08-09T06:59:48.220Z")
+        )
+
+        XCTAssertEqual(optimistic.id, "c8f41d02-6b1e-4a77-9f30-2ab5c9d10e44")
+        XCTAssertEqual(optimistic.seq, 0, "the server has not given it a position yet")
+        XCTAssertEqual(try store.pendingMessages().count, 1)
+        XCTAssertEqual(try outbox.count(), 1)
+    }
+
+    func testShouldNotQueueASecondIntentForADoubleTap() throws {
+        // The idempotency key is UNIQUE in the schema. Queueing the same intent twice
+        // is a no-op at the database level rather than a rule anyone has to remember.
+        for _ in 0..<2 {
+            _ = try store.enqueueSend(
+                conversationId: SylIDs.interactiveConversation,
+                clientId: "c8f41d02-6b1e-4a77-9f30-2ab5c9d10e44",
+                idempotencyKey: "9f2c41d8-b7e0-4a6f-8c1d-3e5a7b9c0d2e",
+                text: "Remind me to call the pharmacy at 4 today.",
+                now: instant("2026-08-09T06:59:48.220Z")
+            )
+        }
+
+        XCTAssertEqual(try outbox.count(), 1)
+        XCTAssertEqual(try store.pendingMessages().count, 1)
+    }
+
+    func testShouldSwapTheOptimisticRowForTheServersCopyOnConfirmation() throws {
+        _ = try store.enqueueSend(
+            conversationId: SylIDs.interactiveConversation,
+            clientId: "c8f41d02-6b1e-4a77-9f30-2ab5c9d10e44",
+            idempotencyKey: "key-12345678",
+            text: "Remind me to call the pharmacy at 4 today.",
+            now: instant("2026-08-09T06:59:48.220Z")
+        )
+
+        let reconciled = try store.reconcile(confirmation())
+
+        XCTAssertTrue(reconciled)
+        XCTAssertTrue(try store.pendingMessages().isEmpty)
+        let messages = try store.messages(conversationId: SylIDs.interactiveConversation)
+        XCTAssertEqual(messages.count, 1, "one message, not two")
+        XCTAssertEqual(messages.first?.id, "syl:message:0198f2c0-0001-7000-8000-00000000b001")
+        XCTAssertEqual(messages.first?.seq, 1283)
+    }
+
+    func testShouldKeepTheTextAndTimestampFromTheOptimisticRow() throws {
+        // The confirmation carries ids and a sequence, not content. Losing the text
+        // here would blank the bubble the instant the server answered.
+        _ = try store.enqueueSend(
+            conversationId: SylIDs.interactiveConversation,
+            clientId: "c8f41d02-6b1e-4a77-9f30-2ab5c9d10e44",
+            idempotencyKey: "key-12345678",
+            text: "Remind me to call the pharmacy at 4 today.",
+            now: instant("2026-08-09T06:59:48.220Z")
+        )
+
+        try store.reconcile(confirmation())
+
+        let message = try XCTUnwrap(
+            try store.messages(conversationId: SylIDs.interactiveConversation).first
+        )
+        XCTAssertEqual(message.text, "Remind me to call the pharmacy at 4 today.")
+        XCTAssertEqual(message.role, .user)
+    }
+
+    func testShouldReportNothingToReconcileWhenTheConfirmationIsForAnotherDevice() throws {
+        // A reinstall, or a confirmation replayed from the socket after the pending row
+        // was already resolved. Not an error.
+        XCTAssertFalse(try store.reconcile(confirmation()))
+    }
+
+    // MARK: - Sync position
+
+    func testShouldKeepTheTwoSyncPositionsApart() throws {
+        // `cursor` survives a reinstall; `lastFrameSeq` survives one reconnect. Feeding
+        // one to the other makes the client either replay everything or silently
+        // believe it is caught up.
+        try store.setCursor("eyJhdCI6IjIwMjYtMDgtMDlUMDc6MDA6MDMuMTE0WiJ9")
+        try store.setLastFrameSeq(4488, serverEpoch: nil)
+
+        let state = try store.syncState()
+
+        XCTAssertEqual(state.cursor, "eyJhdCI6IjIwMjYtMDgtMDlUMDc6MDA6MDMuMTE0WiJ9")
+        XCTAssertEqual(state.lastFrameSeq, 4488)
+    }
+
+    func testShouldStartWithNoCursorSoTheFirstSyncIsABootstrap() throws {
+        let state = try store.syncState()
+
+        XCTAssertNil(state.cursor)
+        XCTAssertEqual(state.lastFrameSeq, 0)
+        XCTAssertNil(state.serverEpoch)
+    }
+
+    func testShouldStoreTheServerRunTheFrameSequenceCameFrom() throws {
+        // `syl-47j`. A frame sequence is only meaningful inside one run of the
+        // server, and this is the only number in the app that outlives a launch. Kept
+        // without the run it belongs to, it is restored on the next launch and
+        // compared against a stream that never issued it.
+        try store.setLastFrameSeq(4488, serverEpoch: "boot-a")
+
+        let state = try store.syncState()
+
+        XCTAssertEqual(state.lastFrameSeq, 4488)
+        XCTAssertEqual(state.serverEpoch, "boot-a")
+    }
+
+    func testShouldWriteTheSequenceAndItsRunInOneGoSoTheyCannotDisagree() throws {
+        // Two writes would leave a window in which the mark belongs to a run the row
+        // does not name — which is precisely the state this field exists to prevent.
+        try store.setLastFrameSeq(4488, serverEpoch: "boot-a")
+        try store.setLastFrameSeq(3, serverEpoch: "boot-b")
+
+        let state = try store.syncState()
+
+        XCTAssertEqual(state.lastFrameSeq, 3, "the mark goes backwards across a restart")
+        XCTAssertEqual(state.serverEpoch, "boot-b")
+    }
+
+    func testShouldLeaveTheCursorAloneWhenWritingTheFrameSequence() throws {
+        // The sync engine writes the cursor from its own actor while the socket pump
+        // writes the frame position. A read-then-write-the-whole-row would roll one
+        // of them back.
+        try store.setCursor("eyJhdCI6IjIwMjYtMDgtMDlUMDc6MDA6MDMuMTE0WiJ9")
+
+        try store.setLastFrameSeq(12, serverEpoch: "boot-a")
+
+        XCTAssertEqual(try store.syncState().cursor, "eyJhdCI6IjIwMjYtMDgtMDlUMDc6MDA6MDMuMTE0WiJ9")
+    }
+
+    // MARK: - Deletes
+
+    func testShouldRemoveARowOnADeleteChange() throws {
+        try store.upsert([todo(id: "syl:todo:0198f2c2-0001-7000-8000-00000000c001", pinned: false)])
+
+        try store.delete(type: .todo, id: "syl:todo:0198f2c2-0001-7000-8000-00000000c001")
+
+        XCTAssertTrue(try store.openTodos().isEmpty)
+    }
+
+    func testShouldIgnoreADeleteForAResourceTypeTheDeviceDoesNotStore() throws {
+        // Jobs and runs are the admin surface's business, read live. Skipping is
+        // correct, not a gap.
+        XCTAssertNil(LocalStore.tableName(for: .job))
+        XCTAssertNoThrow(try store.delete(type: .job, id: "syl:job:whatever"))
+    }
+
+    // MARK: - Migrations
+
+    func testShouldMigrateAFreshDatabaseCleanly() throws {
+        let fresh = try SylDatabase.inMemory()
+
+        let tables = try fresh.queue.read { db in
+            try Set(
+                String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type = 'table'")
+            )
+        }
+
+        for expected in ["conversation", "message", "reminder", "todo", "outbox", "syncState"] {
+            XCTAssertTrue(tables.contains(expected), "missing table \(expected)")
+        }
+    }
+
+    func testShouldBeIdempotentWhenMigratedTwice() throws {
+        XCTAssertNoThrow(try SylDatabase.migrator.migrate(database.queue))
+    }
+
+    // MARK: - Builders
+
+    private func message(id: SylID, seq: Int, offset: TimeInterval = 0) -> Message {
+        Message(
+            id: id,
+            conversationId: SylIDs.interactiveConversation,
+            clientId: nil,
+            role: .assistant,
+            text: "Done.",
+            createdAt: instant("2026-08-09T07:00:03.114Z").addingTimeInterval(offset),
+            seq: seq
+        )
+    }
+
+    private func reminder(
+        id: SylID,
+        fireOffset: TimeInterval,
+        state: ReminderDeliveryState = .scheduled
+    ) -> Reminder {
+        let base = instant("2026-08-09T07:00:00.000Z")
+        return Reminder(
+            id: id,
+            kind: .commitment,
+            text: "Call the pharmacy.",
+            todoId: nil,
+            eventId: nil,
+            wallTime: "16:00",
+            tz: "America/Chicago",
+            rrule: nil,
+            scheduledFor: base.addingTimeInterval(fireOffset),
+            nextFireAt: base.addingTimeInterval(fireOffset),
+            urgent: false,
+            late: false,
+            deferredFrom: nil,
+            supersedesPrevious: false,
+            deliveryState: state,
+            createdAt: base,
+            updatedAt: base,
+            completedAt: nil
+        )
+    }
+
+    private func todo(id: SylID, pinned: Bool) -> Todo {
+        let base = instant("2026-08-09T06:59:48.300Z")
+        return Todo(
+            id: id,
+            text: "Call the pharmacy about the refill",
+            goalId: nil,
+            dueAt: nil,
+            pinned: pinned,
+            status: .open,
+            source: .commander,
+            delegatedJobId: nil,
+            createdAt: base,
+            updatedAt: base,
+            completedAt: nil
+        )
+    }
+
+    private func confirmation() -> DeliveryConfirmation {
+        DeliveryConfirmation(
+            clientId: "c8f41d02-6b1e-4a77-9f30-2ab5c9d10e44",
+            serverId: "syl:message:0198f2c0-0001-7000-8000-00000000b001",
+            conversationId: SylIDs.interactiveConversation,
+            seq: 1283,
+            acceptedAt: instant("2026-08-09T06:59:48.220Z")
+        )
+    }
+
+    private func instant(_ text: String) -> Date {
+        // A literal from the contract; a failure here is a broken fixture, not a
+        // runtime condition.
+        try! Instant.parse(text)
+    }
+}

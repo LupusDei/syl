@@ -62,6 +62,10 @@ backend/                          the Node 22 service (npm workspace)
   src/harness/session.ts          runTurn(): one subprocess per turn
   src/harness/agent.ts            SylAgent: per-lane continuity + stale-session recovery
   src/harness/reader.ts           runReaderTurn(): untrusted text, no tools
+  src/services/conversation-service.ts  the seam that makes her answer: both write
+                                  paths append + accept here; one turn at a time
+                                  per conversation; a failed turn is a message,
+                                  never silence
   tests/helpers/fake-claude.ts    a real fake `claude` executable, for driving runTurn
   tests/fixtures/*.jsonl          captured CLI transcripts — never hand-written
   src/harness/schedule.ts         wall-clock scheduling + quiet hours
@@ -83,6 +87,21 @@ keeping them testable without spawning a process is worth the seam.
 
 - **Test first.** The project constitution (`constitution.md`) requires it, and
   the base layer is exactly where it pays.
+- **An acceptance test describes CORRECT behaviour, never current behaviour.**
+  If the behaviour is not built yet, the test stays **red** saying what should
+  happen, and goes in `tests/expected-failures.json` with a bead. Never soften
+  it into asserting what the code does today. We did exactly that and it caused
+  the worst defect in this project: `should leave the Commander talking to
+  himself: no assistant message ever arrives` sat green while Syl could not
+  reply to anyone. That is worse than no test — it locks in the defect, has to
+  be rewritten rather than deleted, and makes a green suite claim the story
+  works.
+  The gate is therefore **"failures == declared"**, not "zero failures"
+  (`npm run verify`). It is strict both ways: an undeclared failure is red, and
+  **a declared test that starts PASSING is also red**, so you must promote it
+  out of the file. A list that only grows is a list nobody trusts. Do not reach
+  for `it.fails` — it shows a green tick under the correct-behaviour name, and
+  it passes when the test fails for *any* reason, including a typo.
 - **Build fixtures from real captured CLI output, never from our own type
   definitions.** The point is to catch drift between our types and the actual
   wire format.
@@ -92,6 +111,15 @@ keeping them testable without spawning a process is worth the seam.
   Adjutant project.
 - **Communicate through Adjutant MCP.** Terminal output alone is invisible to the
   Commander; `send_message` reaches his dashboard and phone.
+- **Never `git stash` while other worktrees are live.** Worktrees share one
+  object store, and the stash is a REPO-GLOBAL stack: `pop` takes the top entry,
+  not *your* entry. Two agents stashing concurrently means one pops the other's
+  work into the wrong tree, silently, with the damage landing in someone else's
+  files. It has already happened once — recovered in full only because the agent
+  noticed and reported it. Use a **scratch commit on your own branch** instead:
+  it is per-worktree, it is named, and nobody else can take it. If you do pop
+  something that is not yours, re-push it with `-u` and the same paths rather
+  than deleting it.
 
 ## Commands
 
@@ -119,7 +147,23 @@ to add is about *additional* surfaces and blocks nothing.
 
 ## Environment notes
 
-- Backend runs on port **4201**. Read it from `.mcp.json`; do not assume 3001.
+- **Two different backends, two different ports, and confusing them has already
+  cost a real failure.** `.mcp.json` points at **4201** — that is *Adjutant's*
+  backend, the MCP server Syl's agents use for messaging. **Syl's own service
+  runs on 8888.** The line here used to say only "backend runs on 4201", which
+  predated Syl having a backend at all; an agent read it as Syl's port, and Syl
+  would have failed to bind on every boot forever with Adjutant already holding
+  4201 — and worse, a by-hand run bound `*:4201` *alongside* Adjutant's
+  `127.0.0.1:4201`, which do not collide but coexist, so MCP calls landed on a
+  server with no `/mcp` route and took Adjutant's connection down. A collision
+  that fails loudly costs a boot; one that half-succeeds takes out the
+  neighbour.
+  **Never start the Syl service by hand without an explicit port.** The
+  integration tests are safe — they bind a random high port — which is also why
+  no test could ever have caught this.
+  Ports around here: Adjutant 4200/4201, contract mock 4210, Syl admin dev 4211,
+  and **Syl's service on 8888**, deliberately outside the 42xx block rather than
+  merely free within it.
 - The shell has `noclobber` set — a plain `>` fails if the file exists. Use `>|`.
 - `--verbose` is mandatory alongside `--output-format stream-json` in `-p` mode.
 - Headless sessions are pre-authorised (`--permission-mode bypassPermissions`)

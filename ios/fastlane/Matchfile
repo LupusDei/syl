@@ -1,0 +1,30 @@
+# Certificate and provisioning profile management.
+# https://docs.fastlane.tools/actions/match/
+#
+# This points at the SAME private match repository Adjutant already uses — one repo,
+# one password, one shared distribution certificate. Adding Syl is a matter of the
+# bundle id below appearing in that repo, not of provisioning anything new.
+
+git_url(ENV["MATCH_GIT_URL"])
+
+storage_mode("git")
+
+type("appstore")
+
+# One target, one id. Adjutant carries a second for its widget extension, and with it
+# the CFBundleVersion mismatch that fails App Store validation after a successful
+# build and sign. Syl has no extension yet; when it gains one, the version must come
+# from the build setting in both, never a literal.
+app_identifier(["com.jmm.syl"])
+
+username(ENV["APPLE_ID"])
+
+team_id(ENV["TEAM_ID"] || "2BRYAM5Q52")
+
+# Read-only on CI. A runner must never mint a new certificate: the team has a limited
+# number and a runaway job would exhaust them.
+readonly(ENV["MATCH_READONLY"] == "true" || ENV["CI"] == "true")
+
+shallow_clone(true)
+
+force_for_new_devices(false)

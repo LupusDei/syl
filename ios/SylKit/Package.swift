@@ -32,6 +32,16 @@ let package = Package(
             name: "SylKitTests",
             dependencies: ["SylKit"],
             path: "Tests/SylKitTests"
+        ),
+        // The Swift half of the contract gate. Separate from SylKitTests because it
+        // asserts something different in kind: not that the client behaves, but that
+        // the hand-written models still agree with `shared/fixtures`, which is the
+        // failure that actually bit Adjutant. It uses no `@testable` import — if the
+        // gate needed internal access, the wire shape would not be usable by the app.
+        .testTarget(
+            name: "ContractTests",
+            dependencies: ["SylKit"],
+            path: "Tests/ContractTests"
         )
     ]
 )
