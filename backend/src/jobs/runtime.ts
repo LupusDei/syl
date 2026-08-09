@@ -1,4 +1,4 @@
-import type { Job } from "@syl/shared";
+import type { Job, JobKind } from "@syl/shared";
 
 import { ApnsClient, apnsCredentialsFromEnv } from "../services/apns-service.js";
 import { instant, systemClock, type Clock } from "../services/clock.js";
@@ -26,6 +26,19 @@ export interface DeliveryRuntimeDeps {
   readonly reminders: ReminderService;
   readonly outbox: Outbox;
   readonly devices: DeviceTokenService;
+  /**
+   * Handlers for the other kinds in the catalogue.
+   *
+   * One runner, not one per kind: `JobRunner` enforces concurrency of one
+   * across everything, which is the whole point on subscription rails where a
+   * single rate-limit pool is shared with the Commander's own work. A second
+   * runner would break that, and would also lease jobs whose kind it cannot
+   * handle and record them as failures.
+   *
+   * `reminder_delivery` is built here and cannot be overridden — the never-drop
+   * guarantee is not a thing a caller gets to replace.
+   */
+  readonly handlers?: ReadonlyMap<JobKind, JobHandler>;
   readonly env?: NodeJS.ProcessEnv;
   readonly clock?: Clock;
   readonly timers?: Timers;
@@ -73,7 +86,11 @@ export function createDeliveryRuntime(deps: DeliveryRuntimeDeps): DeliveryRuntim
 
   const runner = new JobRunner({
     store: deps.jobs,
-    handlers: new Map([["reminder_delivery", handler]]),
+    // Reminder delivery last, so it cannot be displaced by a caller's map.
+    handlers: new Map<JobKind, JobHandler>([
+      ...(deps.handlers ?? new Map<JobKind, JobHandler>()),
+      ["reminder_delivery", handler],
+    ]),
     clock,
     ...(deps.timers === undefined ? {} : { timers: deps.timers }),
   });

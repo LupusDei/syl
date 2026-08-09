@@ -193,6 +193,22 @@ export class ArticleIntake {
   }
 
   /**
+   * One source by id, or `null`.
+   *
+   * The read side of the ladder, so a caller that has a source id — the HTTP
+   * route, the job handler deciding whether a step will spawn a turn — does
+   * not need its own handle on the store, and cannot reach the writes.
+   */
+  get(sourceId: string): IntakeSource | null {
+    return this.#store.get(sourceId);
+  }
+
+  /** Sources that still have a step to run, oldest first. */
+  pending(): readonly IntakeSource[] {
+    return this.#store.pending();
+  }
+
+  /**
    * Perform exactly one step of one source's ladder.
    *
    * One step, not "as many as fit": that is what keeps a book from becoming a

@@ -10,6 +10,14 @@ import express, {
 
 import { createDeliveryRuntime, describeRuntime } from "./jobs/runtime.js";
 import { loadConfig, type SylConfig } from "./config.js";
+import {
+  createContentIngestionHandler,
+  ensureContentIngestionJob,
+  IntakeQueue,
+} from "./connections/intake-job.js";
+import { createIntakeRouter } from "./connections/intake-route.js";
+import { ArticleIntake } from "./connections/intake.js";
+import { IntakeStore } from "./connections/intake-store.js";
 import { requireBearerToken } from "./middleware/auth.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createConversationRouter } from "./routes/conversations.js";
@@ -137,6 +145,8 @@ export interface AppDependencies {
   readonly jobs: JobStore;
   /** The ledger that makes every write safe to retry. */
   readonly idempotency: IdempotencyStore;
+  /** Article intake: submission, and the resumable ladder behind it. */
+  readonly intake: ArticleIntake;
   /** Extra health probes. The billing check is always present. */
   readonly probes?: readonly HealthProbe[];
 }
@@ -159,6 +169,13 @@ export interface ServiceDependencies extends AppDependencies {
    * and a socket server that restarts must not reset what Syl was doing.
    */
   readonly presence: PresenceService;
+  /**
+   * Which intake source is advanced next.
+   *
+   * Not an HTTP concern — it is the `content_ingestion` job's work list, and
+   * the route only ever puts things into it via `intake.submit`.
+   */
+  readonly intakeQueue: IntakeQueue;
 }
 
 /** Build the Express application. */
@@ -166,7 +183,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // Destructured in full, and reached through the names below rather than
   // through `deps.` — see the note on `AppDependencies`. Removing a use here
   // without removing the field does not compile.
-  const { keys, messages, devices, outbox, reminders, jobs, idempotency, probes } = deps;
+  const { keys, messages, devices, outbox, reminders, jobs, idempotency, intake, probes } = deps;
   const app = express();
 
   // Nothing gains from telling the world which framework to look up CVEs for.
@@ -185,6 +202,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   api.use(createDeliveryRouter({ outbox, reminders, idempotency, authenticate }));
   api.use(createReminderRouter({ reminders, idempotency, authenticate }));
   api.use(createJobRouter({ jobs, authenticate }));
+  api.use(createIntakeRouter({ intake, idempotency, authenticate }));
 
   app.use(API_BASE_PATH, api);
   app.use(notFound);
@@ -320,6 +338,19 @@ export function bootstrap(config: SylConfig): {
   // starts later than the hour the outbox stops sending notifications.
   const presence = new PresenceService({ timeZone: config.quietHours.tz });
 
+  // Intake, wired end to end: the store the migration now creates, the queue
+  // that is `ArticleIntake`'s long-missing scheduler, and the ladder itself.
+  // `fetch` is left at its default — `safeFetch`, the SSRF guard — because the
+  // only reason that parameter exists is so a test can drive the ladder
+  // without a network, and a production caller substituting it would have
+  // removed the control that stops a hostile link reaching the tailnet.
+  const intakeQueue = new IntakeQueue();
+  const intakeStore = new IntakeStore({ db: database.handle });
+  const intake = new ArticleIntake({ store: intakeStore, scheduler: intakeQueue });
+  // Everything mid-ladder when the process died is due again now. Every step
+  // is idempotent, so re-running one is safe; skipping one is not.
+  intakeQueue.recover(intake, Date.now());
+
   return {
     database,
     deps: {
@@ -330,7 +361,9 @@ export function bootstrap(config: SylConfig): {
       reminders,
       jobs,
       idempotency,
+      intake,
       presence,
+      intakeQueue,
       probes: [databaseProbe(database.handle)],
     },
   };
@@ -347,11 +380,22 @@ async function main(): Promise<void> {
   // the machine was down has been considered before the service claims to be
   // up — a runner that starts scheduling before it has looked at what it
   // missed silently swallows whatever was due.
+  // Exactly one `content_ingestion` row exists, forever, and it reschedules
+  // itself. Defined before the runner starts so the first tick can already see
+  // whatever was mid-ladder when the process last died.
+  ensureContentIngestionJob(deps.jobs, Date.now());
+
   const runtime = createDeliveryRuntime({
     jobs: deps.jobs,
     reminders: deps.reminders,
     outbox: deps.outbox,
     devices: deps.devices,
+    handlers: new Map([
+      [
+        "content_ingestion",
+        createContentIngestionHandler({ intake: deps.intake, queue: deps.intakeQueue }),
+      ],
+    ]),
   });
   await runtime.runner.start();
 

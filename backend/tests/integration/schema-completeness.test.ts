@@ -31,24 +31,15 @@ import { existingTables, referencedTables } from "../helpers/sql-tables.js";
 /**
  * Tables the code queries that no migration creates.
  *
- * This is a **finding, not a configuration**. Every entry is a store that
- * cannot work against a real database, listed here so the check below stays
- * able to catch the next one instead of being disabled by this one.
+ * A **finding, not a configuration** — every entry would be a store that
+ * cannot work against a real database. It is empty, and the three tests below
+ * are arranged so that it can only ever be temporarily non-empty: one fails if
+ * a referenced table is missing and unlisted, one fails if a listed table now
+ * exists, and one fails if a listed table is no longer queried.
  *
- * `syl-1o7` — article intake (`IntakeStore`, `IntakeMailStore`) keeps its
- * schema in `INTAKE_SCHEMA_SQL` inside `intake-store.ts` and applies it only
- * from its own test helper. Migrations 0001–0007 create none of it.
- *
- * When the migration lands, delete the entry. The test fails if this set names
- * a table that now exists, so a stale exemption cannot outlive its fix.
+ * `syl-1o7` held all five intake tables here. `0008_intake.sql` creates them.
  */
-const KNOWN_MISSING: ReadonlySet<string> = new Set([
-  "intake_sources",
-  "intake_chunks",
-  "intake_extracts",
-  "intake_mail",
-  "intake_mail_cursor",
-]);
+const KNOWN_MISSING: ReadonlySet<string> = new Set([]);
 
 describe("a freshly migrated database", () => {
   let directory: string;
@@ -65,7 +56,7 @@ describe("a freshly migrated database", () => {
   });
 
   it("should apply every migration that ships, in order", () => {
-    expect(db.applied.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(db.applied.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(db.pragmas.journalMode).toBe("wal");
     expect(db.pragmas.foreignKeys).toBe(true);
   });
@@ -122,25 +113,76 @@ describe("syl-1o7 — article intake against a real migrated database", () => {
   /**
    * The seam, as behaviour rather than as schema.
    *
-   * `intake-store.test.ts` passes because `tests/helpers/intake.ts` executes
-   * `INTAKE_SCHEMA_SQL` by hand first. Against the database the service
-   * actually opens, the very first call throws.
+   * This test used to assert `no such table: intake_sources` — every intake
+   * unit test passed because `tests/helpers/intake.ts` executed
+   * `INTAKE_SCHEMA_SQL` by hand first, and against the database the service
+   * actually opens the very first call threw. The helper built the thing the
+   * suite was meant to be checking.
    *
-   * Asserted as the specific SQLite error rather than as `it.fails`, so that
-   * landing `0008_intake.sql` turns this red for a legible reason — and so
-   * that a *different* break cannot masquerade as this known one.
+   * It now asserts the opposite, and it goes all the way down: a source, its
+   * chunks, an extract, and the cascade that makes a purge a real hard delete.
+   * A schema that exists but whose foreign keys were not enabled would pass a
+   * `SELECT name FROM sqlite_master` check and fail this one.
    */
-  it("should fail with 'no such table', naming the table the migration forgot", () => {
+  it("should record a source, its chunks and its extracts", () => {
     const store = new IntakeStore({ db: db.handle });
 
-    expect(() =>
-      store.create({
-        url: "https://example.com/tidy-desks",
-        channel: "link",
-        requestedBy: "commander",
-        retention: "ephemeral",
-        retentionReason: "read once",
-      }),
-    ).toThrow(/no such table: intake_sources/i);
+    const { source, created } = store.create({
+      url: "https://example.com/tidy-desks?utm_source=newsletter",
+      channel: "link",
+      requestedBy: "commander",
+      retention: "ephemeral",
+      retentionReason: "read once",
+    });
+
+    expect(created).toBe(true);
+    expect(source.stage).toBe("fetch");
+    expect(source.origin).toBe("untrusted");
+    // The UNIQUE index on `canonical_url` is what makes submission idempotent,
+    // and it only exists if the migration created it.
+    expect(source.canonicalUrl).toBe("https://example.com/tidy-desks");
+    expect(store.create({ ...source, requestedBy: "commander" }).created).toBe(false);
+
+    store.putChunks(source.id, [{ index: 0, start: 0, end: 12, text: "A tidy desk." }]);
+    store.putExtract({
+      sourceId: source.id,
+      chunkIndex: 0,
+      start: 0,
+      end: 12,
+      retention: "ephemeral",
+      extract: {
+        summary: "A tidy desk correlates with fewer context switches.",
+        claims: [],
+        entities: [],
+        definitions: [],
+        passages: [],
+        questions: [],
+        instructionsFound: [],
+      },
+    });
+
+    expect(store.chunks(source.id)).toHaveLength(1);
+    expect(store.extracts(source.id)).toHaveLength(1);
+
+    // `purge` deletes only the parent row and relies on `ON DELETE CASCADE`
+    // plus `PRAGMA foreign_keys`. Both come from the migration.
+    expect(store.purge(source.id)).toEqual({ chunks: 1, extracts: 1 });
+    expect(store.chunks(source.id)).toEqual([]);
+    expect(store.extracts(source.id)).toEqual([]);
+  });
+
+  it("should carry the mail cursor tables the poller deduplicates against", () => {
+    // The two tables with no store of their own yet. They are queried by
+    // `intake-email.ts`, so a migration that forgot them would be invisible
+    // until the first poll.
+    const present = existingTables(db.handle);
+
+    expect([...present].filter((table) => table.startsWith("intake_")).sort()).toEqual([
+      "intake_chunks",
+      "intake_extracts",
+      "intake_mail",
+      "intake_mail_cursor",
+      "intake_sources",
+    ]);
   });
 });

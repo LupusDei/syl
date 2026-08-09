@@ -1,4 +1,7 @@
 import { DEFAULT_QUIET_HOURS, type SylConfig } from "../../src/config.js";
+import { IntakeQueue } from "../../src/connections/intake-job.js";
+import { IntakeStore } from "../../src/connections/intake-store.js";
+import { ArticleIntake } from "../../src/connections/intake.js";
 import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api-key-service.js";
 import { fixedClock, type Clock } from "../../src/services/clock.js";
 import { IN_MEMORY, openDatabase, type SylDatabase } from "../../src/services/database.js";
@@ -101,9 +104,12 @@ export function testDeps(db: SylDatabase): {
   readonly reminders: ReminderService;
   readonly jobs: JobStore;
   readonly idempotency: IdempotencyStore;
+  readonly intake: ArticleIntake;
   readonly presence: PresenceService;
+  readonly intakeQueue: IntakeQueue;
 } {
   const clock = fixedClock(TEST_NOW);
+  const intakeQueue = new IntakeQueue();
   return {
     keys: testKeys(db),
     messages: testMessages(db),
@@ -114,9 +120,18 @@ export function testDeps(db: SylDatabase): {
     reminders: new ReminderService({ db: db.handle, clock }),
     jobs: new JobStore({ db: db.handle, clock }),
     idempotency: new IdempotencyStore({ db: db.handle, clock }),
+    // The default fetcher is `safeFetch`, the SSRF guard, and it stays that
+    // way here: a route test never gets as far as a fetch, because `submit`
+    // only records the source and the ladder is driven by the job.
+    intake: new ArticleIntake({
+      store: new IntakeStore({ db: db.handle, clock }),
+      clock,
+      scheduler: intakeQueue,
+    }),
     // No sink. `startServer` attaches one; a test that wants to watch frames
     // hands its own to `PresenceService` directly.
     presence: new PresenceService({ clock }),
+    intakeQueue,
   };
 }
 

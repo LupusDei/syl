@@ -8,6 +8,8 @@ import {
   defineReminderDeliveryJob,
 } from "../../src/jobs/reminder-delivery-job.js";
 import { createApp } from "../../src/index.js";
+import { IntakeStore } from "../../src/connections/intake-store.js";
+import { ArticleIntake } from "../../src/connections/intake.js";
 import { ApnsClient } from "../../src/services/apns-service.js";
 import { DeviceTokenService } from "../../src/services/device-token-service.js";
 import { IdempotencyStore } from "../../src/services/idempotency.js";
@@ -126,6 +128,7 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         reminders,
         jobs,
         idempotency: new IdempotencyStore({ db: db.handle, clock }),
+        intake: new ArticleIntake({ store: new IntakeStore({ db: db.handle, clock }), clock }),
       }),
     );
     token = keys.pair(keys.issuePairingCode().code, "Commander's iPhone").token;

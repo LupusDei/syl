@@ -283,25 +283,35 @@ describe("US4 — untrusted content cannot act", () => {
   });
 
   /**
-   * `syl-jnt` — every guard above is real, and nothing in the service uses any
-   * of them.
+   * `syl-jnt` — every guard above is real, and now something uses them.
    *
-   * `connections/` is imported by nothing outside `connections/`; `ArticleIntake`
-   * is constructed only in tests; `harness/reader.ts` exists solely to serve
-   * `connections/intake.ts`. So US4's guarantees are currently guarantees about
-   * code that never runs — which is a fine place to be *before* intake ships and
-   * a dangerous one to mistake for having shipped it.
+   * This test used to assert that `connections/` was imported by nothing
+   * outside `connections/`: `ArticleIntake` was constructed only in tests, so
+   * US4's guarantees were guarantees about code that never ran. That is a fine
+   * place to be *before* intake ships and a dangerous one to mistake for
+   * having shipped it. `syl-1o7` shipped it.
+   *
+   * So the assertion inverts, and what it protects inverts with it. It is no
+   * longer "nothing reaches the quarantine"; it is **exactly one door in, and
+   * the reader still has exactly one caller**. Intake being reachable is the
+   * fix; a second entry point would be the regression.
    */
-  it("should not be reachable from the running service at all", () => {
+  it("should be reachable through exactly one door, and the reader through one caller", () => {
     const importers = sourceFiles(BACKEND_SRC).filter((file) => {
       if (file.includes("/connections/")) return false;
       const source = readFileSync(file, "utf8");
       return /from "\.{1,2}\/(?:\.\.\/)*connections\//u.test(source);
     });
 
-    expect(importers.map((file) => file.slice(BACKEND_SRC.length))).toEqual([]);
+    // `index.ts` — `bootstrap` constructs the store, the queue and the ladder,
+    // and `createApp` mounts the one route that can submit a link. Nothing
+    // else in the service touches untrusted content.
+    expect(importers.map((file) => file.slice(BACKEND_SRC.length))).toEqual(["index.ts"]);
 
-    // And the reader, which only intake calls, is equally unreachable.
+    // The property that actually carries US4: the model that reads the
+    // untrusted text has no tools, and `harness/reader.ts` is the only way to
+    // reach it. One caller, and it is the read step of the ladder. A second
+    // one would be a second place the boundary has to be got right.
     const readerImporters = sourceFiles(BACKEND_SRC).filter((file) => {
       if (file.endsWith("harness/reader.ts")) return false;
       return /from "[^"]*reader\.js"/u.test(readFileSync(file, "utf8"));
@@ -309,5 +319,15 @@ describe("US4 — untrusted content cannot act", () => {
     expect(readerImporters.map((file) => file.slice(BACKEND_SRC.length))).toEqual([
       "connections/intake.ts",
     ]);
+
+    // And `runTurn` — the tool-bearing path — is still not reachable from
+    // anywhere in `connections/`. This is the thesis as a grep: the model that
+    // reads the untrusted text has no tools and no memory; the model that has
+    // tools and memory never reads the untrusted text.
+    const toolBearing = sourceFiles(BACKEND_SRC).filter(
+      (file) =>
+        file.includes("/connections/") && /from "[^"]*session\.js"/u.test(readFileSync(file, "utf8")),
+    );
+    expect(toolBearing).toEqual([]);
   });
 });

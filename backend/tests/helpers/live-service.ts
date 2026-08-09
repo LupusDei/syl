@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadQuietHours, type SylConfig } from "../../src/config.js";
+import { IntakeQueue } from "../../src/connections/intake-job.js";
+import { IntakeStore } from "../../src/connections/intake-store.js";
+import { ArticleIntake } from "../../src/connections/intake.js";
 import {
   API_BASE_PATH,
   bootstrap,
@@ -96,6 +99,14 @@ function dependenciesOn(
   database: SylDatabase,
   clock: Clock,
 ): ServiceDependencies {
+  const intakeQueue = new IntakeQueue();
+  const intake = new ArticleIntake({
+    store: new IntakeStore({ db: database.handle, clock }),
+    clock,
+    scheduler: intakeQueue,
+  });
+  intakeQueue.recover(intake, clock());
+
   return {
     keys: new ApiKeyService({ db: database.handle, clock }),
     messages: new MessageStore({ db: database.handle, clock }),
@@ -104,7 +115,9 @@ function dependenciesOn(
     outbox: new Outbox({ db: database.handle, clock, quietHours: config.quietHours }),
     reminders: new ReminderService({ db: database.handle, clock }),
     jobs: new JobStore({ db: database.handle, clock }),
+    intake,
     presence: new PresenceService({ clock, timeZone: config.quietHours.tz }),
+    intakeQueue,
     probes: [databaseProbe(database.handle)],
   };
 }

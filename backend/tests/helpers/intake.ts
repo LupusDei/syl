@@ -1,21 +1,21 @@
-import { INTAKE_SCHEMA_SQL, IntakeStore } from "../../src/connections/intake-store.js";
+import { IntakeStore } from "../../src/connections/intake-store.js";
 import { fixedClock, type Clock } from "../../src/services/clock.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import { TEST_NOW, testDatabase } from "./service.js";
 
 /**
- * A migrated database with the intake schema applied on top.
+ * A migrated database, which is now all intake needs.
  *
- * The intake tables are not yet a numbered migration — `backend/src/migrations/`
- * belongs to another lane and two agents appending sequential files to it is a
- * guaranteed conflict — so tests apply `INTAKE_SCHEMA_SQL` themselves. That is
- * the same SQL the migration will contain, so this exercises the real schema
- * including its foreign keys, which is what `purge` depends on.
+ * This function used to execute `INTAKE_SCHEMA_SQL` by hand on top of
+ * `testDatabase()`, because the intake tables were a string constant rather
+ * than a migration. That one line was what made the whole intake suite green
+ * against a schema the running service did not have (`syl-1o7`) — the helper
+ * built the thing the test was supposed to be checking. `0008_intake.sql`
+ * ships the tables now, so this is `testDatabase` under another name, kept
+ * because every intake test says what it means by using it.
  */
 export function intakeDatabase(): SylDatabase {
-  const db = testDatabase();
-  db.handle.exec(INTAKE_SCHEMA_SQL);
-  return db;
+  return testDatabase();
 }
 
 /** An `IntakeStore` on a fixed clock. */
