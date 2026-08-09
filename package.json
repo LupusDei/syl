@@ -28,12 +28,17 @@
     "pretest:coverage": "npm run check:env",
     "test:coverage": "vitest run --coverage",
     "verify": "npm run typecheck && npm run test:gate",
+    "premock": "npm run check:env",
     "mock": "tsx shared/src/cli/mock.ts",
     "contract:generate": "tsx shared/src/cli/generate.ts",
+    "preping": "npm run check:env",
     "ping": "tsx backend/src/harness/cli/ping.ts",
     "when": "tsx backend/src/harness/cli/when.ts",
+    "prepair": "npm run check:env",
     "pair": "tsx backend/src/ops/cli/pair.ts",
+    "prelogs": "npm run check:env",
     "logs": "tsx backend/src/ops/cli/logs.ts",
+    "prelaunchd": "npm run check:env",
     "launchd": "tsx backend/src/ops/cli/launchd.ts"
   },
   "devDependencies": {
