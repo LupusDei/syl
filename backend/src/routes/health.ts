@@ -1,68 +1,140 @@
 import { Router } from "express";
 
+import type { HealthCheck, HealthStatus } from "@syl/shared";
+
 import type { SylConfig } from "../config.js";
+import { instant, systemClock, type Clock } from "../services/clock.js";
+import type { Database } from "../services/sqlite.js";
+import { sendOk } from "./envelope.js";
 
 /**
- * Liveness for the Syl service.
+ * Liveness and dependency status, in the contract's shape.
  *
- * Deliberately small. The API contract will settle the exact shape; until it
- * does, this reports only what the process can answer without touching a
- * store, a socket or a subprocess — plus the one fact that is genuinely ours.
+ * `status` is the worst of the checks rather than a separate judgement, so a
+ * green top line can never sit above a red dependency. `degraded` is a real
+ * and useful answer: Syl with a failing APNs channel is still worth talking
+ * to, and reporting `down` would send a monitor into a restart loop over
+ * something a restart cannot fix.
  *
- * That fact is `credentialSource`. Syl's strongest constraint is that it runs
- * on subscription rails and never the metered API, and a stray
- * `ANTHROPIC_API_KEY` in the environment is the one thing that quietly breaks
- * it. A health check that can only say "ok" would report perfect health while
- * the Commander's billing was being rerouted.
+ * The check that is genuinely ours is `subscription-rails`. Syl's strongest
+ * constraint is that she runs on subscription payment rails and never the
+ * metered API, and a stray `ANTHROPIC_API_KEY` in the environment silently
+ * outranks the claude.ai login. A health endpoint that could only say "ok"
+ * would report perfect health while the Commander's billing was rerouted —
+ * this is how that hazard becomes visible before a statement makes it visible.
  */
-export interface HealthBody {
-  /** Liveness. The process answered, so it is up. */
-  readonly status: "ok";
-  /** Service version, from `backend/package.json`. */
-  readonly version: string;
+
+/** One dependency this service can be asked about. */
+export interface HealthProbe {
+  readonly name: string;
   /**
-   * Seconds since this router was created, i.e. since the service booted.
-   * Measured on a monotonic clock, so an NTP correction cannot make it jump
-   * backwards or report a negative uptime.
+   * Answer for this dependency. Must not throw and must not block — a health
+   * endpoint that hangs is worse than one that reports `down`, because a
+   * monitor cannot tell it apart from a network failure.
    */
-  readonly uptimeSeconds: number;
-  /**
-   * Which environment variable would supply Anthropic credentials, in the
-   * CLI's own `apiKeySource` vocabulary. `"none"` means subscription rails.
-   * Never the credential value — only the variable's name.
-   */
-  readonly credentialSource: string;
-  /** `credentialSource === "none"`. False means billing is at risk. */
-  readonly subscriptionRails: boolean;
+  run(): { readonly status: HealthCheck["status"]; readonly detail?: string | null };
+}
+
+const SEVERITY: Readonly<Record<HealthCheck["status"], number>> = {
+  ok: 0,
+  degraded: 1,
+  down: 2,
+};
+
+/** The worst status among the checks, or `ok` when there are none. */
+export function worstStatus(
+  checks: readonly HealthCheck[],
+): HealthCheck["status"] {
+  let worst: HealthCheck["status"] = "ok";
+  for (const check of checks) {
+    if (SEVERITY[check.status] > SEVERITY[worst]) worst = check.status;
+  }
+  return worst;
+}
+
+/**
+ * The billing check, built from configuration alone.
+ *
+ * `degraded` rather than `down`: the service works, and the harness strips
+ * both credential variables before spawning `claude`. What is at risk is
+ * anything that reaches the CLI another way.
+ */
+export function subscriptionRailsProbe(config: SylConfig): HealthProbe {
+  return {
+    name: "subscription-rails",
+    run: () =>
+      config.subscriptionRails
+        ? { status: "ok", detail: "claude.ai subscription" }
+        : {
+            status: "degraded",
+            detail:
+              `${config.credentialSource} is set. The harness strips it before spawning claude, ` +
+              `but anything reaching the CLI another way bills the metered API.`,
+          },
+  };
+}
+
+/**
+ * The store, checked by actually querying it.
+ *
+ * A probe that only asks whether a handle exists reports `ok` against a
+ * database whose file has been deleted out from under it — SQLite keeps
+ * serving from the open descriptor until it needs a page it does not have.
+ */
+export function databaseProbe(db: Database): HealthProbe {
+  return {
+    name: "database",
+    run: () => {
+      try {
+        db.prepare("SELECT count(*) AS n FROM schema_migrations").get();
+        return { status: "ok", detail: null };
+      } catch (error) {
+        return { status: "down", detail: error instanceof Error ? error.message : "unreadable" };
+      }
+    },
+  };
+}
+
+export interface HealthRouterOptions {
+  readonly config: SylConfig;
+  /** Extra dependencies to report. The billing check is always included. */
+  readonly probes?: readonly HealthProbe[];
+  readonly clock?: Clock;
 }
 
 /**
  * Build the health router.
  *
- * @param config  the resolved service configuration
- * @param now     monotonic millisecond clock. Injected so uptime is assertable
- *                rather than "roughly"; defaults to `performance.now` rather
- *                than `Date.now` because wall-clock time can step backwards.
+ * `startedAt` is captured when the router is built, which is once, during
+ * boot — so it is the service's start time rather than the first request's.
  */
-export function createHealthRouter(
-  config: SylConfig,
-  now: () => number = () => performance.now(),
-): Router {
-  const startedAt = now();
+export function createHealthRouter(options: HealthRouterOptions): Router {
+  const { config } = options;
+  const clock = options.clock ?? systemClock;
+  const probes: readonly HealthProbe[] = [subscriptionRailsProbe(config), ...(options.probes ?? [])];
+  const startedAt = instant(clock());
+
   const router = Router();
 
   router.get("/health", (_request, response) => {
-    const body: HealthBody = {
-      status: "ok",
+    const checks: HealthCheck[] = probes.map((probe) => {
+      const result = probe.run();
+      return { name: probe.name, status: result.status, detail: result.detail ?? null };
+    });
+
+    const body: HealthStatus = {
+      status: worstStatus(checks),
       version: config.version,
-      // Milliseconds are noise in a health check and make the value awkward to
-      // eyeball; three decimals keeps it precise enough to be useful.
-      uptimeSeconds: Math.round(now() - startedAt) / 1000,
-      credentialSource: config.credentialSource,
-      subscriptionRails: config.subscriptionRails,
+      startedAt,
+      now: instant(clock()),
+      checks,
     };
 
-    response.status(200).json(body);
+    // Always 200. `status` inside the body is the answer; a non-200 here would
+    // be indistinguishable from the proxy in front of Syl being unhappy, and
+    // "degraded" is information a monitor should read, not a failure it should
+    // retry through.
+    sendOk(response, body);
   });
 
   return router;

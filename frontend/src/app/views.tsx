@@ -5,16 +5,15 @@ import { NAV_ITEMS, type NavItem, type NavStatus } from "./nav";
 
 /**
  * The landing view. Deliberately small: it says what is wired, what is not,
- * and which bead owns each gap. The viewers themselves are `syl-004.2.*` and
- * are blocked on the API contract.
+ * and which bead owns each section.
  */
 export function OverviewView(): ReactElement {
   return (
     <section className="view">
       <h1 className="view__title">Overview</h1>
       <p className="view__lede">
-        The admin shell is up. The viewers below land as their beads close — each one needs the
-        OpenAPI contract in <code>shared/</code>, which is being written now.
+        A development instrument, not a product surface. Every shape it renders comes from the
+        OpenAPI contract in <code>shared/</code>; nothing here describes a payload of its own.
       </p>
 
       <table className="table">
@@ -44,15 +43,21 @@ export function OverviewView(): ReactElement {
   );
 }
 
-/** A section that is routed and navigable but has no data behind it yet. */
+/**
+ * A section that is routed and navigable but has no viewer behind it yet.
+ *
+ * Every section currently has one, so this is the fallback for the *next* one
+ * added: `App.tsx` falls back to it for any nav path with no entry in `VIEWS`,
+ * which keeps the sidebar and the route table from drifting apart while a
+ * viewer is being built.
+ */
 export function PlaceholderView({ item }: { item: NavItem }): ReactElement {
   return (
     <section className="view">
       <h1 className="view__title">{item.label}</h1>
       <p className="view__lede">{item.summary}</p>
       <div className="notice">
-        Not built yet — owned by bead <code>{item.bead}</code>, which is blocked on the API
-        contract.
+        Not built yet — owned by bead <code>{item.bead}</code>.
       </div>
     </section>
   );

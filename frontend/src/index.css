@@ -142,6 +142,10 @@ code,
   max-width: 62ch;
 }
 
+.view--wide {
+  max-width: none;
+}
+
 .notice {
   padding: var(--syl-space-3) var(--syl-space-4);
   background: var(--syl-bg-panel);
@@ -149,6 +153,77 @@ code,
   border-left: 3px solid var(--syl-state-pending);
   border-radius: var(--syl-radius);
   color: var(--syl-text-secondary);
+}
+
+/* A failed request and an empty result must never look alike — this is an
+   instrument, and "nothing to show" is a different fact from "we could not
+   ask". */
+.notice--fail {
+  border-left-color: var(--syl-state-fail);
+  margin-bottom: var(--syl-space-4);
+}
+
+.notice__head {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-3);
+  color: var(--syl-state-fail);
+}
+
+.notice__body {
+  margin: var(--syl-space-2) 0 0;
+  color: var(--syl-text-primary);
+}
+
+.notice__meta {
+  margin: var(--syl-space-1) 0 0;
+  color: var(--syl-text-muted);
+}
+
+.feedback {
+  margin: 0;
+  padding: var(--syl-space-4);
+  color: var(--syl-text-muted);
+}
+
+.feedback--empty {
+  border: var(--syl-border-width) dashed var(--syl-border);
+  border-radius: var(--syl-radius);
+}
+
+/* --------------------------------------------------------------- toolbar */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-3);
+  margin-bottom: var(--syl-space-3);
+}
+
+.toolbar__count {
+  margin-left: auto;
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+}
+
+/* ---------------------------------------------------------------- banner */
+
+/* The outbox answers its own question before a row is read: this sits above
+   the table and is toned by the worst standing on the page. */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--syl-space-4);
+  padding: var(--syl-space-3) var(--syl-space-4);
+  background: var(--syl-bg-panel);
+  border: var(--syl-border-width) solid var(--syl-border);
+  border-radius: var(--syl-radius);
+}
+
+.banner__counts {
+  color: var(--syl-text-muted);
 }
 
 /* ----------------------------------------------------------------- table */
@@ -198,6 +273,115 @@ code,
 
 .table__prose {
   color: var(--syl-text-secondary);
+}
+
+/* Density is the point of this surface: more rows visible beats more air. */
+.table--dense th,
+.table--dense td {
+  padding: var(--syl-space-1) var(--syl-space-3);
+  vertical-align: baseline;
+}
+
+.row:hover {
+  background: var(--syl-bg-raised);
+}
+
+.row--selected {
+  background: var(--syl-accent-soft);
+}
+
+.row--step {
+  background: var(--syl-bg-inset);
+}
+
+/* An unacknowledged delivery is the one thing on this surface that must never
+   be scanned past. */
+.row--unconfirmed th {
+  border-left: 3px solid var(--syl-state-warn);
+}
+
+.row__sub {
+  display: inline-block;
+  margin-left: var(--syl-space-2);
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+  font-weight: 400;
+}
+
+.cell--late {
+  color: var(--syl-state-warn);
+}
+
+.cell--error {
+  color: var(--syl-state-fail);
+}
+
+/* ----------------------------------------------------------- badge, link */
+
+.badge {
+  display: inline-block;
+  padding: 0 var(--syl-space-2);
+  border: var(--syl-border-width) solid currentcolor;
+  border-radius: var(--syl-radius);
+  font-size: var(--syl-text-size-small);
+  white-space: nowrap;
+}
+
+/* A button that reads as a link: the row action is a selection, not a
+   navigation the browser should treat as one. */
+.link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--syl-accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+/* ---------------------------------------------------------------- detail */
+
+.detail {
+  margin-top: var(--syl-space-5);
+  padding-top: var(--syl-space-4);
+  border-top: var(--syl-border-width) solid var(--syl-border-strong);
+}
+
+.detail__head {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-3);
+  margin-bottom: var(--syl-space-3);
+}
+
+.detail__title {
+  margin: 0;
+  margin-right: auto;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.detail__id {
+  color: var(--syl-text-muted);
+  font-weight: 400;
+}
+
+.detail__note {
+  margin: 0 0 var(--syl-space-3);
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+}
+
+/* Message text is prose and wraps; every other cell in these tables is a
+   value that must not. */
+.cell--wrap {
+  white-space: pre-wrap;
+  min-width: 24rem;
 }
 
 /* ---------------------------------------------------------------- status */

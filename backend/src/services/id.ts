@@ -1,0 +1,149 @@
+import { randomFillSync } from "node:crypto";
+
+import { systemClock, type Clock } from "./clock.js";
+
+/**
+ * Identifiers: `syl:<type>:<uuidv7>`.
+ *
+ * Type-prefixed so a dangling reference is legible in a log line — `syl:todo:…`
+ * in a column that should hold a reminder is a bug you can see rather than one
+ * you have to join a table to find. UUIDv7 so ids sort by creation time, which
+ * is what lets a cursor be an id instead of an offset.
+ *
+ * The convention is fixed before the first row is written, because every graph
+ * edge in the system will reference it forever.
+ */
+
+/** The resource types that get ids. Closed, so a typo is a compile error. */
+export type IdType =
+  | "principal"
+  | "apikey"
+  | "conversation"
+  | "message"
+  | "reminder"
+  | "todo"
+  | "goal"
+  | "device"
+  | "delivery"
+  | "job"
+  | "run"
+  | "step";
+
+/**
+ * `syl:<type>:<uuid>`, matching the contract's `Id` pattern exactly.
+ *
+ * The contract permits either hex case, so this accepts either: a validator at
+ * the API boundary that is stricter than the contract rejects requests a
+ * conforming client is entitled to make. Syl only ever *mints* lowercase, so
+ * the two never disagree on anything it wrote itself.
+ */
+const SYL_ID =
+  /^syl:([a-z][a-z_]*):([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
+
+/** Bytes of entropy in a UUID. */
+const UUID_BYTES = 16;
+
+/** Fills a buffer with random bytes. Injectable so tests can be exact. */
+export type Entropy = (into: Uint8Array) => void;
+
+/** The real one. */
+export const systemEntropy: Entropy = (into) => {
+  randomFillSync(into);
+};
+
+/**
+ * A UUIDv7 generator with monotonic ordering inside a millisecond.
+ *
+ * RFC 9562 leaves sub-millisecond ordering to the implementation. Left purely
+ * random, two ids minted in the same millisecond sort arbitrarily against each
+ * other — which is invisible until a cursor built from an id starts skipping
+ * or repeating a row under load. This uses the RFC's "replace leftmost random
+ * bits with an increased counter" method: within a millisecond the 12-bit
+ * `rand_a` field counts up instead of being redrawn.
+ *
+ * The clock going backwards (NTP correction, a laptop waking in another
+ * timezone) is handled by holding the last timestamp rather than emitting an
+ * id that sorts before its predecessor. Time can move back; the sequence
+ * cannot.
+ */
+export function createUuidV7(
+  clock: Clock = systemClock,
+  entropy: Entropy = systemEntropy,
+): () => string {
+  let lastMs = -1;
+  let counter = 0;
+
+  return function uuidv7(): string {
+    const now = clock();
+
+    if (now > lastMs) {
+      lastMs = now;
+      counter = 0;
+    } else {
+      // Same millisecond, or the clock stepped backwards. Either way the
+      // timestamp we emit is the one we already emitted, and the counter is
+      // what keeps this id after the last.
+      counter += 1;
+      if (counter > 0xfff) {
+        // 4096 ids in one millisecond. Borrow from the next millisecond
+        // rather than wrapping, which would emit a duplicate.
+        lastMs += 1;
+        counter = 0;
+      }
+    }
+
+    const bytes = new Uint8Array(UUID_BYTES);
+    entropy(bytes);
+
+    const timestamp = BigInt(lastMs);
+    bytes[0] = Number((timestamp >> 40n) & 0xffn);
+    bytes[1] = Number((timestamp >> 32n) & 0xffn);
+    bytes[2] = Number((timestamp >> 24n) & 0xffn);
+    bytes[3] = Number((timestamp >> 16n) & 0xffn);
+    bytes[4] = Number((timestamp >> 8n) & 0xffn);
+    bytes[5] = Number(timestamp & 0xffn);
+
+    // Version 7 in the high nibble of byte 6, then the counter across the
+    // remaining 12 bits of `rand_a`.
+    bytes[6] = 0x70 | ((counter >> 8) & 0x0f);
+    bytes[7] = counter & 0xff;
+
+    // Variant 10 in the top two bits of byte 8. `noUncheckedIndexedAccess`
+    // makes the read optional; a 16-byte array always has index 8.
+    bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+
+    return formatUuid(bytes);
+  };
+}
+
+/** The process-wide generator. */
+export const uuidv7 = createUuidV7();
+
+/** Hyphenate 16 bytes into the canonical UUID text form. */
+function formatUuid(bytes: Uint8Array): string {
+  const hex = Buffer.from(bytes).toString("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join("-");
+}
+
+/** Mint an id for a resource type. */
+export function newId(type: IdType, generate: () => string = uuidv7): string {
+  return `syl:${type}:${generate()}`;
+}
+
+/** Whether a string is a well-formed id, optionally of a particular type. */
+export function isId(value: string, type?: IdType): boolean {
+  const match = SYL_ID.exec(value);
+  if (match === null) return false;
+  return type === undefined || match[1] === type;
+}
+
+/** The type segment of an id, or `null` if it is not one. */
+export function idType(value: string): string | null {
+  return SYL_ID.exec(value)?.[1] ?? null;
+}

@@ -3,16 +3,31 @@
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement as h } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../../src/app/App";
 import { NAV_ITEMS } from "../../src/app/nav";
+import { PlaceholderView } from "../../src/app/views";
 import { API_KEY_STORAGE_KEY } from "../../src/auth/api-key-store";
 import { createMemoryStorage } from "../../src/storage";
 import type { StorageLike } from "../../src/storage";
 
+beforeEach(() => {
+  // Every section is now a live viewer that fetches on mount; the shell's own
+  // behaviour is what these tests are about, so the network is stubbed out.
+  vi.stubGlobal("fetch", () =>
+    Promise.resolve(
+      new Response(JSON.stringify({ success: true, data: { items: [], nextCursor: null, hasMore: false } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ),
+  );
+});
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   window.history.pushState({}, "", "/");
 });
 
@@ -46,15 +61,25 @@ describe("App", () => {
     expect(screen.getByRole("heading", { level: 1, name: /overview/i })).toBeTruthy();
   });
 
-  it("should route to a planned view and say which bead owns it", () => {
+  it("should route every section to a heading of its own", () => {
     render(h(App, { storage: authenticatedStorage() }));
-    const planned = NAV_ITEMS.find((item) => item.status === "planned");
-    if (!planned) throw new Error("expected at least one planned nav item");
 
-    fireEvent.click(screen.getByRole("link", { name: planned.label }));
+    for (const item of NAV_ITEMS.filter((entry) => entry.path !== "/")) {
+      fireEvent.click(screen.getByRole("link", { name: item.label }));
+      expect(screen.getByRole("heading", { level: 1, name: item.label })).toBeTruthy();
+    }
+  });
 
-    expect(screen.getByRole("heading", { level: 1, name: planned.label })).toBeTruthy();
-    expect(screen.getByText(new RegExp(planned.bead))).toBeTruthy();
+  it("should name the bead behind a section that has no viewer yet", () => {
+    // Every section has one today; this is the fallback App.tsx uses for the
+    // next one added, so the sidebar and the route table cannot drift apart
+    // while a viewer is being built.
+    const item = NAV_ITEMS[1];
+    if (item === undefined) throw new Error("expected a nav item");
+    render(h(PlaceholderView, { item }));
+
+    expect(screen.getByRole("heading", { level: 1, name: item.label })).toBeTruthy();
+    expect(screen.getByText(new RegExp(item.bead))).toBeTruthy();
   });
 
   it("should show a not-found view for an unknown path", () => {
