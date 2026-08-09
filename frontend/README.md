@@ -10,11 +10,23 @@ and clarity; polish is not the goal, and neither is Adjutant's CRT aesthetic.
 ## Commands
 
 ```sh
-npm run dev -w frontend        # vite dev server on 4210, /api proxied to 4201
+npm run dev -w frontend        # vite dev server on 4211, /api proxied to 4201
 npm run build -w frontend
 npm test -w frontend
 npm run typecheck -w frontend
 ```
+
+Against the mock instead of the backend — which is how this workspace is meant
+to be developed, and what its tests decode:
+
+```sh
+npm run mock                                     # 127.0.0.1:4210/api/v1
+SYL_API_ORIGIN=http://127.0.0.1:4210 npm run dev -w frontend
+```
+
+The dev server is on **4211, not 4210**: `npm run mock` binds 4210 and
+`shared/openapi.yaml` names it in `servers[]`, so a dev server there collides
+with the thing it is pointed at.
 
 `npm test` and `npm run typecheck` from the repo root cover this workspace too,
 and the root run is what CI gates on.
@@ -31,9 +43,14 @@ src/theme/ThemeProvider.tsx  holds the theme name, stamps data-theme
 src/auth/api-key-store.ts  read/write/clear the admin API key
 src/auth/AuthProvider.tsx  useAuth(): apiKey, signIn, signOut
 src/auth/ApiKeyGate.tsx    the whole of the sign-in surface
-src/api/base-url.ts        API_BASE_URL, from VITE_API_BASE_URL
+src/api/base-url.ts        API_BASE_URL, from VITE_API_BASE_URL. Ends at /v1
 src/api/authed-fetch.ts    bearer header + URL join. Nothing else — see below
 src/api/use-authed-fetch.ts  the above, wired to the stored key and sign-out
+src/api/errors.ts          the failure taxonomy + envelope unwrapping
+src/api/retry.ts           the backoff policy. Reads only — see below
+src/api/client.ts          the typed read client, shapes from @syl/shared/types
+src/api/use-admin-client.ts  the client, wired to the stored key
+src/api/use-resource.ts    one request's lifecycle: data, error, loading, reload
 src/app/nav.ts             the section list, as data
 src/app/App.tsx            providers, router, and the route table
 src/app/AppLayout.tsx      the chrome
@@ -64,8 +81,32 @@ would work locally and do nothing in CI.
 
 **API types are not written by hand.** They are generated into `shared/` from
 `shared/openapi.yaml`. `authed-fetch.ts` is deliberately the transport and
-nothing more — no parsing, no error taxonomy, no endpoint helpers. The typed
-admin client is `syl-004.1.2` and the viewers are `syl-004.2.*`.
+nothing more — no parsing, no error taxonomy, no endpoint helpers; `client.ts`
+adds exactly those three things on top, and **describes no payload of its own**.
+If a shape looks wrong, it is wrong in `shared/openapi.yaml`; report it there
+rather than patching a type here.
+
+**The fixtures are the test data.** `tests/helpers/fixtures.ts` reads
+`shared/fixtures/*.json` — the same bytes the mock serves and the Swift suite
+decodes. It reads them off disk rather than through `@syl/shared/fixtures`,
+because that module resolves paths from `import.meta.url`, which under jsdom is
+an `http:` URL and throws before a byte is read.
+
+## The API client
+
+`shared/openapi.yaml` is explicit that **`error.code` is the contract and the
+HTTP status is advisory**, so `errors.ts` branches on the envelope and never on
+the status line: a `success: false` body is a failure at 200. Three failure
+kinds beyond that — `network` (no response at all, retryable, because the
+Tailscale extension is torn down when idle), `malformed` (a response that is
+not an envelope) and `unknown`.
+
+`retry.ts` retries only what the server marked `retryable`, treats
+`retryAfterMs` as a floor that outranks the local cap, and jitters. It applies
+to **reads only**: every write in the contract requires an `Idempotency-Key`,
+and a retry loop without one turns a timeout into a duplicate. That is why the
+client is read-only — a write surface must carry the key before it may reuse
+the policy.
 
 ## Auth
 
