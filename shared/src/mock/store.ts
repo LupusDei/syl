@@ -66,6 +66,12 @@ export interface Page<T> {
   readonly hasMore: boolean;
 }
 
+/**
+ * A change log row: which resource changed, and when. Never what it became —
+ * see `MockStore.record`.
+ */
+type SyncLogEntry = Omit<SyncChange, "resource">;
+
 /** A change the WebSocket should broadcast as a result of a write. */
 export type Broadcast =
   | { readonly kind: "message"; readonly message: Message }
@@ -82,7 +88,7 @@ export class MockStore {
   jobs: Job[];
   runs: Run[];
   readonly principal: Principal;
-  private changes: SyncChange[] = [];
+  private changes: SyncLogEntry[] = [];
 
   constructor() {
     this.conversations = clone(data<Page<Conversation>>("http/conversations.page").items) as Conversation[];
@@ -165,7 +171,7 @@ export class MockStore {
       seq,
     };
     this.messages.push(message);
-    this.record("message", "upsert", message.id, at, message);
+    this.record("message", "upsert", message.id, at);
 
     const reply: Message = {
       id: mockId("message"),
@@ -177,7 +183,7 @@ export class MockStore {
       seq: seq + 1,
     };
     this.messages.push(reply);
-    this.record("message", "upsert", reply.id, reply.createdAt, reply);
+    this.record("message", "upsert", reply.id, reply.createdAt);
 
     if (conversation !== undefined) {
       const updated: Conversation = {
@@ -235,7 +241,7 @@ export class MockStore {
       completedAt: null,
     };
     this.reminders.unshift(reminder);
-    this.record("reminder", "upsert", reminder.id, at, reminder);
+    this.record("reminder", "upsert", reminder.id, at);
     return reminder;
   }
 
@@ -308,7 +314,7 @@ export class MockStore {
 
   private replaceReminder(updated: Reminder): void {
     this.reminders = this.reminders.map((r) => (r.id === updated.id ? updated : r));
-    this.record("reminder", "upsert", updated.id, updated.updatedAt, updated);
+    this.record("reminder", "upsert", updated.id, updated.updatedAt);
   }
 
   // -------------------------------------------------------------- todos ---
@@ -334,7 +340,7 @@ export class MockStore {
       completedAt: null,
     };
     this.todos.unshift(todo);
-    this.record("todo", "upsert", todo.id, at, todo);
+    this.record("todo", "upsert", todo.id, at);
     return todo;
   }
 
@@ -346,7 +352,7 @@ export class MockStore {
       if (patch[key] !== undefined) (updated as Record<string, unknown>)[key] = patch[key];
     }
     this.todos = this.todos.map((t) => (t.id === id ? updated : t));
-    this.record("todo", "upsert", id, updated.updatedAt, updated);
+    this.record("todo", "upsert", id, updated.updatedAt);
     return updated;
   }
 
@@ -356,7 +362,7 @@ export class MockStore {
     if (existing === undefined) return undefined;
     const updated: Todo = { ...existing, status: "done", completedAt: at, updatedAt: at };
     this.todos = this.todos.map((t) => (t.id === id ? updated : t));
-    this.record("todo", "upsert", id, at, updated);
+    this.record("todo", "upsert", id, at);
     return updated;
   }
 
@@ -383,7 +389,7 @@ export class MockStore {
       updatedAt: at,
     };
     this.goals.unshift(goal);
-    this.record("goal", "upsert", goal.id, at, goal);
+    this.record("goal", "upsert", goal.id, at);
     return goal;
   }
 
@@ -411,7 +417,7 @@ export class MockStore {
       lastSeenAt: at,
     };
     this.devices.unshift(device);
-    this.record("device", "upsert", device.id, at, device);
+    this.record("device", "upsert", device.id, at);
     return device;
   }
 
@@ -420,7 +426,7 @@ export class MockStore {
     if (existing === undefined) return undefined;
     const updated: Device = { ...existing, active: false, lastSeenAt: nowIso() };
     this.devices = this.devices.map((d) => (d.id === id ? updated : d));
-    this.record("device", "upsert", id, updated.lastSeenAt, updated);
+    this.record("device", "upsert", id, updated.lastSeenAt);
     return updated;
   }
 
@@ -452,7 +458,7 @@ export class MockStore {
       nextAttemptAt: null,
     };
     this.deliveries = this.deliveries.map((d) => (d.id === id ? updated : d));
-    this.record("delivery", "upsert", id, updated.ackedAt as string, updated);
+    this.record("delivery", "upsert", id, updated.ackedAt as string);
 
     if (existing.reminderId !== null) {
       this.setReminderState(existing.reminderId, "acknowledged");
@@ -476,22 +482,55 @@ export class MockStore {
 
   // --------------------------------------------------------------- sync ---
 
-  private record(
-    type: SyncChange["type"],
-    op: SyncChange["op"],
-    id: string,
-    at: string,
-    resource: unknown,
-  ): void {
-    this.changes.push({ type, op, id, at, resource: resource as SyncChange["resource"] });
+  /**
+   * One entry in the change log: *that* something changed, never *what to*.
+   *
+   * The resource is resolved when a response is built, which is what the
+   * contract means by "state, not history" — and what the real service does,
+   * because its log is a table of `(seq, type, id, at)` with the row read back
+   * through the store that owns it. A mock that stored snapshots instead would
+   * hand a slow-paging client a replay of history and a fast one the current
+   * state, and only one of those matches production.
+   */
+  private record(type: SyncChange["type"], op: SyncChange["op"], id: string, at: string): void {
+    this.changes.push({ type, op, id, at });
+  }
+
+  /** The resource behind a log entry, or `undefined` if it is gone. */
+  private resolve(type: SyncChange["type"], id: string): unknown {
+    switch (type) {
+      case "conversation":
+        return this.conversation(id);
+      case "message":
+        return this.messages.find((message) => message.id === id);
+      case "reminder":
+        return this.reminder(id);
+      case "todo":
+        return this.todo(id);
+      case "goal":
+        return this.goal(id);
+      case "device":
+        return this.device(id);
+      case "delivery":
+        return this.delivery(id);
+      case "job":
+        return this.job(id);
+      case "run":
+        return this.run(id);
+    }
   }
 
   /**
-   * Cursor sync. The cursor is an opaque base64 offset into the change log.
+   * Cursor sync. The cursor is an opaque base64 position in the change log.
    *
    * Deliberately paged at a small default so a client that ignores `hasMore`
    * fails here rather than in the field, where the symptom is a device that
    * silently believes it is up to date.
+   *
+   * @throws {MockCursorError} on a cursor this mock did not issue. Returning
+   * "start from the beginning" instead — which this used to do — is the exact
+   * behaviour that lets a client ship without ever handling the refusal the
+   * real service answers with.
    */
   sync(since: string | undefined, limit: number): {
     cursor: string;
@@ -505,7 +544,14 @@ export class MockStore {
     return {
       cursor: encodeCursor(next),
       hasMore: next < this.changes.length,
-      changes: slice,
+      changes: slice.map((entry) => {
+        const resource = this.resolve(entry.type, entry.id);
+        return {
+          ...entry,
+          op: resource === undefined ? "delete" : entry.op,
+          resource: (resource ?? null) as SyncChange["resource"],
+        };
+      }),
       serverTime: nowIso(),
     };
   }
@@ -515,18 +561,31 @@ export class MockStore {
   }
 }
 
+/** Thrown when the mock is handed a cursor it did not issue. */
+export class MockCursorError extends Error {
+  constructor() {
+    super("That sync cursor is not one this service issued.");
+    this.name = "MockCursorError";
+  }
+}
+
 function encodeCursor(offset: number): string {
   return Buffer.from(JSON.stringify({ o: offset }), "utf8").toString("base64url");
 }
 
 function decodeCursor(cursor: string | undefined): number {
   if (cursor === undefined || cursor === "") return 0;
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as { o?: number };
-    return typeof parsed.o === "number" && parsed.o >= 0 ? parsed.o : 0;
+    parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
   } catch {
-    return 0;
+    throw new MockCursorError();
   }
+  const offset = (parsed as { o?: unknown } | null)?.o;
+  if (typeof offset !== "number" || !Number.isInteger(offset) || offset < 0) {
+    throw new MockCursorError();
+  }
+  return offset;
 }
 
 /** Wrap a list as a single page. The mock does not paginate list endpoints. */

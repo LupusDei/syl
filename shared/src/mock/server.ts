@@ -16,7 +16,7 @@ import {
   type Scenario,
   scenarioFromHeaders,
 } from "./scenario.js";
-import { type Broadcast, MockStore, nowIso, page } from "./store.js";
+import { type Broadcast, MockCursorError, MockStore, nowIso, page } from "./store.js";
 
 /**
  * The mock server.
@@ -307,7 +307,26 @@ export class MockServer {
 
     syncSinceCursor: ({ query, store }) => {
       const limit = Number(query.get("limit") ?? "50");
-      return ok(store.sync(query.get("since") ?? undefined, Number.isFinite(limit) ? limit : 50));
+      if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+        return {
+          ok: false,
+          status: 400,
+          code: "VALIDATION_FAILED",
+          message: "limit must be a whole number between 1 and 200.",
+        };
+      }
+      try {
+        return ok(store.sync(query.get("since") ?? undefined, limit));
+      } catch (error) {
+        // The mock used to read an unknown cursor as "start from the
+        // beginning". The real service refuses, and a client built against the
+        // forgiving version ships without ever handling the refusal — which is
+        // the whole failure mode `syl-c1m` is about, one layer in.
+        if (error instanceof MockCursorError) {
+          return { ok: false, status: 400, code: "VALIDATION_FAILED", message: error.message };
+        }
+        throw error;
+      }
     },
   };
 

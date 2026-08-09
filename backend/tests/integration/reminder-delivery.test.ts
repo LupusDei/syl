@@ -7,17 +7,20 @@ import {
   createReminderDeliveryHandler,
   defineReminderDeliveryJob,
 } from "../../src/jobs/reminder-delivery-job.js";
-import { createApp } from "../../src/index.js";
+import { createApp, syncResolvers } from "../../src/index.js";
 import { IntakeStore } from "../../src/connections/intake-store.js";
 import { ArticleIntake } from "../../src/connections/intake.js";
 import { ApnsClient } from "../../src/services/apns-service.js";
 import { DeviceTokenService } from "../../src/services/device-token-service.js";
+import { GoalService } from "../../src/services/goal-service.js";
 import { IdempotencyStore } from "../../src/services/idempotency.js";
 import { JobRunner, type JobHandler, type Timers } from "../../src/services/job-runner.js";
 import { JobStore } from "../../src/services/job-store.js";
 import { MessageStore } from "../../src/services/message-store.js";
 import { Outbox } from "../../src/services/outbox.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
+import { SyncService } from "../../src/services/sync-service.js";
+import { TodoService } from "../../src/services/todo-service.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import { startFakeApns, type FakeApns } from "../helpers/fake-apns.js";
 import { startTestApp, type RunningApp } from "../helpers/http.js";
@@ -118,8 +121,10 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
     reminders = new ReminderService({ db: db.handle, clock });
     jobs = new JobStore({ db: db.handle, clock });
     const keys = testKeys(db, { clock });
-
     const messages = new MessageStore({ db: db.handle, clock });
+    const todos = new TodoService({ db: db.handle, clock });
+    const goals = new GoalService({ db: db.handle, clock });
+
     running = await startTestApp(
       createApp(testConfig(), {
         keys,
@@ -128,6 +133,13 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         devices,
         outbox,
         reminders,
+        todos,
+        goals,
+        sync: new SyncService({
+          db: db.handle,
+          clock,
+          resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs }),
+        }),
         jobs,
         idempotency: new IdempotencyStore({ db: db.handle, clock }),
         intake: new ArticleIntake({ store: new IntakeStore({ db: db.handle, clock }), clock }),

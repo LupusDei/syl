@@ -39,9 +39,12 @@ import { createLogger, type Logger } from "./ops/logging.js";
 import { assessPower, describePower } from "./ops/power.js";
 import { installShutdownHandlers } from "./ops/shutdown.js";
 import { tailnetCertProbe } from "./ops/tailnet-cert.js";
+import { createGoalRouter } from "./routes/goals.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
 import { createJobRouter } from "./routes/jobs.js";
 import { createReminderRouter } from "./routes/reminders.js";
+import { createSyncRouter } from "./routes/sync.js";
+import { createTodoRouter } from "./routes/todos.js";
 import { fileSessionStore, memorySessionStore, SylAgent } from "./harness/agent.js";
 import type { TurnOptions, TurnRunner } from "./harness/session.js";
 import { apnsCredentialsFromEnv } from "./services/apns-service.js";
@@ -51,12 +54,15 @@ import { ConversationService } from "./services/conversation-service.js";
 import { IN_MEMORY, openDatabase, type SylDatabase } from "./services/database.js";
 import type { Timers } from "./services/job-runner.js";
 import { DeviceTokenService } from "./services/device-token-service.js";
+import { GoalService } from "./services/goal-service.js";
 import { IdempotencyStore } from "./services/idempotency.js";
 import { JobStore } from "./services/job-store.js";
 import { MessageStore } from "./services/message-store.js";
 import { Outbox } from "./services/outbox.js";
 import { PresenceService } from "./services/presence.js";
 import { ReminderService } from "./services/reminder-service.js";
+import { SyncService, type SyncResolvers } from "./services/sync-service.js";
+import { TodoService } from "./services/todo-service.js";
 import { SylSocketServer, WS_PATH } from "./services/ws-server.js";
 
 /**
@@ -117,12 +123,23 @@ export function toFailure(error: unknown): ApiFailure {
   return new ApiFailure("VALIDATION_FAILED", "That request could not be parsed.");
 }
 
+/**
+ * What the terminal 404 says, as a constant.
+ *
+ * This is a **discriminator**, not a message. Every mounted route answers
+ * *something* — a typed refusal, an authentication failure, a page — and only
+ * an unmounted path falls all the way through to here. That makes this exact
+ * string the one reliable way to ask "is this path routed at all?" over HTTP,
+ * which is what `contract-conformance.test.ts` walks the whole contract
+ * asking. Exported so the guard matches the service's own value rather than a
+ * copy of its prose: a test that asserts on a string it also authored proves
+ * nothing about the service (`syl-c1m`).
+ */
+export const NO_ROUTE_MESSAGE = "No route on this service matches that request.";
+
 /** Anything unmatched is a contract 404, not an HTML page. */
 export const notFound: RequestHandler = (_request, response) => {
-  sendFailure(
-    response,
-    new ApiFailure("NOT_FOUND", "No route on this service matches that request."),
-  );
+  sendFailure(response, new ApiFailure("NOT_FOUND", NO_ROUTE_MESSAGE));
 };
 
 /**
@@ -167,6 +184,12 @@ export interface AppDependencies {
   readonly outbox: Outbox;
   /** Reminders, and the deferral invariant. */
   readonly reminders: ReminderService;
+  /** To-dos: what *he* must do, as opposed to what Syl must do. */
+  readonly todos: TodoService;
+  /** Goals, and the tree they self-nest into. */
+  readonly goals: GoalService;
+  /** The change feed a device that has been offline catches up from. */
+  readonly sync: SyncService;
   /** Scheduled work, its runs, and the lateness of each. */
   readonly jobs: JobStore;
   /** The ledger that makes every write safe to retry. */
@@ -209,7 +232,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // Destructured in full, and reached through the names below rather than
   // through `deps.` — see the note on `AppDependencies`. Removing a use here
   // without removing the field does not compile.
-  const { keys, messages, chat, devices, outbox, reminders, jobs, idempotency, intake, probes } =
+  const { keys, messages, chat, devices, outbox, reminders, todos, goals, sync, jobs, idempotency, intake, probes } =
     deps;
   const app = express();
 
@@ -232,6 +255,10 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   api.use(createDeviceRouter({ devices, idempotency, authenticate }));
   api.use(createDeliveryRouter({ outbox, reminders, idempotency, authenticate }));
   api.use(createReminderRouter({ reminders, idempotency, authenticate }));
+  api.use(createTodoRouter({ todos, idempotency, authenticate }));
+  api.use(createGoalRouter({ goals, idempotency, authenticate }));
+  // Read-only, so no idempotency ledger: there is nothing here to run twice.
+  api.use(createSyncRouter({ sync, authenticate }));
   api.use(createJobRouter({ jobs, authenticate }));
   api.use(createIntakeRouter({ intake, idempotency, authenticate }));
 
@@ -455,7 +482,14 @@ export function bootstrap(
   // that throws the first time the delivery handler defers something.
   const outbox = new Outbox({ db: database.handle, clock, quietHours: config.quietHours });
   const reminders = new ReminderService({ db: database.handle, clock });
+  const todos = new TodoService({ db: database.handle, clock });
+  const goals = new GoalService({ db: database.handle, clock });
   const jobs = new JobStore({ db: database.handle, clock });
+  // The sync feed reads every resource through the store that owns it, rather
+  // than mapping rows a second time. A second mapping is a second place for
+  // the wire shape to drift, and drift between the contract and the service is
+  // the bug this whole endpoint was blocked behind (`syl-c1m`).
+  const sync = new SyncService({ db: database.handle, clock, resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs }) });
   // One zone for the whole service, and the one `loadConfig` has already
   // checked is a place rather than an offset. The quiet *window* stays
   // presence's own: `absent` is about whether Syl shows a character, which
@@ -497,6 +531,9 @@ export function bootstrap(
       devices,
       outbox,
       reminders,
+      todos,
+      goals,
+      sync,
       jobs,
       idempotency,
       intake,
@@ -504,6 +541,48 @@ export function bootstrap(
       intakeQueue,
       probes: [databaseProbe(database.handle)],
     },
+  };
+}
+
+/** The stores `GET /sync` reads each resource type through. */
+export interface SyncSources {
+  readonly messages: MessageStore;
+  readonly reminders: ReminderService;
+  readonly todos: TodoService;
+  readonly goals: GoalService;
+  readonly devices: DeviceTokenService;
+  readonly outbox: Outbox;
+  readonly jobs: JobStore;
+}
+
+/**
+ * Point each resource type at the store that owns it.
+ *
+ * Exported so a test can assert the map is **total** — `SyncResolvers` is a
+ * `Record` over the contract's `SyncResourceType`, so a type added to the
+ * contract without a source here does not compile, and one wired to the wrong
+ * store is what the round-trip test in `sync-service.test.ts` catches.
+ *
+ * Every function returns the resource's wire shape or `null`, and `null` is
+ * what `op: "delete"` is derived from.
+ */
+export function syncResolvers(sources: SyncSources): SyncResolvers {
+  const { messages, reminders, todos, goals, devices, outbox, jobs } = sources;
+  // Safe assertion: each store returns the contract type for that resource,
+  // and `SyncChange.resource` is that same object seen as an open record.
+  const as = <T>(value: T | null): Record<string, unknown> | null =>
+    value === null ? null : (value as unknown as Record<string, unknown>);
+
+  return {
+    conversation: (id) => as(messages.conversation(id)),
+    message: (id) => as(messages.get(id)),
+    reminder: (id) => as(reminders.get(id)),
+    todo: (id) => as(todos.get(id)),
+    goal: (id) => as(goals.get(id)),
+    device: (id) => as(devices.get(id)),
+    delivery: (id) => as(outbox.get(id)),
+    job: (id) => as(jobs.get(id)),
+    run: (id) => as(jobs.run(id)),
   };
 }
 

@@ -1,3 +1,5 @@
+import type { Express } from "express";
+
 import { loadSchemas, loadSpec, validateOrThrow } from "@syl/shared";
 
 /**
@@ -115,6 +117,81 @@ export function operation(operationId: string): SpecOperation {
   const found = specOperations().find((candidate) => candidate.operationId === operationId);
   if (found === undefined) throw new Error(`No operation named ${operationId} in the contract.`);
   return found;
+}
+
+/**
+ * One route Express will actually dispatch, as `METHOD /path`.
+ *
+ * Express's own spelling — `:todoId` — normalised to the contract's `{todoId}`
+ * so the two vocabularies can be compared as sets.
+ */
+export type MountedRoute = string;
+
+/** Express 5's router internals, named only as far as this walk needs them. */
+interface RouterLayer {
+  readonly route?: {
+    readonly path?: unknown;
+    readonly methods?: Readonly<Record<string, boolean>>;
+  };
+  readonly handle?: { readonly stack?: readonly RouterLayer[] };
+}
+
+/** `/todos/:todoId` -> `/todos/{todoId}`. */
+function toTemplate(path: string): string {
+  return path.replace(/:([A-Za-z_][A-Za-z0-9_]*)/gu, "{$1}");
+}
+
+/**
+ * Every route the built app will dispatch, read out of Express itself.
+ *
+ * The **reverse** of `specOperations()`, and the reason both exist: a contract
+ * check that only walks the spec catches a published endpoint nobody
+ * implemented, and is completely blind to an implemented endpoint nobody
+ * published. Syl has both kinds today (`syl-c1m`, `syl-21u`), which is what
+ * settled the argument that one direction was enough.
+ *
+ * Mount prefixes are deliberately **not** reconstructed. `createApp` mounts
+ * exactly one router, at the contract's base path, and says in its own comment
+ * that this is so a later route cannot land outside it — so a layer's path
+ * inside that router is already contract-relative. A second mount point would
+ * show up here as a route whose bare path the contract does not declare, which
+ * is the failure worth having rather than a false pass.
+ *
+ * @throws if the walk finds nothing. An introspection helper that quietly
+ * returns an empty set turns every assertion built on it green forever, which
+ * is precisely the class of vacuous test this file exists to prevent.
+ */
+export function mountedRoutes(app: Express): readonly MountedRoute[] {
+  const found = new Set<MountedRoute>();
+
+  const walk = (layers: readonly RouterLayer[] | undefined): void => {
+    for (const layer of layers ?? []) {
+      const path = layer.route?.path;
+      if (typeof path === "string") {
+        for (const [method, enabled] of Object.entries(layer.route?.methods ?? {})) {
+          // Express marks a `.get()` route as also answering HEAD. That is
+          // Express's business, not the contract's.
+          if (enabled && method !== "head" && method !== "_all") {
+            found.add(`${method.toUpperCase()} ${toTemplate(path)}`);
+          }
+        }
+      }
+      walk(layer.handle?.stack);
+    }
+  };
+
+  // Safe assertion: Express 5 exposes its root router as `app.router`; the
+  // shape is re-tested field by field by the walk, and an empty result throws.
+  const root = (app as unknown as { router?: { stack?: readonly RouterLayer[] } }).router;
+  walk(root?.stack);
+
+  if (found.size === 0) {
+    throw new Error(
+      "Walked the Express app and found no routes. Express's router internals have moved; " +
+        "fix this helper rather than letting every route check pass vacuously.",
+    );
+  }
+  return [...found].sort();
 }
 
 /**
