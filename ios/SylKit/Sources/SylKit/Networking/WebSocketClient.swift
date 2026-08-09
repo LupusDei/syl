@@ -1,0 +1,330 @@
+import Foundation
+
+/// The live connection to Syl.
+///
+/// The client is a thin driver over `SocketSession`, which holds everything subtle
+/// about the protocol and holds it purely. This type owns only the things that
+/// genuinely need the outside world: opening a socket, reading frames off it,
+/// keepalive, and reconnecting with backoff.
+///
+/// Reconnecting matters more here than it looks. The iOS Tailscale extension is torn
+/// down when idle, so the first attempt after a wake can fail while the tunnel
+/// re-establishes; every reconnect retries, and the state the app shows says
+/// "reconnecting (2)" rather than pretending nothing is wrong.
+public actor WebSocketClient {
+    public typealias Sleeper = @Sendable (TimeInterval) async throws -> Void
+
+    /// Raised when a caller tries to send over a socket that is not ready. The caller
+    /// falls back to `POST /conversations/{id}/messages`, which reconciles identically.
+    public struct NotConnected: Error, CustomStringConvertible {
+        public var description: String {
+            "the socket is not ready — send over HTTP and reconcile by clientId instead"
+        }
+    }
+
+    private let url: URL
+    private let connector: any WebSocketConnecting
+    private let tokenProvider: TokenProviding
+    private let reconnectPolicy: RetryPolicy
+    private let keepaliveInterval: TimeInterval
+    private let missedPongsBeforeDead: Int
+    private let sleeper: Sleeper
+    private let randomSampler: APIClient.RandomSampler
+    private let now: @Sendable () -> Date
+
+    private var session: SocketSession?
+    private var connection: (any WebSocketConnection)?
+    private var keepalive: Keepalive
+    private var presence = PresenceTimeline()
+    private var runTask: Task<Void, Never>?
+    private var keepaliveTask: Task<Void, Never>?
+    private var continuation: AsyncStream<SocketEvent>.Continuation?
+
+    /// The frame-stream high-water mark, kept across reconnects. This is what makes
+    /// "the phone was in a tunnel" a non-event rather than lost messages.
+    public private(set) var lastSeq: Int
+
+    /// The state the app should show. Offline is a state to design, not an error.
+    public private(set) var connectionState: SocketConnectionState = .idle
+
+    public init(
+        configuration: ServerConfiguration,
+        connector: any WebSocketConnecting = URLSessionWebSocketConnector(),
+        tokenProvider: TokenProviding,
+        lastSeq: Int = 0,
+        reconnectPolicy: RetryPolicy = .socketReconnect,
+        keepaliveInterval: TimeInterval = 30,
+        missedPongsBeforeDead: Int = 2,
+        sleeper: @escaping Sleeper = { seconds in
+            try await Task.sleep(nanoseconds: UInt64(max(seconds, 0) * 1_000_000_000))
+        },
+        randomSampler: @escaping APIClient.RandomSampler = { Double.random(in: 0...1) },
+        now: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        // `/ws` hangs off the same versioned base as the REST API, same origin and
+        // same token.
+        self.url = configuration.baseURL.appendingPathComponent("ws")
+        self.connector = connector
+        self.tokenProvider = tokenProvider
+        self.lastSeq = lastSeq
+        self.reconnectPolicy = reconnectPolicy
+        self.keepaliveInterval = keepaliveInterval
+        self.missedPongsBeforeDead = missedPongsBeforeDead
+        self.keepalive = Keepalive(
+            interval: keepaliveInterval,
+            missedPongsBeforeDead: missedPongsBeforeDead
+        )
+        self.sleeper = sleeper
+        self.randomSampler = randomSampler
+        self.now = now
+    }
+
+    // MARK: - Events
+
+    /// The event stream. One consumer; calling it again replaces the previous one.
+    public func events() -> AsyncStream<SocketEvent> {
+        AsyncStream { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    /// Syl's presence right now, decayed per the TTL rules.
+    public func presenceState() -> PresenceState {
+        presence.state(at: now())
+    }
+
+    // MARK: - Lifecycle
+
+    public func start() {
+        guard runTask == nil else { return }
+        runTask = Task { [weak self] in
+            await self?.run()
+        }
+    }
+
+    public func stop() {
+        runTask?.cancel()
+        runTask = nil
+        stopKeepalive()
+        connection?.close()
+        connection = nil
+        session = nil
+        presence.clear()
+        set(.idle)
+        continuation?.finish()
+    }
+
+    /// Sends over the socket. Throws `NotConnected` when it is not ready, which is the
+    /// caller's cue to use HTTP — the two paths reconcile identically by `clientId`.
+    public func send(
+        text: String,
+        conversationId: SylID,
+        clientId: String,
+        idempotencyKey: String
+    ) async throws {
+        guard let connection, session?.phase == .ready else { throw NotConnected() }
+        try await write(
+            .chatMessage(
+                WsClientChatMessage(
+                    clientId: clientId,
+                    conversationId: conversationId,
+                    text: text,
+                    idempotencyKey: idempotencyKey
+                )
+            ),
+            to: connection
+        )
+    }
+
+    // MARK: - The loop
+
+    private func run() async {
+        var attempt = 1
+
+        while !Task.isCancelled {
+            set(attempt == 1 ? .connecting : .reconnecting(attempt: attempt))
+
+            let outcome = await connectAndPump()
+            switch outcome {
+            case .stopped:
+                return
+            case .disconnected(let hadReachedReady):
+                stopKeepalive()
+                connection?.close()
+                connection = nil
+                session?.socketClosed()
+                // Presence does not survive a disconnection: a state held across the
+                // gap would assert something about now that stopped being true.
+                presence.clear()
+
+                if hadReachedReady { attempt = 1 }
+                guard !Task.isCancelled else { return }
+
+                set(attempt == 1 ? .offline : .reconnecting(attempt: attempt))
+                let delay = reconnectPolicy.delay(
+                    beforeAttempt: attempt + 1,
+                    randomSample: randomSampler()
+                )
+                do {
+                    try await sleeper(delay)
+                } catch {
+                    return
+                }
+                attempt += 1
+            }
+        }
+    }
+
+    private enum PumpOutcome {
+        /// A fatal error, or a deliberate stop. Do not reconnect.
+        case stopped
+        /// The socket went away. `hadReachedReady` resets the backoff, because a
+        /// connection that worked and then dropped is a different situation from one
+        /// that never came up.
+        case disconnected(hadReachedReady: Bool)
+    }
+
+    private func connectAndPump() async -> PumpOutcome {
+        guard let token = await tokenProvider.token() else {
+            set(.unauthenticated)
+            return .stopped
+        }
+
+        let connection: any WebSocketConnection
+        do {
+            connection = try await connector.connect(to: url)
+        } catch {
+            return .disconnected(hadReachedReady: false)
+        }
+
+        self.connection = connection
+        var session = SocketSession(token: token, lastSeq: lastSeq)
+        self.session = session
+        keepalive.reset()
+        startKeepalive()
+
+        var reachedReady = false
+
+        while !Task.isCancelled {
+            let text: String
+            do {
+                text = try await connection.receive()
+            } catch {
+                return .disconnected(hadReachedReady: reachedReady)
+            }
+
+            guard let frame = decodeFrame(text) else { continue }
+
+            if case .pong = frame { keepalive.pongReceived() }
+            if case .presence(let presenceFrame) = frame {
+                presence.record(presenceFrame, at: now())
+            }
+
+            let outcomes = session.receive(frame)
+            self.session = session
+            lastSeq = session.lastSeq
+            if session.phase == .ready { reachedReady = true }
+
+            for outcome in outcomes {
+                switch outcome {
+                case .emit(let event):
+                    if case .connectionState(let state) = event {
+                        set(state)
+                    } else {
+                        continuation?.yield(event)
+                    }
+                case .send(let frame):
+                    do {
+                        try await write(frame, to: connection)
+                    } catch {
+                        return .disconnected(hadReachedReady: reachedReady)
+                    }
+                case .stop:
+                    return .stopped
+                }
+            }
+        }
+        return .stopped
+    }
+
+    private func decodeFrame(_ text: String) -> WsServerFrame? {
+        do {
+            return try SylJSON.decoder().decode(WsServerFrame.self, from: Data(text.utf8))
+        } catch {
+            // An unrecognised frame is not a reason to drop a working socket. The
+            // service may have added a frame type; a client that closes on one is a
+            // client that breaks on a server deploy.
+            continuation?.yield(
+                .error(
+                    ApiError(
+                        code: .validationFailed,
+                        message: "Unreadable frame: \(error)",
+                        retryable: false
+                    ),
+                    fatal: false
+                )
+            )
+            return nil
+        }
+    }
+
+    private func write(_ frame: WsClientFrame, to connection: any WebSocketConnection) async throws {
+        let data = try SylJSON.encoder().encode(frame)
+        try await connection.send(String(decoding: data, as: UTF8.self))
+    }
+
+    private func set(_ state: SocketConnectionState) {
+        guard state != connectionState else { return }
+        connectionState = state
+        continuation?.yield(.connectionState(state))
+    }
+
+    // MARK: - Keepalive
+
+    private func startKeepalive() {
+        guard keepaliveInterval > 0 else { return }
+        keepaliveTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                do {
+                    try await self.sleepForKeepalive()
+                } catch {
+                    return
+                }
+                await self.pingOrGiveUp()
+            }
+        }
+    }
+
+    private func sleepForKeepalive() async throws {
+        try await sleeper(keepaliveInterval)
+    }
+
+    private func pingOrGiveUp() async {
+        guard let connection, session?.phase == .ready else { return }
+        guard keepalive.pingSent() else {
+            // Two missed pongs. The socket is gone whether or not it has admitted it;
+            // closing makes `receive` throw and the run loop reconnect.
+            connection.close()
+            return
+        }
+        try? await write(.ping(WsPing(ts: now())), to: connection)
+    }
+
+    private func stopKeepalive() {
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
+    }
+}
+
+extension RetryPolicy {
+    /// Socket reconnection: exponential backoff with jitter, **capped at 30 seconds**
+    /// and never giving up. A home Mac that is rebooting will be back; a client that
+    /// stopped trying would need the Commander to notice and relaunch the app.
+    public static let socketReconnect = RetryPolicy(
+        maxAttempts: .max,
+        baseDelay: 1,
+        maxDelay: 30,
+        multiplier: 2
+    )
+}

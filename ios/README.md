@@ -90,8 +90,32 @@ backend rule that the protocol codec stays pure.
 a local package's test target parses fine and is then silently skipped — xcodebuild
 reports success having run nothing. Hence two commands, and `scripts/test.sh`.
 
+## The socket
+
+`SocketSession` is the protocol as a **pure state machine** — no I/O, no timers, no
+`URLSession`. Everything subtle about this protocol is about sequencing, and none of
+it needs a server to be wrong, so none of it needs a server to be tested. Feed it a
+server frame, get back the frames to send and the events to emit.
+
+`WebSocketClient` is the thin driver around it: open a socket, read frames, keepalive,
+reconnect with backoff capped at 30 seconds and no attempt limit.
+`WebSocketConnecting` exists as a seam because `URLSessionWebSocketTask` cannot be
+intercepted — `MockURLProtocol` never sees a WebSocket upgrade — and without it, gap
+recovery would only be testable against a live server.
+
+The three rules worth knowing before touching it:
+
+- **Presence never advances the high-water mark**, and never triggers a `sync`.
+  Numbering it would force either a replay the rules forbid or a hole in the sequence
+  space, and holes are exactly how gap detection works.
+- **`complete: false` is not "caught up".** The gap is older than the server
+  remembers; the client emits `needsHTTPSync` and falls back to `GET /sync`.
+- **`sinceSeq` is not `since`.** The frame recovers a socket by sequence number; the
+  endpoint rebuilds a device store by opaque cursor. The names differ so they cannot
+  be conflated.
+
 ## Not built yet
 
-The WebSocket client, the local store, the app UI and the TestFlight pipeline are
-separate beads under `syl-003`. Model types come from the contract; writing them
-ahead of it produces guesses that have to be unwound.
+The local store, the app UI and the TestFlight pipeline are separate beads under
+`syl-003`. Model types come from the contract; writing them ahead of it produces
+guesses that have to be unwound.
