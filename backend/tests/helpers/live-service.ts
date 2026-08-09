@@ -246,6 +246,9 @@ export async function startLiveService(
     nodeEnv: "test",
     version: "0.1.0",
     databasePath,
+    // Absolute, and under the same temp directory as the store: a live-service
+    // test must not point Claude Code's memory at the developer's own.
+    autoMemoryDirectory: join(directory ?? tmpdir(), "memory"),
     credentialSource: "none",
     subscriptionRails: true,
     // Through the same validator `loadConfig` uses, so the harness cannot be

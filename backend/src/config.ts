@@ -3,6 +3,12 @@ import { createRequire } from "node:module";
 import type { PushEnvironment } from "@syl/shared";
 
 import type { QuietHours } from "./harness/schedule.js";
+import {
+  AUTO_MEMORY_ENV_VAR,
+  autoMemoryDirectoryFromEnv,
+  AutoMemoryPathError,
+  DEFAULT_AUTO_MEMORY_PATH,
+} from "./memory/auto-memory.js";
 import { defaultLogDirectory } from "./ops/logging.js";
 import { defaultCertStatusPath } from "./ops/tailnet-cert.js";
 
@@ -129,6 +135,17 @@ export interface SylConfig {
   readonly version: string;
   /** Where the SQLite operational store lives. */
   readonly databasePath: string;
+  /**
+   * Absolute path to Claude Code's auto-memory directory, from
+   * `SYL_AUTO_MEMORY_DIR` or `.syl/memory`.
+   *
+   * Absolute because a relative one is the one value the CLI throws away
+   * without a word — see `memory/auto-memory.ts`. Resolved at boot for the
+   * reason the whole of this module exists: a memory directory that turns out
+   * to be unusable at first use is discovered by the memories that quietly went
+   * somewhere else.
+   */
+  readonly autoMemoryDirectory: string;
   /**
    * Which environment variable would hand credentials to a child `claude`
    * process, in the CLI's own `apiKeySource` vocabulary. `"none"` means the
@@ -377,6 +394,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SylConfig {
     );
   }
 
+  // Collected like everything else rather than thrown from where it is read:
+  // a start that is wrong about the memory directory *and* the quiet window
+  // should say both once.
+  let autoMemoryDirectory = "";
+  try {
+    autoMemoryDirectory = autoMemoryDirectoryFromEnv(env);
+  } catch (error) {
+    problems.push(
+      error instanceof AutoMemoryPathError
+        ? `${AUTO_MEMORY_ENV_VAR}: ${error.message}`
+        : `${AUTO_MEMORY_ENV_VAR} could not be resolved: ${String(error)}. ` +
+            `Unset it for "${DEFAULT_AUTO_MEMORY_PATH}".`,
+    );
+  }
+
   if (problems.length > 0) throw new ConfigError(problems);
 
   const credentialSource = resolveCredentialSource(env);
@@ -387,6 +419,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SylConfig {
     nodeEnv,
     version: SERVICE_VERSION,
     databasePath: read(env, "SYL_DB_PATH") ?? DEFAULT_DATABASE_PATH,
+    autoMemoryDirectory,
     credentialSource,
     subscriptionRails: credentialSource === "none",
     quietHours,

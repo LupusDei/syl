@@ -1,6 +1,8 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import type { AutoMemory } from "../memory/auto-memory.js";
+
 import { runTurn, type TurnOptions, type TurnResult, type TurnRunner } from "./session.js";
 
 /**
@@ -105,6 +107,16 @@ export interface SylAgentOptions {
   readonly soul?: string;
   /** Lane used by `ask` when none is named. Defaults to `LANES.commander`. */
   readonly lane?: Lane;
+  /**
+   * Claude Code's auto-memory, for every turn this agent takes.
+   *
+   * Deliberately **not** per lane, and it is the same value for a lane view
+   * made by `forLane`. Lanes keep transcripts apart; memory is the one thing
+   * that must not be kept apart, or the morning agenda knows nothing the
+   * Commander said last night. The reasoning is written out in
+   * `memory/auto-memory.ts`.
+   */
+  readonly autoMemory?: AutoMemory;
   /** Extra options forwarded to every turn. */
   readonly turnOptions?: TurnOptions;
 }
@@ -127,12 +139,14 @@ export class SylAgent {
   readonly #runner: TurnRunner;
   readonly #store: SessionStore;
   readonly #soul: string | undefined;
+  readonly #autoMemory: AutoMemory | undefined;
   readonly #turnOptions: TurnOptions;
   readonly #lane: Lane;
 
   constructor(options: SylAgentOptions = {}) {
     this.#runner = options.runner ?? runTurn;
     this.#soul = options.soul;
+    this.#autoMemory = options.autoMemory;
     this.#turnOptions = options.turnOptions ?? {};
     this.#store = options.store ?? memorySessionStore();
     this.#lane = assertLane(options.lane ?? LANES.commander);
@@ -165,6 +179,9 @@ export class SylAgent {
       lane: assertLane(lane),
       turnOptions: this.#turnOptions,
       ...(this.#soul !== undefined ? { soul: this.#soul } : {}),
+      // Shared across lanes on purpose: a lane view is a different transcript,
+      // not a different assistant.
+      ...(this.#autoMemory !== undefined ? { autoMemory: this.#autoMemory } : {}),
     });
   }
 
@@ -220,6 +237,9 @@ export class SylAgent {
       // untrusted content must not (see `runReaderTurn`).
       permissionMode: "bypassPermissions",
       ...this.#turnOptions,
+      // After the spread, not before: if the agent was told where its memory
+      // lives, an incidental `turnOptions` must not be able to move it.
+      ...(this.#autoMemory !== undefined ? { autoMemory: this.#autoMemory } : {}),
       ...(this.#soul ? { systemPrompt: this.#soul } : {}),
       ...(resume ? { resume } : {}),
       onSessionId: (sessionId) => {

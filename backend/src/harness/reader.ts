@@ -1,3 +1,5 @@
+import { autoMemoryOff } from "../memory/auto-memory.js";
+
 import { runTurn, type TurnOptions } from "./session.js";
 
 import type { SylEvent } from "./protocol.js";
@@ -157,6 +159,16 @@ export async function runReaderTurn(
     // The security boundary. Everything else here is defence in depth.
     tools: "",
     strictMcpConfig: true,
+    // Not optional and not overridable by the caller. Auto-memory would
+    // otherwise cut straight through the sealed room in both directions: it
+    // loads Syl's `MEMORY.md` into a context whose other half is attacker-
+    // written text, and it is a *writable* store reachable from a turn whose
+    // input the attacker controls — which is how a prompt injection stops
+    // being one turn's problem and becomes a standing instruction Syl reads at
+    // the start of every session afterwards. `--tools ""` already means nothing
+    // can write; this is what makes that true by configuration as well as by
+    // capability, and `runTurn` refuses the turn if the CLI disagrees.
+    autoMemory: autoMemoryOff(),
     systemPrompt: READER_SYSTEM_PROMPT,
     // The CLI's own default: approval required, and in `-p` mode there is
     // nobody to approve. With an empty surface there is nothing to approve
