@@ -181,8 +181,15 @@ export class ApnsProviderToken {
   }
 }
 
-/** What to do about a rejected push. */
-export type ApnsDisposition = "unregister" | "retry" | "permanent";
+/**
+ * What to do about a rejected push.
+ *
+ * Four answers, not three. The fourth — `blocked` — is the one whose absence
+ * lost every reminder on the first attempt (`syl-clc`): a refusal that is about
+ * *this machine's configuration* is not a property of the notification, and
+ * treating it as one consumed the row permanently the first time Apple said no.
+ */
+export type ApnsDisposition = "unregister" | "retry" | "permanent" | "blocked";
 
 /**
  * A transport-level failure, before Apple ever answered.
@@ -213,12 +220,54 @@ const TRANSIENT_REASONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Reasons that say **this machine is misconfigured**, not that this
+ * notification is bad.
+ *
+ * Every one of these is a value a human typed once — the `.p8`, the key id, the
+ * team id, the bundle id — and every one of them is fixed by that human typing
+ * it again. Apple is refusing the *provider*, and would refuse any notification
+ * the provider sent; nothing about the reminder in hand is wrong.
+ *
+ * That distinction is the whole of `syl-clc`. Lumped in with `permanent`, the
+ * first refusal set `state = 'failed', next_attempt_at = NULL` and made the row
+ * invisible to every future pass. Correcting the credentials re-armed nothing,
+ * because there was nothing left to re-arm.
+ */
+const CONFIG_REASONS: ReadonlySet<string> = new Set([
+  "InvalidProviderToken",
+  "MissingProviderToken",
+  "InvalidProviderTokenSignature",
+  "BadCertificate",
+  "BadCertificateEnvironment",
+  "Forbidden",
+  "BadTopic",
+  "MissingTopic",
+  "TopicDisallowed",
+  "InvalidPushType",
+  "BadPath",
+  "MethodNotAllowed",
+]);
+
+/**
  * Decide what a rejection means.
  *
- * The three-way split matters because each answer has a different cost of
- * being wrong: retrying a dead token forever wastes the outbox, unregistering
- * on a transient error silently stops all delivery to his phone, and retrying
- * a wrong bundle id floods Apple with requests that cannot succeed.
+ * The four-way split matters because each answer has a different cost of being
+ * wrong: retrying a dead token forever wastes the outbox, unregistering on a
+ * transient error silently stops all delivery to his phone, retrying a wrong
+ * bundle id every thirty seconds floods Apple with requests that cannot
+ * succeed — and *abandoning* on a wrong key throws away reminders over a typo
+ * in an environment file.
+ *
+ * The axis that matters is **what the answer is about**:
+ *
+ * - the *token* → `unregister`. This phone will never receive again.
+ * - the *moment* → `retry`. Apple, or the network, or us, briefly.
+ * - the *machine* → `blocked`. The credentials are wrong. Nothing may be sent
+ *   until a human fixes them, and nothing may be thrown away either.
+ * - the *notification* → `permanent`. We built something Apple will never
+ *   accept, and building it again will not help.
+ *
+ * Only the last is a property of the row, and only the last may consume it.
  */
 export function classifyApnsFailure(status: number, reason: string): ApnsDisposition {
   if (status === 410 || DEAD_TOKEN_REASONS.has(reason)) return "unregister";
@@ -228,6 +277,12 @@ export function classifyApnsFailure(status: number, reason: string): ApnsDisposi
   // anything about a token from a connection we never made would let a
   // rebooting Mac unregister the Commander's phone.
   if (status === TRANSPORT_FAILURE || status === 429 || status >= 500) return "retry";
+  // An authentication answer is never about the notification. 401 and 403 are
+  // what Apple says to a wrong key, a wrong team id, an expired certificate or
+  // a `.p8` that was pasted with its newlines flattened, and a reason string we
+  // have never seen before carrying one of those statuses is far more likely to
+  // be a fifth way of saying the same thing than a bad reminder.
+  if (status === 401 || status === 403 || CONFIG_REASONS.has(reason)) return "blocked";
   return "permanent";
 }
 

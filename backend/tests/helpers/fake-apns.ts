@@ -41,6 +41,19 @@ export interface FakeApns {
   readonly sessionCount: number;
   /** Queue one reply. Exhausted queues fall back to 200. */
   reply(next: FakeApnsReply): void;
+  /**
+   * Refuse **every** push from now on, until {@link FakeApns.accept}.
+   *
+   * A queue cannot express "for the rest of the week". Journey 4 drives 169
+   * passes and the number of network attempts in them is a property of the
+   * implementation under test — the whole question that journey asks — so a
+   * fixture of *n* queued refusals silently becomes "Apple starts accepting
+   * after the nth attempt", at an hour nobody chose. That is a fixture deciding
+   * the outcome of the test.
+   */
+  refuse(reply: FakeApnsReply): void;
+  /** Stop refusing. The credentials were fixed. */
+  accept(): void;
   close(): Promise<void>;
 }
 
@@ -48,6 +61,8 @@ export interface FakeApns {
 export async function startFakeApns(): Promise<FakeApns> {
   const pushes: CapturedPush[] = [];
   const replies: FakeApnsReply[] = [];
+  /** The standing answer, when one has been set. Outranks the queue. */
+  let standing: FakeApnsReply | null = null;
   let sessions = 0;
   const sessionIds = new WeakMap<object, number>();
   const open = new Set<{ destroy(): void }>();
@@ -81,7 +96,7 @@ export async function startFakeApns(): Promise<FakeApns> {
         sessionId: sessionIds.get(stream.session ?? {}) ?? 0,
       });
 
-      const reply = replies.shift() ?? { status: 200 };
+      const reply = standing ?? replies.shift() ?? { status: 200 };
       const send = (): void => {
         if (stream.destroyed) return;
         const responseHeaders: Record<string, string | number> = {
@@ -122,6 +137,12 @@ export async function startFakeApns(): Promise<FakeApns> {
     },
     reply: (next) => {
       replies.push(next);
+    },
+    refuse: (next) => {
+      standing = next;
+    },
+    accept: () => {
+      standing = null;
     },
     close: () =>
       new Promise<void>((resolve) => {

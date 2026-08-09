@@ -187,15 +187,78 @@ describe("pushDueDeliveries", () => {
     expect(delivery?.lastError).toContain("503");
   });
 
-  it("should fail permanently on a configuration error", async () => {
+  it("should fail permanently on a notification Apple will never accept", async () => {
     const id = enqueue();
     register(IPHONE);
     const apns = scriptedApns([
-      { ok: false, status: 400, reason: "BadTopic", disposition: "permanent" },
+      { ok: false, status: 413, reason: "PayloadTooLarge", disposition: "permanent" },
     ]);
 
-    await pushDueDeliveries({ outbox, devices, apns });
+    const result = await pushDueDeliveries({ outbox, devices, apns });
     expect(outbox.get(id)?.state).toBe("failed");
+    // Reported as exhausted, which is what lets the job above escalate it.
+    // Nothing a wrong credential does may ever reach this list.
+    expect(result.exhausted).toEqual([id]);
+  });
+
+  it("should hold a row Apple refused over the credentials, and never spend it", async () => {
+    // `syl-clc`. The row must survive a week of refusals unchanged, because a
+    // wrong key id is a property of the machine and machines get fixed. This
+    // is driven across many passes on purpose: the defect was invisible to one.
+    const id = enqueue();
+    register(IPHONE);
+    const apns = scriptedApns([
+      { ok: false, status: 403, reason: "InvalidProviderToken", disposition: "blocked" },
+    ]);
+
+    let passes = 0;
+    for (let hour = 0; hour < 24 * 7; hour += 1) {
+      now = TEST_NOW + hour * 60 * 60_000;
+      const result = await pushDueDeliveries({ outbox, devices, apns }, now);
+      if (result.blocked.length > 0) passes += 1;
+      // Not once, ever: a refused credential must not consume the row.
+      expect(result.exhausted).toEqual([]);
+      expect(result.failed).toEqual([]);
+    }
+
+    // It kept trying, rather than giving up after the first refusal.
+    expect(passes).toBeGreaterThan(1);
+
+    const delivery = outbox.get(id);
+    expect(delivery?.state).toBe("pending");
+    // The two fields that decide whether it is reachable at all.
+    expect(delivery?.nextAttemptAt).not.toBeNull();
+    expect(delivery?.lastError).toContain("InvalidProviderToken");
+    // And the attempt budget is untouched, so the first genuine hiccup after
+    // the credentials are fixed does not abandon a week-old reminder.
+    expect(delivery?.attempts).toBe(0);
+
+    // The credentials are fixed.
+    now = TEST_NOW + 24 * 7 * 60 * 60_000;
+    const after = await pushDueDeliveries(
+      { outbox, devices, apns: scriptedApns([ACCEPTED]) },
+      now,
+    );
+    expect(after.accepted).toEqual([id]);
+    expect(outbox.get(id)?.state).toBe("delivered");
+  });
+
+  it("should stop asking Apple once it has refused the credentials in a pass", async () => {
+    // The answer is about the provider, so it is already known for every other
+    // row waiting. Asking once per reminder is the flood the old `permanent`
+    // branch was trying to avoid, arrived at from the other direction.
+    enqueue();
+    enqueue();
+    enqueue();
+    register(IPHONE);
+    const apns = scriptedApns([
+      { ok: false, status: 403, reason: "InvalidProviderToken", disposition: "blocked" },
+    ]);
+
+    const result = await pushDueDeliveries({ outbox, devices, apns });
+
+    expect(apns.sent).toHaveLength(1);
+    expect(result.blocked).toHaveLength(3);
   });
 
   it("should keep the row when the last device was just unregistered", async () => {
@@ -236,7 +299,10 @@ describe("pushDueDeliveries", () => {
     const id = enqueue();
     const result = await pushDueDeliveries({ outbox, devices, apns: scriptedApns([ACCEPTED]) });
 
-    expect(result.failed).toEqual([id]);
+    // Blocked, not failed. Nothing was sent and nothing refused us, and the
+    // job above reads the difference: a block must not open the breaker.
+    expect(result.blocked).toEqual([id]);
+    expect(result.failed).toEqual([]);
     expect(outbox.get(id)?.state).toBe("pending");
     expect(outbox.get(id)?.lastError).toContain("No device");
   });

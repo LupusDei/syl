@@ -490,20 +490,43 @@ export class Outbox {
    * abandoned: an environment that cannot send yet is a state to wait out, not
    * a reason to drop a reminder.
    */
-  deferBlocked(id: string, error: string): Delivery | null {
+  deferBlocked(
+    id: string,
+    error: string,
+    options: {
+      /**
+       * Give back the attempt `markSending` counted.
+       *
+       * For the block that is only discovered *after* the row was claimed:
+       * Apple refusing the provider token (`syl-clc`). The claim spends an
+       * attempt before the attempt is made, which is right when the attempt is
+       * real, and wrong here — a machine whose credentials were wrong for a
+       * week would otherwise arrive at the attempt ceiling and be abandoned on
+       * the first genuine hiccup after they were fixed. That is the same
+       * accounting mistake `deferBlocked` exists to avoid, arriving one line
+       * later.
+       */
+      readonly refundAttempt?: boolean;
+    } = {},
+  ): Delivery | null {
     const current = this.get(id);
     if (current === null) return null;
 
     const now = this.#clock();
     const age = Math.max(0, now - (parseInstant(current.createdAt) ?? now));
     const wait = blockedWaitFor(age, this.#jitter());
+    // `max(attempts - 1, 0)`, never a bare decrement: a refund on a row that
+    // was never claimed must not write -1 into a counter the ceiling is
+    // compared against.
+    const attempts =
+      options.refundAttempt === true ? Math.max(0, current.attempts - 1) : current.attempts;
 
     this.#db
       .prepare(
-        `UPDATE deliveries SET state = 'pending', next_attempt_at = ?, last_error = ?
+        `UPDATE deliveries SET state = 'pending', next_attempt_at = ?, attempts = ?, last_error = ?
           WHERE id = ? AND state IN ('pending', 'sending')`,
       )
-      .run(instant(now + wait), error, id);
+      .run(instant(now + wait), attempts, error, id);
     return this.get(id);
   }
 

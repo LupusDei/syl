@@ -34,6 +34,27 @@ export interface PushOutboxDeps {
 export interface PushOutboxResult {
   readonly accepted: readonly string[];
   readonly failed: readonly string[];
+  /**
+   * Rows nothing could be attempted for: no channel, no credentials, no
+   * device, or credentials Apple refuses.
+   *
+   * Separate from `failed` because the two mean opposite things to the job
+   * above. A failure is about a notification and is worth escalating; a block
+   * is about the machine, will not improve by being retried harder, and must
+   * not open a breaker — a breaker that opened here would end every *future*
+   * reminder on top of the one already waiting.
+   */
+  readonly blocked: readonly string[];
+  /**
+   * Rows the outbox will not attempt again: `failed` or `abandoned`.
+   *
+   * The one outcome that deserves to be escalated rather than waited out.
+   * Everything else here either succeeds later by itself or is waiting on a
+   * human; this is the outbox saying it has stopped. Nothing may reach this
+   * list from a wrong credential — that is `blocked` — so a breaker fed from it
+   * cannot be opened by a misconfiguration.
+   */
+  readonly exhausted: readonly string[];
   /** Tokens Apple told us are gone. Unregistered on the spot. */
   readonly unregistered: readonly string[];
 }
@@ -54,9 +75,28 @@ export async function pushDueDeliveries(
 
   const accepted: string[] = [];
   const failed: string[] = [];
+  const blocked: string[] = [];
+  const exhausted: string[] = [];
   const unregistered: string[] = [];
 
+  /**
+   * Why this machine cannot send, once Apple has told us.
+   *
+   * Set the moment Apple refuses the *provider* rather than a notification.
+   * Every remaining row in this pass is then held without a request: the answer
+   * is a property of the credentials, so it is already known for all of them,
+   * and asking Apple once per waiting reminder to be told the same thing is the
+   * flood the classifier's `permanent` branch was originally trying to avoid.
+   */
+  let refusedProvider: string | null = null;
+
   for (const delivery of outbox.due(now)) {
+    if (refusedProvider !== null) {
+      outbox.deferBlocked(delivery.id, refusedProvider);
+      blocked.push(delivery.id);
+      continue;
+    }
+
     // The three branches below are *blocked*, not failed: nothing was sent and
     // nothing refused us. `deferBlocked` holds the row without spending its
     // attempt budget and without leaving the loop spinning every thirty
@@ -66,13 +106,13 @@ export async function pushDueDeliveries(
       // broken notification, and the row must survive until the build that
       // does know arrives.
       outbox.deferBlocked(delivery.id, `This build cannot deliver over "${delivery.channel}".`);
-      failed.push(delivery.id);
+      blocked.push(delivery.id);
       continue;
     }
 
     if (apns === null) {
       outbox.deferBlocked(delivery.id, "APNs is not configured on this machine.");
-      failed.push(delivery.id);
+      blocked.push(delivery.id);
       continue;
     }
 
@@ -81,7 +121,7 @@ export async function pushDueDeliveries(
       // Not an error worth abandoning over: the phone may simply not have
       // registered yet, and the row must still be here when it does.
       outbox.deferBlocked(delivery.id, "No device is registered to receive this.");
-      failed.push(delivery.id);
+      blocked.push(delivery.id);
       continue;
     }
 
@@ -97,6 +137,10 @@ export async function pushDueDeliveries(
     // Per delivery, not per pass. A token unregistered while sending an
     // earlier row says nothing about whether THIS one should be retried.
     let anyUnregistered = false;
+    // Apple refused the provider, not the notification. Per delivery for the
+    // same reason, and hoisted out of the loop below onto `refusedProvider` so
+    // the rest of the pass does not ask again.
+    let anyBlocked = false;
     const errors: string[] = [];
 
     for (const target of targets) {
@@ -116,6 +160,7 @@ export async function pushDueDeliveries(
         anyUnregistered = true;
       }
       if (result.disposition === "retry") anyRetryable = true;
+      if (result.disposition === "blocked") anyBlocked = true;
     }
 
     if (anyAccepted) {
@@ -126,7 +171,22 @@ export async function pushDueDeliveries(
       continue;
     }
 
-    outbox.recordFailure(delivery.id, {
+    if (anyBlocked) {
+      // `syl-clc`. Apple refused the credentials, so nothing about this row is
+      // wrong and nothing about it may be spent: the attempt is refunded, the
+      // row goes back to `pending` with a wait, and it is still here — still
+      // reachable by `due` — on the day the Commander fixes the `.p8`.
+      //
+      // The alternative this replaces classified the same answer `permanent`,
+      // which wrote `next_attempt_at = NULL` and made the row unreachable by
+      // every future pass after ONE refusal.
+      refusedProvider = errors.join("; ");
+      outbox.deferBlocked(delivery.id, refusedProvider, { refundAttempt: true });
+      blocked.push(delivery.id);
+      continue;
+    }
+
+    const after = outbox.recordFailure(delivery.id, {
       error: errors.join("; "),
       // A token that was just unregistered is not retryable against that
       // token — but the phone re-registering is exactly the case the outbox
@@ -134,9 +194,13 @@ export async function pushDueDeliveries(
       retryable: anyRetryable || anyUnregistered,
     });
     failed.push(delivery.id);
+    // Asked of the row rather than inferred from the disposition: whether this
+    // was the attempt that used the row up is the outbox's judgement, and it
+    // owns the ceiling that decides.
+    if (after?.state === "failed" || after?.state === "abandoned") exhausted.push(delivery.id);
   }
 
-  return { accepted, failed, unregistered };
+  return { accepted, failed, blocked, exhausted, unregistered };
 }
 
 /** Turn an outbox row into a notification. */

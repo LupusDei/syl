@@ -97,9 +97,13 @@ describe("Journey 4 — a bad week", () => {
       await runner.start();
 
       // Apple refuses every push for the rest of the week: the key id is wrong.
-      for (let index = 0; index < 20; index += 1) {
-        apple.reply({ status: 403, reason: "InvalidProviderToken" });
-      }
+      //
+      // A standing refusal, not a queue of them. How many attempts a week of
+      // passes makes is exactly what this journey is asking, so a queue of n
+      // refusals would mean "Apple starts accepting after the nth attempt" —
+      // the fixture choosing the hour the credentials get fixed, and choosing
+      // it differently for every candidate implementation.
+      apple.refuse({ status: 403, reason: "InvalidProviderToken" });
 
       now = Date.parse(FIRE_AT);
       await runner.tick();
@@ -134,6 +138,7 @@ describe("Journey 4 — a bad week", () => {
       expect(held?.nextAttemptAt, "a reminder with no next attempt can never be sent again").not.toBeNull();
 
       // The credentials are fixed. Apple accepts.
+      apple.accept();
       now = Date.parse(FIRE_AT) + 7 * 24 * HOUR + HOUR;
       const before = apple.pushes.length;
       await runner.tick();
@@ -153,9 +158,7 @@ describe("Journey 4 — a bad week", () => {
     const { runner, close } = runnerAgainst(apple);
     try {
       await runner.start();
-      for (let index = 0; index < 20; index += 1) {
-        apple.reply({ status: 403, reason: "InvalidProviderToken" });
-      }
+      apple.refuse({ status: 403, reason: "InvalidProviderToken" });
 
       now = Date.parse(FIRE_AT);
       for (let pass = 0; pass < 10; pass += 1) {
