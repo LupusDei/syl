@@ -31,7 +31,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Jobs and runs",
     summary: "Every job run with outcome, duration and failure detail — including overnight work.",
     bead: "syl-004.2.1",
-    status: "planned",
+    status: "ready",
   },
   {
     path: "/delivery",

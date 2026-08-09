@@ -55,8 +55,18 @@ src/app/nav.ts             the section list, as data
 src/app/App.tsx            providers, router, and the route table
 src/app/AppLayout.tsx      the chrome
 src/app/views.tsx          overview, placeholders, not-found
+src/format/time.ts         instants, spans, lateness. Pure
+src/format/text.ts         ids, cost, enum names. Pure
+src/ui/Badge.tsx           a state chip, coloured by token reference
+src/ui/feedback.tsx        Loading / Empty / ErrorNotice
+src/features/jobs/         the job and run viewer (syl-004.2.1)
+tests/helpers/fixtures.ts  the shared fixtures, read off disk
 tests/unit/**              vitest
 ```
+
+Each viewer keeps its judgements in a `*-model.ts` of pure functions and its
+markup thin. "Is this job in trouble", "what does this trigger mean" and "did
+this run fire late" are the parts worth testing, and none of them need a DOM.
 
 ## Conventions worth keeping
 
