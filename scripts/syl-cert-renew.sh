@@ -90,8 +90,27 @@ fail_loudly() {
 
 resolve_tailscale() {
   local candidate
+
+  # An explicit override is an INSTRUCTION, not a hint.
+  #
+  # `SYL_TAILSCALE_BIN` used to be merely the first entry in the candidate list
+  # below, so setting it to a path that does not exist silently fell through to
+  # whatever happened to be on the machine. An operator who fat-fingers the
+  # override then gets a DIFFERENT binary than the one they named, with no
+  # complaint — the same "override that does not override" shape as every other
+  # silent-substitution defect in this project.
+  #
+  # It was invisible until tailscale was actually installed here: the test that
+  # covers it points at /nonexistent/tailscale and had been passing only
+  # because the fallbacks were empty too. Installing the real client turned a
+  # green test red and exposed the bug, which is the test doing its job late
+  # rather than not at all.
+  if [ -n "${SYL_TAILSCALE_BIN:-}" ]; then
+    [ -x "${SYL_TAILSCALE_BIN}" ] && printf '%s' "${SYL_TAILSCALE_BIN}" && return 0
+    return 1
+  fi
+
   for candidate in \
-    "${SYL_TAILSCALE_BIN:-}" \
     /usr/local/bin/tailscale \
     /opt/homebrew/bin/tailscale \
     "/Applications/Tailscale.app/Contents/MacOS/Tailscale"; do

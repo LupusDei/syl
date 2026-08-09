@@ -313,6 +313,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				DEVELOPMENT_TEAM = 2BRYAM5Q52;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jmm.syl;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -341,6 +342,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				DEVELOPMENT_TEAM = 2BRYAM5Q52;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jmm.syl;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -356,6 +358,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				DEVELOPMENT_TEAM = 2BRYAM5Q52;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jmm.syl.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -372,6 +375,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				DEVELOPMENT_TEAM = 2BRYAM5Q52;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jmm.syl.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";

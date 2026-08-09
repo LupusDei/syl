@@ -37,7 +37,13 @@ const paths: LaunchdPaths = {
   logDirectory: "/Users/commander/Library/Logs/Syl",
   nodeBin: "/opt/homebrew/bin/node",
   databasePath: "/Users/commander/.syl/syl.db",
-  port: 4201,
+  // Deliberately NOT 8888, the real default. A fixture that reuses the default
+  // cannot tell "the generator threaded my port through" from "the generator
+  // ignored me and fell back", which is precisely the bug that put Syl on
+  // Adjutant's 4201 in production. And deliberately not 4201 either: that
+  // number should not appear anywhere in this repo except as the neighbour to
+  // stay away from.
+  port: 8899,
   tailnetHostname: "syl.tail1234.ts.net",
   environment: { SYL_APNS_BUNDLE_ID: "com.jmm.syl", SYL_TZ: "America/Chicago" },
 };
@@ -143,7 +149,11 @@ describe("the core job", () => {
     expect(environment["NODE_ENV"]).toBe("production");
     expect(environment["SYL_DB_PATH"]).toBe("/Users/commander/.syl/syl.db");
     expect(environment["SYL_LOG_DIR"]).toBe("/Users/commander/Library/Logs/Syl");
-    expect(environment["PORT"]).toBe("4201");
+    // SYL_PORT, namespaced. A bare `PORT` is set in this machine's own agent
+    // environment and silently overrode the default when the plists were
+    // generated for real.
+    expect(environment["SYL_PORT"]).toBe("8899");
+    expect(environment["PORT"]).toBeUndefined();
   });
 
   it("should forward the extra environment it was given", () => {
@@ -154,7 +164,12 @@ describe("the core job", () => {
 
   it("should launch the wrapper script, which is what execs node", () => {
     const args = roundTrip(coreJob(paths).plist)["ProgramArguments"] as string[];
-    expect(args).toEqual(["/bin/bash", "/Users/commander/code/syl/scripts/syl-service.sh"]);
+    // The script directly, not `bash script`. macOS names a background item
+    // after its program, so three jobs launched via /bin/bash showed up in
+    // Login Items as three anonymous entries called "bash" — which is exactly
+    // how a user learns to distrust what is running on their machine. The
+    // scripts are executable and carry a shebang, so this costs nothing.
+    expect(args).toEqual(["/Users/commander/code/syl/scripts/syl-service.sh"]);
   });
 });
 
@@ -181,7 +196,10 @@ describe("the watchdog job", () => {
       string
     >;
     expect(environment["SYL_CORE_LABEL"]).toBe(CORE_LABEL);
-    expect(environment["SYL_PORT"]).toBe("4201");
+    // The SAME port the core job was given. The watchdog probing a different
+    // port than the service listens on is a watchdog that restarts a healthy
+    // service forever, or never notices a dead one.
+    expect(environment["SYL_PORT"]).toBe("8899");
   });
 });
 

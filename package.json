@@ -15,7 +15,8 @@
   "scripts": {
     "check:node": "node scripts/check-node.mjs",
     "check:deps": "node scripts/check-workspace-deps.mjs",
-    "check:env": "npm run check:node && npm run check:deps",
+    "check:secrets": "node scripts/check-no-secrets.mjs",
+    "check:env": "npm run check:node && npm run check:deps && npm run check:secrets",
     "pretypecheck": "npm run check:env",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
     "prebuild": "npm run check:env",

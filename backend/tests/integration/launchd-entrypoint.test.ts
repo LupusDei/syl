@@ -98,7 +98,7 @@ async function start(env: Readonly<Record<string, string>> = {}): Promise<Starte
       // profile, no nvm, no Homebrew on the path by default.
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
       HOME: process.env["HOME"] ?? "",
-      PORT: String(port),
+      SYL_PORT: String(port),
       HOST: "127.0.0.1",
       NODE_ENV: "development",
       SYL_DB_PATH: join(directory, "syl.db"),
