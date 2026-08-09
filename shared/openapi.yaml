@@ -508,6 +508,18 @@ paths:
     get:
       tags: [todos]
       operationId: listTodos
+      summary: A page of to-dos, in agenda order.
+      description: |
+        **Agenda order is exactly this, and a client may rely on it:** pinned
+        first; then the nearest `dueAt`, with undated to-dos after every dated
+        one; then newest first; then by id. Deterministic to the last tiebreak,
+        because a page boundary that moves between two equal rows drops one of
+        them.
+
+        It is spelled out because a documented ordering the server does not
+        apply is the same species of lie as a documented endpoint the server
+        does not serve. Richer ranking — goal linkage, staleness — is `syl-18u`
+        and is not implemented; nothing here claims it is.
       parameters:
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
@@ -538,9 +550,10 @@ paths:
         aspiration.
 
         There is no priority ladder. Priority is a property of a moment, not
-        of a task; ordering is computed at agenda time from deadline, goal
-        linkage and staleness. One bit of `pinned` survives, because "this one
-        matters" is genuinely durable.
+        of a task; ordering is computed at read time rather than stored. One
+        bit of `pinned` survives, because "this one matters" is genuinely
+        durable. What the server actually orders by today is written out under
+        `listTodos`.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -983,6 +996,41 @@ paths:
 
         Omit `since` for a full bootstrap. Keep calling while `hasMore` is
         true — a device returning after a week will page.
+
+        ## Conflict semantics: there are none, by construction
+
+        **This endpoint accepts no client state, so it cannot conflict.** The
+        push half of the loop is the ordinary write endpoints, each carrying an
+        `Idempotency-Key`; by the time a pull runs, the device's own writes have
+        already been applied. The server is the sole authority and the pull
+        hands back the server's row, which replaces whatever the device held
+        optimistically. "What happens when both sides changed the same row" has
+        the answer *the server's version, always*, rather than an answer that
+        depends on timing.
+
+        There is deliberately no `POST /sync`. Giving this endpoint a write side
+        would invent a merge problem the architecture does not have.
+
+        ## The four properties a client may rely on
+
+        1. **The cursor is a monotonic sequence, not a timestamp.** A timestamp
+           cursor loses a row permanently, and silently, if the server's clock
+           ever steps backwards.
+        2. **State, not history.** A change says *that* a resource changed;
+           `resource` is that resource as it is when the response is built. A
+           device that pages slowly therefore sees fewer, fresher changes rather
+           than a replay it would only overwrite.
+        3. **At-least-once.** Replaying a cursor re-delivers. Every change is an
+           id-keyed `upsert` or `delete`, so a duplicate is a no-op. Nothing here
+           is exactly-once.
+        4. **An empty page does not move the cursor.** A client polling a quiet
+           server neither loses its place nor skips a row that lands a
+           millisecond later.
+
+        `op: delete` is a shape the feed supports and does not presently emit:
+        no resource in Syl is hard-deleted — reminders are cancelled, devices
+        are deactivated, to-dos are dropped — and every one of those is an
+        `upsert` carrying a new status.
 
         **This is not the WebSocket `sync` frame.** That one recovers a gap on
         one socket by sequence number and does not survive a reinstall. This

@@ -5,10 +5,12 @@ import { DEFAULT_QUIET_HOURS, type SylConfig } from "../../src/config.js";
 import { IntakeQueue } from "../../src/connections/intake-job.js";
 import { IntakeStore } from "../../src/connections/intake-store.js";
 import { ArticleIntake } from "../../src/connections/intake.js";
+import { syncResolvers } from "../../src/index.js";
 import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api-key-service.js";
 import { fixedClock, type Clock } from "../../src/services/clock.js";
 import { IN_MEMORY, openDatabase, type SylDatabase } from "../../src/services/database.js";
 import { DeviceTokenService } from "../../src/services/device-token-service.js";
+import { GoalService } from "../../src/services/goal-service.js";
 import type { Entropy } from "../../src/services/id.js";
 import { IdempotencyStore } from "../../src/services/idempotency.js";
 import { JobStore } from "../../src/services/job-store.js";
@@ -16,6 +18,8 @@ import { MessageStore } from "../../src/services/message-store.js";
 import { Outbox } from "../../src/services/outbox.js";
 import { PresenceService } from "../../src/services/presence.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
+import { SyncService } from "../../src/services/sync-service.js";
+import { TodoService } from "../../src/services/todo-service.js";
 
 /**
  * The pieces a service-level test needs, assembled the way `bootstrap` does.
@@ -112,6 +116,9 @@ export function testDeps(db: SylDatabase): {
   readonly devices: DeviceTokenService;
   readonly outbox: Outbox;
   readonly reminders: ReminderService;
+  readonly todos: TodoService;
+  readonly goals: GoalService;
+  readonly sync: SyncService;
   readonly jobs: JobStore;
   readonly idempotency: IdempotencyStore;
   readonly intake: ArticleIntake;
@@ -120,15 +127,31 @@ export function testDeps(db: SylDatabase): {
 } {
   const clock = fixedClock(TEST_NOW);
   const intakeQueue = new IntakeQueue();
+  const messages = testMessages(db);
+  const devices = new DeviceTokenService({ db: db.handle, clock });
+  // No quiet hours by default: a route test asserting on delivery would
+  // otherwise depend on what hour TEST_NOW happens to be in.
+  const outbox = new Outbox({ db: db.handle, clock });
+  const reminders = new ReminderService({ db: db.handle, clock });
+  const todos = new TodoService({ db: db.handle, clock });
+  const goals = new GoalService({ db: db.handle, clock });
+  const jobs = new JobStore({ db: db.handle, clock });
   return {
     keys: testKeys(db),
-    messages: testMessages(db),
-    devices: new DeviceTokenService({ db: db.handle, clock }),
-    // No quiet hours by default: a route test asserting on delivery would
-    // otherwise depend on what hour TEST_NOW happens to be in.
-    outbox: new Outbox({ db: db.handle, clock }),
-    reminders: new ReminderService({ db: db.handle, clock }),
-    jobs: new JobStore({ db: db.handle, clock }),
+    messages,
+    devices,
+    outbox,
+    reminders,
+    todos,
+    goals,
+    // Built through the same `syncResolvers` the service uses, so a test can
+    // never be passing against a wiring production does not have.
+    sync: new SyncService({
+      db: db.handle,
+      clock,
+      resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs }),
+    }),
+    jobs,
     idempotency: new IdempotencyStore({ db: db.handle, clock }),
     // The default fetcher is `safeFetch`, the SSRF guard, and it stays that
     // way here: a route test never gets as far as a fetch, because `submit`

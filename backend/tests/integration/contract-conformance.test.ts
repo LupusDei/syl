@@ -1,14 +1,17 @@
 import type { Conversation, Delivery, Device, Job, Reminder, Run } from "@syl/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { createApp, NO_ROUTE_MESSAGE } from "../../src/index.js";
 import { INTERACTIVE_CONVERSATION_ID } from "../../src/services/database.js";
 import {
   expectConformingFailure,
   expectConformingSuccess,
   fillPath,
+  mountedRoutes,
   operation,
   specOperations,
 } from "../helpers/contract.js";
+import { testConfig, testDatabase, testDeps } from "../helpers/service.js";
 import { startLiveService, type LiveService } from "../helpers/live-service.js";
 
 /**
@@ -30,26 +33,28 @@ import { startLiveService, type LiveService } from "../helpers/live-service.js";
 /**
  * Operations in the contract with no route on the real service.
  *
- * A **finding, not a configuration** — see `syl-c1m`. The mock serves all nine,
- * because it reads the spec; Syl serves none of them, because someone has to
- * write the router. The iOS client has full `Todo`, `Goal` and `Sync` models
- * and calls `GET /sync` on every foreground reconcile.
+ * A **finding, not a configuration**, and it is empty. `syl-c1m` held nine
+ * here: the mock served all nine because it reads the spec, Syl served none of
+ * them because someone had to write the router, and both clients were built
+ * against the difference. `/todos`, `/goals` and `/sync` are implemented now.
  *
- * The test below asserts this set **exactly**, so landing one of these routes
- * turns the suite red until its name is removed, and adding a tenth
- * unimplemented operation turns it red immediately.
+ * The test below asserts this set **exactly**, in both directions: landing one
+ * of these routes turns the suite red until its name is removed, and
+ * publishing an operation nobody implemented turns it red immediately.
  */
-const UNIMPLEMENTED: readonly string[] = [
-  "completeTodo",
-  "createGoal",
-  "createTodo",
-  "getGoal",
-  "getTodo",
-  "listGoals",
-  "listTodos",
-  "syncSinceCursor",
-  "updateTodo",
-];
+const UNIMPLEMENTED: readonly string[] = [];
+
+/**
+ * Routes the service dispatches that the contract does not publish.
+ *
+ * Also a finding, and the mirror of the one above. `syl-21u`: article intake
+ * is mounted and undeclared, so no generated client can reach it and no
+ * fixture pins its shapes. Less dangerous than the reverse — nothing was built
+ * against an illusion — but it is still a contract that does not describe the
+ * service, and it is listed here so it is visible on every run rather than
+ * only in a bead.
+ */
+const UNDECLARED: readonly string[] = ["GET /intake/{sourceId}", "POST /intake"];
 
 /** Path parameters that are syntactically valid but name nothing. */
 const ABSENT_IDS: Readonly<Record<string, string>> = {
@@ -79,43 +84,94 @@ describe("the live service against shared/openapi.yaml", () => {
 
   describe("every operation the contract publishes", () => {
     /**
-     * Probe each operation **without** a token.
+     * The anti-divergence guard, and the deliverable of `syl-c1m`.
      *
-     * A mounted route answers `UNAUTHORIZED`; an unmounted path falls through
-     * to the terminal `notFound` handler. Both are 404/401 envelopes, so the
-     * discriminator is which one comes back — and going in unauthenticated
-     * means the answer cannot depend on whether the resource exists, which is
-     * what makes this a routing check rather than a fixture check.
+     * Every operation in `openapi.yaml` is probed against the running service
+     * and must be **routed**. The discriminator is the terminal 404's exact
+     * message, imported from the service rather than written here: an
+     * unmounted path is the only thing that reaches `notFound`, and a test
+     * asserting on prose it authored itself proves nothing about the service.
+     *
+     * Authenticated operations are probed **without** a token, so the answer
+     * cannot depend on whether a resource exists — this is a routing check,
+     * not a fixture check. Unauthenticated ones are probed too. The previous
+     * version of this loop skipped them (`if (!spec.requiresAuth) continue`),
+     * which meant a published-but-unimplemented `GET /health` or
+     * `POST /auth/pair` would have sailed through; `syl-ux1` was exactly that
+     * blind spot in the neighbouring idempotency probe, so it is not a
+     * hypothetical.
      */
-    it("should be routable, or else named in UNIMPLEMENTED", async () => {
+    it("should route every operation the contract publishes, or else name it in UNIMPLEMENTED", async () => {
       const unroutable: string[] = [];
+      const probed: string[] = [];
 
       for (const spec of specOperations()) {
-        if (!spec.requiresAuth) continue;
-
+        probed.push(spec.operationId);
         const response = await syl.api(fillPath(spec.template, ABSENT_IDS), {
           method: spec.method,
-          anonymous: true,
+          anonymous: spec.requiresAuth,
           ...(spec.method === "GET" || spec.method === "DELETE"
             ? {}
             : { body: JSON.stringify({}) }),
         });
-        const body = (await response.json()) as { error?: { code?: string } };
+        const body = (await response.json()) as { error?: { message?: string } };
 
-        if (body.error?.code !== "UNAUTHORIZED") unroutable.push(spec.operationId);
+        if (body.error?.message === NO_ROUTE_MESSAGE) unroutable.push(spec.operationId);
       }
+
+      // The loop is only worth its assertion if it ran. A `specOperations()`
+      // that returned nothing — a moved `paths` key, a parse that silently
+      // failed — would make every check in this file vacuously green.
+      expect(probed.length).toBe(specOperations().length);
+      expect(probed.length).toBeGreaterThan(20);
+      expect(probed).toContain("getHealth");
+      expect(probed).toContain("pairDevice");
+      expect(probed).toContain("syncSinceCursor");
 
       expect(unroutable.sort()).toEqual([...UNIMPLEMENTED].sort());
     });
 
-    it("should answer an unmounted contract path with the terminal 404, not a framework page", async () => {
+    /**
+     * The same question, asked backwards.
+     *
+     * A guard that only walks the spec is blind to the other divergence: an
+     * endpoint the service dispatches that no client can know about. Syl has
+     * two (`syl-21u`), and they are named in `UNDECLARED` so they are visible
+     * on every run.
+     */
+    it("should dispatch nothing the contract does not publish, or else name it in UNDECLARED", () => {
+      const database = testDatabase();
+      try {
+        const app = createApp(testConfig(), testDeps(database));
+        const declared = new Set(
+          specOperations().map((spec) => `${spec.method} ${spec.template}`),
+        );
+        const served = mountedRoutes(app);
+
+        // `mountedRoutes` throws on an empty walk, and this pins the count so
+        // an introspection change that finds one layer instead of thirty
+        // cannot pass either.
+        expect(served.length).toBeGreaterThanOrEqual(declared.size);
+
+        expect(served.filter((route) => !declared.has(route)).sort()).toEqual(
+          [...UNDECLARED].sort(),
+        );
+      } finally {
+        database.close();
+      }
+    });
+
+    it("should answer a path the contract has never published with the terminal 404", async () => {
       // How the seam actually presents to a client: not a typed refusal from a
-      // route, but the catch-all saying nothing here matches.
-      const response = await syl.api("/todos");
+      // route, but the catch-all saying nothing here matches. This is also the
+      // control for the guard above — it proves `NO_ROUTE_MESSAGE` is a
+      // reachable answer, so "no operation produced it" is a real result and
+      // not a string that never appears.
+      const response = await syl.api("/todos/not-an-id/reassign");
       const error = await expectConformingFailure(response, "NOT_FOUND");
 
       expect(response.status).toBe(404);
-      expect(error["message"]).toContain("No route on this service matches");
+      expect(error["message"]).toBe(NO_ROUTE_MESSAGE);
     });
 
     it("should still be answering in the contract's envelope when it refuses", async () => {
@@ -422,6 +478,117 @@ describe("the live service against shared/openapi.yaml", () => {
         await syl.api(`/reminders/${encodeURIComponent(created.id)}`, { method: "DELETE" }),
         "cancelReminder",
       );
+    });
+  });
+
+  describe("todos and goals", () => {
+    it("should conform through the whole to-do lifecycle", async () => {
+      const goal = await expectConformingSuccess<{ id: string }>(
+        await syl.api("/goals", {
+          method: "POST",
+          body: JSON.stringify({
+            title: "Stop carrying the household in his head",
+            why: "Because that is the thing Syl is for.",
+            targetDate: "2026-12-31",
+            cadenceDays: 7,
+          }),
+        }),
+        "createGoal",
+      );
+
+      await expectConformingSuccess(await syl.api("/goals"), "listGoals");
+      await expectConformingSuccess(
+        await syl.api(`/goals/${encodeURIComponent(goal.id)}`),
+        "getGoal",
+      );
+
+      const todo = await expectConformingSuccess<{ id: string }>(
+        await syl.api("/todos", {
+          method: "POST",
+          body: JSON.stringify({
+            text: "Renew the passport before the trip.",
+            goalId: goal.id,
+            dueAt: "2026-11-01T12:00:00.000Z",
+            pinned: true,
+          }),
+        }),
+        "createTodo",
+      );
+
+      await expectConformingSuccess(await syl.api("/todos"), "listTodos");
+      await expectConformingSuccess(
+        await syl.api(`/todos/${encodeURIComponent(todo.id)}`),
+        "getTodo",
+      );
+      await expectConformingSuccess(
+        await syl.api(`/todos/${encodeURIComponent(todo.id)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ text: "Renew the passport this week." }),
+        }),
+        "updateTodo",
+      );
+      await expectConformingSuccess(
+        await syl.api(`/todos/${encodeURIComponent(todo.id)}/complete`, { method: "POST" }),
+        "completeTodo",
+      );
+    });
+
+    it("should conform when refusing a to-do linked to a goal that is not there", async () => {
+      const response = await syl.api("/todos", {
+        method: "POST",
+        body: JSON.stringify({ text: "Linked to nowhere", goalId: ABSENT_IDS["goalId"] }),
+      });
+      await expectConformingFailure(response, "VALIDATION_FAILED");
+    });
+
+    it("should conform when a to-do is not there", async () => {
+      const response = await syl.api(`/todos/${encodeURIComponent(ABSENT_IDS["todoId"] ?? "")}`);
+      await expectConformingFailure(response, "NOT_FOUND");
+    });
+  });
+
+  describe("sync", () => {
+    it("should conform on a bootstrap and on a follow-up page", async () => {
+      const first = await expectConformingSuccess<{ cursor: string }>(
+        await syl.api("/sync"),
+        "syncSinceCursor",
+      );
+      await expectConformingSuccess(
+        await syl.api(`/sync?since=${encodeURIComponent(first.cursor)}&limit=10&types=todo`),
+        "syncSinceCursor",
+      );
+    });
+
+    it("should conform when refusing a cursor it did not issue", async () => {
+      // The refusal that matters: a bad cursor read as "start over" or "start
+      // from now" is a device that silently re-downloads or silently skips.
+      const response = await syl.api("/sync?since=not-a-cursor");
+      await expectConformingFailure(response, "VALIDATION_FAILED");
+    });
+
+    it("should hand back a cursor that walks forward over a real write", async () => {
+      const before = await expectConformingSuccess<{ cursor: string }>(
+        await syl.api("/sync"),
+        "syncSinceCursor",
+      );
+      const todo = await expectConformingSuccess<{ id: string }>(
+        await syl.api("/todos", {
+          method: "POST",
+          body: JSON.stringify({ text: "Something the phone should learn about." }),
+        }),
+        "createTodo",
+      );
+
+      const after = await expectConformingSuccess<{
+        changes: { id: string; op: string; resource: Record<string, unknown> | null }[];
+      }>(
+        await syl.api(`/sync?since=${encodeURIComponent(before.cursor)}`),
+        "syncSinceCursor",
+      );
+
+      const change = after.changes.find((candidate) => candidate.id === todo.id);
+      expect(change?.op).toBe("upsert");
+      expect(change?.resource?.["text"]).toBe("Something the phone should learn about.");
     });
   });
 

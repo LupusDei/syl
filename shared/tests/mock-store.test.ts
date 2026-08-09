@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { MockStore, mockId, nowIso, page } from "../src/mock/store.js";
+import { MockCursorError, MockStore, mockId, nowIso, page } from "../src/mock/store.js";
 import { loadSchemas } from "../src/spec.js";
 import { validate } from "../src/validate.js";
 
@@ -322,18 +322,51 @@ describe("cursor sync", () => {
     expect(second.hasMore).toBe(false);
   });
 
-  it("should treat a corrupt cursor as the beginning rather than throwing", () => {
-    // A client that persisted a cursor across a schema change must recover,
-    // not crash on every launch forever.
+  it("should refuse a cursor it did not issue rather than silently starting over", () => {
+    // This used to return the whole log, on the reasoning that a client which
+    // persisted a cursor across a schema change should recover rather than
+    // crash forever. The reasoning was fine and the placement was wrong: the
+    // real service refuses, so the forgiving mock let a client ship without
+    // ever handling the refusal — and the two failure modes it hides are a
+    // device that re-downloads everything on every foreground, and one that
+    // skips whatever it missed. Recovery belongs on the client, where it can
+    // decide to bootstrap deliberately. `syl-c1m`.
     store.createTodo({ text: "one" });
-    expect(store.sync("not-base64-at-all!!", 50).changes.length).toBe(1);
+    expect(() => store.sync("not-base64-at-all!!", 50)).toThrow(MockCursorError);
+    expect(() => store.sync(Buffer.from('{"o":-1}').toString("base64url"), 50)).toThrow(
+      MockCursorError,
+    );
   });
 
-  it("should record a delete with a null resource", () => {
+  it("should carry the resource as it is now, not as it was when it changed", () => {
+    // "State, not history" — the property the contract publishes and the real
+    // service gets by reading the row back at response time. A mock that
+    // stored snapshots would hand a slow-paging client a replay of history and
+    // a fast one the current state, and only one of those matches production.
+    const todo = store.createTodo({ text: "first wording" });
+    store.updateTodo(todo.id, { text: "second wording" });
+
+    const changes = store.sync(undefined, 50).changes.filter((c) => c.id === todo.id);
+    expect(changes.length).toBeGreaterThan(1);
+    for (const change of changes) {
+      expect(change.resource?.["text"]).toBe("second wording");
+    }
+  });
+
+  it("should keep an upsert an upsert while the row is still there", () => {
     const id = store.todos[0]?.id ?? "";
     store.completeTodo(id);
     const change = store.sync(undefined, 50).changes[0];
     expect(change?.op).toBe("upsert");
     expect(change?.resource).not.toBeNull();
+  });
+
+  it("should spell a row that has gone away as a delete with no resource", () => {
+    const todo = store.createTodo({ text: "briefly held" });
+    store.todos = store.todos.filter((candidate) => candidate.id !== todo.id);
+
+    const change = store.sync(undefined, 50).changes.find((c) => c.id === todo.id);
+    expect(change?.op).toBe("delete");
+    expect(change?.resource).toBeNull();
   });
 });
