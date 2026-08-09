@@ -1,0 +1,65 @@
+name: iOS against a real backend
+
+# `backend/tests/integration/ios-live-server.test.ts` boots a throwaway Syl on a free
+# port with a real on-disk store, pairs a device over HTTP, and hands the token to
+# `swift test --filter LiveServerTests`. The Swift side then drives the `APIClient` and
+# `WebSocketClient` the app ships at the real service.
+#
+# It is the only thing in this repository where shipping Swift and the real backend
+# exchange a byte. Everything else on both sides is measured against
+# `shared/openapi.yaml` — which is exactly why both sides are green while disagreeing:
+# the clients and the mock were written from that document, and the service was written
+# separately. Three of the four open iOS P0s came out of this suite's first execution.
+#
+# ## Why this is its own workflow
+#
+# `ios.yml` runs `ios/scripts/test.sh`, which now includes this suite, so changes under
+# `ios/` are covered there. But `ios.yml` watches `ios/**` and nothing else, and the
+# drift this catches is mostly the *service* moving under a client that still compiles.
+# Widening `ios.yml` would run a simulator build on every backend commit; this runs the
+# one job that matters and nothing else.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'shared/**'
+      - '.github/workflows/ios-live.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'shared/**'
+      - '.github/workflows/ios-live.yml'
+
+concurrency:
+  group: ios-live-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live:
+    name: SylKit against the real service
+    # macOS because the suite spawns `swift test`. Same image as `ios.yml`: one runner,
+    # one toolchain, one set of answers about what the app was actually built against.
+    runs-on: macos-26
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # .nvmrc is the single source of truth. Node 22 is required rather than
+      # preferred — node:sqlite is what the stores are built on, and the service this
+      # suite boots is the real one.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `SYL_IOS_LIVE=1` is the whole point of this job. Without it the file skips
+      # itself and reports success having checked nothing — which is what it did
+      # everywhere, for as long as it existed (`syl-e4f`).
+      - name: The iOS client against the real backend
+        run: SYL_IOS_LIVE=1 npx vitest run backend/tests/integration/ios-live-server.test.ts

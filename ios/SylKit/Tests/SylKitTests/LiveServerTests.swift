@@ -26,8 +26,15 @@ import XCTest
 /// ```
 ///
 /// `backend/tests/integration/ios-live-server.test.ts` does that assembly
-/// automatically against a throwaway service, and is itself opt-in behind
-/// `SYL_IOS_LIVE=1`.
+/// automatically against a throwaway service, and **that** is what runs in anger:
+/// `ios/scripts/test.sh` invokes it, `ios.yml` runs the script, and `ios-live.yml`
+/// runs it again for backend and shared changes. Until `syl-e4f` it ran in none of
+/// them and the whole client/service boundary was verified by a command nobody
+/// issued — this file self-skips without `SYL_LIVE_URL`, so it looked identical to
+/// passing.
+///
+/// **A skip here is not a pass.** If this suite reports "skipped" inside an
+/// automated run, the run checked nothing that matters and the harness is broken.
 final class LiveServerTests: XCTestCase {
     private struct Live {
         let url: URL

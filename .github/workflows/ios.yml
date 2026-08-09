@@ -38,7 +38,19 @@ jobs:
       # whole repository has to be here — a sparse checkout of `ios/` would fail with
       # "could not find shared/fixtures".
 
-      # BOTH commands, and this is the point of the job.
+      # Node, because `scripts/test.sh` now boots a real backend for SylKit to talk to
+      # (`syl-e4f`). That phase spawns `swift test` from a vitest harness, so both
+      # toolchains have to be present in this one job.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ALL THREE commands, and this is the point of the job.
       #
       # A scheme's TestAction CANNOT run a local SPM package's test target. A
       # TestableReference pointing at SylKitTests parses fine and is then silently
@@ -46,10 +58,10 @@ jobs:
       # possible failure for a test gate: green CI, zero tests executed.
       #
       # `scripts/test.sh` runs `swift test` (SylKit and the contract suite, on the
-      # host, no simulator) and then `xcodebuild test` (the app target, on a
-      # simulator). Running either alone leaves half the suite unexecuted and nothing
-      # says so.
-      - name: Run both halves of the suite
+      # host, no simulator), then the live-backend phase, then `xcodebuild test` (the
+      # app target, on a simulator). Running any one alone leaves the rest unexecuted
+      # and nothing says so.
+      - name: Run every phase of the suite
         run: ios/scripts/test.sh
 
   # Deliberately NOT gated on a version change.
