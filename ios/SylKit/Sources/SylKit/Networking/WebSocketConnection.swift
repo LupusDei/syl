@@ -62,15 +62,16 @@ extension ServerConfiguration {
             throw SocketURLError.malformedServerURL(baseURL)
         }
 
-        // Lowercased first: schemes are case-insensitive, and `URLSession` compares
-        // this one literally.
+        // Lowercased to compare, because schemes are case-insensitive by RFC and
+        // `URLSession` compares this one literally. Reported in the case it was
+        // written in, because that is what the Commander typed and will go looking for.
         switch components.scheme?.lowercased() {
         case "http", "ws":
             components.scheme = "ws"
         case "https", "wss":
             components.scheme = "wss"
-        case let other:
-            throw SocketURLError.unsupportedScheme(other)
+        default:
+            throw SocketURLError.unsupportedScheme(components.scheme)
         }
 
         guard let url = components.url else {
