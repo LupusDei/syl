@@ -260,6 +260,38 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         }
     }
 
+    /// What the admin WebView is given, and nothing besides.
+    ///
+    /// This is the **only** place in the app that hands out the raw bearer token
+    /// rather than a client with it already attached, and it is written as two named
+    /// closures so that stays visible. See `AdminConsoleViewModel` for what is done
+    /// with it and `AdminNavigationPolicy` for the condition it is done under.
+    ///
+    /// `verify` is the same `whoami` call as `verifyPairing`, and draws the same
+    /// distinction — but it deliberately does **not** clear the token on a refusal.
+    /// Opening a debug screen is not a reason to un-pair the app; the screen says the
+    /// credential was rejected, and `verifyPairing` on the next foreground is what acts
+    /// on it.
+    var adminConsoleAccess: AdminConsoleAccess {
+        let tokens = self.tokens
+        let backend = self.backend
+        return AdminConsoleAccess(
+            readCredential: { tokens.read() },
+            verify: {
+                do {
+                    _ = try await backend.client().send(SylAPI.whoami())
+                    return .authenticated
+                } catch let error as APIError where error.requiresReauthentication {
+                    return .rejected
+                } catch let error as APIError {
+                    return .unreachable(error.errorDescription ?? error.localizedDescription)
+                } catch {
+                    return .unreachable(error.localizedDescription)
+                }
+            }
+        )
+    }
+
     /// Foreground reconcile. Push collapses a night of notifications into one and
     /// Apple offers no way to ask what arrived, so this is where anything that was
     /// dropped or coalesced reappears.
