@@ -150,20 +150,35 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(try outbox.count(), 1)
     }
 
-    // MARK: - Writes the service does not deduplicate
+    // MARK: - Writes after an ambiguous failure
 
-    func testShouldParkASnoozeThatMayAlreadyHaveTakenEffect() async throws {
-        // `Idempotency-Key` is in the contract for every write but only message sends
-        // honour it today (syl-1mz). Retrying a snooze after an ambiguous failure would
-        // defer the reminder by another fifteen minutes.
+    func testShouldRetryASnoozeAfterAnAmbiguousFailureNowThatTheServerDeduplicates() async throws {
+        // This used to park. `Idempotency-Key` was in the contract for every write but
+        // only message sends honoured it, so a retried snooze deferred the reminder by
+        // another fifteen minutes and the client had to refuse to try. `syl-ux1` put
+        // every implemented write through the server's ledger, so the retry replays the
+        // stored answer and the workaround is retired.
         try enqueueSnooze(key: "key-00000001")
 
         let report = await makeEngine(
             push: { _ in throw APIError.transport(code: .timedOut, description: "timed out") }
         ).synchronise()
 
-        XCTAssertEqual(report.blocked, 1)
-        XCTAssertEqual(report.deferred, 0)
+        XCTAssertEqual(report.blocked, 0)
+        XCTAssertEqual(report.deferred, 1)
+        XCTAssertEqual(try outbox.pending().count, 1, "retried, carrying the same key")
+        XCTAssertEqual(try outbox.blocked().count, 0)
+    }
+
+    func testShouldStillParkAnIntentThatIsDeclaredUnsafeToReplay() async throws {
+        // The parking machinery is not deleted just because nothing currently reaches
+        // it. It is the honest response if a future write forgets the ledger, so it
+        // stays covered: parked means neither retried nor dropped.
+        try enqueueSnooze(key: "key-00000001")
+        let record = try XCTUnwrap(try outbox.pending().first)
+
+        try outbox.block(record, reason: "may already have taken effect")
+
         XCTAssertEqual(try outbox.pending().count, 0, "not retried")
         XCTAssertEqual(try outbox.blocked().count, 1, "and not dropped either")
     }
@@ -182,8 +197,8 @@ final class SyncEngineTests: XCTestCase {
     }
 
     func testShouldStillRetryAMessageAfterAnAmbiguousFailure() async throws {
-        // Message sends are deduplicated by the clientId unique index, so a replay is
-        // safe and the bubble must not hang pending forever.
+        // Message sends are deduplicated by the clientId unique index as well as by
+        // the ledger, so a replay is safe and the bubble must not hang pending forever.
         try enqueueSend(clientId: "c1", key: "key-00000001")
 
         let report = await makeEngine(
@@ -194,13 +209,16 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(try outbox.pending().count, 1)
     }
 
-    func testShouldKnowWhichIntentsAreSafeToReplayBlind() {
-        XCTAssertTrue(OutboxRecord.Kind.sendMessage.isSafeToReplayBlind)
-        XCTAssertTrue(OutboxRecord.Kind.acknowledgeDelivery.isSafeToReplayBlind)
-        XCTAssertTrue(OutboxRecord.Kind.completeReminder.isSafeToReplayBlind)
-        XCTAssertFalse(OutboxRecord.Kind.snoozeReminder.isSafeToReplayBlind)
-        XCTAssertFalse(OutboxRecord.Kind.createTodo.isSafeToReplayBlind)
-        XCTAssertFalse(OutboxRecord.Kind.createReminder.isSafeToReplayBlind)
+    func testShouldTreatEveryIntentAsSafeToReplayBlind() {
+        // Every kind, and the list is exhaustive on purpose: a new kind added without
+        // an idempotency story fails this test rather than quietly duplicating.
+        for kind in OutboxRecord.Kind.allCases {
+            XCTAssertTrue(
+                kind.isSafeToReplayBlind,
+                "\(kind.rawValue) must survive a retry — every implemented write now "
+                    + "goes through the server's idempotency ledger (syl-ux1)"
+            )
+        }
     }
 
     func testShouldClassifyPermanentAndRecoverableFailuresApart() {

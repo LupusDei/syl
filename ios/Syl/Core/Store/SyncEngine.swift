@@ -104,12 +104,17 @@ actor SyncEngine {
                     report.failures.append("\(record.kind.rawValue): \(error.localizedDescription)")
                 } else if !record.kind.isSafeToReplayBlind, error.mayHaveReachedTheServer {
                     // The request may have landed and the service does not deduplicate
-                    // this kind — `Idempotency-Key` is in the contract but only message
-                    // sends honour it today (`syl-1mz`). Retrying a snooze here would
-                    // defer the reminder by another fifteen minutes, which is exactly
-                    // the quiet kind of wrong this project cares most about.
+                    // this kind. Retrying a snooze in that state would defer the
+                    // reminder by another fifteen minutes, which is exactly the quiet
+                    // kind of wrong this project cares most about.
                     //
                     // So it is parked, not dropped. Nothing vanishes; it waits visibly.
+                    //
+                    // `syl-ux1` made every implemented write honour `Idempotency-Key`,
+                    // so `isSafeToReplayBlind` is now true for every kind and this
+                    // branch no longer fires. It stays as the honest response if that
+                    // ever stops holding — a new write that forgets the ledger, or a
+                    // retry arriving after the ledger's retention has dropped the key.
                     try? outbox.block(record, reason: error.localizedDescription)
                     report.blocked += 1
                     report.failures.append(
