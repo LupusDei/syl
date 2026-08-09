@@ -28,7 +28,11 @@ describe("the dev proxy target", () => {
       // The path must be a static literal — a template string is not
       // statically analysable and fails as "unknown variable dynamic import".
       vi.resetModules();
-      const mod = await import("../../vite.config.ts");
+      // No `.ts` extension: allowImportingTsExtensions is off, so tsc rejects
+      // it (TS5097) even though vitest resolves it happily. Caught by
+      // `npm run verify` and not by running the test — which is the argument
+      // for the gate being typecheck AND tests rather than either alone.
+      const mod = await import("../../vite.config");
       const config = mod.default as {
         server?: { proxy?: Record<string, { target?: string }> };
       };
