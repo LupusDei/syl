@@ -208,6 +208,27 @@ describe("pushDueDeliveries", () => {
     expect(outbox.get(id)?.state).toBe("pending");
   });
 
+  it("should judge each row's retryability on its own attempt", async () => {
+    // A token unregistered while sending an earlier row says nothing about
+    // whether a later one should be retried. Sharing the flag across the pass
+    // would turn a permanent configuration error into an endless retry.
+    const first = enqueue();
+    const second = enqueue();
+    register(IPHONE);
+    const apns = scriptedApns([
+      { ok: false, status: 410, reason: "Unregistered", disposition: "unregister" },
+      { ok: false, status: 400, reason: "BadTopic", disposition: "permanent" },
+    ]);
+
+    await pushDueDeliveries({ outbox, devices, apns });
+
+    expect(outbox.get(first)?.state).toBe("pending");
+    // The device was unregistered by the first row, so the second found no
+    // targets at all — which is itself a wait, not a permanent failure.
+    expect(outbox.get(second)?.state).toBe("pending");
+    expect(outbox.get(second)?.lastError).toContain("No device");
+  });
+
   it("should hold a row when no device has registered yet", async () => {
     const id = enqueue();
     const result = await pushDueDeliveries({ outbox, devices, apns: scriptedApns([ACCEPTED]) });

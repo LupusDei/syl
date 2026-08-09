@@ -292,6 +292,16 @@ export class ApnsClient {
   readonly #provider: ApnsProviderToken;
   readonly #timeoutMs: number;
   readonly #sessions = new Map<string, ClientHttp2Session>();
+  /**
+   * How many requests are in flight, per session.
+   *
+   * A session is unreffed while idle so the sender is never a reason for the
+   * process to stay alive, and reffed while it is carrying something so an
+   * awaited send cannot be starved by the event loop emptying. A bare
+   * ref/unref pair would get that wrong the moment two sends overlap: the
+   * first to settle would unref a session the second is still using.
+   */
+  readonly #inFlight = new Map<string, number>();
 
   constructor(options: ApnsClientOptions) {
     this.#credentials = options.credentials;
@@ -338,6 +348,7 @@ export class ApnsClient {
 
     const result = await this.#request(
       session,
+      origin,
       headers,
       body,
       notification.timeoutMs ?? this.#timeoutMs,
@@ -375,6 +386,7 @@ export class ApnsClient {
         }),
     );
     this.#sessions.clear();
+    this.#inFlight.clear();
     await Promise.all(closing);
   }
 
@@ -404,11 +416,25 @@ export class ApnsClient {
 
   #forget(origin: string, session: ClientHttp2Session): void {
     if (this.#sessions.get(origin) === session) this.#sessions.delete(origin);
+    this.#inFlight.delete(origin);
+  }
+
+  #beginRequest(origin: string, session: ClientHttp2Session): void {
+    const count = (this.#inFlight.get(origin) ?? 0) + 1;
+    this.#inFlight.set(origin, count);
+    if (count === 1) session.ref();
+  }
+
+  #endRequest(origin: string, session: ClientHttp2Session): void {
+    const count = Math.max(0, (this.#inFlight.get(origin) ?? 0) - 1);
+    this.#inFlight.set(origin, count);
+    if (count === 0) session.unref();
   }
 
   /** One request/response exchange, reduced to an {@link ApnsResult}. */
   #request(
     session: ClientHttp2Session,
+    origin: string,
     headers: Record<string, string | number>,
     body: string,
     timeoutMs: number,
@@ -419,9 +445,7 @@ export class ApnsClient {
       const settle = (result: ApnsResult): void => {
         if (settled) return;
         settled = true;
-        // A session with nothing in flight goes back to not holding the
-        // process open.
-        session.unref();
+        this.#endRequest(origin, session);
         resolve(result);
       };
 
@@ -429,7 +453,7 @@ export class ApnsClient {
       try {
         // Referenced only while a request is in flight, so an awaited send
         // cannot be starved by the event loop emptying.
-        session.ref();
+        this.#beginRequest(origin, session);
         stream = session.request(headers);
       } catch {
         settle(this.#failure(TRANSPORT_FAILURE, "ConnectionFailed"));

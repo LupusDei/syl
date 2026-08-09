@@ -409,6 +409,58 @@ describe("JobRunner", () => {
       loop.stop();
     });
 
+    it("should keep an event-driven job alive after a thrown handler", async () => {
+      // An event trigger has no expression to compute a next instant from, so
+      // a failed run that returns none would release the job with a null
+      // instant and it would go permanently dormant. For reminder delivery
+      // that is every future reminder dropped, on one thrown exception.
+      handlers.set("reminder_delivery", () => {
+        throw new Error("APNs is on fire");
+      });
+      const job = define({ trigger: { type: "event", event: "reminder.due" }, nextRunAt: new Date(now).toISOString() });
+
+      const loop = runner();
+      await loop.start();
+
+      const after = store.get(job.id);
+      expect(after?.state).toBe("pending");
+      expect(after?.nextRunAt).not.toBeNull();
+      expect(Date.parse(after?.nextRunAt ?? "")).toBeGreaterThan(now);
+      loop.stop();
+    });
+
+    it("should keep an event-driven job alive when its occurrence is skipped", async () => {
+      handlers.set("heartbeat", () => ({ outcome: "success" }));
+      const job = define({
+        kind: "heartbeat",
+        priority: "background",
+        trigger: { type: "event", event: "something.happened" },
+        nextRunAt: new Date(now).toISOString(),
+        catchUp: { policy: "skip" },
+      });
+      now += 5 * MINUTE;
+
+      const loop = runner();
+      expect((await loop.start()).skipped).toEqual([job.id]);
+      expect(store.get(job.id)?.nextRunAt).not.toBeNull();
+      loop.stop();
+    });
+
+    it("should leave a manual job dormant, because dormant is what manual means", async () => {
+      const job = define({
+        kind: "research_brief",
+        priority: "background",
+        trigger: { type: "manual" },
+        nextRunAt: new Date(now).toISOString(),
+      });
+
+      const loop = runner();
+      await loop.start();
+
+      expect(store.get(job.id)?.nextRunAt).toBeNull();
+      loop.stop();
+    });
+
     it("should report an error through the injected reporter", async () => {
       const seen: unknown[] = [];
       handlers.set("reminder_delivery", () => {

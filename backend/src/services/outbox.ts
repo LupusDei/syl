@@ -55,6 +55,17 @@ export const BACKOFF_MS: readonly number[] = [
 /** Up to this fraction of a backoff step is added at random. */
 const JITTER_FRACTION = 0.2;
 
+/**
+ * How long a claimed row may stay `sending` before another pass reclaims it.
+ *
+ * A process that dies between `markSending` and the result leaves a row in
+ * flight with nobody carrying it. If claiming cleared the attempt instant
+ * outright, that row would sit there forever — a silently dropped reminder
+ * with a perfectly healthy-looking table. So a claim is a *deadline*, not a
+ * removal, and the reclaim is what makes a crash mid-send survivable.
+ */
+export const SENDING_STALE_MS = 60_000;
+
 /** Quiet hours, and the zone they are expressed in. */
 export interface QuietHoursPolicy {
   readonly quiet: QuietHours;
@@ -355,15 +366,22 @@ export class Outbox {
     return next;
   }
 
-  /** Claim a row for an attempt. Counts the attempt before it is made. */
+  /**
+   * Claim a row for an attempt. Counts the attempt before it is made.
+   *
+   * The claim carries a deadline rather than clearing the attempt instant. A
+   * process that dies between here and the result would otherwise leave the
+   * row `sending` with a null `next_attempt_at`, which no query would ever
+   * return again — a silently dropped reminder in a table that looks healthy.
+   */
   markSending(id: string): Delivery | null {
     this.#db
       .prepare(
         `UPDATE deliveries
-            SET state = 'sending', attempts = attempts + 1, next_attempt_at = NULL
+            SET state = 'sending', attempts = attempts + 1, next_attempt_at = ?
           WHERE id = ? AND state IN ('pending', 'sending')`,
       )
-      .run(id);
+      .run(instant(this.#clock() + SENDING_STALE_MS), id);
     return this.get(id);
   }
 

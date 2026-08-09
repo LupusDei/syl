@@ -95,6 +95,9 @@ export async function pushDueDeliveries(
     let uniqueId: string | null = null;
     let anyAccepted = false;
     let anyRetryable = false;
+    // Per delivery, not per pass. A token unregistered while sending an
+    // earlier row says nothing about whether THIS one should be retried.
+    let anyUnregistered = false;
     const errors: string[] = [];
 
     for (const target of targets) {
@@ -111,6 +114,7 @@ export async function pushDueDeliveries(
       if (result.disposition === "unregister") {
         devices.deactivateByToken(target.token);
         unregistered.push(target.deviceId);
+        anyUnregistered = true;
       }
       if (result.disposition === "retry") anyRetryable = true;
     }
@@ -128,7 +132,7 @@ export async function pushDueDeliveries(
       // A token that was just unregistered is not retryable against that
       // token — but the phone re-registering is exactly the case the outbox
       // exists to survive, so the row waits rather than failing outright.
-      retryable: anyRetryable || unregistered.length > 0,
+      retryable: anyRetryable || anyUnregistered,
     });
     failed.push(delivery.id);
   }

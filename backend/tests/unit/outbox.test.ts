@@ -5,6 +5,7 @@ import {
   BACKOFF_MS,
   MAX_ATTEMPTS,
   Outbox,
+  SENDING_STALE_MS,
   backoffFor,
   type EnqueueDelivery,
 } from "../../src/services/outbox.js";
@@ -196,7 +197,21 @@ describe("Outbox", () => {
 
       expect(claimed?.state).toBe("sending");
       expect(claimed?.attempts).toBe(1);
-      expect(claimed?.nextAttemptAt).toBeNull();
+      // A deadline, not a removal: see the reclaim test below.
+      expect(claimed?.nextAttemptAt).toBe(new Date(now + SENDING_STALE_MS).toISOString());
+    });
+
+    it("should reclaim a row whose send never came back", () => {
+      // A process that dies between markSending and the result would leave
+      // this row `sending` forever if claiming cleared the attempt instant —
+      // a silently dropped reminder in a table that looks perfectly healthy.
+      const { delivery } = outbox.enqueue(reminderDelivery());
+      const claimed = outbox.markSending(delivery.id);
+
+      expect(claimed?.nextAttemptAt).not.toBeNull();
+      expect(outbox.due(now)).toHaveLength(0);
+      expect(outbox.due(now + SENDING_STALE_MS)).toHaveLength(1);
+      expect(outbox.nextDueAt()).toBe(new Date(now + SENDING_STALE_MS).toISOString());
     });
 
     it("should record acceptance without calling it delivered", () => {

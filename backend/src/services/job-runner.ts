@@ -34,6 +34,23 @@ export const MIN_TICK_MS = 10;
 /** How long a lease is held before another runner may reclaim it. */
 export const DEFAULT_LEASE_MS = 5 * 60_000;
 
+/**
+ * Keep an event-driven job alive when it did not schedule itself.
+ *
+ * An `event` trigger has no expression to compute a next instant from — the
+ * job itself decides, by returning `nextRunAt`. A run that *fails* or is
+ * *skipped* never returns one, so without this the job would be released with
+ * a null instant and go permanently dormant. For the reminder-delivery job
+ * that is every future reminder silently dropped, on the back of one thrown
+ * exception.
+ *
+ * A `manual` trigger deliberately does not get this: dormant is what manual
+ * means, and somebody triggers it.
+ */
+function keepAliveFor(job: Job, now: number): string | undefined {
+  return job.trigger.type === "event" ? instant(now + MAX_TICK_MS) : undefined;
+}
+
 /** Later than this after its instant, and a run is late. */
 export const LATE_THRESHOLD_MS = 60_000;
 
@@ -282,7 +299,7 @@ export class JobRunner {
       // A skip is recorded, not silent. The gap between what was scheduled and
       // what happened is the whole reason the runs table exists.
       this.#store.finishRun(run.id, { outcome: "skipped", summary: decision.reason });
-      this.#store.release(leased.id, "skipped", run.id);
+      this.#store.release(leased.id, "skipped", run.id, keepAliveFor(leased, now));
       return "skipped";
     }
 
@@ -292,7 +309,7 @@ export class JobRunner {
         outcome: "failure",
         error: `No handler is registered for ${leased.kind}.`,
       });
-      this.#store.release(leased.id, "failure", run.id);
+      this.#store.release(leased.id, "failure", run.id, keepAliveFor(leased, now));
       return "failure";
     }
 
@@ -316,7 +333,7 @@ export class JobRunner {
         outcome: "failure",
         error: error instanceof Error ? error.message : String(error),
       });
-      this.#store.release(leased.id, "failure", run.id);
+      this.#store.release(leased.id, "failure", run.id, keepAliveFor(leased, now));
       return "failure";
     }
   }
