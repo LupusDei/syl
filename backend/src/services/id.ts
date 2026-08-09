@@ -28,7 +28,11 @@ export type IdType =
   | "delivery"
   | "job"
   | "run"
-  | "step";
+  | "step"
+  // Telemetry, not memory. A dream session is a row in the dream log
+  // (`0013_dream_log.sql`) and never a node in the graph — see the header of
+  // that migration for why the two must not touch.
+  | "dream_session";
 
 /**
  * `syl:<type>:<uuid>`, matching the contract's `Id` pattern exactly.
