@@ -6,6 +6,7 @@ import { DeviceTokenService } from "../../src/services/device-token-service.js";
 import type { Entropy } from "../../src/services/id.js";
 import { IdempotencyStore } from "../../src/services/idempotency.js";
 import { MessageStore } from "../../src/services/message-store.js";
+import { Outbox } from "../../src/services/outbox.js";
 
 /**
  * The pieces a service-level test needs, assembled the way `bootstrap` does.
@@ -66,6 +67,7 @@ export function testDeps(db: SylDatabase): {
   readonly keys: ApiKeyService;
   readonly messages: MessageStore;
   readonly devices: DeviceTokenService;
+  readonly outbox: Outbox;
   readonly idempotency: IdempotencyStore;
 } {
   const clock = fixedClock(TEST_NOW);
@@ -73,6 +75,9 @@ export function testDeps(db: SylDatabase): {
     keys: testKeys(db),
     messages: testMessages(db),
     devices: new DeviceTokenService({ db: db.handle, clock }),
+    // No quiet hours by default: a route test asserting on delivery would
+    // otherwise depend on what hour TEST_NOW happens to be in.
+    outbox: new Outbox({ db: db.handle, clock }),
     idempotency: new IdempotencyStore({ db: db.handle, clock }),
   };
 }
