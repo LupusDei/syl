@@ -4,8 +4,8 @@
       "type": "http",
       "url": "http://localhost:4201/mcp",
       "headers": {
-        "X-Agent-Id": "${ADJUTANT_AGENT_ID:-unknown}",
-        "X-Project-Root": "${ADJUTANT_PROJECT_ROOT:-}"
+        "X-Agent-Id": "tassadar",
+        "X-Project-Root": "/Users/Reason/code/ai/syl/worktrees/tassadar"
       }
     }
   }

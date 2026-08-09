@@ -20,6 +20,8 @@ import {
   IntakeQueue,
 } from "./connections/intake-job.js";
 import { createIntakeRouter } from "./connections/intake-route.js";
+import { ADMIN_BASE_PATH, createAdminRouter } from "./routes/admin.js";
+import { describeAdmin, inspectAdminBundle } from "./ops/admin-bundle.js";
 import { ArticleIntake } from "./connections/intake.js";
 import { IntakeStore } from "./connections/intake-store.js";
 import { requireBearerToken } from "./middleware/auth.js";
@@ -265,6 +267,14 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   api.use(createIntakeRouter({ intake, idempotency, authenticate }));
 
   app.use(API_BASE_PATH, api);
+
+  // The admin, AFTER the contract and scoped to its own prefix. Static serving
+  // is strictly additive: the SPA's history fallback lives inside this router,
+  // so Express cannot dispatch to it for a URL outside `/admin` — which is what
+  // stops a catch-all answering `/api/v1/anything` with an HTML page. See
+  // `routes/admin.ts`, and the ordering cases in `tests/unit/admin.test.ts`.
+  app.use(ADMIN_BASE_PATH, createAdminRouter({ root: config.adminDir }));
+
   app.use(notFound);
   app.use(onError);
 
@@ -439,6 +449,20 @@ export function sessionStoreFor(config: SylConfig): ReturnType<typeof memorySess
 /** What `bootstrap` may be told that the configuration cannot say. */
 export interface BootstrapOptions {
   /**
+   * Where a turn's life gets written down.
+   *
+   * Omitted, the service was a BLACK BOX: it logged startup and failures and
+   * nothing in between. The Commander asked her a question from his phone,
+   * watched the logs, and saw no message arrive, no turn begin, and no tool
+   * run — because none of that was ever written. `ConversationService` took an
+   * optional `log` and `bootstrap` never passed one.
+   *
+   * An assistant that acts on your machine with a pre-authorised session is
+   * exactly the thing you must be able to watch. "It is working, trust me" is
+   * not a property; it is the absence of one.
+   */
+  readonly logger?: Logger;
+  /**
    * The clock every store runs on. Omit for the real one.
    *
    * `syl-md5`: `bootstrap` took no clock, so `startLiveService` could not use
@@ -509,6 +533,34 @@ export function bootstrap(
   // conversation; anything that reads fetched content goes through
   // `runReaderTurn` instead and never comes near this object.
   const soul = options.soul ?? readSoul();
+  const log = options.logger;
+
+  // What she is DOING, as it happens.
+  //
+  // The harness already emits an event per step of a turn; nothing was
+  // listening. So a turn that took nine seconds and called three tools looked,
+  // from the logs, exactly like a turn that never happened. Tool calls matter
+  // most: this session runs pre-authorised, so `turn.tool` is the record of
+  // what she actually did on the machine — and the only way to notice her
+  // reaching for something she should not.
+  //
+  // A caller-supplied `onEvent` still wins; this composes rather than replaces,
+  // because tests pass their own and would otherwise lose it.
+  const observe = (event: Parameters<NonNullable<TurnOptions["onEvent"]>>[0]): void => {
+    options.turn?.onEvent?.(event);
+    if (log === undefined) return;
+    if (event.kind === "tool_use") log.info("turn.tool", { tool: event.name });
+    else if (event.kind === "init") log.info("turn.start", { sessionId: event.sessionId });
+    else if (event.kind === "api_error") log.error("turn.api_error", { message: event.message });
+    else if (event.kind === "result") {
+      log.log(event.isError ? "error" : "info", "turn.done", {
+        turns: event.numTurns,
+        costUsd: event.costUsd,
+        isError: event.isError,
+      });
+    }
+  };
+
   const agent = new SylAgent({
     store: sessionStoreFor(config),
     // One memory directory for every lane, and not the CLI's per-project
@@ -518,7 +570,10 @@ export function bootstrap(
     // `memory/auto-memory.ts`.
     autoMemory: autoMemoryAt(config.autoMemoryDirectory),
     ...(soul === undefined ? {} : { soul }),
-    ...(options.turn === undefined ? {} : { turnOptions: options.turn }),
+    // Both halves are load-bearing and neither survives alone: `onEvent` is how
+    // the service observes a turn at all, and the index wrapper is what makes a
+    // written memory findable again.
+    turnOptions: { ...(options.turn ?? {}), onEvent: observe },
     // Wrapped, never bypassed — including when a test substitutes the runner,
     // because "was the index maintained?" is a question about the service and
     // not about which runner ran. Whether a memory can be found again is a
@@ -526,7 +581,21 @@ export function bootstrap(
     // Commander's canary on a haiku turn (`syl-03d`).
     runner: withMemoryIndex(options.runner ?? runTurn),
   });
-  const chat = new ConversationService({ messages, agent, presence });
+  const chat = new ConversationService({
+    messages,
+    agent,
+    presence,
+    // Was omitted entirely, so the only thing that ever reached a file was a
+    // failure — and only via a default that writes to stderr.
+    ...(log === undefined
+      ? {}
+      : {
+          log: (line: string, error?: unknown) => {
+            if (error === undefined) log.info("chat", { message: line });
+            else log.error("chat", { message: line, error: String(error) });
+          },
+        }),
+  });
 
   // Intake, wired end to end: the store the migration now creates, the queue
   // that is `ArticleIntake`'s long-missing scheduler, and the ladder itself.
@@ -757,6 +826,10 @@ export async function startSyl(
     : describeStartup(config);
 
   const power = assessPower();
+  // Looked at once, for the startup lines. The route re-checks per request, so
+  // this is a report rather than a decision — a build that lands while the
+  // service is running still serves.
+  const admin = inspectAdminBundle(config.adminDir);
 
   return {
     database,
@@ -769,6 +842,7 @@ export async function startSyl(
       ...describeRuntime(runtime),
       ...describePushEnvironment(push, { pushConfigured: runtime.pushEnabled }),
       ...describePower(power),
+      ...describeAdmin(admin),
     ],
     startupFields: {
       version: config.version,
@@ -784,6 +858,8 @@ export async function startSyl(
       pushEnvironment: push.environment,
       pushEnvironmentDeclared: push.declared,
       powerOk: power.ok,
+      adminDir: admin.root,
+      adminBundlePresent: admin.present,
     },
     close: async () => {
       // The loop first. A tick that begins while the socket is closing has
@@ -839,7 +915,7 @@ export async function main(options: { readonly logger?: Logger } = {}): Promise<
     },
   });
 
-  const syl = await startSyl(config);
+  const syl = await startSyl(config, { logger });
 
   close = async () => {
     await syl.close();

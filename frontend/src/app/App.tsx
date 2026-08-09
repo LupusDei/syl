@@ -10,6 +10,7 @@ import { JobsView } from "../features/jobs/JobsView";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import type { StorageLike } from "../storage";
 import { AppLayout } from "./AppLayout";
+import { ADMIN_BASENAME } from "./basename";
 import { NAV_ITEMS } from "./nav";
 import { NotFoundView, OverviewView, PlaceholderView } from "./views";
 
@@ -72,7 +73,9 @@ export function App({ storage }: AppProps): ReactElement {
   return (
     <ThemeProvider storage={storage}>
       <AuthProvider storage={storage}>
-        <BrowserRouter>
+        {/* Syl serves this bundle under a prefix; the router has to agree with
+            the server about which one. See `basename.ts`. */}
+        <BrowserRouter basename={ADMIN_BASENAME}>
           <AppShell />
         </BrowserRouter>
       </AuthProvider>

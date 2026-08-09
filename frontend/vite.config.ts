@@ -3,6 +3,17 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react()],
+  // Syl serves this bundle from her own origin at `/admin`, over the tailnet
+  // certificate the phone already trusts — so the built asset URLs have to
+  // carry that prefix. It must equal `ADMIN_BASE_PATH` in
+  // `backend/src/routes/admin.ts`; `backend/tests/integration/admin-bundle.
+  // test.ts` builds this for real and checks that it does.
+  //
+  // The dev server picks the prefix up too, so `npm run dev` serves the admin
+  // at http://localhost:4211/admin/ and dev and production address it the same
+  // way. `scripts/check-bundle.mjs` fails the build if the emitted page ever
+  // stops referencing it.
+  base: "/admin/",
   server: {
     // The admin talks to SYL's service, which is 8888 (`DEFAULT_PORT` in
     // backend/src/config.ts, overridden by SYL_PORT). Proxying in dev keeps the
@@ -10,10 +21,12 @@ export default defineConfig({
     // the API base URL is the same string in dev and prod.
     //
     // **NOT 4201.** That is ADJUTANT's backend, and the comment here used to say
-    // so — it named .mcp.json, which points at Adjutant because that is where
-    // agents send messages, not where Syl serves its API. This is the same
-    // two-backends confusion CLAUDE.md records as having already cost a real
-    // failure, arriving a second time in a different file.
+    // so — it named `.mcp.json`, which points at Adjutant because that is where
+    // agents send messages, not where Syl serves its API. This is exactly the
+    // misreading `docs/CONTEXT.md` §7 already records as having cost a real
+    // failure, arriving a second time in a different file. Two agents found it
+    // independently within the hour, which is its own evidence about how easy
+    // the mistake is to make.
     //
     // It failed quietly, which is why it survived: 4201 is usually LISTENING,
     // so the proxy connected happily and Adjutant answered every /api call with

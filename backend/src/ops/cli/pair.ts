@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -67,6 +67,40 @@ export interface PairingBriefing {
  *
  * @throws {Error} naming the path it resolved and how to correct it.
  */
+
+/**
+ * The store the RUNNING SERVICE uses, read from its installed launchd plist.
+ *
+ * `assertExistingStore` below asks "does a database exist at this path?" That
+ * is the wrong question, and it let a real failure through: the repo-local
+ * `.syl/syl.db` exists from development runs, so the check passed while the
+ * service was reading `~/.syl/syl.db`. The command printed a valid-looking
+ * pairing code into a store nothing serves — and the symptom on the phone is
+ * "code not accepted", forever, with the command reporting success.
+ *
+ * The right question is "is this the database the SERVICE is using?", and the
+ * plist is the only authority on that. It is written by `npm run launchd
+ * --install` and read by launchd itself, so it cannot disagree with reality
+ * the way an environment variable in somebody's shell can.
+ *
+ * Returns `undefined` when nothing is installed, in which case the caller
+ * falls back to configuration — correct for a developer running the service by
+ * hand.
+ */
+export function storeOfInstalledService(home?: string): string | undefined {
+  const base = home ?? process.env["HOME"];
+  if (base === undefined) return undefined;
+  const plist = join(base, "Library", "LaunchAgents", "com.jmm.syl.core.plist");
+  if (!existsSync(plist)) return undefined;
+  // Deliberately a regex over the XML rather than a plist parser: this is one
+  // string from a file we generated ourselves, and taking a dependency (or
+  // shelling out to `plutil`, which is macOS-only) to read it would cost more
+  // than it is worth.
+  const xml = readFileSync(plist, "utf8");
+  const match = /<key>SYL_DB_PATH<\/key>\s*<string>([^<]+)<\/string>/.exec(xml);
+  return match?.[1];
+}
+
 export function assertExistingStore(databasePath: string, home?: string): void {
   if (existsSync(databasePath)) return;
   throw new Error(
@@ -100,7 +134,16 @@ export function tailnetBaseURL(certStatusPath: string): string | null {
 }
 
 /** Issue a code against an already-open store, and gather what to say about it. */
-export function issueBriefing(db: SylDatabase, config: SylConfig): PairingBriefing {
+export function issueBriefing(
+  db: SylDatabase,
+  config: SylConfig,
+  // Passed in rather than read from `config`, because the store the SERVICE
+  // uses is authoritative and configuration is not — see
+  // `storeOfInstalledService`. Printing the wrong path here would be worse
+  // than printing none: it is the line an operator checks when a code is
+  // refused.
+  databasePath: string = config.databasePath,
+): PairingBriefing {
   const keys = new ApiKeyService({ db: db.handle });
   const issued: PairingCode = keys.issuePairingCode();
   const live = keys.list().filter((key) => key.revokedAt === null).length;
@@ -109,7 +152,7 @@ export function issueBriefing(db: SylDatabase, config: SylConfig): PairingBriefi
     expiresAt: issued.expiresAt,
     baseURL: tailnetBaseURL(config.certStatusPath),
     pairedDevices: live,
-    databasePath: resolve(config.databasePath),
+    databasePath: resolve(databasePath),
   };
 }
 
@@ -156,12 +199,17 @@ export function describePairing(briefing: PairingBriefing): readonly string[] {
 /** Open the store, issue a code, say what to do with it. */
 export function main(argv: readonly string[] = []): number {
   const config = loadConfig();
+  // The installed service's path WINS over configuration. A shell has no
+  // SYL_DB_PATH, so `loadConfig` falls back to a CWD-relative default that is
+  // very likely the wrong store — see `storeOfInstalledService`.
+  const installed = storeOfInstalledService();
   // Before `openDatabase`, which would otherwise create the wrong store and
   // then succeed at everything else. See `assertExistingStore`.
-  assertExistingStore(config.databasePath, process.env["HOME"]);
-  const db = openDatabase({ path: config.databasePath });
+  const databasePath = installed ?? config.databasePath;
+  assertExistingStore(databasePath, process.env["HOME"]);
+  const db = openDatabase({ path: databasePath });
   try {
-    const briefing = issueBriefing(db, config);
+    const briefing = issueBriefing(db, config, databasePath);
     if (argv.includes("--json")) {
       console.log(JSON.stringify(briefing, null, 2));
     } else {

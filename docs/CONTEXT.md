@@ -92,7 +92,35 @@ revisit without new information.
 | **Isaac** (slagyr) | Clojure/Babashka/Java against our TypeScript, eleven repos pinned by SHA, and its LLM layer is direct-API. See §5 — its *design* is worth stealing even though its base layer is not. |
 | **ACP adapters** | A translation layer buying nothing. ACP exists so any editor can drive any agent; we are not an editor and target one agent. Every adapter found ultimately spawns this same binary or the Agent SDK. |
 
-### One process per turn — a measured constraint, not a choice
+### One process per turn — WAS a measured constraint. It is no longer true.
+
+> **SUPERSEDED 2026-08-09.** Re-measured on CLI 2.1.226 and the constraint has
+> gone. A `result` now arrives **with stdin still open**, and further frames can
+> be sent down the same process. Reproduce with
+> `node scripts/experiments/persistent-session.mjs`.
+>
+> Measured, same process, same session id throughout:
+>
+> ```
+> turn 1 (pays CLI startup)   7728ms
+> follow-up turns             1379ms, 1045ms, 1614ms, 1410ms   (avg 1362ms)
+> ```
+>
+> So the per-turn floor drops from ~5.5-9.7s to **~1.4s** — a 4-7x improvement,
+> and it applies to every turn Syl takes, not just voice.
+>
+> This is why the original note is preserved below rather than deleted. It was
+> correctly measured and honestly recorded, and it was still wrong a few CLI
+> versions later. **A measured constraint has a shelf life**, and this one had
+> quietly decided the entire architecture — one subprocess per turn, `--resume`
+> for continuity, and a latency floor that made real-time voice look impossible.
+> The lesson is not "that was sloppy"; it is that load-bearing measurements
+> against someone else's binary need re-running, and the note should say which
+> version it was taken on. This one did, which is what made it re-testable.
+>
+> Not yet acted on: `runTurn` still spawns per turn. See `syl-per1`.
+
+The original finding, on an earlier CLI:
 
 In `-p` mode with `--input-format stream-json`, **a turn does not complete until
 stdin reaches EOF.** Verified by holding stdin open for 25 seconds: elapsed time

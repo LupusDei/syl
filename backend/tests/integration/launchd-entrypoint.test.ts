@@ -168,7 +168,26 @@ async function awaitLog(
   }
 }
 
-describe("scripts/syl-service.sh", () => {
+/**
+ * macOS only, and it is the SUBJECT that is macOS-only, not the test.
+ *
+ * launchd, `plutil`, `tailscale cert` and BSD shell tooling do not exist on
+ * Linux, and `verify` runs on ubuntu — so this file had been failing on every
+ * push to main. Skipping here is honest: there is no behaviour to be right
+ * about on a platform where the thing under test cannot run.
+ *
+ * But a silent skip would mean NOTHING exercises this in CI, which is this
+ * project's favourite way to be wrong. `.github/workflows/ios.yml` — the only
+ * job on a macOS runner — runs these files explicitly. The coverage moved; it
+ * did not disappear. See `syl-live1`: a skip must name itself, and something
+ * somewhere must run it.
+ */
+const onMacOS = process.platform === "darwin";
+if (!onMacOS) {
+  console.warn(`[launchd-entrypoint.test] skipped: macOS-only. Covered by the macOS job in ios.yml.`);
+}
+
+describe.skipIf(!onMacOS)("scripts/syl-service.sh", () => {
   it("should find a usable node with only launchd's PATH", async () => {
     const started = await start();
     expect(started.output()).toContain("starting");

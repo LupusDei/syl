@@ -471,6 +471,42 @@ done
 
 ---
 
+## 6b. Reachable from the phone — `tailscale serve`
+
+```sh
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8888
+tailscale serve status
+```
+
+**Run once.** `--bg` writes the configuration into `tailscaled`'s own state
+under `/Library/Tailscale`, and the daemon has `RunAtLoad` and `KeepAlive`, so
+it comes back at boot with the config intact. It is not something to re-run
+after every reboot.
+
+**Proves**: the phone can reach Syl at all.
+
+**Why this and not `HOST=0.0.0.0`**: binding every interface would put Syl in
+plain HTTP on the local network, and iOS would still refuse her because it
+wants HTTPS. `serve` terminates TLS with the certificate from step 6 and
+proxies to loopback, so **the service never binds a network interface at all** —
+nothing outside the tailnet can even attempt a connection.
+
+**Worked if**: `scripts/syl-verify.sh status` prints
+
+```
+PASS  tailscale serve is proxying https -> 127.0.0.1:8888
+PASS  https://<your-tailnet-host>/api/v1/health answers over the tailnet
+```
+
+> This step was missing from the runbook and cost an evening. Every other check
+> passed while the phone said "could not reach that Mac", because a green health
+> check on `127.0.0.1` says nothing about whether anything OUTSIDE the machine
+> can reach her. A certificate nothing presents is a certificate that does not
+> exist. The verify script now checks reachability from outside the process, so
+> the same gap cannot recur silently after a reboot.
+
+---
+
 ## Stopping her, and how to insist
 
 ```sh

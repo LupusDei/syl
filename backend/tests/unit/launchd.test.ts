@@ -71,7 +71,27 @@ function roundTrip(value: PlistValue): Record<string, unknown> {
   return JSON.parse(json) as Record<string, unknown>;
 }
 
-describe("toPlistXml", () => {
+/**
+ * `plutil` is macOS-only, and these tests describe macOS-only behaviour.
+ *
+ * `roundTrip` lints every generated plist with Apple's own parser rather than a
+ * JavaScript one, which is the entire point: a malformed plist fails with a line
+ * number from the tool that will actually read it at boot. That binary does not
+ * exist on Linux, and the `verify` job runs on ubuntu — so this file failed on
+ * every push to main with `spawnSync /usr/bin/plutil ENOENT`.
+ *
+ * Skipping on non-Darwin is legitimate: launchd does not exist there either, so
+ * there is nothing to be right about. But a silent skip would mean NOTHING
+ * validates these plists in CI, which is this project's favourite way to be
+ * wrong. So `.github/workflows/ios.yml`, which already runs on macOS, now runs
+ * this file explicitly. The coverage moved; it did not disappear.
+ */
+const onMacOS = process.platform === "darwin";
+if (!onMacOS) {
+  console.warn("[launchd.test] skipped: plutil is macOS-only. Covered by the macOS job in ios.yml.");
+}
+
+describe.skipIf(!onMacOS)("toPlistXml", () => {
   it("should produce something plutil accepts", () => {
     expect(roundTrip({ Label: "x" })).toEqual({ Label: "x" });
   });
@@ -106,7 +126,7 @@ describe("toPlistXml", () => {
   });
 });
 
-describe("the core job", () => {
+describe.skipIf(!onMacOS)("the core job", () => {
   it("should be a plist plutil accepts", () => {
     expect(() => roundTrip(coreJob(paths).plist)).not.toThrow();
   });
@@ -173,7 +193,7 @@ describe("the core job", () => {
   });
 });
 
-describe("the watchdog job", () => {
+describe.skipIf(!onMacOS)("the watchdog job", () => {
   it("should be a plist plutil accepts", () => {
     expect(() => roundTrip(watchdogJob(paths).plist)).not.toThrow();
   });
@@ -203,7 +223,7 @@ describe("the watchdog job", () => {
   });
 });
 
-describe("the certificate job", () => {
+describe.skipIf(!onMacOS)("the certificate job", () => {
   it("should be a plist plutil accepts", () => {
     expect(() => roundTrip(certJob(paths).plist)).not.toThrow();
   });
@@ -235,7 +255,7 @@ describe("the certificate job", () => {
   });
 });
 
-describe("sylLaunchdJobs", () => {
+describe.skipIf(!onMacOS)("sylLaunchdJobs", () => {
   it("should produce all three, each named after its label", () => {
     const jobs = sylLaunchdJobs(paths);
     expect(jobs.map((job) => job.label)).toEqual([CORE_LABEL, WATCHDOG_LABEL, CERT_LABEL]);

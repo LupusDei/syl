@@ -88,6 +88,12 @@ export function testConfig(overrides: Partial<SylConfig> = {}): SylConfig {
     // must not rotate it.
     logDirectory: join(tmpdir(), "syl-test-logs"),
     certStatusPath: join(tmpdir(), "syl-test-cert-status.json"),
+    // A path that deliberately does not exist. A test that says nothing about
+    // the admin gets a service with no admin bundle, rather than one that
+    // quietly serves whatever `frontend/dist` happens to hold on this machine —
+    // which would make the suite's answer depend on whether somebody had run a
+    // build. Tests about the admin pass their own directory.
+    adminDir: join(tmpdir(), "syl-test-no-admin-bundle"),
     ...overrides,
   };
 }

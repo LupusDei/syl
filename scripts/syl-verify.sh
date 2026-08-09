@@ -116,6 +116,41 @@ cmd_status() {
     fail "$HEALTH_URL does not answer"
   fi
 
+  # The check that would have saved an evening.
+  #
+  # Every check above passed while the Commander's phone said "could not reach
+  # that Mac". The service answers on LOOPBACK and speaks plain HTTP; the phone
+  # asks for https://<tailnet-name>. A green health check on 127.0.0.1 says
+  # nothing about whether anything outside this machine can reach her, and a
+  # certificate NOTHING PRESENTS is a certificate that does not exist.
+  #
+  # `tailscale serve` is what bridges the two: it terminates TLS with that
+  # certificate and proxies to loopback, so the service never binds a network
+  # interface. This checks the bridge is actually there — including after a
+  # reboot, which is the case nobody would notice until a reminder failed to
+  # arrive.
+  heading "Reachable from the tailnet"
+  if ! command -v tailscale >/dev/null 2>&1; then
+    fail "no tailscale binary — install the STANDALONE client"
+  elif tailscale serve status 2>/dev/null | grep -q "127.0.0.1:$PORT"; then
+    pass "tailscale serve is proxying https -> 127.0.0.1:$PORT"
+    # Taken from `serve status` rather than parsed out of `status --json`.
+    # It is the URL serve itself reports, so it cannot disagree with what is
+    # actually configured — and a hand-rolled sed over JSON was already wrong
+    # once, silently producing an empty host and a failure that read as
+    # unreachable rather than as a broken check.
+    tailnet_host="$(tailscale serve status 2>/dev/null |
+      /usr/bin/sed -n 's|^https://\([^ ]*\).*|\1|p' | head -1)"
+    if [ -n "$tailnet_host" ] &&
+       curl -fsS --max-time 8 "https://$tailnet_host/api/v1/health" >/dev/null 2>&1; then
+      pass "https://$tailnet_host/api/v1/health answers over the tailnet"
+    else
+      fail "serve is configured but https://$tailnet_host/api/v1/health does not answer"
+    fi
+  else
+    fail "tailscale serve is NOT configured — the phone cannot reach her. Run: sudo tailscale serve --bg --https=443 http://127.0.0.1:$PORT"
+  fi
+
   heading "The tailnet certificate"
   if [ -f "$STATUS_FILE" ]; then
     note "$(cat "$STATUS_FILE")"

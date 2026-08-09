@@ -18,6 +18,7 @@ import {
   loadQuietHours,
   resolveCredentialSource,
 } from "../../src/config.js";
+import { DEFAULT_ADMIN_DIR } from "../../src/ops/admin-bundle.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
 import { testDatabase } from "../helpers/service.js";
 
@@ -79,7 +80,15 @@ describe("loadConfig", () => {
         // `~/Library/Logs`.
         logDirectory: ".syl/logs",
         certStatusPath: ".syl/cert-status.json",
+        // Absolute, and derived from this file's own location rather than from
+        // the environment: the admin bundle is a build artefact of this
+        // checkout, not a deployment setting.
+        adminDir: DEFAULT_ADMIN_DIR,
       });
+    });
+
+    it("should read the admin bundle directory from SYL_ADMIN_DIR", () => {
+      expect(loadConfig({ SYL_ADMIN_DIR: "/srv/syl/admin" }).adminDir).toBe("/srv/syl/admin");
     });
 
     it("should read the database path from SYL_DB_PATH", () => {

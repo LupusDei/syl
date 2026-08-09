@@ -89,6 +89,26 @@ jobs:
           bundler-cache: true
           working-directory: ios
 
+      # Node, because the suite below is not only Swift.
+      #
+      # `ios/scripts/test.sh` has three phases, and its middle one boots a REAL
+      # throwaway Syl service so `LiveServerTests` can drive `APIClient` against
+      # it rather than a mock. That phase needs the backend's dependencies.
+      #
+      # Missing here, this job failed with "node_modules is missing" AFTER
+      # compiling and running all 210 Swift tests — a minute of macOS runner time,
+      # which bills at 10x, spent to discover a setup step. `ios.yml` already had
+      # these two steps; this workflow was assembled without them because its
+      # author was thinking about signing, not about what the test script needs.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Run both halves of the test suite
         # Before signing anything. A build that ships untested is worse than one that
         # does not ship, and this is the last point at which stopping is cheap.

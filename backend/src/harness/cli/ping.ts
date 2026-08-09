@@ -58,9 +58,25 @@ async function main(): Promise<void> {
     ...(soul ? { soul } : {}),
     turnOptions: {
       model: "claude-haiku-4-5",
-      // Only Syl's own MCP config; otherwise the session inherits every
-      // ambient server and the model thrashes on tool discovery.
-      mcpConfig: join(root, ".mcp.json"),
+      // NO MCP, because the SERVICE has none — and a smoke test that runs a
+      // different shape than production is not a smoke test.
+      //
+      // This used to pass `.mcp.json`, on the reasoning that scoping to Syl's
+      // own config beat inheriting every ambient server. True as far as it
+      // went, but `.mcp.json` IS Adjutant, the channel agents use to report to
+      // the Commander while building. So `npm run ping -- "hello"` answered him
+      // through `mcp__adjutant__send_message` — and he rightly asked why his
+      // assistant was replying over the development tooling.
+      //
+      // Worse, it made this command lie about the thing it exists to check.
+      // The service builds `SylAgent` with no MCP config at all, so ping was
+      // exercising a configuration production never uses: different tool
+      // surface, different turn count, different latency. Measured: attaching
+      // it cost ~2.5s per turn and turned "hello" into FOUR turns, three of
+      // them tool calls.
+      //
+      // Syl's reply is the RETURN VALUE of the turn. She needs no tool to
+      // speak; `ConversationService` persists what she says and broadcasts it.
       onEvent: (event) => {
         if (event.kind === "tool_use") console.log(`  [tool] ${event.name}`);
       },

@@ -236,6 +236,32 @@ export class SylAgent {
       // here — this is the trusted lane opting in, and a turn that reads
       // untrusted content must not (see `runReaderTurn`).
       permissionMode: "bypassPermissions",
+      // No ambient MCP. This was missing, and the Commander caught it on the
+      // very first live turn: asked to say hello, Syl answered him through
+      // `mcp__adjutant__send_message`.
+      //
+      // Two things were wrong with that. ADJUTANT IS DEVELOPMENT TOOLING — the
+      // channel agents use to report to him while building. Syl's reply path is
+      // the RETURN VALUE of the turn, which `ConversationService` persists and
+      // broadcasts to his phone. Answering through Adjutant means the message
+      // never enters her conversation history, never reaches the app, and is
+      // invisible to the assistant that has to remember it tomorrow.
+      //
+      // And she reached for it because it was THERE. `--strict-mcp-config` was
+      // off, so every turn inherited the repo's own `.mcp.json`. The cost was
+      // not only architectural: "hello" took FOUR turns — ToolSearch, then
+      // set_status, then send_message, then an answer — which is the same
+      // thrash `CLAUDE.md` measured at 44 turns and $0.39 for one question.
+      // Measured here at ~2.5s of pure latency per turn just for attaching it.
+      //
+      // Scoping the tool surface was already the outstanding follow-up noted in
+      // `CLAUDE.md`; it also bounds what `bypassPermissions` can reach, which
+      // matters more now that she is a real service on a real tailnet.
+      //
+      // If Syl should ever push to Adjutant deliberately, that is a NARROW,
+      // named capability handed to a specific lane — not an ambient surface
+      // every turn inherits.
+      strictMcpConfig: true,
       ...this.#turnOptions,
       // After the spread, not before: if the agent was told where its memory
       // lives, an incidental `turnOptions` must not be able to move it.
