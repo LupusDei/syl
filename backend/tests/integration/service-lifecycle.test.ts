@@ -114,7 +114,7 @@ async function startProcess(
     cwd: repoRoot,
     env: {
       ...inherited,
-      PORT: String(port),
+      SYL_PORT: String(port),
       HOST: "127.0.0.1",
       // `development`, so the APNs assertion is not the thing under test here.
       NODE_ENV: "development",
@@ -267,7 +267,7 @@ describe("the service as a process", () => {
       cwd: repoRoot,
       env: {
         ...process.env,
-        PORT: String(freePort()),
+        SYL_PORT: String(freePort()),
         NODE_ENV: "development",
         SYL_DB_PATH: join(directory, "syl.db"),
         SYL_LOG_DIR: join(directory, "logs"),

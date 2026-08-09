@@ -345,7 +345,21 @@ function parseNodeEnv(raw: string | undefined, problems: string[]): NodeEnv {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): SylConfig {
   const problems: string[] = [];
 
-  const port = parsePort(read(env, "PORT"), problems);
+  // SYL_PORT, not PORT. `PORT` is far too generic a name to trust: it is set
+  // in this very machine's agent environment (to 4201, Adjutant's), and it
+  // silently overrode the built-in default when the launchd plists were
+  // generated — putting Syl straight onto her neighbour's port for the SECOND
+  // time in one day. The first time cost Adjutant's MCP connection.
+  //
+  // Every other variable this service reads is already namespaced —
+  // SYL_DB_PATH, SYL_LOG_DIR, SYL_APNS_*. `PORT` was the lone exception, and
+  // the codebase did not even agree with itself: the core plist wrote `PORT`
+  // while the watchdog read `SYL_PORT`, so the two halves of the same install
+  // could disagree about where the service was.
+  //
+  // Deliberately NOT falling back to `PORT`. A fallback would preserve exactly
+  // the leak this removes.
+  const port = parsePort(read(env, "SYL_PORT"), problems);
   const nodeEnv = parseNodeEnv(read(env, "NODE_ENV"), problems);
 
   // HOST gets its own handling rather than going through `read`. An empty

@@ -157,7 +157,7 @@ export function coreJob(paths: LaunchdPaths): LaunchdJob {
     PATH: launchdPath(paths.home),
     HOME: paths.home,
     NODE_ENV: "production",
-    PORT: String(paths.port),
+    SYL_PORT: String(paths.port),
     SYL_DB_PATH: paths.databasePath,
     SYL_LOG_DIR: paths.logDirectory,
     ...(paths.environment ?? {}),
@@ -168,7 +168,7 @@ export function coreJob(paths: LaunchdPaths): LaunchdJob {
     filename: `${CORE_LABEL}.plist`,
     plist: {
       Label: CORE_LABEL,
-      ProgramArguments: ["/bin/bash", join(paths.repoRoot, "scripts", "syl-service.sh")],
+      ProgramArguments: [join(paths.repoRoot, "scripts", "syl-service.sh")],
       EnvironmentVariables: environment,
       WorkingDirectory: paths.repoRoot,
       RunAtLoad: true,
@@ -203,7 +203,7 @@ export function watchdogJob(paths: LaunchdPaths): LaunchdJob {
     filename: `${WATCHDOG_LABEL}.plist`,
     plist: {
       Label: WATCHDOG_LABEL,
-      ProgramArguments: ["/bin/bash", join(paths.repoRoot, "scripts", "syl-watchdog.sh")],
+      ProgramArguments: [join(paths.repoRoot, "scripts", "syl-watchdog.sh")],
       EnvironmentVariables: {
         PATH: launchdPath(paths.home),
         HOME: paths.home,
@@ -237,7 +237,7 @@ export function certJob(paths: LaunchdPaths): LaunchdJob {
     filename: `${CERT_LABEL}.plist`,
     plist: {
       Label: CERT_LABEL,
-      ProgramArguments: ["/bin/bash", join(paths.repoRoot, "scripts", "syl-cert-renew.sh")],
+      ProgramArguments: [join(paths.repoRoot, "scripts", "syl-cert-renew.sh")],
       EnvironmentVariables: {
         PATH: launchdPath(paths.home),
         HOME: paths.home,

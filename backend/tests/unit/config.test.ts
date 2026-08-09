@@ -89,7 +89,7 @@ describe("loadConfig", () => {
     });
 
     it("should read HOST, PORT and NODE_ENV from the environment", () => {
-      const config = loadConfig({ HOST: "0.0.0.0", PORT: "8080", NODE_ENV: "production" });
+      const config = loadConfig({ HOST: "0.0.0.0", SYL_PORT: "8080", NODE_ENV: "production" });
 
       expect(config.host).toBe("0.0.0.0");
       expect(config.port).toBe(8080);
@@ -143,23 +143,23 @@ describe("loadConfig", () => {
 
   describe("error path", () => {
     it("should reject a PORT that is not a number", () => {
-      expect(() => loadConfig({ PORT: "not-a-port" })).toThrow(ConfigError);
-      expect(() => loadConfig({ PORT: "not-a-port" })).toThrow(/PORT/);
+      expect(() => loadConfig({ SYL_PORT: "not-a-port" })).toThrow(ConfigError);
+      expect(() => loadConfig({ SYL_PORT: "not-a-port" })).toThrow(/PORT/);
     });
 
     it("should reject a fractional PORT", () => {
-      expect(() => loadConfig({ PORT: "8080.5" })).toThrow(ConfigError);
+      expect(() => loadConfig({ SYL_PORT: "8080.5" })).toThrow(ConfigError);
     });
 
     it("should reject a PORT outside 1-65535", () => {
-      expect(() => loadConfig({ PORT: "0" })).toThrow(ConfigError);
-      expect(() => loadConfig({ PORT: "-1" })).toThrow(ConfigError);
-      expect(() => loadConfig({ PORT: "65536" })).toThrow(ConfigError);
+      expect(() => loadConfig({ SYL_PORT: "0" })).toThrow(ConfigError);
+      expect(() => loadConfig({ SYL_PORT: "-1" })).toThrow(ConfigError);
+      expect(() => loadConfig({ SYL_PORT: "65536" })).toThrow(ConfigError);
     });
 
     it("should accept the boundary ports 1 and 65535", () => {
-      expect(loadConfig({ PORT: "1" }).port).toBe(1);
-      expect(loadConfig({ PORT: "65535" }).port).toBe(65535);
+      expect(loadConfig({ SYL_PORT: "1" }).port).toBe(1);
+      expect(loadConfig({ SYL_PORT: "65535" }).port).toBe(65535);
     });
 
     it("should reject a NODE_ENV outside the known set", () => {
@@ -175,7 +175,7 @@ describe("loadConfig", () => {
     it("should report every problem at once rather than one per run", () => {
       let thrown: unknown;
       try {
-        loadConfig({ PORT: "nope", NODE_ENV: "staging", HOST: " " });
+        loadConfig({ SYL_PORT: "nope", NODE_ENV: "staging", HOST: " " });
       } catch (error) {
         thrown = error;
       }
@@ -191,7 +191,7 @@ describe("loadConfig", () => {
 
   describe("edge cases", () => {
     it("should treat an empty string as unset, not as an invalid value", () => {
-      const config = loadConfig({ PORT: "", HOST: "", NODE_ENV: "" });
+      const config = loadConfig({ SYL_PORT: "", HOST: "", NODE_ENV: "" });
 
       expect(config.port).toBe(DEFAULT_PORT);
       expect(config.host).toBe(DEFAULT_HOST);
@@ -199,7 +199,7 @@ describe("loadConfig", () => {
     });
 
     it("should trim surrounding whitespace off values", () => {
-      const config = loadConfig({ PORT: " 8080 ", HOST: " localhost ", NODE_ENV: " test " });
+      const config = loadConfig({ SYL_PORT: " 8080 ", HOST: " localhost ", NODE_ENV: " test " });
 
       expect(config.port).toBe(8080);
       expect(config.host).toBe("localhost");
@@ -207,7 +207,7 @@ describe("loadConfig", () => {
     });
 
     it("should not treat a numeric-looking string with a suffix as a port", () => {
-      expect(() => loadConfig({ PORT: "8080abc" })).toThrow(ConfigError);
+      expect(() => loadConfig({ SYL_PORT: "8080abc" })).toThrow(ConfigError);
     });
 
     it("should ignore unrelated environment variables", () => {
@@ -331,7 +331,7 @@ describe("quiet hours", () => {
     it("should report a bad port and a bad window in one throw", () => {
       let thrown: unknown;
       try {
-        loadConfig({ PORT: "nope", SYL_QUIET_START: "25:00", SYL_TZ: "-06:00" });
+        loadConfig({ SYL_PORT: "nope", SYL_QUIET_START: "25:00", SYL_TZ: "-06:00" });
       } catch (error) {
         thrown = error;
       }
