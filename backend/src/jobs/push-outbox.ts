@@ -57,23 +57,21 @@ export async function pushDueDeliveries(
   const unregistered: string[] = [];
 
   for (const delivery of outbox.due(now)) {
+    // The three branches below are *blocked*, not failed: nothing was sent and
+    // nothing refused us. `deferBlocked` holds the row without spending its
+    // attempt budget and without leaving the loop spinning every thirty
+    // seconds until the environment changes.
     if (delivery.channel !== "apns") {
-      // Retryable rather than permanent: a channel this build does not know
-      // about is a deployment state, not a broken notification, and the row
-      // must survive until the build that does know arrives.
-      outbox.recordFailure(delivery.id, {
-        error: `This build cannot deliver over "${delivery.channel}".`,
-        retryable: true,
-      });
+      // A channel this build does not know about is a deployment state, not a
+      // broken notification, and the row must survive until the build that
+      // does know arrives.
+      outbox.deferBlocked(delivery.id, `This build cannot deliver over "${delivery.channel}".`);
       failed.push(delivery.id);
       continue;
     }
 
     if (apns === null) {
-      outbox.recordFailure(delivery.id, {
-        error: "APNs is not configured on this machine.",
-        retryable: true,
-      });
+      outbox.deferBlocked(delivery.id, "APNs is not configured on this machine.");
       failed.push(delivery.id);
       continue;
     }
@@ -82,15 +80,16 @@ export async function pushDueDeliveries(
     if (targets.length === 0) {
       // Not an error worth abandoning over: the phone may simply not have
       // registered yet, and the row must still be here when it does.
-      outbox.recordFailure(delivery.id, {
-        error: "No device is registered to receive this.",
-        retryable: true,
-      });
+      outbox.deferBlocked(delivery.id, "No device is registered to receive this.");
       failed.push(delivery.id);
       continue;
     }
 
-    outbox.markSending(delivery.id);
+    // The claim is a compare-and-swap. Losing it means another pass already
+    // took this row, or the device acknowledged it between `due` and here —
+    // either way, sending anyway would be a second notification for one
+    // reminder.
+    if (outbox.markSending(delivery.id) === null) continue;
 
     let uniqueId: string | null = null;
     let anyAccepted = false;

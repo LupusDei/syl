@@ -90,6 +90,7 @@ describe("pushDueDeliveries", () => {
   let db: SylDatabase;
   let outbox: Outbox;
   let devices: DeviceTokenService;
+  let now: number;
 
   function enqueue(): string {
     return outbox.enqueue({
@@ -114,7 +115,10 @@ describe("pushDueDeliveries", () => {
 
   beforeEach(() => {
     db = testDatabase();
-    const clock = fixedClock(TEST_NOW);
+    // Movable, so a test can drive many passes across a simulated day. Every
+    // defect in this file was invisible to a single pass.
+    now = TEST_NOW;
+    const clock = (): number => now;
     outbox = new Outbox({ db: db.handle, clock, jitter: () => 0 });
     devices = new DeviceTokenService({ db: db.handle, clock });
   });
@@ -273,6 +277,75 @@ describe("pushDueDeliveries", () => {
 
     const result = await pushDueDeliveries({ outbox, devices, apns: scriptedApns([ACCEPTED]) });
     expect(result.accepted).toHaveLength(0);
+  });
+
+  it("should not push a row the device acknowledged between passes", async () => {
+    // syl-eer. `due` is read once, and anything can happen between reading it
+    // and claiming a row: another drainer, or the device's own ack arriving
+    // over HTTP. `markSending` is the compare-and-swap that settles it, and
+    // ignoring its answer sends a second notification for one reminder.
+    const first = enqueue();
+    const second = enqueue();
+    register(IPHONE);
+
+    const sent: string[] = [];
+    const apns: ApnsSender = {
+      send: (notification) => {
+        sent.push(String(notification.data["deliveryId"]));
+        // The phone acknowledges the second row while we are still sending the
+        // first — it was in the same digest-less batch and already arrived.
+        outbox.acknowledge(second, { ackedAt: new Date(TEST_NOW).toISOString() });
+        return Promise.resolve(ACCEPTED);
+      },
+    };
+
+    await pushDueDeliveries({ outbox, devices, apns });
+
+    expect(sent).toEqual([first]);
+    expect(outbox.get(second)?.state).toBe("acknowledged");
+    // Not claimed, so not counted: the attempt column means sends, not passes.
+    expect(outbox.get(second)?.attempts).toBe(0);
+  });
+
+  it("should stop retrying every thirty seconds when nothing can send for a day", async () => {
+    // syl-eer, second half. The blocked branches never touched the attempt
+    // counter, so backoffFor(0) was 30s forever: an unpaired install woke the
+    // drain loop 2,880 times a day, for weeks, and the docstring one screen up
+    // says "Nothing retries forever".
+    const id = enqueue();
+
+    let attempts = 0;
+    for (let elapsed = 0; elapsed <= 86_400_000; elapsed += 30_000) {
+      now = TEST_NOW + elapsed;
+      const result = await pushDueDeliveries({ outbox, devices, apns: null });
+      attempts += result.failed.length;
+    }
+
+    expect(attempts).toBeLessThan(40);
+    // Held, not dropped. The phone may register tomorrow and the reminder must
+    // still be here when it does.
+    expect(outbox.get(id)?.state).toBe("pending");
+    expect(outbox.get(id)?.nextAttemptAt).not.toBeNull();
+  });
+
+  it("should deliver the held row the moment the device finally registers", async () => {
+    // The other half of the same guarantee: backing off must not become
+    // forgetting.
+    const id = enqueue();
+    for (let elapsed = 0; elapsed <= 6 * 3_600_000; elapsed += 60_000) {
+      now = TEST_NOW + elapsed;
+      await pushDueDeliveries({ outbox, devices, apns: null });
+    }
+
+    register(IPHONE);
+    const apns = scriptedApns([ACCEPTED]);
+    // At most an hour later, by the ceiling in `blockedWaitFor`.
+    now += 3_600_000;
+    const result = await pushDueDeliveries({ outbox, devices, apns });
+
+    expect(result.accepted).toEqual([id]);
+    expect(outbox.get(id)?.state).toBe("delivered");
+    expect(outbox.get(id)?.attempts).toBe(1);
   });
 
   it("should record that the device was heard from", async () => {
