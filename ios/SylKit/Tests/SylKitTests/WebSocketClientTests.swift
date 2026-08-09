@@ -361,6 +361,45 @@ final class WebSocketClientTests: XCTestCase {
         await client.stop()
     }
 
+    // MARK: - The wait between attempts
+
+    /// **The reconnect the app actually ships**, default arguments and all.
+    ///
+    /// Every other case here injects `sleeper: { _ in }`, which is right — the backoff
+    /// schedule is arithmetic and waiting it out would make the suite slower than the
+    /// thing it tests — and it meant the default sleeper had never run. It aborted the
+    /// process the first time it did, on the first real reconnect: an async closure
+    /// written as a *default argument* is built at the call site, in the caller's
+    /// module, and calling it from inside the actor's run loop corrupted the task
+    /// allocator ("freed pointer was not the last allocation", SIGABRT). Built inside
+    /// `init` instead, from the same source text, it is fine.
+    ///
+    /// It is the same shape of bug as `syl-w40` itself: a default that every test
+    /// substituted away, so the thing that shipped was the one thing never executed.
+    func testShouldSurviveTheReconnectWaitItShipsWith() async throws {
+        let first = FakeSocket()
+        let connector = FakeConnector(sockets: [first, FakeSocket()])
+        let client = WebSocketClient(
+            configuration: ServerConfiguration(baseURL: URL(string: "http://syl.test/api/v1")!),
+            connector: connector,
+            tokenProvider: StaticTokenProvider(token),
+            // Zero delay, so the wait the app ships is executed rather than waited on.
+            reconnectPolicy: RetryPolicy(maxAttempts: .max, baseDelay: 0, maxDelay: 0),
+            keepaliveInterval: 0
+            // No `sleeper:`, and that is the entire point of this case.
+        )
+
+        await client.start()
+        await first.push(challenge())
+        await first.push(connected(lastSeq: 0))
+        try await eventually { await client.connectionState == .connected }
+
+        await first.fail()
+
+        try await eventually { await connector.connectionCount == 2 }
+        await client.stop()
+    }
+
     // MARK: - Keepalive bookkeeping
 
     func testShouldTolerateOneMissedPongAndGiveUpAfterTwo() {

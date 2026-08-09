@@ -35,21 +35,12 @@ import XCTest
 ///
 /// **A skip here is not a pass.** If this suite reports "skipped" inside an
 /// automated run, the run checked nothing that matters and the harness is broken.
+/// The socket half lives in `LiveSocketTests`, and is run separately by the harness:
+/// a socket failure used to be an abort rather than a failure (`syl-w40`), which took
+/// every case in this file down with it and reported nothing about any of them.
 final class LiveServerTests: XCTestCase {
-    private struct Live {
-        let url: URL
-        let token: String
-    }
-
-    private func live() throws -> Live {
-        let environment = ProcessInfo.processInfo.environment
-        guard let raw = environment["SYL_LIVE_URL"], let url = URL(string: raw) else {
-            throw XCTSkip("set SYL_LIVE_URL and SYL_LIVE_TOKEN to run against a real Syl")
-        }
-        guard let token = environment["SYL_LIVE_TOKEN"], !token.isEmpty else {
-            throw XCTSkip("set SYL_LIVE_TOKEN to a bearer token from POST /auth/pair")
-        }
-        return Live(url: url, token: token)
+    private func live() throws -> LiveSyl {
+        try LiveSyl.fromEnvironment()
     }
 
     private func makeClient() throws -> APIClient {
@@ -221,49 +212,5 @@ final class LiveServerTests: XCTestCase {
                 XCTAssertEqual(api.code, .notFound, "/\(probe)")
             }
         }
-    }
-
-    // MARK: - The socket
-
-    /// The real WebSocket, over the real transport, against the real server.
-    ///
-    /// Every other socket test in this package injects a fake `WebSocketConnecting`.
-    /// This is the only one that exercises `URLSessionWebSocketConnector` — and with
-    /// it the fact that `WebSocketClient` builds its URL by appending `ws` to an
-    /// `http://` base rather than switching the scheme to `ws://`.
-    func testShouldCompleteTheHandshakeAgainstTheRealSocket() async throws {
-        let live = try live()
-        let client = WebSocketClient(
-            configuration: ServerConfiguration(baseURL: live.url),
-            tokenProvider: StaticTokenProvider(live.token)
-        )
-
-        let events = await client.events()
-        await client.start()
-        defer { Task { await client.stop() } }
-
-        var states: [SocketConnectionState] = []
-        let deadline = Date().addingTimeInterval(10)
-
-        for await event in events {
-            if case .connectionState(let state) = event {
-                states.append(state)
-                if case .connected = state { break }
-                if case .unauthenticated = state { break }
-            }
-            if case .error(let error, let fatal) = event {
-                XCTFail("socket refused the app's token: \(error.code) \(error.message) fatal=\(fatal)")
-                break
-            }
-            if Date() > deadline {
-                XCTFail("the socket never reached a terminal state; saw \(states)")
-                break
-            }
-        }
-
-        XCTAssertTrue(
-            states.contains { if case .connected = $0 { return true } else { return false } },
-            "the app's own socket client could not connect to the real service; saw \(states)"
-        )
     }
 }

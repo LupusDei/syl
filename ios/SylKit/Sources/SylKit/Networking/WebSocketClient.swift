@@ -12,6 +12,17 @@ import Foundation
 /// re-establishes; every reconnect retries, and the state the app shows says
 /// "reconnecting (2)" rather than pretending nothing is wrong.
 public actor WebSocketClient {
+    /// Waits between reconnect attempts. Injected so a test drives the schedule
+    /// without spending the wall-clock time it describes.
+    ///
+    /// **The default is built inside `init`, never written as a default argument.**
+    /// A default argument is evaluated in the *caller's* module — which is why the
+    /// compiler refuses to let one reference an internal symbol — so an async closure
+    /// literal there is a thunk formed at every call site. Awaiting one from inside
+    /// this actor's own long-lived run task corrupts the task allocator: "freed
+    /// pointer was not the last allocation", SIGABRT, on the first reconnect. The
+    /// identical source text formed inside `init` is fine, and so is a named function.
+    /// Measured both ways; `testShouldSurviveTheReconnectWaitItShipsWith` pins it.
     public typealias Sleeper = @Sendable (TimeInterval) async throws -> Void
 
     /// Raised when a caller tries to send over a socket that is not ready. The caller
@@ -68,9 +79,8 @@ public actor WebSocketClient {
         reconnectPolicy: RetryPolicy = .socketReconnect,
         keepaliveInterval: TimeInterval = 30,
         missedPongsBeforeDead: Int = 2,
-        sleeper: @escaping Sleeper = { seconds in
-            try await Task.sleep(nanoseconds: UInt64(max(seconds, 0) * 1_000_000_000))
-        },
+        // **Not a default argument.** See `Sleeper`.
+        sleeper: Sleeper? = nil,
         randomSampler: @escaping APIClient.RandomSampler = { Double.random(in: 0...1) },
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -94,7 +104,9 @@ public actor WebSocketClient {
             interval: keepaliveInterval,
             missedPongsBeforeDead: missedPongsBeforeDead
         )
-        self.sleeper = sleeper
+        self.sleeper = sleeper ?? { seconds in
+            try await Task.sleep(nanoseconds: UInt64(max(seconds, 0) * 1_000_000_000))
+        }
         self.randomSampler = randomSampler
         self.now = now
     }

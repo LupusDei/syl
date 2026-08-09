@@ -47,6 +47,13 @@ public struct ServerConfiguration: Equatable, Sendable {
 public actor APIClient {
     /// Waits before a retry. Injected so tests exercise the backoff schedule without
     /// spending the wall-clock time it describes.
+    ///
+    /// **The default is built inside `init`, never written as a default argument.** An
+    /// async closure literal in a default argument is a thunk formed in the caller's
+    /// module, and awaiting one of those from inside an actor's own long-lived task
+    /// aborted the process on `WebSocketClient` — see the longer note there. This path
+    /// does not abort today; it is the same construct, and the difference is not one
+    /// worth relying on.
     public typealias Sleeper = @Sendable (TimeInterval) async throws -> Void
     /// Samples jitter in `0...1`. Injected so a test can assert on an exact delay.
     public typealias RandomSampler = @Sendable () -> Double
@@ -63,16 +70,17 @@ public actor APIClient {
         session: URLSession = .shared,
         retryPolicy: RetryPolicy = .default,
         tokenProvider: TokenProviding = StaticTokenProvider(nil),
-        sleeper: @escaping Sleeper = { seconds in
-            try await Task.sleep(nanoseconds: UInt64(max(seconds, 0) * 1_000_000_000))
-        },
+        // Built below rather than defaulted here, for the reason on `Sleeper`.
+        sleeper: Sleeper? = nil,
         randomSampler: @escaping RandomSampler = { Double.random(in: 0...1) }
     ) {
         self.configuration = configuration
         self.session = session
         self.retryPolicy = retryPolicy
         self.tokenProvider = tokenProvider
-        self.sleeper = sleeper
+        self.sleeper = sleeper ?? { seconds in
+            try await Task.sleep(nanoseconds: UInt64(max(seconds, 0) * 1_000_000_000))
+        }
         self.randomSampler = randomSampler
     }
 

@@ -103,16 +103,20 @@ itself and reports success having checked nothing.`,
   });
 });
 
-/** The one case that touches `URLSessionWebSocketConnector`. */
-const SOCKET_TEST = "testShouldCompleteTheHandshakeAgainstTheRealSocket";
 /**
- * Everything that is not the socket case.
+ * The two Swift suites, run as two `swift test` invocations.
  *
- * `--skip` takes a regex, and a negative lookahead is the only way to say "run
- * exactly one of these" without listing the other nine and having the list rot
- * the moment somebody adds a tenth.
+ * They are separate classes rather than one filtered by a negative lookahead —
+ * and separate runs rather than one — because of what a socket failure used to
+ * be. `syl-w40` was not a failing connection: `URLSession` raises an
+ * Objective-C `NSException` for an `http` socket URL, no Swift `catch` can see
+ * it, and the process aborts. An abort takes every other case in the same
+ * process with it, so a socket bug would erase the HTTP results too. That is
+ * fixed, and the isolation still costs about a second.
  */
-const EVERY_HTTP_TEST = `LiveServerTests/(?!${SOCKET_TEST})`;
+const HTTP_SUITE = "LiveServerTests";
+/** The only place `URLSessionWebSocketConnector` runs anywhere. */
+const SOCKET_SUITE = "LiveSocketTests";
 
 interface SwiftRun {
   readonly code: number | null;
@@ -120,19 +124,12 @@ interface SwiftRun {
   readonly stderr: string;
 }
 
-/** Run `swift test` against the package, with the live service's coordinates. */
-function runSwiftTests(syl: LiveService, options: { readonly skip?: string } = {}): Promise<SwiftRun> {
+/** Run one Swift suite against the package, with the live service's coordinates. */
+function runSwiftTests(syl: LiveService, suite: string): Promise<SwiftRun> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       "swift",
-      [
-        "test",
-        "--package-path",
-        SYLKIT,
-        "--filter",
-        "LiveServerTests",
-        ...(options.skip === undefined ? [] : ["--skip", options.skip]),
-      ],
+      ["test", "--package-path", SYLKIT, "--filter", suite],
       {
         env: {
           ...process.env,
@@ -168,7 +165,7 @@ describe.skipIf(!ENABLED)("the iOS client against the real backend", () => {
   });
 
   it("should serve the app's whole HTTP surface, decoded by the app's own models", async () => {
-    const run = await runSwiftTests(syl, { skip: SOCKET_TEST });
+    const run = await runSwiftTests(syl, HTTP_SUITE);
     const output = `${run.stdout}\n${run.stderr}`;
 
     // A skipped suite is the failure mode that would make this worthless: it
@@ -180,26 +177,30 @@ describe.skipIf(!ENABLED)("the iOS client against the real backend", () => {
   }, 600_000);
 
   /**
-   * `syl-w40` — the socket connector aborts the process.
+   * `syl-w40` — the socket, over the real transport.
    *
-   * `WebSocketClient` builds its URL by appending `ws` to the base, which keeps
-   * the base's `http` scheme; `URLSession.webSocketTask(with:)` raises an
-   * Objective-C `NSGenericException` for anything but `ws`/`wss`. An
-   * `NSException` is not a Swift `Error`, so the `do/catch` around
-   * `connector.connect` does not catch it and the process dies with SIGABRT.
+   * This ran nowhere at all until the crash it found was fixed: the connector
+   * aborted the process, so the case that proves a socket works could not be
+   * written. It opens a real `URLSessionWebSocketTask` against the service
+   * booted above, completes the handshake, exchanges frames, and loses and
+   * regains the transport.
    *
-   * Every other socket test in `SylKit` injects a fake `WebSocketConnecting`,
-   * so `URLSessionWebSocketConnector` had never run anywhere before this file.
-   *
-   * Asserted as the specific crash rather than as "it fails", so that fixing
-   * the scheme turns this red for the right reason and someone deletes it.
+   * The assertions are here rather than only inside Swift because a Swift
+   * suite that skips itself exits 0 and looks exactly like one that passed —
+   * which is `syl-e4f`, and is why "was skipped" is a failure below.
    */
-  it("should crash rather than connect, until the scheme is mapped to ws", async () => {
-    const run = await runSwiftTests(syl, { skip: EVERY_HTTP_TEST });
+  it("should open a real socket, complete the handshake and carry frames", async () => {
+    const run = await runSwiftTests(syl, SOCKET_SUITE);
     const output = `${run.stdout}\n${run.stderr}`;
 
-    expect(output).toContain("WebSocket tasks can only be created with ws or wss schemes");
-    expect(output).toContain("Terminating app due to uncaught exception");
-    expect(run.code).not.toBe(0);
+    expect(output).not.toContain("was skipped");
+    expect(output).toMatch(/Executed [1-9]\d* tests/u);
+    // The old failure mode, named so it can never come back quietly: an
+    // `NSException` is not a test failure, it is a dead process, and a suite
+    // that dies mid-run reports nothing about the cases it never reached.
+    expect(output, "the socket connector aborted the process again").not.toContain(
+      "Terminating app due to uncaught exception",
+    );
+    expect(run.code, output.slice(-4000)).toBe(0);
   }, 600_000);
 });

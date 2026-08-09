@@ -324,6 +324,52 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(sleeps.recorded, [2.0], "the server's floor wins over the local schedule")
     }
 
+    /// **A retry the app actually ships**, default arguments and all.
+    ///
+    /// `makeClient` injects a sleeper into every other case here — correctly, since
+    /// the schedule is arithmetic and waiting it out would make the suite slower than
+    /// the thing it tests — which meant the default sleeper had never once run. Written
+    /// as an async closure in a *default argument* it is built in the caller's module,
+    /// and calling it from inside the actor aborts the process: "freed pointer was not
+    /// the last allocation", SIGABRT. Built inside `init` from the same source text it
+    /// is fine.
+    ///
+    /// Found on the socket's first real reconnect (`syl-w40`); this is the same defect
+    /// on the HTTP side, where it would have fired on the first 503 the app ever saw.
+    func testShouldSurviveARetryUsingTheWaitItShipsWith() async throws {
+        let attempts = Counter()
+        let body = try JSONSerialization.data(withJSONObject: okEnvelope(principal))
+        MockURLProtocol.handler = { request in
+            // A timeout on the first attempt: the ordinary shape of a tunnel that has
+            // not come up yet, and the reason the app retries at all.
+            if attempts.next() == 1 {
+                throw URLError(.timedOut)
+            }
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!,
+                body
+            )
+        }
+
+        // No `sleeper:` and no `randomSampler:`, which is the entire point. Zero delay,
+        // so the wait the app ships is executed rather than waited on.
+        let client = APIClient(
+            configuration: ServerConfiguration(baseURL: baseURL),
+            session: MockURLProtocol.session(),
+            retryPolicy: RetryPolicy(maxAttempts: 3, baseDelay: 0, maxDelay: 0)
+        )
+
+        let principal = try await client.send(SylAPI.whoami())
+
+        XCTAssertEqual(attempts.value, 2, "the transport failure must have been retried")
+        XCTAssertFalse(principal.name.isEmpty)
+    }
+
     // MARK: - Fixtures
 
     private var principal: [String: Any] {
