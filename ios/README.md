@@ -11,10 +11,12 @@ Syl/                     app target sources
   Core/Services/              notifications, push registration, network monitor
   Core/Storage/               server profiles (UserDefaults), token (Keychain)
   Features/Pairing/           the first screen: server address + eight digits
+  Features/Settings/          the Developer section and the admin WebView
 SylTests/                app-target unit tests (wiring only; see below)
 SylKit/                  local SPM package — the client wire layer, ZERO dependencies
   Sources/SylKit/Model/       the wire types, hand-written from shared/openapi.yaml
   Sources/SylKit/Networking/  coding, typed errors, retry, the API client
+  Sources/SylKit/Web/         admin URL, origin policy, credential script — all pure
   Tests/SylKitTests/          behaviour, stubbed through MockURLProtocol
   Tests/ContractTests/        the fixture gate — see below
 scripts/test.sh          runs both halves of the suite
@@ -308,6 +310,71 @@ lie that sends him back to the Mac for nothing.
 All four are reachable against `npm run mock`, which publishes fixed codes for
 exactly this reason — a mock that only produces the happy path produces a
 client that only handles the happy path. It prints them at startup.
+
+## Settings, and the admin in a WebView
+
+`syl-1h3` and `syl-iu3`, landed as one change because the second is only acceptable
+given the first. Settings is the second tab; the Developer section at the bottom is the
+only way in.
+
+**The admin URL is derived, never stored.** `ServerProfile.baseURL` is
+`https://<host>/api/v1`, and `AdminConsole.url(forAPIBaseURL:)` returns that origin with
+`/admin`. A second stored URL is a second thing to fix after re-pairing, and the two
+would disagree exactly once, at the worst moment.
+
+**It refuses to derive one over cleartext**, so the mock profile has no admin. That is a
+security rule, not a convenience: the WebView carries a live bearer token, and an `http`
+origin publishes it to every hop. It is also why the epic serves the admin from Syl's own
+TLS origin rather than the Vite dev server — there is no App Transport Security exception
+anywhere in this app and there must not be one.
+
+**Gated by a toggle, not `#if DEBUG`.** The Commander's phone runs the TestFlight build,
+which is Release, so a debug-only surface would be missing from the one build that needs
+it. Off by default; on, it stays on.
+
+### The credential, and the condition it is handed over under
+
+The admin authenticates with an API key in `localStorage` (`syl.admin.api-key`, the other
+half of which is `frontend/src/auth/api-key-store.ts`). A `WKUserScript` at
+`.atDocumentStart`, main frame only, writes the device's own bearer token there before the
+admin's bundle reads it — so the screen arrives authenticated rather than presenting a
+login nobody can satisfy on a phone.
+
+**That is a live credential in a web context, and it is acceptable only because the
+WebView cannot leave the paired origin.** One redirect otherwise and the token is
+somewhere else. So:
+
+- `AdminNavigationPolicy` compares whole `(scheme, host, port)` origins. **Not a prefix
+  match** — that accepts `reason-2.tail714e0e.ts.net.evil.com`. Not a suffix match — that
+  accepts `admin.reason-2.tail714e0e.ts.net`. Not a comparison of URL strings — that
+  accepts `https://reason-2.tail714e0e.ts.net@evil.com/`. `AdminConsoleTests` tries all
+  three, plus `javascript:`, `data:`, `file:`, a wrong port, cleartext, and an off-origin
+  hop of a redirect chain.
+- Non-persistent `WKWebsiteDataStore`, so the token does not get written to a second place
+  on disk outside the Keychain.
+- No new windows: `target="_blank"` is refused and `createWebViewWith` returns `nil`.
+- The token is **not scoped or short-lived**, because the service has no way to mint one
+  that is — `api_keys` carries a TTL and no scopes, and adding a scoped-key endpoint is a
+  backend change. Filed rather than faked. See `syl-iu3`.
+
+**`WKNavigationDelegate`'s methods are Objective-C optional**, so a signature that drifts
+by one annotation is not a compile error — it is a method WebKit never calls, and its
+default is to allow. That already happened once here (the completion handlers need
+`@MainActor @Sendable` on the current SDK). `testShouldActuallyBeWiredIntoWebKitsDelegateSelectors`
+asserts against the selectors so a future SDK cannot turn the lock off quietly.
+
+### 401
+
+The screen never renders an empty admin. `AdminConsoleViewModel` asks `GET /auth/whoami`
+before loading anything and tells four outcomes apart — verified, rejected, unreachable,
+no credential — and the document response is checked too, so a 401 rendered mid-session
+and a 404 from a service that is not serving `/admin` yet each get their own sentence.
+Rejected does **not** clear the token: opening a debug screen is not a reason to un-pair
+the app, and `verifyPairing` on the next foreground is what acts on it.
+
+The pure half — URL derivation, the origin policy, the injected script — is in
+`SylKit/Sources/SylKit/Web` and tested in `SylKitTests`, on the host, in milliseconds.
+Security logic that costs a simulator boot to exercise is security logic nobody re-runs.
 
 ## Not built yet
 

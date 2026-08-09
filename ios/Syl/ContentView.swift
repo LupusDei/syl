@@ -12,12 +12,19 @@ import SylKit
 /// reboots, the tailnet drops on a WiFi-to-cellular handoff, the phone goes through a
 /// tunnel — and an assistant that silently fails to sync is worse than one that says
 /// so.
+///
+/// It is also the app's Settings surface, which until `syl-1h3` did not exist at all.
+/// The Developer section at the bottom is the only way to the web admin.
 struct ContentView: View {
     var serverName: String = ServerProfile.mock.name
     var baseURL: URL = ServerProfile.mock.baseURL
     var reachability: NetworkMonitor.Reachability = .unknown
     var notificationAuthorization: NotificationService.Authorization = .unknown
     var registration: AppDelegate.RegistrationState = .idle
+    /// How the Developer section reaches the bearer token and checks it. `nil` in
+    /// previews and tests, which have no Keychain and no server — the section then
+    /// says so rather than offering a link that cannot work.
+    var adminAccess: AdminConsoleAccess? = nil
 
     var body: some View {
         NavigationStack {
@@ -51,8 +58,10 @@ struct ContentView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 }
+
+                DeveloperSettingsSection(apiBaseURL: baseURL, access: adminAccess)
             }
-            .navigationTitle("Syl")
+            .navigationTitle("Settings")
         }
     }
 

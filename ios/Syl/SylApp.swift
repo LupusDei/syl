@@ -76,9 +76,10 @@ struct RootView: View {
                 serverName: profiles.selected.name,
                 baseURL: profiles.selected.baseURL,
                 reachability: network.reachability,
-                registration: appDelegate.registration
+                registration: appDelegate.registration,
+                adminAccess: appDelegate.adminConsoleAccess
             )
-            .tabItem { Label("Status", systemImage: "gearshape") }
+            .tabItem { Label("Settings", systemImage: "gearshape") }
         }
         .task {
             network.start()
@@ -104,6 +105,7 @@ struct StatusView: View {
     let baseURL: URL
     let reachability: NetworkMonitor.Reachability
     let registration: AppDelegate.RegistrationState
+    let adminAccess: AdminConsoleAccess
 
     var body: some View {
         ContentView(
@@ -111,7 +113,8 @@ struct StatusView: View {
             baseURL: baseURL,
             reachability: reachability,
             notificationAuthorization: notifications.authorization,
-            registration: registration
+            registration: registration,
+            adminAccess: adminAccess
         )
     }
 }
