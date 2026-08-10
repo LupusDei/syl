@@ -13,7 +13,7 @@ import { DatabaseSync, type Database } from "../../src/services/sqlite.js";
 /**
  * The `agent` scope, tested as a **migration** rather than as a column.
  *
- * SQLite cannot widen a CHECK constraint in place, so `0015_agent_scope.sql`
+ * SQLite cannot widen a CHECK constraint in place, so `0016_agent_scope.sql`
  * rebuilds `api_keys`: new table, copy, drop, rename, recreate the indexes.
  * That is a far more dangerous operation than an `ALTER TABLE ADD COLUMN`, and
  * every way it can go wrong is silent:
@@ -31,7 +31,12 @@ import { DatabaseSync, type Database } from "../../src/services/sqlite.js";
  */
 
 /** The version this bead took. See the file header of the migration itself. */
-const AGENT_SCOPE_VERSION = 15;
+// 16, not 15. This bead was built against 0014 as the highest and took 0015;
+// `0015_attachments` landed on main first, and `readMigrations` refuses a gap so
+// the number could not be reserved ahead of the merge. The collision surfaced as
+// 1313 failing tests with one honest cause — "Two migrations claim version 15" —
+// which is this assertion's whole purpose. Renumbered on integration.
+const AGENT_SCOPE_VERSION = 16;
 
 let db: Database;
 let migrations: readonly MigrationFile[];
@@ -41,7 +46,7 @@ function before(): readonly MigrationFile[] {
   return migrations.filter((migration) => migration.version < AGENT_SCOPE_VERSION);
 }
 
-/** Write a key row directly, the way the pre-0015 schema accepted one. */
+/** Write a key row directly, the way the pre-0016 schema accepted one. */
 function insertKey(
   id: string,
   scope: string,
@@ -110,7 +115,7 @@ afterEach(() => {
   db.close();
 });
 
-describe("0015_agent_scope", () => {
+describe("0016_agent_scope", () => {
   it("should exist at the version this bead claimed, so a collision is a build failure", () => {
     // `readMigrations` refuses a gap in the sequence, which means a number
     // cannot be reserved ahead of a branch merging. If another branch lands
@@ -118,7 +123,7 @@ describe("0015_agent_scope", () => {
     // files fighting over one version.
     const taken = migrations.find((migration) => migration.version === AGENT_SCOPE_VERSION);
 
-    expect(taken?.filename).toBe("0015_agent_scope.sql");
+    expect(taken?.filename).toBe("0016_agent_scope.sql");
   });
 
   it("should widen the CHECK constraint to admit `agent`", () => {

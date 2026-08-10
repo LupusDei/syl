@@ -2,7 +2,6 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -40,10 +39,19 @@ import { queryLog } from "../../src/ops/log-query.js";
 
 const repoRoot = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
 const script = join(repoRoot, "scripts", "syl-service.sh");
-const entry = join(repoRoot, "backend", "dist", "index.js");
 
 beforeAll(() => {
-  if (existsSync(entry)) return;
+  // Build EVERY time, not only when `dist` is missing.
+  //
+  // The conditional was the whole cause of a ten-failure run that looked like a
+  // regression in the service and was not: a migration had been RENUMBERED, the
+  // old filename was still sitting in `dist`, and the built service refused to
+  // start with "Two migrations claim version 15". The source was correct; the
+  // artifact was last week's.
+  //
+  // That is the same conditional-build hazard already fixed in
+  // `service-lifecycle.test.ts`. This file is the other place that runs the
+  // built output, and it kept the stale copy alive for both.
   execFileSync("npm", ["run", "build", "-w", "backend"], { cwd: repoRoot, stdio: "inherit" });
 }, 300_000);
 

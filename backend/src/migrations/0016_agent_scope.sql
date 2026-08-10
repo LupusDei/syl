@@ -1,4 +1,4 @@
--- 0015_agent_scope.sql — a third scope, for Syl herself.
+-- 0016_agent_scope.sql — a third scope, for Syl herself.
 --
 -- `0014` gave a token a scope of `device | admin` and argued the point that
 -- matters: **what makes a scope defensible is not the column, it is where a
