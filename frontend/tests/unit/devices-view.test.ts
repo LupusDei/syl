@@ -4,7 +4,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { createElement as h } from "react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DevicesView } from "../../src/features/devices/DevicesView";
 import { API_KEY_STORAGE_KEY } from "../../src/auth/api-key-store";
@@ -12,8 +12,25 @@ import { AuthProvider } from "../../src/auth/AuthProvider";
 import { createMemoryStorage, type StorageLike } from "../../src/storage";
 import { fixture, fixtureResponse } from "../helpers/fixtures";
 
+/**
+ * An hour after the newest `lastSeenAt` in `http/devices.page`.
+ *
+ * Fixed, because "active" is a statement about how long ago a device was last
+ * heard from and every fixture instant is in the past — so a view test read on
+ * the real clock is a test whose answer changes with the day it is run.
+ */
+const JUST_AFTER_THE_FIXTURE = new Date("2026-08-09T07:58:00.000Z");
+
+beforeEach(() => {
+  // `Date` only. Faking `setTimeout` would stop `waitFor` making progress and
+  // every assertion in this file would time out instead.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(JUST_AFTER_THE_FIXTURE);
+});
+
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -87,6 +104,13 @@ describe("DevicesView", () => {
   });
 
   it("should describe an unregistered device as unregistered, not missing", async () => {
+    // The clock is frozen an hour after the fixture's newest `lastSeenAt`, and
+    // that is the whole reason this test has a `beforeEach` at all. `active`
+    // means "registered and heard from within a day" — so on the real clock
+    // this assertion was true on the day the fixture was captured and has been
+    // false ever since, which is the one-day-fuse time bomb the backend suite
+    // documents, wearing a frontend hat. Only `Date` is faked: `waitFor` needs
+    // real timers to make progress.
     stubApi();
     renderView();
 

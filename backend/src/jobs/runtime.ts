@@ -6,6 +6,7 @@ import type { DeviceTokenService } from "../services/device-token-service.js";
 import { JobRunner, type JobHandler, type Timers } from "../services/job-runner.js";
 import type { JobStore } from "../services/job-store.js";
 import type { Outbox } from "../services/outbox.js";
+import type { AlertSink } from "../services/presence.js";
 import type { ReminderService } from "../services/reminder-service.js";
 import { createReminderDeliveryHandler, defineReminderDeliveryJob } from "./reminder-delivery-job.js";
 
@@ -39,6 +40,14 @@ export interface DeliveryRuntimeDeps {
    * guarantee is not a thing a caller gets to replace.
    */
   readonly handlers?: ReadonlyMap<JobKind, JobHandler>;
+  /**
+   * Syl's character, for the delivery handler to tell about an interruption.
+   *
+   * Passed straight through rather than used here: this function assembles,
+   * and the judgement about what counts as an interruption belongs to the
+   * handler that made one. Omitted, delivery is unchanged and silent.
+   */
+  readonly presence?: AlertSink;
   readonly env?: NodeJS.ProcessEnv;
   readonly clock?: Clock;
   readonly timers?: Timers;
@@ -103,6 +112,7 @@ export function createDeliveryRuntime(deps: DeliveryRuntimeDeps): DeliveryRuntim
     outbox: deps.outbox,
     devices: deps.devices,
     apns,
+    ...(deps.presence === undefined ? {} : { presence: deps.presence }),
     ...(deps.warn === undefined ? {} : { warn: deps.warn }),
   });
 
