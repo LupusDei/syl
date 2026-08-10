@@ -611,6 +611,24 @@ describe("a superseded node leaving the ranked path", () => {
     expect(store.searchVector(unit(1, 0, 0, 0)).map((h) => h.nodeId)).toEqual([current.id]);
   });
 
+  it("should not let a cold search under-report because the repair has not run", () => {
+    // The direction that fails SILENTLY. The confirming join makes a hot search
+    // correct with a stale vector by dropping it; a cold search would instead
+    // return nothing, and "nothing there" is indistinguishable from "not
+    // repaired yet" — which would hand the cold-store audit a spurious
+    // unreachability finding. So a non-hot search drains first.
+    const node = graph.addNode({ kind: "fact", label: "the March belief" });
+    store.putVector(node.id, unit(1, 0, 0, 0));
+    setTier(node.id, "cold");
+
+    // Deliberately NOT drained by the test.
+    expect(store.pendingReindex()).toBe(1);
+    expect(store.searchVector(unit(1, 0, 0, 0), { tier: "cold" }).map((h) => h.nodeId)).toEqual([
+      node.id,
+    ]);
+    expect(store.pendingReindex()).toBe(0);
+  });
+
   it("should keep a superseded node reachable by identity, so history stays answerable", () => {
     // "What did I believe in March?" — the ledger's history is write-only if
     // this stops being true.

@@ -478,12 +478,25 @@ export class MemoryStore {
    * real tier is what closes that window, and it costs one primary-key lookup
    * per returned hit rather than a scan. See §4 of the migration.
    *
+   * **A search of a tier other than `hot` drains the reindex queue first**, and
+   * that is not an optimisation. The confirming join makes a HOT search correct
+   * with an undrained queue by dropping a stale vector; a COLD search fails the
+   * other way, and silently. A node demoted a moment ago still has its vector
+   * in the hot partition, so the cold KNN prunes it away and returns nothing —
+   * and an empty result reads as "there is nothing there", not as "the repair
+   * has not run". The cold-store audit (`syl-005.6.4`) exists to prove nothing
+   * has become unreachable, so handing it a spurious unreachability finding
+   * would be the worst possible failure of this method. Raised by graph-laws
+   * against `syl-005.3.3`.
+   *
    * @throws {StoreError} `bad_limit`, `bad_vector`.
    */
   searchVector(embedding: readonly number[], options: SearchOptions = {}): VectorHit[] {
     const limit = requireLimit(options.limit ?? DEFAULT_SEARCH_LIMIT);
     const partition = nodePartition(options.tier ?? SCANNED_TIER, options.kind ?? "fact");
     const blob = encodeEmbedding(embedding, this.dimensions);
+
+    if (partition.tier !== SCANNED_TIER && this.pendingReindex() > 0) this.drainReindexQueue();
 
     const pruned = ["tier = ?"];
     const bindings: (string | Uint8Array | number)[] = [partition.tier];

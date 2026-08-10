@@ -394,6 +394,50 @@ job is spawning subprocesses — raised to 20s.
 
 ---
 
+**`vec0` refuses `UPDATE` on a partition key column, so `tier` does NOT track
+the row in the vector table.** Verified on **sqlite-vec 0.1.9**: the statement
+fails outright with *"UPDATE on partition key columns are not supported yet"*.
+
+This is worth its own entry because it quietly breaks the assumption
+`0012_memory_core.sql` leans on. That file's argument is that `tier` as a
+partition key is the mechanism by which demotion and partitioning become the
+same thing — and for an ordinary SQLite B-tree that is exactly right, because
+`UPDATE memory_nodes SET tier = 'cold'` moves the row and every index follows
+it. **In `vec0` it does not.** A demoted node leaves its vector sitting in the
+`hot` partition, where a pruned KNN happily returns it. The next person to
+reason from "tier is the partition key, so pruning is automatic" will be right
+about the B-tree and wrong about the vector table, and nothing will fail.
+
+The consequence is not a performance detail. It is a superseded belief served as
+though it were current — the exact failure `syl-005.3.3`'s ledger exists to
+prevent, arriving through the search index instead. Ordinary retrieval serves a
+superseded value 15-40% of the time against essentially never for a
+deterministic ledger, so routing around it costs the whole mechanism.
+
+`memory/store.ts` handles it in three overlapping layers, and the ordering of
+the argument matters more than the code:
+
+- **A tier move is a re-insert, never an update.** `syncPartition` reads the
+  embedding back out and writes a new row inside one SAVEPOINT, because a crash
+  between the delete and the insert would erase a vector that cost a model call.
+- **`searchVector` confirms every hit against its node's real tier.** Pruning is
+  for cost, the join is for correctness, and it is the confirmation — not the
+  repair — that is the guarantee: a stale vector is never returned even if
+  nothing has repaired it. That is what keeps correctness independent of whether
+  a queue has drained.
+- **A trigger fills a repair queue on every tier or kind change**, so the repair
+  is owed by the service rather than remembered by a caller. Same call as
+  `index-guarantee.ts`: reachability is a guarantee, and a guarantee that
+  depends on somebody calling a hook is a behavioural instruction wearing a
+  mechanism's clothes.
+
+Two smaller `vec0` facts from the same session, each of which cost a debugging
+cycle: it rejects an outer `ORDER BY` on a KNN query as a second *"ORDER BY
+distance"* clause even when the KNN sits in a CTE that has none; and it stores
+**float32**, so a cosine recovered from its L2 distance carries ~1e-8 of
+quantisation — harmless for ranking, and enough to fail an assertion that says
+"exactly".
+
 **`autoMemoryDirectory` fails silently, in both directions.** Claude Code ships
 its own auto-memory — a `MEMORY.md` index plus topic files, written by the model
 with the ordinary Write tool — and it is relocatable via the `autoMemoryDirectory`
