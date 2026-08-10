@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_PAIRING_CODE_TTL_MS,
   hashToken,
+  KEY_SCOPES,
   PAIRING_CODE_RETENTION_MS,
   PairingError,
   THE_COMMANDER,
@@ -505,8 +506,54 @@ describe("key scope", () => {
     expect(keys.verify(admin.token)).toEqual({ ok: false, reason: "revoked" });
   });
 
+  it("should mint `agent` only when the service asks for it by name", () => {
+    const grant = keys.mint("Syl (her own hands)", { scope: "agent" });
+
+    expect(keys.verify(grant.token)).toMatchObject({ ok: true, key: { scope: "agent" } });
+  });
+
+  it("should never mint `agent` from a pairing code, however the body is spelled", () => {
+    // `pair` takes a code and a device name and NOTHING else. This is the claim
+    // that makes the scope defensible: not that the route currently passes
+    // "device", but that there is no parameter through which a caller could ask
+    // for anything else. The assertion is on the signature as much as the row.
+    const grant = keys.pair(keys.issuePairingCode().code, "Commander's iPhone");
+
+    expect(keys.pair.length).toBe(2);
+    expect(keys.verify(grant.token)).toMatchObject({ ok: true, key: { scope: "device" } });
+    expect(keys.liveKeysWithScope("agent")).toEqual([]);
+  });
+
+  it("should keep all three scopes apart on the same store", () => {
+    const device = keys.pair(keys.issuePairingCode().code, "Commander's iPhone");
+    const admin = keys.mint("Web admin (console)", { scope: "admin" });
+    const agent = keys.mint("Syl (her own hands)", { scope: "agent" });
+
+    expect(keys.verify(device.token)).toMatchObject({ key: { scope: "device" } });
+    expect(keys.verify(admin.token)).toMatchObject({ key: { scope: "admin" } });
+    expect(keys.verify(agent.token)).toMatchObject({ key: { scope: "agent" } });
+    expect(keys.liveKeysWithScope("agent").map((key) => key.deviceName)).toEqual([
+      "Syl (her own hands)",
+    ]);
+  });
+
+  it("should stop counting a revoked agent key as live, so her hands can be taken away", () => {
+    // US3: revoking her must stop her acting. It is the same mechanism as a
+    // phone, which is the whole reason her credential lives in this table.
+    const agent = keys.mint("Syl (her own hands)", { scope: "agent" });
+    const record = keys.liveKeysWithScope("agent")[0];
+    keys.revoke(record?.id ?? "", "hands withdrawn");
+
+    expect(keys.liveKeysWithScope("agent")).toEqual([]);
+    expect(keys.verify(agent.token)).toEqual({ ok: false, reason: "revoked" });
+  });
+
+  it("should list every scope it knows, so a caller cannot iterate a stale set", () => {
+    expect([...KEY_SCOPES].sort()).toEqual(["admin", "agent", "device"]);
+  });
+
   it("should refuse a scope the schema does not know", () => {
-    // The CHECK constraint in 0014. A typo must fail at the write: an
+    // The CHECK constraint in 0014, widened by 0015. A typo must fail at the write: an
     // unrecognised scope compared against "admin" denies access, which is safe
     // and then looks exactly like a bug in the middleware.
     expect(() =>

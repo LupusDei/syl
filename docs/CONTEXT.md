@@ -503,6 +503,57 @@ Two smaller consequences worth remembering:
   dropped, the operator returned to the gate, and invited to paste the same
   working key back in.
 
+### A third scope, for Syl herself — `syl-009.1`
+
+`agent` extends the argument above rather than repeating it. The question is
+still **where a value can be created**, and the answer is one step stronger than
+`admin`'s: `agent` comes from `ensureAgentKey`, which `bootstrap` calls and
+nothing else does. `admin` requires write access to `syl.db`; `agent` requires
+being the process. **No code path in this service puts an agent token onto a
+socket at all**, so there is no missing guard to find — which is what the
+containment tests in `tests/integration/agent-credential.test.ts` assert three
+ways: from the contract (exactly one operation returns a `TokenGrant`), from the
+running service (a sweep of every parameterless route with a device token), and
+from the source (the credential is named in `index.ts` and `agent-key.ts` and
+nowhere else).
+
+Four things worth not rediscovering:
+
+- **Every boot mints a new one, and that is not a choice.** `api_keys` stores
+  only a SHA-256, which is the property that makes a stolen copy of the database
+  worthless. So a surviving agent row is a hash, not a credential anybody can
+  present, and "reuse the existing one" is not available. Superseded rows are
+  revoked so "how many of Syl's credentials are outstanding" has the answer one.
+  Persisting the plaintext beside the database was rejected: it would turn *read*
+  access to the state directory into a working credential for writing the
+  Commander's reminders.
+- **The confinement is an allowlist inside `requireBearerToken`, not a denylist
+  beside it.** `createApp` builds one `authenticate` and hands it to every
+  router, so that is the service's single authenticated chokepoint: a router
+  mounted next month is out of her reach by default, and the "401 before 403"
+  ordering cannot be got wrong because the confinement runs *inside* the
+  authentication that must precede it.
+- **Minting at boot broke the pairing-code line, silently.** `startSyl` decided
+  whether to print a pairing code with "every key in this table is revoked",
+  which was right while every key was a phone. With Syl's own key present from
+  the first boot, a brand-new machine would have concluded a device was already
+  paired and printed nothing — no failure, just no line, and no way in. It is
+  `needsPairingCode`, asking about `device` keys, and it is exported so it is a
+  test rather than a line nobody can call.
+- **The WebSocket needed the same denial and could not get it from the
+  middleware.** The handshake calls `keys.verify` directly, so an agent key
+  would have been accepted there and could have written chat messages *as the
+  Commander*. Refused identically to any other bad token: there is nothing for
+  her to learn from a distinguishable answer.
+
+Two mechanical notes. SQLite cannot widen a CHECK, so `0015_agent_scope.sql`
+rebuilds `api_keys` — the dangerous part is not the copy but the **indexes**,
+because `DROP TABLE` takes them with it and `api_keys_pairing_code_idx` is where
+the single-use pairing guarantee lives. And the migration sequence is dense by
+construction (`readMigrations` refuses a gap), so a number cannot be reserved
+ahead of a merge: concurrent branches necessarily collide and the second one
+renumbers.
+
 ### A stale build is invisible by construction — `syl-dep1.4`
 
 Every health check passes against an old build, because an old build is

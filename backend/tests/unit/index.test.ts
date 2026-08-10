@@ -9,6 +9,7 @@ import {
   clientErrorStatus,
   createApp,
   describeStartup,
+  needsPairingCode,
   onError,
   startServer,
   toFailure,
@@ -400,12 +401,94 @@ describe("bootstrap", () => {
       );
 
       expect(built.deps.keys.verify(grant.token).ok).toBe(true);
+      // Two rows: the device just paired, and Syl's own credential, which
+      // `bootstrap` mints for itself on the way up.
       expect(
         built.database.handle.prepare("SELECT count(*) AS n FROM api_keys").get(),
-      ).toEqual({ n: 1 });
+      ).toEqual({ n: 2 });
+      expect(built.deps.keys.liveKeysWithScope("device")).toHaveLength(1);
     } finally {
       built.database.close();
     }
+  });
+
+  it("should mint Syl's own agent credential into that same store", () => {
+    // Her hands, made at boot. Without this the tools have no token and every
+    // one of them fails at the first call — which is a service that answers
+    // every request and quietly does nothing.
+    const built = bootstrap(testConfig({ databasePath: ":memory:" }));
+    try {
+      expect(built.deps.keys.verify(built.agentKey.token)).toMatchObject({
+        ok: true,
+        key: { scope: "agent" },
+      });
+      expect(built.deps.keys.liveKeysWithScope("agent")).toHaveLength(1);
+    } finally {
+      built.database.close();
+    }
+  });
+
+  it("should keep her token out of everything the store can hand back", () => {
+    const built = bootstrap(testConfig({ databasePath: ":memory:" }));
+    try {
+      const rows = built.database.handle.prepare("SELECT * FROM api_keys").all();
+
+      expect(JSON.stringify(rows)).not.toContain(built.agentKey.token);
+      expect(JSON.stringify(built.deps.keys.list())).not.toContain(built.agentKey.token);
+    } finally {
+      built.database.close();
+    }
+  });
+});
+
+describe("needsPairingCode", () => {
+  /**
+   * The check that decides whether a fresh machine is told how to pair.
+   *
+   * It used to be "every key in this table is revoked", which was correct while
+   * the only keys were phones. Minting Syl's own credential at boot breaks it:
+   * on a brand-new machine there is now always a live key, so the service would
+   * decide a device was already paired and print nothing — and the Commander
+   * would be looking at a service he had no way into. The question was never
+   * "is any key live"; it is "is a DEVICE paired".
+   */
+  it("should ask for a pairing code on a store with nothing in it", () => {
+    db = testDatabase();
+    expect(needsPairingCode(testDeps(db).keys)).toBe(true);
+  });
+
+  it("should still ask when the only live key is Syl's own", () => {
+    db = testDatabase();
+    const keys = testDeps(db).keys;
+    keys.mint("Syl (her own hands)", { scope: "agent" });
+
+    expect(needsPairingCode(keys)).toBe(true);
+  });
+
+  it("should still ask when the only live key is an admin key from the console", () => {
+    db = testDatabase();
+    const keys = testDeps(db).keys;
+    keys.mint("Web admin (console)", { scope: "admin" });
+
+    expect(needsPairingCode(keys)).toBe(true);
+  });
+
+  it("should stop asking once a device is paired", () => {
+    db = testDatabase();
+    const keys = testDeps(db).keys;
+    keys.pair(keys.issuePairingCode().code, "Commander's iPhone");
+
+    expect(needsPairingCode(keys)).toBe(false);
+  });
+
+  it("should ask again after that device is revoked", () => {
+    db = testDatabase();
+    const keys = testDeps(db).keys;
+    keys.pair(keys.issuePairingCode().code, "Commander's iPhone");
+    keys.mint("Syl (her own hands)", { scope: "agent" });
+    keys.revoke(keys.liveKeysWithScope("device")[0]?.id ?? "", "phone lost");
+
+    expect(needsPairingCode(keys)).toBe(true);
   });
 });
 
