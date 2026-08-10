@@ -45,6 +45,7 @@ import {
   pushEnvironmentProbe,
   type PushEnvironmentAssertion,
 } from "./ops/apns-environment.js";
+import { assertContainer, describeContainer } from "./ops/container.js";
 import { createLogger, type Logger } from "./ops/logging.js";
 import { assessPower, describePower } from "./ops/power.js";
 import { installShutdownHandlers } from "./ops/shutdown.js";
@@ -612,7 +613,40 @@ export function bootstrap(
 ): {
   readonly database: SylDatabase;
   readonly deps: ServiceDependencies;
+  /**
+   * Syl herself, on her default lane.
+   *
+   * Returned rather than reachable only through `chat` so that a test can take
+   * a turn on **every** lane and check what it carried. The container is a
+   * property of each turn's options, and `ConversationService` only ever drives
+   * the commander lane — so without this the heartbeat, agenda and
+   * consolidation lanes could only be asserted about by rebuilding the wiring
+   * in the test, which is the one thing a wiring test must not do.
+   */
+  readonly agent: SylAgent;
 } {
+  // BEFORE THE DATABASE IS OPENED, because a refusal has to be a refusal — and
+  // because a service that opens a store, binds a port and only then declines
+  // is a service somebody restarts until it works.
+  //
+  // Skipped for an in-memory store, which means a test: there is no `~/.syl`
+  // then, `cwd` stays at `process.cwd()`, and that is this repository. Asserting
+  // would fail every test in the suite for a container that does not exist. The
+  // live service always has a real path.
+  const home = sylHome(config);
+  if (home !== undefined) {
+    // The MCP config is checked alongside the directory because it is the one
+    // door that is deliberately going to be opened. `--tools ""` empties the
+    // built-ins and nothing else — an MCP server attached to a turn keeps every
+    // tool it exposes — so when `syl-009` hands her a narrow named surface, the
+    // file declaring it must live under her home rather than in this source
+    // tree. A capability read from a checked-out branch is a capability that
+    // changes when somebody switches branches.
+    assertContainer(home, {
+      ...(options.turn?.mcpConfig === undefined ? {} : { mcpConfig: options.turn.mcpConfig }),
+    });
+  }
+
   const clock = options.clock ?? systemClock;
   // `allowExtension` must be asked for at CONSTRUCTION — `node:sqlite` offers no
   // way to turn it on later. Without it this connection can never load `vec0`,
@@ -717,7 +751,6 @@ export function bootstrap(
     // No soul file out-argues the room. `~/.syl` is already her home: her
     // database, her sessions and her memory all live there.
     turnOptions: (() => {
-      const home = sylHome(config);
       return {
         ...(options.turn ?? {}),
         ...(home === undefined ? {} : { cwd: home }),
@@ -738,6 +771,15 @@ export function bootstrap(
         // appears. So conversational memory does not accumulate while this
         // holds. Reversing it is this one line.
         tools: "",
+        // NONE OF THE MACHINE'S SETTINGS. `cwd` and `tools` were two thirds of
+        // the container; this is the third, and it is the one that was still
+        // open after the other two were fixed. Hooks and plugins are not read
+        // from the working directory, so moving her home did nothing to them:
+        // a live turn in `~/.syl` with an empty tool surface still had
+        // `bd prime` and the "Adjutant Agent Protocol" injected at SessionStart
+        // from the *user-level* settings and an installed plugin. See
+        // `TurnOptions.settingSources` for the captures.
+        settingSources: "",
         onEvent: observe,
       };
     })(),
@@ -815,6 +857,7 @@ export function bootstrap(
 
   return {
     database,
+    agent,
     deps: {
       keys,
       messages,
@@ -1128,6 +1171,8 @@ export async function startSyl(
     push,
     startupLines: [
       ...startup,
+      // Where she thinks, said out loud, once per boot.
+      ...describeContainer(sylHome(config)),
       ...describeRuntime(runtime),
       // Re-read: `ensureNightlyDreamJob` returns the row as it was found, and
       // the runner's first tick has already run since then.
@@ -1142,6 +1187,11 @@ export async function startSyl(
       host: config.host,
       port: config.port,
       databasePath: config.databasePath,
+      // The room she thinks in, as a field rather than as prose — this is the
+      // one a log query six months from now can group on, and the one whose
+      // absence meant nobody could answer "where do her turns run?" without
+      // reading a launchd plist.
+      turnHome: sylHome(config) ?? process.cwd(),
       credentialSource: config.credentialSource,
       subscriptionRails: config.subscriptionRails,
       timeZone: config.quietHours.tz,

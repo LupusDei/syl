@@ -159,6 +159,14 @@ export async function runReaderTurn(
     // The security boundary. Everything else here is defence in depth.
     tools: "",
     strictMcpConfig: true,
+    // No hooks, no plugins, no discovered CLAUDE.md — none of the machine's
+    // ambient configuration. Measured on 2.1.226: without this, a turn in any
+    // directory still runs every SessionStart hook the user has configured and
+    // loads every installed plugin. For a turn whose input is attacker-written
+    // text that is the wrong way round twice over — hook output lands in the
+    // same context as the untrusted text, and a plugin is a tool surface this
+    // turn is supposed not to have.
+    settingSources: "",
     // Not optional and not overridable by the caller. Auto-memory would
     // otherwise cut straight through the sealed room in both directions: it
     // loads Syl's `MEMORY.md` into a context whose other half is attacker-

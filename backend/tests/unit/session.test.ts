@@ -215,9 +215,32 @@ describe("runTurn", () => {
         "--resume",
         "--tools",
         "--settings",
+        "--setting-sources",
       ]) {
         expect(argv).not.toContain(flag);
       }
+    });
+
+    it("should pass an empty settings-source list through intact", async () => {
+      // Same trap as `--tools ""`, and a worse one to fall into: `""` is the
+      // value that means "load none of this machine's settings", so a falsiness
+      // check here silently restores every SessionStart hook and every
+      // installed plugin to a turn that asked for none. Measured on 2.1.226:
+      // without the flag, a turn in `~/.syl` still had `bd prime` and an agent
+      // protocol document injected before it read a word of the prompt.
+      const f = replaying(PONG);
+
+      await runTurn("hi", options(f, { settingSources: "" }));
+
+      expect(flagValue(invocationOf(f).argv, "--setting-sources")).toBe("");
+    });
+
+    it("should forward a settings-source list the caller chose", async () => {
+      const f = replaying(PONG);
+
+      await runTurn("hi", options(f, { settingSources: "project" }));
+
+      expect(flagValue(invocationOf(f).argv, "--setting-sources")).toBe("project");
     });
 
     it("should set the tool surface only when asked, and pass an empty one through intact", async () => {

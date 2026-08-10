@@ -171,6 +171,21 @@ describe("runReaderTurn", () => {
       expect(argv).not.toContain("--mcp-config");
     });
 
+    it("should load none of this machine's settings, hooks or plugins", async () => {
+      // `--strict-mcp-config` is the same idea for MCP, and it turned out to
+      // cover the smaller half. Hooks and plugins are not read from the working
+      // directory at all, so nothing about *where* a reader turn runs affects
+      // them: measured on 2.1.226, an ordinary turn still ran every SessionStart
+      // hook the machine had configured and injected their stdout into the
+      // context. For this turn that context also holds attacker-written text,
+      // and a plugin is a tool surface a reader is supposed not to have.
+      const f = replaying(READER_INJECTION);
+
+      await runReaderTurn({ instruction: "Summarise.", untrusted: ARTICLE }, { claudeBin: f.bin });
+
+      expect(flagValue(invocationOf(f).argv, "--setting-sources")).toBe("");
+    });
+
     it("should never resume, and never hand back an id that could be resumed later", async () => {
       // A reader session is a sealed room. If untrusted text could be carried
       // into a later turn by resuming, removing the tools from *this* turn buys
