@@ -365,10 +365,25 @@ describe("bootstrap", () => {
     }
   });
 
-  it("should point Syl's auto-memory at the configured directory on every turn", async () => {
-    // The wiring the whole bead is about: without this, memory lands in
-    // ~/.claude/projects/<sanitised-cwd>/memory/ — partitioned by whatever
-    // directory the service happened to start in, and outside .syl/ entirely.
+  it("should never hand her a memory directory she has no tools to open", async () => {
+    // REGRESSION, `syl-010.4.5`, and it inverts what this test used to assert.
+    //
+    // It used to demand a directory, which was right while she had hands. Once
+    // `--tools ""` landed it became the instruction that broke her: auto-memory
+    // injects Claude Code's own directions to READ and MAINTAIN memory files,
+    // and those directions need the tools we removed. Asked "who are you?" she
+    // emitted a fabricated `Read` and then a fabricated `ls` listing a
+    // directory that does not exist — three runs of three. One line flipped,
+    // nothing else changed, and she answered as herself.
+    //
+    // So the test now guards the pairing rather than the path: an instruction
+    // she cannot obey does not fail loudly, it gets acted out, and prose is not
+    // a place where a failure can be caught. If auto-memory ever comes back,
+    // the tools come back in the same change or this goes red.
+    //
+    // The directory is still configured below on purpose. Passing one and
+    // getting `off` is the whole assertion — it proves the wiring ignores it by
+    // decision rather than because nobody set it.
     const seen: (unknown | undefined)[] = [];
     const built = bootstrap(
       testConfig({ databasePath: ":memory:", autoMemoryDirectory: "/srv/syl/memory" }),
@@ -386,7 +401,7 @@ describe("bootstrap", () => {
       );
       await built.deps.chat.idle();
 
-      expect(seen).toEqual([{ mode: "directory", directory: "/srv/syl/memory" }]);
+      expect(seen).toEqual([{ mode: "off" }]);
     } finally {
       built.database.close();
     }

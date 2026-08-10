@@ -156,6 +156,19 @@ export interface SylConfig {
    * to be unusable at first use is discovered by the memories that quietly went
    * somewhere else.
    */
+  /**
+   * Parsed, and deliberately **not consumed** as of `syl-010.4.5`.
+   *
+   * Claude Code's own auto-memory is off for every lane: its instructions
+   * require the tools that `--tools ""` removes, and a turn told to maintain a
+   * memory file it cannot open acts the file operation out in prose. Memory now
+   * forms through `memory/extraction.ts`, where the service does the writing.
+   *
+   * The field survives its consumer because the env var is documented, and a
+   * setting that vanishes silently is worse than one that is honestly inert.
+   * If auto-memory is ever wanted again, the tool surface has to come back
+   * first — the two are one decision, which is the whole lesson of that bead.
+   */
   readonly autoMemoryDirectory: string;
   /**
    * Which environment variable would hand credentials to a child `claude`

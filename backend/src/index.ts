@@ -61,7 +61,7 @@ import { createSyncRouter } from "./routes/sync.js";
 import { createTodoRouter } from "./routes/todos.js";
 import { fileSessionStore, memorySessionStore, SylAgent } from "./harness/agent.js";
 import { runTurn, type TurnOptions, type TurnRunner } from "./harness/session.js";
-import { autoMemoryAt } from "./memory/auto-memory.js";
+import { autoMemoryOff } from "./memory/auto-memory.js";
 import { DreamJudge } from "./memory/dream/judge.js";
 import { DreamLog } from "./memory/dream/log.js";
 import { DreamSweep } from "./memory/dream/sweep.js";
@@ -824,12 +824,29 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     // handed — the distinction that had her answering "what is your
     // personality?" by describing her own configuration file.
     recall: () => workingMemory.preamble(),
-    // One memory directory for every lane, and not the CLI's per-project
-    // default. Sessions are partitioned so Syl's inner monologue does not
-    // interleave with the Commander's conversation; memory is deliberately not,
-    // or the morning agenda would know nothing he said last night. See
-    // `memory/auto-memory.ts`.
-    autoMemory: autoMemoryAt(config.autoMemoryDirectory),
+    // OFF, and this is the second half of `--tools ""` rather than a separate
+    // decision. Auto-memory is Claude Code's OWN subsystem: pointing it at a
+    // directory injects instructions to READ and MAINTAIN memory files, and
+    // those instructions require the very tools we removed.
+    //
+    // Instructed to act and given nothing to act with, the model performs the
+    // tool call in prose. Measured, three runs of three, asked only "who are
+    // you?": she emitted a fabricated `Read`, then a fabricated `ls` output
+    // listing a directory that does not exist. With this one line flipped and
+    // nothing else changed, she answered as herself. See `syl-010.4.5`.
+    //
+    // Two flags decided by two tracks on the same day, each correct alone and
+    // incoherent together. The lesson is cheap to state and was not cheap to
+    // find: REMOVING A CAPABILITY IS NOT DONE UNTIL EVERY INSTRUCTION THAT
+    // ASSUMED IT IS ALSO GONE. An order she cannot obey does not fail loudly;
+    // it gets acted out.
+    //
+    // Nothing is lost. `memory/extraction.ts` replaced this path deliberately:
+    // the model proposes, the SERVICE writes, and the writing needs no tool in
+    // her hands. That is strictly better than trusting a turn to maintain its
+    // own memory file, because the authority to write now lives with the code
+    // that can be tested.
+    autoMemory: autoMemoryOff(),
     ...(soul === undefined ? {} : { soul }),
     // Both halves are load-bearing and neither survives alone: `onEvent` is how
     // the service observes a turn at all, and the index wrapper is what makes a
