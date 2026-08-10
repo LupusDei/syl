@@ -86,6 +86,38 @@ export interface TurnOptions {
    */
   readonly strictMcpConfig?: boolean;
   /**
+   * Which of Claude Code's own settings sources this turn loads: any comma-
+   * separated subset of `user`, `project`, `local`. **`""` loads none of them.**
+   *
+   * `--strict-mcp-config` is the same idea for MCP; this is the one for
+   * everything else the machine has lying around, and it turned out to matter
+   * far more. Moving `cwd` to `~/.syl` did **not** stop the repository reaching
+   * her, because two of the three doors are not in the cwd at all. Driven live
+   * on 2.1.226 with `cwd=~/.syl` and `--tools ""`, five SessionStart hooks
+   * still fired on an ordinary turn and injected, before she had said a word:
+   *
+   * - `bd prime` — from the *user-level* `~/.claude/settings.json`, announcing
+   *   itself as "project memories and session rules";
+   * - "# Adjutant Agent Protocol" — from an installed *plugin*, telling her to
+   *   find her layer in a squad and report to her orchestrator.
+   *
+   * Neither is in her home; neither cares what `cwd` is. With
+   * `--setting-sources ""` the same turn reports no hooks, no plugins, 47 slash
+   * commands instead of 98, and five agent types instead of eight. A `CLAUDE.md`
+   * canary placed in the cwd reached the model without the flag and did not
+   * reach it with the flag — so this closes the cwd door as well.
+   *
+   * Two things it does **not** break, both verified rather than assumed:
+   * `apiKeySource` stays `"none"` (the claude.ai login is not a settings
+   * source, so subscription rails are untouched), and `--settings` is still
+   * honoured — `memory_paths.auto` came back as the directory we asked for.
+   *
+   * `--bare` looks like it does this job and must not be used: its help text
+   * says auth becomes "strictly ANTHROPIC_API_KEY or apiKeyHelper", which is
+   * the metered API and the one constraint this project does not bend.
+   */
+  readonly settingSources?: string;
+  /**
    * Where Claude Code's own auto-memory reads and writes for this turn, or
    * that it is switched off. Omit and the CLI uses whatever the machine's
    * settings say, which for a personal assistant is nobody's decision.
@@ -189,6 +221,9 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
   if (options.systemPrompt) args.push("--append-system-prompt", options.systemPrompt);
   if (options.mcpConfig) args.push("--mcp-config", options.mcpConfig);
   if (options.strictMcpConfig ?? options.mcpConfig !== undefined) args.push("--strict-mcp-config");
+  // Checked against `undefined`, not for truthiness: `""` is the whole point of
+  // the flag, and `if (options.settingSources)` would silently drop it.
+  if (options.settingSources !== undefined) args.push("--setting-sources", options.settingSources);
   if (options.autoMemory) args.push("--settings", autoMemorySettingsFlag(options.autoMemory));
   if (options.permissionMode) args.push("--permission-mode", options.permissionMode);
   if (options.tools !== undefined) args.push("--tools", options.tools);

@@ -214,20 +214,48 @@ describe("SylAgent", () => {
     expect(optionsOfCall(runner, 0).cwd).toBe("/home/syl");
   });
 
-  it("should carry her directory into a lane-scoped view", async () => {
-    // A lane that falls back to process.cwd() is a lane that wakes up in the
-    // workshop — and the heartbeat and agenda lanes are the ones that speak to
-    // him unprompted.
-    const runner = announcingRunner(() => "sess-1");
-    const agent = new SylAgent({
-      runner,
-      store: memoryStore(),
-      turnOptions: { cwd: "/home/syl" },
+  // Parameterised over LANES rather than over today's four names, so a lane
+  // added later FAILS until somebody decides what container it gets instead of
+  // inheriting silence. That is exactly how the heartbeat and the agenda came
+  // to wake her in the source repository — and those two are the lanes that
+  // speak to the Commander unprompted.
+  describe.each(Object.values(LANES))("the %s lane", (lane) => {
+    it("should carry her home, her empty built-in surface, and no ambient settings", async () => {
+      // Three separate mechanisms and every one of them load-bearing. `cwd`
+      // decides which CLAUDE.md she reads and therefore who she thinks she is.
+      // `tools` empties the BUILT-INS — and only those; an attached MCP server
+      // keeps every tool it exposes, measured 2026-08-10 as 0 built-ins and 59
+      // MCP tools under `--tools ""`. `settingSources` is the one that survived
+      // the other two: hooks and plugins are not read from the working
+      // directory, so moving her home did nothing to them.
+      const runner = announcingRunner(() => "sess-1");
+      const agent = new SylAgent({
+        runner,
+        store: memoryStore(),
+        turnOptions: { cwd: "/home/syl", tools: "", settingSources: "" },
+      });
+
+      await agent.forLane(lane).ask("who are you?");
+
+      const options = optionsOfCall(runner, 0);
+      expect(options.cwd).toBe("/home/syl");
+      expect(options.tools).toBe("");
+      expect(options.settingSources).toBe("");
     });
 
-    await agent.forLane("agenda").ask("morning");
+    it("should attach no ambient MCP servers", async () => {
+      // Not "only Syl's servers" — none, unless one is named. Asked to say
+      // hello on her first live turn she answered through
+      // `mcp__adjutant__send_message`, development tooling, because it was
+      // simply there; the reply never reached the Commander's phone.
+      const runner = announcingRunner(() => "sess-1");
+      const agent = new SylAgent({ runner, store: memoryStore() });
 
-    expect(optionsOfCall(runner, 0).cwd).toBe("/home/syl");
+      await agent.forLane(lane).ask("who are you?");
+
+      expect(optionsOfCall(runner, 0).strictMcpConfig).toBe(true);
+      expect(optionsOfCall(runner, 0).mcpConfig).toBeUndefined();
+    });
   });
 
   it("should take her turns with no built-in tools at all", async () => {
@@ -244,15 +272,6 @@ describe("SylAgent", () => {
     });
 
     await agent.ask("who are you?");
-
-    expect(optionsOfCall(runner, 0).tools).toBe("");
-  });
-
-  it("should carry the empty tool surface into a lane-scoped view", async () => {
-    const runner = announcingRunner(() => "sess-1");
-    const agent = new SylAgent({ runner, store: memoryStore(), turnOptions: { tools: "" } });
-
-    await agent.forLane("heartbeat").ask("anything wrong?");
 
     expect(optionsOfCall(runner, 0).tools).toBe("");
   });
