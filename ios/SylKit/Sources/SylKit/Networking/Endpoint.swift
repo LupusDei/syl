@@ -33,6 +33,22 @@ public enum HTTPMethod: String, Equatable, Sendable {
 /// mobile client retries by design, so a write without a key is a duplicated reminder
 /// waiting to happen — that is a compile-time and precondition-level rule here rather
 /// than a convention anyone has to remember.
+///
+/// ## The one operation this type cannot describe
+///
+/// `Response` is the type of the `data` member of a `{ success, data }` envelope, and
+/// `APIClient` decodes one on every path. **`GET /attachments/{attachmentId}` does not
+/// answer an envelope** — it answers the file, with its sniffed `Content-Type`. There
+/// is no `Response` that spells that, and inventing one would mean lying about the
+/// shape to keep the table tidy. So it is `SylAPI.attachmentPath(_:variant:)`, which
+/// returns a path and its query and stops there, and the fetch lives with the thing
+/// that needs raw bytes.
+///
+/// If you are adding an operation and reaching for the same exception: check first that
+/// its *failures* are still envelopes. That is what makes the exception safe — the
+/// discriminator is the content type, so JSON means Syl refused and the declared media
+/// type means these are the bytes. An operation whose errors are also unstructured does
+/// not belong in this client at all.
 public struct Endpoint<Response: Codable & Equatable & Sendable>: Sendable {
     public let method: HTTPMethod
     public let path: String

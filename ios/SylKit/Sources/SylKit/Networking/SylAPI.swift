@@ -83,6 +83,42 @@ public enum SylAPI {
         )
     }
 
+    // MARK: - Attachments
+
+    /// Store an image or a short video and get an id for it.
+    ///
+    /// Two steps, always: upload here, then name the returned id in
+    /// ``SendMessageRequest/attachmentIds``. An attachment exists on its own until a
+    /// message claims it, which is exactly what lets a client write its local row and
+    /// start the upload *before* it has a message to attach it to — `ChatViewModel`'s
+    /// "disk first" rule applied to bytes.
+    public static func createAttachment(
+        _ body: CreateAttachmentRequest,
+        idempotencyKey: String
+    ) throws -> Endpoint<Attachment> {
+        try .write(.post, "/attachments", body: body, idempotencyKey: idempotencyKey)
+    }
+
+    /// The **path** of the stored bytes, relative to the API base URL.
+    ///
+    /// Not an `Endpoint`, and that is not an oversight. `Endpoint<Response>` decodes a
+    /// JSON envelope, and this is the one operation in the whole contract whose success
+    /// body is not one: it answers the file, with its sniffed `Content-Type`. Every
+    /// *failure* is still the ordinary error envelope, and the discriminator is the
+    /// content type — JSON means Syl refused, the declared media type means these are
+    /// the bytes, and anything else is a transport failure wearing an HTTP status.
+    ///
+    /// Ask for `.thumb` only when ``Attachment/hasThumbnail`` is true.
+    public static func attachmentPath(
+        _ id: SylID,
+        variant: AttachmentVariant = .original
+    ) -> (path: String, query: [QueryItem]) {
+        (
+            "/attachments/\(id)",
+            variant == .original ? [] : [QueryItem("variant", variant.rawValue)]
+        )
+    }
+
     // MARK: - Reminders
 
     public static func reminders(

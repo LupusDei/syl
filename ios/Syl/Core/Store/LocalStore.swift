@@ -111,7 +111,8 @@ struct LocalStore: Sendable {
         clientId: String,
         idempotencyKey: String,
         text: String,
-        now: Date
+        now: Date,
+        attachments: [Attachment] = []
     ) throws -> Message {
         let optimistic = Message(
             id: clientId,
@@ -122,7 +123,12 @@ struct LocalStore: Sendable {
             createdAt: now,
             // Zero: the server has not given this message a position in the
             // conversation yet, and pretending otherwise would sort it wrongly.
-            seq: 0
+            seq: 0,
+            // The LOCAL attachments, with locally-minted ids. The bubble renders from
+            // these against bytes already primed into `AttachmentLoader`'s cache, so a
+            // just-sent picture appears with no round trip and no spinner. They are
+            // swapped for the server's rows by ``attachUploaded(clientId:idempotencyKey:attachments:)``.
+            attachments: attachments
         )
 
         try database.queue.write { db in
@@ -132,13 +138,30 @@ struct LocalStore: Sendable {
                 clientId: clientId,
                 text: text,
                 conversationId: conversationId
+                // No `attachmentIds` yet, on purpose. The ids that exist right now are
+                // local, and a send naming them would be `VALIDATION_FAILED` forever.
             )
             var outboxRow = OutboxRecord(
                 idempotencyKey: idempotencyKey,
                 kind: .sendMessage,
                 targetId: conversationId,
                 payload: try SylJSON.encoder().encode(body),
-                createdAt: now
+                createdAt: now,
+                // Parked until the bytes are up.
+                //
+                // **This is the disk-first rule applied to attachments (D7).** The
+                // bubble and the intent are written together, in one transaction, before
+                // a single byte leaves the device — so a crash mid-upload loses neither.
+                // What it must not do is let the outbox flush a message whose pictures
+                // do not exist on the server yet: sending it anyway would deliver the
+                // words without the picture, which is the silent drop this project
+                // forbids in a different costume.
+                //
+                // `blockedReason` is the existing machinery for exactly this shape of
+                // problem — neither retried nor discarded, waiting visibly. A crash here
+                // leaves the row in `Outbox.blocked()`, which is a state someone can see
+                // and act on, rather than a queue entry that would fail forever.
+                blockedReason: attachments.isEmpty ? nil : Self.awaitingAttachmentUpload
             )
             // The unique index makes a repeat a no-op; catching it here keeps a double
             // tap from failing the whole transaction and losing the bubble.
@@ -151,6 +174,68 @@ struct LocalStore: Sendable {
         }
 
         return optimistic
+    }
+
+    /// Why a send is parked. Compared as a value, so nothing has to spell it twice.
+    static let awaitingAttachmentUpload = "Waiting for its attachments to upload"
+
+    /// The uploads landed. Swap the local rows for the server's and release the send.
+    ///
+    /// One transaction, because the three facts are the same fact: the message now
+    /// refers to attachments that exist, the queued intent now names them, and the
+    /// intent may now go. Doing any of them separately would leave a window in which the
+    /// outbox could flush a send naming ids the message does not carry.
+    ///
+    /// - Returns: whether anything was found to update. False after a reconcile has
+    ///   already swapped the optimistic row out — which is possible, if unlikely, and is
+    ///   not an error.
+    @discardableResult
+    func attachUploaded(
+        clientId: String,
+        idempotencyKey: String,
+        attachments: [Attachment]
+    ) throws -> Bool {
+        try database.queue.write { db in
+            guard let pending = try MessageRecord
+                .filter(Column("clientId") == clientId)
+                .filter(Column("pending") == true)
+                .fetchOne(db)
+            else {
+                return false
+            }
+
+            let stored = try pending.model()
+            let updated = Message(
+                id: stored.id,
+                conversationId: stored.conversationId,
+                clientId: stored.clientId,
+                role: stored.role,
+                text: stored.text,
+                createdAt: stored.createdAt,
+                seq: stored.seq,
+                attachments: attachments
+            )
+            try MessageRecord(updated, pending: true).save(db)
+
+            guard let row = try OutboxRecord
+                .filter(Column("idempotencyKey") == idempotencyKey)
+                .fetchOne(db)
+            else {
+                return false
+            }
+
+            let body = SendMessageRequest(
+                clientId: clientId,
+                text: stored.text,
+                conversationId: stored.conversationId,
+                attachmentIds: attachments.map(\.id)
+            )
+            try db.execute(
+                sql: "UPDATE outbox SET payload = ?, blockedReason = NULL WHERE id = ?",
+                arguments: [try SylJSON.encoder().encode(body), row.id]
+            )
+            return true
+        }
     }
 
     /// Swaps the optimistic row for the server's copy.

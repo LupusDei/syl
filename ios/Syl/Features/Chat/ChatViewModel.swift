@@ -42,6 +42,12 @@ final class ChatViewModel: ObservableObject {
     private let pageSize: Int
     private let conversationId: SylID
     private let sendOverSocket: @Sendable (_ text: String, _ clientId: String, _ key: String) async throws -> Void
+    /// Puts one attachment's bytes on the server and hands back the row it made.
+    ///
+    /// Injected rather than reached for, so the ordering rule in ``send(staging:)`` can
+    /// be tested — including the case where the upload fails partway — without a server
+    /// and without a network stub.
+    private let uploadAttachment: @Sendable (CreateAttachmentRequest, String) async throws -> Attachment
     private let flush: @Sendable () async -> Void
     private let now: @Sendable () -> Date
     private let makeClientId: @Sendable () -> String
@@ -63,6 +69,12 @@ final class ChatViewModel: ObservableObject {
         sendOverSocket: @escaping @Sendable (String, String, String) async throws -> Void = { _, _, _ in
             throw WebSocketClient.NotConnected()
         },
+        /// Uploads one attachment. The default throws, which is correct for every
+        /// caller that does not stage attachments and honest for one that does without
+        /// wiring this: the send parks rather than pretending to have gone.
+        uploadAttachment: @escaping @Sendable (CreateAttachmentRequest, String) async throws -> Attachment = { _, _ in
+            throw AttachmentFetchError.offline
+        },
         /// Runs the outbox. Called after a send so a queued message leaves promptly
         /// rather than waiting for the next scheduled sync.
         flush: @escaping @Sendable () async -> Void = {},
@@ -75,6 +87,7 @@ final class ChatViewModel: ObservableObject {
         self.pageSize = limit
         self.loader = ChatSnapshotLoader(store: store, conversationId: conversationId, limit: limit)
         self.sendOverSocket = sendOverSocket
+        self.uploadAttachment = uploadAttachment
         self.flush = flush
         self.now = now
         self.makeClientId = makeClientId
@@ -129,12 +142,42 @@ final class ChatViewModel: ObservableObject {
     /// The order matters and is not negotiable: **disk first**. If the app is killed
     /// between the write and the send, the message is still queued and still on screen.
     /// If it were sent first, a crash would lose both the bubble and the intent.
-    func send() async {
+    ///
+    /// ## The same rule, applied to bytes (D7, T036)
+    ///
+    /// A staged attachment goes through the identical ordering, and the temptation to
+    /// invert it is much stronger here — uploading first would hand back a real server
+    /// id and save a second write. It is exactly as wrong: a crash mid-upload would lose
+    /// the bubble, the words and the picture, and the Commander would have no evidence
+    /// he ever sent anything.
+    ///
+    /// So the sequence is:
+    ///
+    /// 1. **Prime the byte cache** under locally-minted ids, so the bubble draws the
+    ///    picture he just chose rather than fetching a copy of it back from the Mac.
+    /// 2. **Write disk** — the optimistic row *with those local attachments*, and the
+    ///    outbox intent, in one transaction. Nothing has left the device yet.
+    /// 3. **Upload**, one attachment at a time.
+    /// 4. **Swap in the server's ids and release the send.**
+    ///
+    /// Between 2 and 4 the outbox row is parked (`blockedReason`), because a send naming
+    /// local ids is `VALIDATION_FAILED` forever and a send with the ids stripped would
+    /// deliver the words without the picture. Parked is neither: it is a durable,
+    /// visible "not yet".
+    func send(staging: [StagedAttachment] = []) async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Text is required by the contract (`minLength: 1`), so an attachment cannot be
+        // sent bare. That is the service's rule rather than this screen's opinion.
         guard !text.isEmpty else { return }
 
         let clientId = makeClientId()
         let idempotencyKey = makeIdempotencyKey()
+
+        // Before the write, so a bubble that renders on the very next `refresh()` has
+        // its bytes already in hand.
+        for staged in staging {
+            AttachmentLoader.prime(attachmentId: staged.id, data: staged.data)
+        }
 
         do {
             _ = try store.enqueueSend(
@@ -142,7 +185,8 @@ final class ChatViewModel: ObservableObject {
                 clientId: clientId,
                 idempotencyKey: idempotencyKey,
                 text: text,
-                now: now()
+                now: now(),
+                attachments: staging.map(\.localAttachment)
             )
         } catch {
             notice = "Could not queue that message on this device."
@@ -153,6 +197,15 @@ final class ChatViewModel: ObservableObject {
         notice = nil
         await refresh()
 
+        if !staging.isEmpty {
+            guard await upload(staging, clientId: clientId, idempotencyKey: idempotencyKey) else {
+                // The row stays on disk and stays parked. Nothing is lost and nothing is
+                // sent half-formed; `retryQueued()` runs it again.
+                return
+            }
+            await refresh()
+        }
+
         do {
             try await sendOverSocket(text, clientId, idempotencyKey)
         } catch {
@@ -162,6 +215,42 @@ final class ChatViewModel: ObservableObject {
             // the message is written once.
             await flush()
         }
+    }
+
+    /// Uploads every staged attachment, then releases the parked send.
+    ///
+    /// - Returns: whether the send may now go.
+    private func upload(
+        _ staging: [StagedAttachment],
+        clientId: String,
+        idempotencyKey: String
+    ) async -> Bool {
+        var uploaded: [Attachment] = []
+        for staged in staging {
+            do {
+                let attachment = try await uploadAttachment(staged.request, makeIdempotencyKey())
+                // The same bytes, now also reachable under the id the server minted, so
+                // the confirmed message renders from cache instead of downloading the
+                // picture that is already in memory.
+                AttachmentLoader.prime(attachmentId: attachment.id, data: staged.data)
+                uploaded.append(attachment)
+            } catch {
+                notice = "That picture has not uploaded yet. It will go when Syl is reachable."
+                return false
+            }
+        }
+
+        do {
+            try store.attachUploaded(
+                clientId: clientId,
+                idempotencyKey: idempotencyKey,
+                attachments: uploaded
+            )
+        } catch {
+            notice = "Could not finish attaching that picture on this device."
+            return false
+        }
+        return true
     }
 
     // MARK: - Live events

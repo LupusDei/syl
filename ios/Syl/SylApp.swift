@@ -75,6 +75,10 @@ struct RootView: View {
                     unopenableStore
                 }
             }
+            // The paired origin and the credentialed fetcher, for any bubble carrying a
+            // picture. Read from the delegate on every evaluation rather than captured,
+            // so re-pairing moves the attachments with everything else.
+            .environment(\.attachmentContext, appDelegate.attachmentContext)
             .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
 
             StatusView(

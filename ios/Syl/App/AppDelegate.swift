@@ -70,6 +70,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     /// hammering the host the Commander switched away from.
     private var socketBaseURL: URL?
 
+    /// What a chat bubble needs in order to fetch a picture.
+    ///
+    /// Computed on every read rather than cached, for the same reason `SylBackend`
+    /// rebuilds its client on every call: the paired base URL lives in `UserDefaults`
+    /// and can change under the app. A cached `AttachmentSource` would be a copy of the
+    /// origin as it was at launch, and the failure mode is not a broken image — it is
+    /// the origin guard refusing every attachment from the server the Commander just
+    /// switched to, which reads as a security alarm when it is a stale value.
+    var attachmentContext: AttachmentContext {
+        AttachmentContext(
+            source: AttachmentSource(baseURL: backend.baseURL),
+            fetcher: AuthenticatedAttachmentFetcher(tokens: tokens)
+        )
+    }
+
     /// The last registration outcome, so the app can be honest about it rather than
     /// pretending push works.
     @Published private(set) var registration: RegistrationState = .idle
