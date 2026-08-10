@@ -1,8 +1,10 @@
+import { loadSchemas, validateOrThrow } from "@syl/shared";
 import { describe, expect, it } from "vitest";
 
 import { SylApiClient, type FetchLike } from "../../src/tools/client.js";
 import { TOOLS } from "../../src/tools/schemas.js";
 import {
+  advertisedTools,
   advertisedToolNames,
   createToolServer,
   HANDLERS,
@@ -159,6 +161,89 @@ function remindingApi(): FakeApi {
 
 const FIVE_MINUTES = { said: "in five minutes", kind: "relative", minutes: 5 };
 
+/** The to-do these tests are about, and the goal. Real ids: `syl:<type>:<uuidv7>`. */
+const THE_TODO = "syl:todo:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f";
+const THE_GOAL = "syl:goal:0198f2c1-4a3b-7d21-9f00-0a0b0c0d0e0f";
+
+/** `/todos/syl%3Atodo%3A…`, so the assertions read as paths rather than as escapes. */
+const TODO_PATH = `/todos/${encodeURIComponent(THE_TODO)}`;
+const GOAL_PATH = `/goals/${encodeURIComponent(THE_GOAL)}`;
+
+/**
+ * A stored to-do, in the contract's shape.
+ *
+ * Every field, including the ones this verb never touches. A fixture written
+ * down to the fields a handler happens to read is a fixture that agrees with
+ * the handler by construction, and the drift it would have caught is exactly
+ * the kind that reaches him as a confident sentence about a row that does not
+ * look like that. `the fixtures in this file` below measures it against
+ * `openapi.yaml` rather than against our own types (constitution rule 1).
+ */
+function storedTodo(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: THE_TODO,
+    text: "Buy flour",
+    goalId: null,
+    dueAt: null,
+    pinned: false,
+    status: "open",
+    source: "commander",
+    delegatedJobId: null,
+    createdAt: new Date(NOW).toISOString(),
+    updatedAt: new Date(NOW).toISOString(),
+    completedAt: null,
+    ...over,
+  };
+}
+
+/** A stored goal, in the contract's shape. */
+function storedGoal(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: THE_GOAL,
+    parentId: null,
+    title: "Run a half marathon",
+    why: null,
+    targetDate: null,
+    metricKey: null,
+    targetValue: null,
+    cadenceDays: null,
+    status: "active",
+    statusReason: null,
+    createdAt: new Date(NOW).toISOString(),
+    updatedAt: new Date(NOW).toISOString(),
+    ...over,
+  };
+}
+
+/** A page, in the shape `/todos` and the rest actually answer with. */
+function page(items: readonly unknown[]): unknown {
+  return { items, nextCursor: null, hasMore: false };
+}
+
+/**
+ * A store holding one to-do, which remembers what was done to it.
+ *
+ * Stateful rather than a constant answer, because the two facts these tests
+ * turn on are both about state: a row read after a write must reflect the
+ * write, and completing an already-done to-do must return it **unchanged** —
+ * `TodoService.complete` says so, and it says so because the phone's outbox
+ * retries that call by design and a retry that moved `completedAt` forward
+ * would rewrite when he actually finished it.
+ */
+function todoApi(initial: Record<string, unknown> = storedTodo()): FakeApi {
+  let row = initial;
+  return fakeApi({
+    [`${TODO_PATH}/complete`]: () => {
+      if (row["status"] !== "done") {
+        row = storedTodo({ ...row, status: "done", completedAt: new Date(NOW).toISOString() });
+      }
+      return ok(row);
+    },
+    [TODO_PATH]: () => ok(row),
+    "/todos": (made) => (made.method === "POST" ? ok(row, 201) : ok(page([row]))),
+  });
+}
+
 describe("the tool surface she is offered", () => {
   it("should advertise every verb that has a handler, with the schema from schemas.ts", async () => {
     const reply = await createToolServer(contextFor(fakeApi({}))).handle({
@@ -184,6 +269,47 @@ describe("the tool surface she is offered", () => {
     // every time, which is the defect this epic exists to fix, one layer along.
     expect(TOOLS.map((tool) => tool.name)).toContain("remember");
     expect(advertisedToolNames()).not.toContain("remember");
+  });
+
+  it("should refuse EVERY write that arrives without its reason, whatever the verb", async () => {
+    // `tool-surface-budget` holds the same rule one layer up — that every verb
+    // which changes something DECLARES `because` — and a declaration nothing
+    // enforces is a field the model omits at 3am. This is the enforcing half,
+    // and it is guarded by shape for the same reason: a seventh verb added next
+    // month is covered without anyone remembering this file exists.
+    //
+    // A required field this table has no answer for fails loudly rather than
+    // being skipped, so a new verb cannot slip through the guard by arriving
+    // with a field nobody taught it.
+    const plausible: Readonly<Record<string, unknown>> = {
+      text: "Something he asked for.",
+      when: FIVE_MINUTES,
+      id: THE_TODO,
+      fact: "His wife's birthday is in March.",
+    };
+
+    for (const tool of advertisedTools()) {
+      const required = (tool.inputSchema as { required?: readonly string[] }).required ?? [];
+      if (!required.includes("because")) continue;
+
+      const args: Record<string, unknown> = {};
+      for (const field of required) {
+        if (field === "because") continue;
+        const value = plausible[field];
+        expect(value, `${tool.name} requires ${field} and this guard has no value for it`).toBeDefined();
+        args[field] = value;
+      }
+
+      const api = todoApi();
+      const { envelope, isError } = await call(contextFor(api), tool.name, args);
+
+      expect(envelope.ok, `${tool.name} accepted a write with no reason`).toBe(false);
+      expect(isError).toBe(true);
+      if (!envelope.ok) expect(envelope.reason).toContain("because");
+      // And nothing was written on the way to refusing. A verb that refuses
+      // AFTER it has acted has not refused.
+      expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+    }
   });
 
   it("should refuse a verb it does not have, in words rather than in a protocol error", async () => {
@@ -397,13 +523,29 @@ describe("urgency, at the one place it is decided", () => {
   });
 });
 
-describe("the to-do and goal verbs", () => {
-  it("should add a to-do and report the stored row", async () => {
+describe("the fixtures in this file", () => {
+  it("should be the shapes the contract publishes, not the shapes our types allow", async () => {
+    // Constitution rule 1, applied to the one layer where it is cheap to skip:
+    // these rows never come from the service in a unit test, so nothing but
+    // this measures them against `openapi.yaml`. A handler that reads a field
+    // the contract does not carry passes every test in this file otherwise.
+    const schemas = loadSchemas();
+
+    validateOrThrow(schemas, "Todo", storedTodo(), "storedTodo()");
+    validateOrThrow(schemas, "Todo", storedTodo({ status: "done", completedAt: new Date(NOW).toISOString() }), "a finished storedTodo()");
+    validateOrThrow(schemas, "Goal", storedGoal(), "storedGoal()");
+    validateOrThrow(schemas, "TodoPage", page([storedTodo()]), "a page of to-dos");
+  });
+});
+
+describe("add_todo", () => {
+  it("should put it on his list and report the row the STORE has", async () => {
+    // `syl-009.3.4`. The echo and the stored row differ on purpose: if the
+    // envelope carried what the write said it did, this passes while reporting
+    // her intention rather than his list.
     const api = fakeApi({
-      "/todos": (made) =>
-        made.method === "POST"
-          ? ok({ id: "syl:todo:1", text: "Buy flour", status: "open", updatedAt: "2026-08-10T12:00:00.000Z" }, 201)
-          : ok({ id: "syl:todo:1", text: "Buy flour", status: "open", updatedAt: "2026-08-10T12:00:00.000Z" }),
+      [TODO_PATH]: () => ok(storedTodo({ text: "as the store actually has it" })),
+      "/todos": () => ok(storedTodo(), 201),
     });
 
     const { envelope } = await call(contextFor(api), "add_todo", {
@@ -411,30 +553,210 @@ describe("the to-do and goal verbs", () => {
       because: "He said he was out.",
     });
 
-    expect(envelope).toMatchObject({ ok: true, action: "add_todo" });
     expect(api.calls.map((made) => `${made.method} ${made.path}`)).toEqual([
       "POST /todos",
-      "GET /todos/syl%3Atodo%3A1",
+      `GET ${TODO_PATH}`,
     ]);
+    expect(envelope).toMatchObject({ ok: true, action: "add_todo" });
+    if (envelope.ok) {
+      expect((envelope.subject as { text: string }).text).toBe("as the store actually has it");
+      // The moment the row was last written, so she can say what she did
+      // without inventing a time for it.
+      expect(envelope.at).toBe(new Date(NOW).toISOString());
+    }
   });
 
-  it("should finish a to-do only when told which one", async () => {
-    const { envelope } = await call(contextFor(fakeApi({})), "finish_todo", {
+  it("should refuse with nothing to add, and write nothing", async () => {
+    const api = todoApi();
+
+    const { envelope, isError } = await call(contextFor(api), "add_todo", {
+      because: "He said he was out.",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("text");
+    expect(api.calls).toEqual([]);
+  });
+
+  it("should say what went wrong when the store refuses, in the store's own words", async () => {
+    const api = fakeApi({
+      "/todos": () => failure(422, "VALIDATION_FAILED", "A to-do must say something.", false),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "add_todo", {
+      text: "Buy flour",
+      because: "He said he was out.",
+    });
+
+    expect(isError).toBe(true);
+    if (!envelope.ok) {
+      expect(envelope.reason).toBe("A to-do must say something.");
+      expect(envelope.retryable).toBe(false);
+    }
+  });
+
+  it("should admit uncertainty when the write landed and the read back did not", async () => {
+    // "It failed" would be a lie in the dangerous direction here: the to-do is
+    // on his list and she would be telling him it is not.
+    const api = fakeApi({
+      [TODO_PATH]: () => failure(500, "INTERNAL", "the store is unwell", true),
+      "/todos": () => ok(storedTodo(), 201),
+    });
+
+    const { envelope } = await call(contextFor(api), "add_todo", {
+      text: "Buy flour",
+      because: "He said he was out.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toMatch(/may well have gone through/u);
+  });
+});
+
+/**
+ * The one verb that takes something away.
+ *
+ * The dangerous case is not a bad id — a bad id is loud. It is her *inferring*
+ * that he finished something. Nothing in a schema can tell a machine whether
+ * that inference is right, so the tests here are about the two things that can
+ * be arranged instead: she must never write on a guess she has not checked, and
+ * whatever she says afterwards must NAME the item, because him hearing the
+ * wrong title is the only place a wrong guess can still be caught.
+ */
+describe("finish_todo — the verb that removes", () => {
+  it("should mark it done and report the stored row, with the moment it was finished", async () => {
+    const api = todoApi();
+
+    const { envelope } = await call(contextFor(api), "finish_todo", {
+      id: THE_TODO,
+      because: "He said he had done it.",
+    });
+
+    expect(envelope).toMatchObject({ ok: true, action: "finish_todo" });
+    if (envelope.ok) {
+      const row = envelope.subject as { text: string; status: string };
+      // Named, in his words. This is the guard: she reports what LEFT his list,
+      // so a wrong inference is audible in the same breath she acts on it.
+      expect(row.text).toBe("Buy flour");
+      expect(row.status).toBe("done");
+      expect(envelope.at).toBe(new Date(NOW).toISOString());
+    }
+  });
+
+  it("should look it up before it writes, so a wrong id takes nothing off his list", async () => {
+    // A stale or half-remembered id is the shape a wrong guess usually arrives
+    // in. Reading first makes it a question rather than a write.
+    const api = fakeApi({
+      "/todos": () => failure(404, "NOT_FOUND", "There is no such to-do.", false),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "finish_todo", {
+      id: THE_TODO,
+      because: "He said he had done it.",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toContain("There is no such to-do.");
+      // And it must say so: "I could not" and "nothing changed" are different
+      // sentences, and only one of them lets him stop worrying about the list.
+      expect(envelope.reason).toMatch(/nothing has come off/iu);
+    }
+    expect(api.calls.map((made) => made.method)).toEqual(["GET"]);
+  });
+
+  it("should not claim to have finished something that was already finished", async () => {
+    // The second shape of a wrong guess: an id from a list she read two turns
+    // ago, for an item that has since been ticked off. The store would answer
+    // this happily — `complete` on a done row returns it unchanged — and she
+    // would report having just done it. That is her claiming an act she did not
+    // perform, about an item she may have picked by mistake.
+    const finished = new Date(NOW - 3_600_000).toISOString();
+    const api = todoApi(storedTodo({ status: "done", completedAt: finished, updatedAt: finished }));
+
+    const { envelope, isError } = await call(contextFor(api), "finish_todo", {
+      id: THE_TODO,
+      because: "He said he had done it.",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toContain("Buy flour");
+      expect(envelope.reason).toContain(finished);
+      expect(envelope.retryable).toBe(false);
+    }
+    // Nothing written. Not for the store's sake — it is idempotent — but so
+    // that `turn.tool` and the log do not record an act that did not happen.
+    expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+  });
+
+  it("should refuse without an id, and point at where an id comes from", async () => {
+    const api = todoApi();
+
+    const { envelope } = await call(contextFor(api), "finish_todo", {
       because: "He said it is done.",
     });
 
     expect(envelope.ok).toBe(false);
     if (!envelope.ok) expect(envelope.reason).toContain("which one");
+    expect(api.calls).toEqual([]);
+  });
+
+  it("should admit uncertainty when the completion landed and the read back did not", async () => {
+    // Worst of both: telling him it failed would leave him doing a thing he has
+    // already done, and telling him it worked would be a guess.
+    let reads = 0;
+    const api = fakeApi({
+      [`${TODO_PATH}/complete`]: () => ok(storedTodo({ status: "done", completedAt: new Date(NOW).toISOString() })),
+      [TODO_PATH]: () => {
+        reads += 1;
+        return reads === 1 ? ok(storedTodo()) : failure(500, "INTERNAL", "the store is unwell", true);
+      },
+    });
+
+    const { envelope } = await call(contextFor(api), "finish_todo", {
+      id: THE_TODO,
+      because: "He said he had done it.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toMatch(/may well have gone through/u);
+  });
+});
+
+describe("set_goal", () => {
+  it("should record it and report the row the store has", async () => {
+    const api = fakeApi({
+      [GOAL_PATH]: () => ok(storedGoal({ why: "He has mentioned it three times this month." })),
+      "/goals": () => ok(storedGoal(), 201),
+    });
+
+    const { envelope } = await call(contextFor(api), "set_goal", {
+      text: "Run a half marathon",
+      because: "He has mentioned it three times this month.",
+    });
+
+    expect(api.calls.map((made) => `${made.method} ${made.path}`)).toEqual([
+      "POST /goals",
+      `GET ${GOAL_PATH}`,
+    ]);
+    expect(envelope).toMatchObject({ ok: true, action: "set_goal" });
+    if (envelope.ok) {
+      expect((envelope.subject as { why: string }).why).toBe(
+        "He has mentioned it three times this month.",
+      );
+    }
   });
 
   it("should put the reason for a goal where the goal keeps one", async () => {
     // `because` has a home on this row and nowhere else in the contract, so it
     // is stored rather than only logged.
     const api = fakeApi({
-      "/goals": (made) =>
-        made.method === "POST"
-          ? ok({ id: "syl:goal:1", title: "Run a half marathon", why: null, updatedAt: "" }, 201)
-          : ok({ id: "syl:goal:1", title: "Run a half marathon", why: null, updatedAt: "" }),
+      [GOAL_PATH]: () => ok(storedGoal()),
+      "/goals": () => ok(storedGoal(), 201),
     });
 
     await call(contextFor(api), "set_goal", {
@@ -448,11 +770,39 @@ describe("the to-do and goal verbs", () => {
     });
   });
 
+  it("should refuse with no goal to record, and write nothing", async () => {
+    const api = fakeApi({ "/goals": () => ok(storedGoal(), 201) });
+
+    const { envelope, isError } = await call(contextFor(api), "set_goal", {
+      because: "He has mentioned it three times this month.",
+    });
+
+    expect(isError).toBe(true);
+    if (!envelope.ok) expect(envelope.reason).toContain("goal");
+    expect(api.calls).toEqual([]);
+  });
+
+  it("should say what went wrong when the store refuses, in the store's own words", async () => {
+    const api = fakeApi({
+      "/goals": () => failure(422, "VALIDATION_FAILED", "A goal must have a title.", false),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "set_goal", {
+      text: "Run a half marathon",
+      because: "He has mentioned it three times this month.",
+    });
+
+    expect(isError).toBe(true);
+    if (!envelope.ok) expect(envelope.reason).toBe("A goal must have a title.");
+  });
+});
+
+describe("whats_outstanding", () => {
   it("should read what is outstanding across all three lists", async () => {
     const api = fakeApi({
-      "/reminders": () => ok({ items: [storedReminder()], nextCursor: null, hasMore: false }),
-      "/todos": () => ok({ items: [], nextCursor: null, hasMore: false }),
-      "/goals": () => ok({ items: [], nextCursor: null, hasMore: false }),
+      "/reminders": () => ok(page([storedReminder()])),
+      "/todos": () => ok(page([storedTodo()])),
+      "/goals": () => ok(page([storedGoal()])),
     });
 
     const { envelope } = await call(contextFor(api), "whats_outstanding", {});
@@ -475,11 +825,53 @@ describe("the to-do and goal verbs", () => {
   });
 
   it("should read only the list she asked for", async () => {
-    const api = fakeApi({ "/todos": () => ok({ items: [], nextCursor: null, hasMore: false }) });
+    const api = fakeApi({ "/todos": () => ok(page([])) });
 
     await call(contextFor(api), "whats_outstanding", { of: "todos" });
 
     expect(api.calls.map((made) => made.path)).toEqual(["/todos?status=open&limit=50"]);
+  });
+
+  it("should show him everything rather than nothing when the filter is not one she has", async () => {
+    // The failure this prevents is silent and is the worst answer available: a
+    // filter she misspelled matches no list, every list goes unread, and the
+    // envelope comes back `ok` and empty — which she reports as "you have
+    // nothing outstanding". Widening cannot mislead him; an empty answer can.
+    const api = fakeApi({
+      "/reminders": () => ok(page([])),
+      "/todos": () => ok(page([storedTodo()])),
+      "/goals": () => ok(page([])),
+    });
+
+    const { envelope } = await call(contextFor(api), "whats_outstanding", { of: "tasks" });
+
+    expect(envelope.ok).toBe(true);
+    if (envelope.ok) {
+      expect(Object.keys(envelope.subject as object).sort()).toEqual([
+        "goals",
+        "reminders",
+        "todos",
+      ]);
+    }
+  });
+
+  it("should refuse rather than half-answer when one of the lists cannot be read", async () => {
+    // A partial list is indistinguishable from a short one. "You have nothing
+    // else on" is a sentence she must not say from a page that never arrived.
+    const api = fakeApi({
+      "/reminders": () => ok(page([])),
+      "/todos": () => ok(page([storedTodo()])),
+      "/goals": () => failure(503, "UNAVAILABLE", "The store is not answering.", true),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "whats_outstanding", {});
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toBe("The store is not answering.");
+      expect(envelope.retryable).toBe(true);
+    }
   });
 });
 

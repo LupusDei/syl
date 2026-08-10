@@ -271,6 +271,32 @@ const addTodo: ToolHandler = async (input, context) => {
  * The one verb that takes something away, which is why `because` matters most
  * here rather than least: if she infers he finished it and is wrong, the item
  * is gone and he never learns it existed.
+ *
+ * ## What can and cannot be guarded
+ *
+ * The dangerous case is not a bad id. A bad id is loud. It is her **inferring**
+ * that he finished something, and no field in a schema can tell a machine
+ * whether that inference is right — `urgentBecauseHeSaid` works because there
+ * is a message to compare a quote against, and "he finished it" is a claim
+ * about the world rather than about the conversation. So the guard is not
+ * verification. It is these three, in this order:
+ *
+ * 1. **`because` is required**, so a guess is recorded as a guess. `turn.tool`
+ *    carries the arguments, which makes it the one place a wrong one can be
+ *    found afterwards.
+ * 2. **Look before writing.** A stale or half-remembered id must cost a read
+ *    and nothing else, and the answer must say plainly that nothing left his
+ *    list — "I could not" and "nothing changed" are different sentences and
+ *    only one of them lets him stop wondering.
+ * 3. **Say which item.** Every path here names the to-do in his own words,
+ *    because him hearing the wrong title is the only place a wrong guess is
+ *    still catchable. A verb that answers "done" tells him nothing he could
+ *    contradict.
+ *
+ * The row itself survives — `complete` sets a status, and nothing in this
+ * system deletes a to-do — so the cost of being wrong is that an item stops
+ * being offered to him, not that it ceases to exist. That is precisely why (3)
+ * matters: the recovery exists, and he can only use it if he is told.
  */
 const finishTodo: ToolHandler = async (input, context) => {
   const id = text(input, "id");
@@ -285,10 +311,46 @@ const finishTodo: ToolHandler = async (input, context) => {
     );
   }
 
-  const done = await context.client.post<Todo>(`/todos/${encodeURIComponent(id)}/complete`);
+  const path = `/todos/${encodeURIComponent(id)}`;
+
+  const before = await context.client.get<Todo>(path);
+  if (!before.ok) {
+    return {
+      ok: false,
+      action: "finish_todo",
+      // The added sentence is true whichever way the read failed — a wrong id,
+      // a service restarting, a timeout — because it is a statement about what
+      // this handler did, not about what the store said.
+      reason: `${before.failure.message} I looked it up before touching it, so nothing has come off your list.`,
+      retryable: before.failure.retryable,
+    };
+  }
+
+  if (before.data.status === "done") {
+    // Reported as a refusal, not as a success, and the distinction is the whole
+    // point. `TodoService.complete` returns an already-done row unchanged — it
+    // is idempotent for the phone's outbox — so the write would succeed and she
+    // would announce having just finished something she did not touch. That is
+    // her claiming an act she did not perform, about an item she may well have
+    // picked by mistake, and it is exactly the case where he needs to hear the
+    // title and the date and decide for himself.
+    const when = before.data.completedAt === null ? "" : `, at ${before.data.completedAt}`;
+    return {
+      ok: false,
+      action: "finish_todo",
+      reason:
+        `"${before.data.text}" was already marked done${when}. I have changed nothing. ` +
+        "If that is not the one you meant, tell me which it is.",
+      // Nothing to retry: repeating the call cannot produce a different answer,
+      // and a retryable refusal invites exactly that.
+      retryable: false,
+    };
+  }
+
+  const done = await context.client.post<Todo>(`${path}/complete`);
   if (!done.ok) return refused("finish_todo", done.failure);
 
-  return readBack("finish_todo", context, `/todos/${encodeURIComponent(id)}`, (row: Todo) => row.completedAt);
+  return readBack("finish_todo", context, path, (row: Todo) => row.completedAt);
 };
 
 /** Record something he is working toward. */
@@ -316,10 +378,28 @@ const setGoal: ToolHandler = async (input, context) => {
 /** How much of each list she is shown. Enough to talk about, not a data dump. */
 const OUTSTANDING_LIMIT = 50;
 
-/** Look at what he currently has open. */
+/** The three lists `of` may name. Anything else is not one of them. */
+const OUTSTANDING_LISTS = ["reminders", "todos", "goals"] as const;
+
+/**
+ * Look at what he currently has open.
+ *
+ * The read that stops her offering him something he already has, which makes
+ * its failure mode the interesting part: **it must never answer "nothing"
+ * because it did not look**. Two ways that could happen, and both are closed
+ * here — a filter that is not one of the three widens to everything instead of
+ * matching nothing, and a list that cannot be read refuses the whole call
+ * rather than returning the rest. A short list and a partial one look identical
+ * to him, and "you have nothing else on" is not a sentence she may say from a
+ * page that never arrived.
+ */
 const whatsOutstanding: ToolHandler = async (input, context) => {
   const of = input["of"];
-  const wanted = typeof of === "string" && of !== "" ? of : "everything";
+  const asked = typeof of === "string" ? of.trim().toLowerCase() : "";
+  // Anything outside the enum reads as `everything`. Widening cannot mislead
+  // him; the alternative — no list matches, and an empty `ok` envelope comes
+  // back — is a confident "your plate is clear" produced by a typo.
+  const wanted = OUTSTANDING_LISTS.find((list) => list === asked) ?? "everything";
   const want = (kind: string): boolean => wanted === "everything" || wanted === kind;
 
   const subject: Record<string, unknown> = {};
