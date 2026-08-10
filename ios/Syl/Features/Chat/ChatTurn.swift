@@ -26,6 +26,11 @@ struct ChatTurn: View {
     let group: MessageGroup
     let showsTime: Bool
 
+    /// Parsed markdown for every message in this turn, keyed by id. Supplied by the
+    /// snapshot rather than computed here, so a body re-evaluation costs a dictionary
+    /// lookup and not a parse.
+    var blocks: [SylID: [MarkdownBlock]] = [:]
+
     /// True when this turn is queued and the connection is not up, so "sending" would
     /// be a lie. Derived rather than stored: there is no failure state on a message yet
     /// (`syl-008.3.8`), and inventing one in the view would be worse than saying only
@@ -81,7 +86,7 @@ struct ChatTurn: View {
 
             VStack(alignment: .leading, spacing: SylTheme.Metric.step) {
                 ForEach(group.messages) { message in
-                    MessageBody(message: message)
+                    MessageBody(blocks: blocks[message.id] ?? [.paragraph(message.text)])
                 }
 
                 if showsTime {
@@ -125,7 +130,7 @@ struct ChatTurn: View {
         VStack(alignment: .trailing, spacing: SylTheme.Metric.snug) {
             VStack(alignment: .leading, spacing: SylTheme.Metric.snug) {
                 ForEach(group.messages) { message in
-                    MessageBody(message: message)
+                    MessageBody(blocks: blocks[message.id] ?? [.paragraph(message.text)])
                 }
             }
             .padding(.horizontal, SylTheme.Metric.step)
@@ -234,21 +239,15 @@ struct ChatTurn: View {
     }
 }
 
-/// The words themselves.
+/// The words themselves, as she wrote them.
 ///
-/// **This is the seam `T011` replaces.** Today it is a `Text`; when the markdown engine
-/// lands (`syl-008.1`) the body becomes `MarkdownView(blocks:)` and nothing else in this
-/// file changes. Isolating it to one view is what makes that a one-line change rather
-/// than a rewrite of the turn layout.
+/// The blocks arrive already parsed — `ChatSnapshotLoader` does that off the main actor,
+/// per message and cached by id. This view never touches the parser.
 private struct MessageBody: View {
-    let message: Message
+    let blocks: [MarkdownBlock]
 
     var body: some View {
-        Text(message.text)
-            .font(SylTheme.Typeface.Prose.body)
-            .lineSpacing(SylTheme.Metric.proseLineSpacing)
-            .foregroundStyle(SylTheme.Colour.ink)
-            .textSelection(.enabled)
+        MarkdownView(blocks: blocks)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }

@@ -103,14 +103,30 @@ final class ChatSnapshotRendering: XCTestCase {
                 role: .assistant,
                 at: "2026-08-09T14:02:11Z",
                 text: """
-                    Three things, and one of them is time-sensitive.
+                    ## Three things, one time-sensitive
 
                     The deploy gate is still red on `a91df4c` — the check run never \
-                    reported, so nothing has shipped since Friday. That is the one worth \
-                    doing first.
+                    reported, so **nothing has shipped since Friday**.
 
-                    After that: the quarterly review draft, and a reply to Marcus about \
-                    the contract dates.
+                    1. Unstick the deploy gate
+                    2. Quarterly review draft
+                    3. Reply to Marcus about the contract dates
+
+                    ```sh
+                    gh run list --commit a91df4c --json conclusion
+                    ```
+
+                    | Item | Due | State |
+                    | --- | --- | --- |
+                    | Deploy gate | today | blocked |
+                    | Review draft | Thu | open |
+
+                    > Nothing has shipped since Friday.
+
+                    ### Worth knowing
+
+                    - The gate treats "no checks" as *do not deploy*
+                    - [The run](https://github.com/example/repo) never reported
                     """
             ),
             message(

@@ -9,6 +9,61 @@ struct ChatSnapshot: Equatable, Sendable {
     var pendingCount: Int = 0
     /// The highest conversation sequence held on disk. Not the frame-stream sequence.
     var highestSeq: Int = 0
+
+    /// Rendered markdown, keyed by message id.
+    ///
+    /// **Per message, never per group.** `MessageGroup.text` joins its messages with
+    /// `"\n\n"`, and parsing that join would merge blocks across message boundaries —
+    /// an unclosed fence in one message would swallow the next one whole.
+    var blocks: [SylID: [MarkdownBlock]] = [:]
+
+    func blocks(for message: Message) -> [MarkdownBlock] {
+        blocks[message.id] ?? [.paragraph(message.text)]
+    }
+}
+
+/// Parsed markdown, kept between loads.
+///
+/// A `refresh()` triggered by one arriving message would otherwise re-parse the other
+/// 499. Parsing is not free — it is the reason `ChatSnapshotLoader` runs off the main
+/// actor at all — and re-doing it on every socket event is exactly the kind of cost that
+/// shows up as stutter rather than as a failing test.
+///
+/// Lock-guarded rather than an actor: the loader is a `Sendable` struct running on a
+/// detached task, and making this an actor would force `load()` to become async and
+/// re-suspend per message.
+final class MarkdownCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cache: [SylID: [MarkdownBlock]] = [:]
+
+    init() {}
+
+    /// Blocks for every given message, parsing only the ones not already held.
+    ///
+    /// Entries for messages no longer in the window are dropped, so a long-running
+    /// session does not accumulate the parse of every message ever seen.
+    func blocks(for messages: [Message]) -> [SylID: [MarkdownBlock]] {
+        lock.lock()
+        let known = cache
+        lock.unlock()
+
+        var result: [SylID: [MarkdownBlock]] = [:]
+        result.reserveCapacity(messages.count)
+
+        for message in messages {
+            if let hit = known[message.id] {
+                result[message.id] = hit
+            } else {
+                result[message.id] = MarkdownParser.parse(message.text)
+            }
+        }
+
+        lock.lock()
+        cache = result
+        lock.unlock()
+
+        return result
+    }
 }
 
 /// Reads the conversation from disk and groups it — **off the main actor**.
@@ -20,12 +75,17 @@ struct ChatSnapshot: Equatable, Sendable {
 /// handing the main actor one finished value means the UI only ever does the cheap
 /// part: assigning it.
 ///
+/// Markdown parsing joined that list for the same reason. Adjutant parses in its
+/// renderer's `init`, on the main thread, on every body re-evaluation — and `LazyVStack`
+/// re-evaluates a row's body every time it scrolls back on screen.
+///
 /// `Sendable` and free of any view or view-model reference, so it can genuinely leave
 /// the main actor rather than being hopped back by an implicit capture.
 struct ChatSnapshotLoader: Sendable {
     let store: LocalStore
     let conversationId: SylID
     var limit: Int = 200
+    var markdown = MarkdownCache()
 
     func load() throws -> ChatSnapshot {
         let messages = try store.messages(conversationId: conversationId, limit: limit)
@@ -34,7 +94,8 @@ struct ChatSnapshotLoader: Sendable {
         return ChatSnapshot(
             groups: MessageGrouping.group(messages, pendingIds: pendingIds),
             pendingCount: messages.filter { pendingIds.contains($0.id) }.count,
-            highestSeq: messages.map(\.seq).max() ?? 0
+            highestSeq: messages.map(\.seq).max() ?? 0,
+            blocks: markdown.blocks(for: messages)
         )
     }
 }

@@ -113,6 +113,7 @@ struct ChatView: View {
                     ChatTurn(
                         group: group,
                         showsTime: showsTime,
+                        blocks: model.snapshot.blocks,
                         isStalled: model.isStalled(group),
                         retry: { Task { await model.retryQueued() } }
                     )

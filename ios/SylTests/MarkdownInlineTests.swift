@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import XCTest
 
 @testable import Syl
@@ -130,6 +131,73 @@ final class MarkdownInlineTests: XCTestCase {
 
     func testShouldRenderAnEmptyRunWithoutFailing() {
         XCTAssertEqual(text(of: MarkdownInline.render("")), "")
+    }
+
+    // MARK: - Link styling
+
+    func testShouldGiveASurvivingLinkSylsColourRatherThanTheAmbientTint() {
+        // Untinted, a link renders in stock system blue — in the middle of her
+        // sentences, where it is the most conspicuous possible violation of "no stock
+        // system colours remain".
+        let rendered = MarkdownInline.render("See [the run](https://example.com) for detail.")
+
+        let linkRuns = rendered.runs.filter { $0.link != nil }
+        XCTAssertFalse(linkRuns.isEmpty, "precondition: Foundation produced a link")
+        for run in linkRuns {
+            // Compared as resolved components, not as `Color`. Every token in
+            // `SylTheme.Colour` is a COMPUTED property returning a fresh
+            // `UIColor(dynamicProvider:)`, and equality on those is identity — so
+            // `XCTAssertEqual(colour, SylTheme.Colour.luminance)` fails even when the
+            // colour is exactly right. Resolving is what actually asserts the pixel.
+            XCTAssertEqual(
+                rgba(rendered[run.range].foregroundColor, in: .light),
+                rgba(SylTheme.Colour.luminance, in: .light)
+            )
+            XCTAssertEqual(
+                rgba(rendered[run.range].foregroundColor, in: .dark),
+                rgba(SylTheme.Colour.luminance, in: .dark),
+                "both appearances, or a link is right in the day and wrong at night"
+            )
+            XCTAssertEqual(rendered[run.range].underlineStyle, .single)
+        }
+    }
+
+    /// A colour's actual components in one appearance.
+    private func rgba(_ color: Color?, in style: UIUserInterfaceStyle) -> [CGFloat]? {
+        guard let color else { return nil }
+        let resolved = UIColor(color)
+            .resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        return [red, green, blue, alpha]
+    }
+
+    func testShouldNotPaintARefusedLinkToLookTappable() {
+        // Ordering matters and this is the test that pins it. LinkPolicy strips the
+        // attribute first, so styling finds nothing to colour. Colour first and a
+        // `javascript:` link would advertise itself as a link and then quietly fail to
+        // open — worse than either outcome alone.
+        let rendered = MarkdownInline.render("Click [here](javascript:alert(1)) now.")
+
+        XCTAssertTrue(rendered.runs.allSatisfy { $0.link == nil }, "the scheme must be refused")
+        for run in rendered.runs {
+            XCTAssertNil(
+                rendered[run.range].foregroundColor,
+                "a refused link must look like ordinary text"
+            )
+            XCTAssertNil(rendered[run.range].underlineStyle)
+        }
+        XCTAssertEqual(text(of: rendered), "Click here now.", "the words survive")
+    }
+
+    func testShouldLeaveOrdinaryProseUncoloured() {
+        // Styling must touch links and nothing else, or a paragraph acquires a colour
+        // the design system never chose.
+        let rendered = MarkdownInline.render("Plain **bold** and `code`.")
+
+        for run in rendered.runs {
+            XCTAssertNil(rendered[run.range].foregroundColor)
+        }
     }
 
     // MARK: - Helpers
