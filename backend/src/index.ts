@@ -748,6 +748,25 @@ export interface Bootstrapped {
    * See `services/agent-key.ts` for why it cannot be obtained over the network.
    */
   readonly agentKey: AgentCredential;
+  /**
+   * The MCP declaration the commander lane was actually given, or `undefined`.
+   *
+   * The resolved value — `options.turn.mcpConfig` if a caller overrode it, the
+   * path under her home otherwise — and therefore the same string that reaches
+   * `TurnOptions.mcpConfig` and `--mcp-config`. It is `undefined` for an
+   * in-memory store, which has no home to put a declaration in.
+   *
+   * Returned so the boot notice can be a FUNCTION of it (`syl-009.9`). The one
+   * line that states her tool surface at startup said "no MCP" as a constant,
+   * and went on saying it after `syl-009.3` handed her hands — a false security
+   * claim in the only place that makes one. `startSyl` passes this to
+   * `describeContainer`, so the notice and the turn cannot disagree.
+   *
+   * NOT a field on `ServiceDependencies`, for the same reason `agentKey` is
+   * not: everything there is handed to a router, and which lane holds the tools
+   * is not a route's business.
+   */
+  readonly hands: string | undefined;
 }
 
 /** Open the store and build the services the app needs. */
@@ -1146,6 +1165,9 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     database,
     agent,
     agentKey,
+    // What was decided, not what was intended — the boot notice is derived from
+    // this and from nothing else. See `Bootstrapped.hands` and `syl-009.9`.
+    hands: commanderHands,
     deps: {
       keys,
       messages,
@@ -1368,7 +1390,7 @@ export async function startSyl(
   config: SylConfig,
   options: StartSylOptions = {},
 ): Promise<RunningSyl> {
-  const { database, deps: bootstrapped, agentKey } = bootstrap(config, options);
+  const { database, deps: bootstrapped, agentKey, hands } = bootstrap(config, options);
   const delivery = options.delivery ?? {};
   const clock = delivery.clock ?? options.clock ?? systemClock;
 
@@ -1502,8 +1524,11 @@ export async function startSyl(
     push,
     startupLines: [
       ...startup,
-      // Where she thinks, said out loud, once per boot.
-      ...describeContainer(sylHome(config)),
+      // Where she thinks and what she can reach from there, said out loud, once
+      // per boot — and BOTH halves derived. `hands` is the declaration
+      // `bootstrap` resolved and gave the commander lane, so the notice cannot
+      // drift from the turn the way the old constant "no MCP" did (`syl-009.9`).
+      ...describeContainer(sylHome(config), hands),
       ...describeRuntime(runtime),
       // Re-read: `ensureNightlyDreamJob` returns the row as it was found, and
       // the runner's first tick has already run since then.
