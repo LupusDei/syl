@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { AutoMemory } from "../memory/auto-memory.js";
+import { autoMemoryOff, type AutoMemory } from "../memory/auto-memory.js";
 
 import { runTurn, type TurnOptions, type TurnResult, type TurnRunner } from "./session.js";
 
@@ -27,6 +27,35 @@ export const LANES = {
   /** The nightly review and memory consolidation pass. */
   consolidation: "consolidation",
 } as const;
+
+/**
+ * Lanes that must never write into Claude Code's auto-memory.
+ *
+ * `consolidation` is the dream. Its entire output is speculation ABOUT the
+ * corpus, and Claude Code's auto-memory writes what a turn learned into
+ * `MEMORY.md` — an index loaded at the start of every session, including the
+ * next dream. Left on, the dream reads its own previous reflections back as
+ * though they were experience, and the corpus contaminates itself with its own
+ * output. That is what `CLAUDE.md` constraint 7 is about; the constraint's
+ * wording forbids writing the dream LOG into the graph, and this is neither the
+ * log nor the graph, which is exactly why it went unguarded (QA finding C1).
+ *
+ * The sharing argument in `memory/auto-memory.ts` is right for every other
+ * lane — a fact learned in conversation should reach the morning agenda. It is
+ * backwards for this one.
+ *
+ * **`autoMemoryOff()` rather than simply omitting the option**: auto-memory is
+ * ON BY DEFAULT in headless `-p`, so passing nothing lets the CLI write into
+ * `~/.claude/projects/<slug>/memory/` instead — outside `.syl/` and not covered
+ * by its gitignore. Silence is not refusal here; the lane has to say off.
+ */
+export const MEMORYLESS_LANES: ReadonlySet<string> = new Set<string>([LANES.consolidation]);
+
+/** The auto-memory a lane may use — off for {@link MEMORYLESS_LANES}. */
+function autoMemoryForLane(lane: Lane, configured: AutoMemory | undefined): AutoMemory | undefined {
+  if (MEMORYLESS_LANES.has(lane)) return autoMemoryOff();
+  return configured;
+}
 
 export type Lane = string;
 
@@ -110,11 +139,11 @@ export interface SylAgentOptions {
   /**
    * Claude Code's auto-memory, for every turn this agent takes.
    *
-   * Deliberately **not** per lane, and it is the same value for a lane view
-   * made by `forLane`. Lanes keep transcripts apart; memory is the one thing
-   * that must not be kept apart, or the morning agenda knows nothing the
-   * Commander said last night. The reasoning is written out in
-   * `memory/auto-memory.ts`.
+   * Shared across lanes on purpose — lanes keep transcripts apart, and memory
+   * is the one thing that must not be, or the morning agenda knows nothing the
+   * Commander said last night. The reasoning is in `memory/auto-memory.ts`.
+   *
+   * **With exactly one exception: {@link MEMORYLESS_LANES}.** See there.
    */
   readonly autoMemory?: AutoMemory;
   /** Extra options forwarded to every turn. */
@@ -265,7 +294,10 @@ export class SylAgent {
       ...this.#turnOptions,
       // After the spread, not before: if the agent was told where its memory
       // lives, an incidental `turnOptions` must not be able to move it.
-      ...(this.#autoMemory !== undefined ? { autoMemory: this.#autoMemory } : {}),
+      ...((): { autoMemory?: AutoMemory } => {
+        const forLane = autoMemoryForLane(lane, this.#autoMemory);
+        return forLane === undefined ? {} : { autoMemory: forLane };
+      })(),
       ...(this.#soul ? { systemPrompt: this.#soul } : {}),
       ...(resume ? { resume } : {}),
       onSessionId: (sessionId) => {

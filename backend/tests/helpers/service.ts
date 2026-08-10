@@ -8,6 +8,11 @@ import { ArticleIntake } from "../../src/connections/intake.js";
 import { SylAgent, memorySessionStore } from "../../src/harness/agent.js";
 import type { TurnResult, TurnRunner } from "../../src/harness/session.js";
 import { syncResolvers } from "../../src/index.js";
+import { DreamLog } from "../../src/memory/dream/log.js";
+import { MemoryGraph } from "../../src/memory/graph.js";
+import { MemoryMetrics } from "../../src/memory/metrics.js";
+import { EdgeWeights } from "../../src/memory/weights.js";
+import type { MemoryViews } from "../../src/routes/memory.js";
 import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api-key-service.js";
 import { fixedClock, type Clock } from "../../src/services/clock.js";
 import { ConversationService } from "../../src/services/conversation-service.js";
@@ -204,6 +209,24 @@ export function testChat(messages: MessageStore): ConversationService {
   });
 }
 
+/**
+ * The memory surface, on a fixed clock and the real store.
+ *
+ * A real `MemoryGraph` rather than a double, for the same reason every other
+ * helper here opens a real database: the interesting failures in this layer are
+ * the CHECK that fires and the UNIQUE that spans the cold partition, and a mock
+ * cannot have them.
+ */
+export function testMemory(db: SylDatabase, clock: Clock = fixedClock(TEST_NOW)): MemoryViews {
+  const graph = new MemoryGraph({ db: db.handle, clock });
+  return {
+    graph,
+    weights: new EdgeWeights({ graph, clock }),
+    metrics: new MemoryMetrics({ db: db.handle, clock }),
+    dreams: new DreamLog({ db: db.handle, clock }),
+  };
+}
+
 /** Everything `createApp` and `startServer` need, on one in-memory store. */
 export function testDeps(db: SylDatabase): {
   readonly keys: ApiKeyService;
@@ -218,6 +241,7 @@ export function testDeps(db: SylDatabase): {
   readonly jobs: JobStore;
   readonly idempotency: IdempotencyStore;
   readonly intake: ArticleIntake;
+  readonly memory: MemoryViews;
   readonly presence: PresenceService;
   readonly intakeQueue: IntakeQueue;
 } {
@@ -260,6 +284,7 @@ export function testDeps(db: SylDatabase): {
       clock,
       scheduler: intakeQueue,
     }),
+    memory: testMemory(db, clock),
     // No sink. `startServer` attaches one; a test that wants to watch frames
     // hands its own to `PresenceService` directly.
     presence: new PresenceService({ clock }),

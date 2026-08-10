@@ -47,6 +47,32 @@ const TABLE_REFERENCE = /\b(?:FROM|JOIN|INTO|UPDATE)\s+"?([A-Za-z_][A-Za-z0-9_]*
  */
 const NOT_A_TABLE: ReadonlySet<string> = new Set(["SET", "SELECT", "VALUES", "WHERE"]);
 
+/**
+ * Names bound by a `WITH ... AS (...)` clause.
+ *
+ * A common table expression is named exactly like a table and read exactly like
+ * one — `FROM hits JOIN memory_nodes` — so the keyword scan cannot tell them
+ * apart, and reports the CTE as a table no migration creates. That is a false
+ * finding in the direction that matters most: this check exists to be believed,
+ * and one entry nobody can act on is how a completeness list starts getting
+ * exemptions added to it instead of bugs fixed.
+ *
+ * Anchored on `WITH` (and on `) ,` for the second and later expressions in a
+ * chain) rather than on a bare `name AS (`. A looser pattern would eventually
+ * match a column alias and EXCLUDE a real table, which fails silently — the one
+ * direction this scanner must never fail in.
+ */
+const CTE_NAME = /(?:\bWITH\s+(?:RECURSIVE\s+)?|\)\s*,\s*)([A-Za-z_][A-Za-z0-9_]*)\s+AS\s*\(/g;
+
+/**
+ * SQLite's own schema tables.
+ *
+ * `sqlite_master` is queried by `memory/store.ts` to check the shape of a table
+ * it may have to create. It always exists and no migration could create it —
+ * the prefix is reserved by SQLite for exactly this class of thing.
+ */
+const SQLITE_INTERNAL = /^sqlite_/;
+
 /** Where the service's own source lives. */
 export const BACKEND_SRC = fileURLToPath(new URL("../../src/", import.meta.url));
 
@@ -84,10 +110,19 @@ export function referencedTables(dir: string = BACKEND_SRC): readonly TableRefer
       .replace(LINE_COMMENT, "$1")
       .replace(SQL_LINE_COMMENT, " ");
 
+    // Per file, because a CTE name is only a CTE inside the statement that
+    // binds it — and a name that is a CTE in one file may be a real table in
+    // another.
+    const cteNames = new Set(
+      [...source.matchAll(CTE_NAME)].map((match) => match[1]).filter((name) => name !== undefined),
+    );
+
     for (const match of source.matchAll(TABLE_REFERENCE)) {
       const name = match[1];
       if (name === undefined) continue;
       if (NOT_A_TABLE.has(name) && name === name.toUpperCase()) continue;
+      if (cteNames.has(name)) continue;
+      if (SQLITE_INTERNAL.test(name)) continue;
 
       const files = byTable.get(name) ?? new Set<string>();
       files.add(file.slice(dir.length));

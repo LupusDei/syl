@@ -46,12 +46,17 @@ import { createGoalRouter } from "./routes/goals.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
 import { createJobRouter } from "./routes/jobs.js";
 import { createLogRouter } from "./routes/logs.js";
+import { createMemoryRouter, type MemoryViews } from "./routes/memory.js";
 import { createReminderRouter } from "./routes/reminders.js";
 import { createSyncRouter } from "./routes/sync.js";
 import { createTodoRouter } from "./routes/todos.js";
 import { fileSessionStore, memorySessionStore, SylAgent } from "./harness/agent.js";
 import { runTurn, type TurnOptions, type TurnRunner } from "./harness/session.js";
 import { autoMemoryAt } from "./memory/auto-memory.js";
+import { DreamLog } from "./memory/dream/log.js";
+import { MemoryGraph } from "./memory/graph.js";
+import { MemoryMetrics } from "./memory/metrics.js";
+import { EdgeWeights } from "./memory/weights.js";
 import { withMemoryIndex } from "./memory/index-guarantee.js";
 import { apnsCredentialsFromEnv } from "./services/apns-service.js";
 import { ApiKeyService } from "./services/api-key-service.js";
@@ -217,6 +222,15 @@ export interface AppDependencies {
   readonly idempotency: IdempotencyStore;
   /** Article intake: submission, and the resumable ladder behind it. */
   readonly intake: ArticleIntake;
+  /**
+   * The memory graph, the weight law, the derived panel and the dream log.
+   *
+   * One field rather than four, because they are one surface: the admin's
+   * memory viewer reads all four and writes through two of them, and splitting
+   * them here would put four names in `createApp`'s destructure for one
+   * feature. See `routes/memory.ts`.
+   */
+  readonly memory: MemoryViews;
   /** Extra health probes. The billing check is always present. */
   readonly probes?: readonly HealthProbe[];
 }
@@ -253,7 +267,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // Destructured in full, and reached through the names below rather than
   // through `deps.` — see the note on `AppDependencies`. Removing a use here
   // without removing the field does not compile.
-  const { keys, messages, chat, devices, outbox, reminders, todos, goals, sync, jobs, idempotency, intake, probes } =
+  const { keys, messages, chat, devices, outbox, reminders, todos, goals, sync, jobs, idempotency, intake, memory, probes } =
     deps;
   const app = express();
 
@@ -299,6 +313,19 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   api.use(
     createLogRouter({
       logDirectory: config.logDirectory,
+      authenticate,
+      requireAdmin: requireScope("admin"),
+    }),
+  );
+  // The graph, and the one surface that corrects it. Admin-scoped for the same
+  // reason the log is — this is the record of what a pre-authorised program
+  // inferred, and the feedback endpoint writes into Syl's memory. Both
+  // middlewares named here rather than hidden inside the router, so the
+  // bootstrap shows what is gated and by what.
+  api.use(
+    createMemoryRouter({
+      memory,
+      idempotency,
       authenticate,
       requireAdmin: requireScope("admin"),
     }),
@@ -543,7 +570,15 @@ export function bootstrap(
   readonly deps: ServiceDependencies;
 } {
   const clock = options.clock ?? systemClock;
-  const database = openDatabase({ path: config.databasePath });
+  // `allowExtension` must be asked for at CONSTRUCTION — `node:sqlite` offers no
+  // way to turn it on later. Without it this connection can never load `vec0`,
+  // so the memory store's vector half would simply be absent on the running
+  // service while every unit test stayed green, because the tests open their own
+  // connection and do pass the flag. Silent, and invisible from the test suite:
+  // `syl-63n`. Granting it is not loading anything — `memory/store.ts` still has
+  // to call `enableLoadExtension(true)` immediately before, and re-disables it
+  // once `vec0` is in.
+  const database = openDatabase({ path: config.databasePath, allowExtension: true });
   const keys = new ApiKeyService({ db: database.handle, clock });
   const messages = new MessageStore({ db: database.handle, clock });
   const devices = new DeviceTokenService({ db: database.handle, clock });
@@ -642,6 +677,18 @@ export function bootstrap(
   // only reason that parameter exists is so a test can drive the ladder
   // without a network, and a production caller substituting it would have
   // removed the control that stops a hostile link reaching the tailnet.
+  // The memory surface the admin reads and corrects. Every one of these is a
+  // thin object over the same handle — `MemoryMetrics` in particular is a
+  // derived view that writes nothing — so building them here costs a
+  // constructor and keeps the route free of store construction.
+  const memoryGraph = new MemoryGraph({ db: database.handle, clock });
+  const memory: MemoryViews = {
+    graph: memoryGraph,
+    weights: new EdgeWeights({ graph: memoryGraph, clock }),
+    metrics: new MemoryMetrics({ db: database.handle, clock }),
+    dreams: new DreamLog({ db: database.handle, clock }),
+  };
+
   const intakeQueue = new IntakeQueue();
   const intakeStore = new IntakeStore({ db: database.handle, clock });
   const intake = new ArticleIntake({ store: intakeStore, clock, scheduler: intakeQueue });
@@ -664,6 +711,7 @@ export function bootstrap(
       jobs,
       idempotency,
       intake,
+      memory,
       presence,
       intakeQueue,
       probes: [databaseProbe(database.handle)],

@@ -24,7 +24,7 @@ import { TodoService } from "../../src/services/todo-service.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import { startFakeApns, type FakeApns } from "../helpers/fake-apns.js";
 import { startTestApp, type RunningApp } from "../helpers/http.js";
-import { testChat, testConfig, testDatabase, testKeys } from "../helpers/service.js";
+import { testChat, testConfig, testDatabase, testKeys, testMemory } from "../helpers/service.js";
 
 /**
  * `syl-002.5.1` — the end-to-end proof, and the point of the whole feature.
@@ -143,6 +143,7 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         jobs,
         idempotency: new IdempotencyStore({ db: db.handle, clock }),
         intake: new ArticleIntake({ store: new IntakeStore({ db: db.handle, clock }), clock }),
+        memory: testMemory(db, clock),
       }),
     );
     token = keys.pair(keys.issuePairingCode().code, "Commander's iPhone").token;
