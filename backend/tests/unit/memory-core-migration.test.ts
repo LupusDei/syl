@@ -149,7 +149,14 @@ describe("0012_memory_core — the tables exist and are STRICT", () => {
       .map((row) => (row as { name: string }).name)
       .sort();
 
-    expect(names).toEqual(["memory_edges", "memory_nodes"]);
+    // Containment, not equality. This file is about the SHAPE of 0012's two
+    // tables, and an exact list also asserted that no LATER migration may add a
+    // `memory_*` table — a claim it was not making on purpose and cannot
+    // support. `0015_supersession_ledger.sql` adds `memory_assertions`, and the
+    // retrieval work adds more; each arrival would fail this line in a file its
+    // author had no other business in, which is the same rot the migration-count
+    // literal in `schema-completeness.test.ts` was already changed to avoid.
+    expect(names).toEqual(expect.arrayContaining(["memory_edges", "memory_nodes"]));
   });
 
   it("should refuse a value of the wrong storage class, because the tables are STRICT", () => {
