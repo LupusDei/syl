@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, expect, it } from "vitest";
 
 import { MemoryGraph, type InferredEdge } from "../../src/memory/graph.js";
 import { DreamLog, type DreamSession } from "../../src/memory/dream/log.js";
+import { DreamSweep } from "../../src/memory/dream/sweep.js";
 import {
   IGNORED_AFTER_MS,
   MemoryMetrics,
@@ -839,21 +840,24 @@ describe("the full report", () => {
 });
 
 // ---------------------------------------------------------------------------
-// ACCEPTANCE TESTS FOR BEHAVIOUR THAT IS NOT BUILT YET.
+// WHAT THE NIGHTLY SWEEP MUST RECORD.
 //
-// Both describe what the SYSTEM must do, not what this module does. The dream
-// does not run: `backend/src/memory/dream/sweep.ts` (syl-005.4.2) is the piece
-// that has to write to the log as it works on the graph. Until it exists these
-// stay RED and are declared in `tests/expected-failures.json`.
+// Both describe what the SYSTEM must do, not what this module does. They were
+// declared RED in `tests/expected-failures.json` while the dream did not run,
+// and `backend/src/memory/dream/sweep.ts` (syl-005.4.2) is what made them pass:
+// the sweep writes to BOTH stores as it works, and neither store writes to the
+// other, so constraint 7 is untouched.
 //
-// They are deliberately written against modules that DO exist, so they fail on
-// an assertion rather than on an import. A test file that cannot be collected
-// does not fail — it vanishes, and takes its neighbours with it.
+// They drive the real sweep against the real graph and the real log. Nothing
+// here is stubbed, because the failure they exist to catch — an engine that
+// changes the graph and tells the log nothing — is invisible to any test that
+// writes the log rows by hand.
 // ---------------------------------------------------------------------------
 
 describe("what the nightly sweep must record", () => {
   it("should report tonight's floor crossings from the sweep that actually moved the edges", () => {
     const opened = session();
+    const sweep = new DreamSweep({ graph, log, clock });
     const hub = node();
     for (let index = 0; index < 3; index += 1) {
       infer(hub, node(), {
@@ -863,13 +867,12 @@ describe("what the nightly sweep must record", () => {
     }
     clock.advance(2 * 60_000);
 
-    const moved = graph.demoteDueEdges(instant(clock()));
+    const moved = sweep.demote(opened.id);
     log.closeSession(opened.id, { outcome: "completed" });
 
-    // The sweep moved three edges across the floor and told the log nothing.
-    // The audit is derived from the log, so the growth of the cold set is
-    // invisible however fast it grows: the cold store now holds three edges
-    // and the night that put them there claims to have demoted none.
+    // The count is the `changes` the demotion statement already returned, so
+    // recording it is free — and without it the growth of the cold set is
+    // invisible however fast it grows.
     expect(moved).toBe(3);
     expect(metrics.coldStoreAudit().shape.edges).toBe(3);
 
@@ -882,15 +885,32 @@ describe("what the nightly sweep must record", () => {
 
   it("should see the edges the reflection engine actually wrote into the graph", () => {
     const opened = session();
+    const sweep = new DreamSweep({ graph, log, clock });
     const a = node();
     const b = node();
-    infer(a, b);
+
+    sweep.applyVerdict({
+      sessionId: opened.id,
+      candidate: {
+        sourceNode: a < b ? a : b,
+        targetNode: a < b ? b : a,
+        relation: "resembles",
+        kernel: "related",
+        symmetric: true,
+        score: 0.82,
+        existing: null,
+      },
+      verdict: {
+        disposition: "created",
+        reasoning: "both showed up in the same week and share a shape",
+        confidence: 0.8,
+      },
+    });
     log.closeSession(opened.id, { outcome: "completed" });
 
-    // An inferred edge exists in the graph and nothing knows why or when it was
-    // born, because whatever created it never logged the reasoning. Survival,
-    // cost per kept edge and the astrology rate are all blind to it, and the
-    // invariant alarm stays `unproven` forever.
+    // Every edge the engine writes leaves a reasoning row saying why and on
+    // which night, so survival, cost per kept edge and the astrology rate all
+    // have something to read.
     const report = metrics.survival();
 
     expect(metrics.storeShape().edges.inferred).toBe(1);
