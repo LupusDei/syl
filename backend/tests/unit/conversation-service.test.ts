@@ -68,6 +68,9 @@ function result(text: string, sessionId = "session-1"): TurnResult {
   return {
     sessionId,
     text,
+    // No tool call in a double, so the two are the same string. The case where they
+    // DIFFER is the one that lost his words, and it has its own test.
+    spoken: text,
     costUsd: 0,
     numTurns: 1,
     init: {
@@ -673,5 +676,37 @@ describe("ConversationService.afterExchange", () => {
     await service.idle();
 
     expect(finished).toBe(true);
+  });
+});
+
+describe("what reaches the transcript", () => {
+  it("should store everything she said, not only what came after the tool", async () => {
+    // The defect the Commander read twice in one conversation.
+    //
+    // `runTurn.text` is the CLI's `result`, which carries only the prose after the LAST
+    // tool call. So from the moment `syl-009` let her create a reminder mid-answer, her
+    // replies arrived with the thinking removed and only the closing line stored.
+    //
+    // Nothing threw and the message looked like a message. The only reason it was ever
+    // caught is that Syl read her own transcript back and said it had been clipped.
+    //
+    // This is the guard on the seam: the service must read `spoken`, and a change back
+    // to `text` fails here rather than on his phone.
+    const { service } = harness(() =>
+      Promise.resolve({
+        ...result("Kill it if it's wrong."),
+        spoken: "Three things, and one of them is time-sensitive.\n\nKill it if it's wrong.",
+      }),
+    );
+
+    say(service, "What's left today?");
+    await service.idle();
+
+    const reply = messages
+      .list(INTERACTIVE_CONVERSATION_ID)
+      .items.find((message) => message.role === "assistant");
+
+    expect(reply?.text).toContain("Three things");
+    expect(reply?.text).toContain("Kill it if it's wrong.");
   });
 });

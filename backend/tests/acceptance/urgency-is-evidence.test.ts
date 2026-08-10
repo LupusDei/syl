@@ -140,6 +140,8 @@ describe("urgency, through the machine that has to enforce it", () => {
         return {
           sessionId,
           text: failure === null ? "Done." : `I could not: ${failure}`,
+          // No tool call in a double, so the two are the same string.
+          spoken: failure === null ? "Done." : `I could not: ${failure}`,
           costUsd: 0,
           numTurns: 1,
           init: {

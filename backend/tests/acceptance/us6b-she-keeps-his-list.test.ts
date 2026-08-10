@@ -306,6 +306,8 @@ function aModelThatKeepsHisList(hands: Hands, wrongId?: string): TurnRunner {
     return {
       sessionId,
       text,
+      // No tool call in a double, so the two are the same string.
+      spoken: text,
       costUsd: 0,
       numTurns: 1,
       init: {

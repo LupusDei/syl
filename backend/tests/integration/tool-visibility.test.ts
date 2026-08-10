@@ -85,6 +85,8 @@ function callsATool(input: () => Record<string, unknown>): TurnRunner {
     return {
       sessionId,
       text: "Done.",
+      // No tool call in a double, so the two are the same string.
+      spoken: "Done.",
       costUsd: 0,
       numTurns: 1,
       init: {

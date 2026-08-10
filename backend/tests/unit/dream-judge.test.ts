@@ -149,6 +149,8 @@ function scriptedRunner(script: readonly StubTurn[]): {
     return {
       sessionId,
       text: step?.text ?? acceptEverything(),
+      // No tool call in a double, so the two are the same string.
+      spoken: step?.text ?? acceptEverything(),
       costUsd: 0.02,
       numTurns: 1,
       init: {

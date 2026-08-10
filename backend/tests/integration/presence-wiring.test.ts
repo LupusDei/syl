@@ -148,6 +148,8 @@ describe("presence on the live socket", () => {
         return {
           sessionId: "held-session",
           text: "Yes.",
+          // No tool call in a double, so the two are the same string.
+          spoken: "Yes.",
           costUsd: 0,
           numTurns: 1,
           init: {

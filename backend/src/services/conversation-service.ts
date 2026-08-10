@@ -390,7 +390,11 @@ export class ConversationService {
     this.#presence?.turnStarted();
     try {
       const result = await this.#agent.ask(message.text, lane);
-      reply = result.text.trim();
+      // `spoken`, not `text`. The CLI's result field carries only the prose after the
+      // last tool call, so the moment she could create a reminder mid-answer her replies
+      // began arriving with everything before the tool removed. `text` stays the raw
+      // final answer for the reader, which parses it as JSON and would choke on prose.
+      reply = result.spoken.trim();
     } catch (error) {
       failed = true;
       this.#log(`turn failed on lane ${lane}`, error);

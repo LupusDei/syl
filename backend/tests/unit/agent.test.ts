@@ -20,6 +20,8 @@ function fakeResult(sessionId: string, text = "ok"): TurnResult {
   return {
     sessionId,
     text,
+    // No tool call in a double, so the two are the same string.
+    spoken: text,
     costUsd: 0.001,
     numTurns: 1,
     init: {

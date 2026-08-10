@@ -90,6 +90,8 @@ function scriptedRunner(reply: string): {
     return Promise.resolve({
       sessionId,
       text: reply,
+      // No tool call in a double, so the two are the same string.
+      spoken: reply,
       costUsd: 0,
       numTurns: 1,
       init: {
