@@ -29,7 +29,22 @@ import {
  * with `BadDeviceToken`, which looks like a broken key rather than a
  * mismatched environment, so this surface names it on every row.
  */
-export function DevicesView(): ReactElement {
+/**
+ * `now` is injectable so a test can pin it, and defaults to the real clock.
+ *
+ * Without the seam this view was UNTESTABLE ACROSS TIME, and it failed exactly
+ * that way. `standingOf` calls a device stale after 24 hours of silence, the
+ * shared fixture's active device carries an absolute `lastSeenAt`, and the view
+ * read `new Date()`. So the test asserting a healthy device reads "active"
+ * passed until 24 hours after the fixture was written and went red FOREVER
+ * after — with no code change, and looking exactly like a regression in the
+ * view. It was measured at 27.7 hours old when found.
+ *
+ * That is the fifth time-dependent failure in this project and the same shape
+ * as the seeded `strftime('now')` in migration 0001. The fixture is shared with
+ * the Swift contract tests, so the seam belongs here rather than in the data.
+ */
+export function DevicesView({ now: pinnedNow }: { now?: Date } = {}): ReactElement {
   const client = useAdminClient();
 
   const load = useCallback<Loader<DevicePage>>(
@@ -42,7 +57,7 @@ export function DevicesView(): ReactElement {
   const devices = useResource<DevicePage>(client === null ? null : load);
 
   const items = devices.data?.items ?? [];
-  const now = useMemo(() => new Date(), [devices.data]);
+  const now = useMemo(() => pinnedNow ?? new Date(), [devices.data, pinnedNow]);
   const rows = useMemo(() => sortDevices(items), [items]);
   const summary = useMemo(() => summariseFleet(items), [items]);
 

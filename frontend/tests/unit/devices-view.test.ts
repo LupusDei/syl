@@ -50,7 +50,8 @@ function renderView(storage: StorageLike = signedIn()): void {
   render(
     h(AuthProvider, {
       storage,
-      children: h(MemoryRouter, { initialEntries: ["/devices"] }, h(DevicesView)),
+      // Pinned to the fixture, never to the wall clock — see fixtureNow().
+      children: h(MemoryRouter, { initialEntries: ["/devices"] }, h(DevicesView, { now: fixtureNow() })),
     }),
   );
 }
@@ -60,6 +61,26 @@ function pageOf(rows: readonly unknown[]): Response {
     JSON.stringify({ success: true, data: { items: rows, nextCursor: null, hasMore: false } }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
+}
+
+/**
+ * A moment pinned to the FIXTURE, not to the wall clock.
+ *
+ * `standingOf` calls a device stale after 24 hours of silence, and the fixture's
+ * timestamps are absolute. Rendering against the real clock meant these
+ * assertions aged out: the healthy device turned stale a day after the fixture
+ * was written and "active" stopped appearing, which reads as a regression in the
+ * view and is not one.
+ *
+ * Derived from the newest `lastSeenAt` in the fixture, so it stays correct if the
+ * fixture is regenerated — a hard-coded instant here would simply move the bomb.
+ */
+function fixtureNow(): Date {
+  const newest = fixtureRows()
+    .map((device) => Date.parse(String(device["lastSeenAt"])))
+    .filter((value) => !Number.isNaN(value))
+    .reduce((a, b) => Math.max(a, b), 0);
+  return new Date(newest + 60_000);
 }
 
 function fixtureRows(): Record<string, unknown>[] {
