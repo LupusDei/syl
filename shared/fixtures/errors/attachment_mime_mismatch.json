@@ -1,0 +1,13 @@
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_FAILED",
+    "message": "That file says it is image/png; the request declared image/jpeg.",
+    "retryable": false,
+    "details": {
+      "field": "mimeType",
+      "reason": "mime-mismatch"
+    },
+    "retryAfterMs": null
+  }
+}

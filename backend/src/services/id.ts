@@ -21,6 +21,10 @@ export type IdType =
   | "pairing_code"
   | "conversation"
   | "message"
+  // Images and video (`0015_attachments.sql`). An attachment is addressable on
+  // its own because it is created before the message that claims it — see the
+  // header of that migration.
+  | "attachment"
   | "reminder"
   | "todo"
   | "goal"

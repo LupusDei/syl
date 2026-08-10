@@ -1,5 +1,7 @@
 import { fixture } from "../fixtures.js";
 import type {
+  Attachment,
+  AttachmentKind,
   Conversation,
   Delivery,
   DeliveryConfirmation,
@@ -90,6 +92,16 @@ export class MockStore {
   jobs: Job[];
   runs: Run[];
   logs: LogEntry[];
+  /**
+   * Attachments the mock has been handed, plus their bytes.
+   *
+   * Held in memory rather than on disk: a mock two squads run on their own
+   * laptops must not leave files behind, and the only thing a client needs
+   * from `GET /attachments/{id}` is that bytes come back with the right
+   * `Content-Type`.
+   */
+  attachments: Attachment[];
+  private blobs = new Map<string, Buffer>();
   readonly principal: Principal;
   private changes: SyncLogEntry[] = [];
 
@@ -104,6 +116,7 @@ export class MockStore {
     this.jobs = clone(data<Page<Job>>("http/jobs.page").items) as Job[];
     this.runs = clone(data<Page<Run>>("http/runs.page").items) as Run[];
     this.logs = seedLogs();
+    this.attachments = [];
     this.principal = clone(data<Principal>("http/auth.whoami"));
   }
 
@@ -120,7 +133,73 @@ export class MockStore {
     this.jobs = fresh.jobs;
     this.runs = fresh.runs;
     this.logs = fresh.logs;
+    this.attachments = [];
+    this.blobs.clear();
     this.changes = [];
+  }
+
+  // -------------------------------------------------------- attachments ---
+
+  /**
+   * Store bytes and hand back a row, the way `POST /attachments` does.
+   *
+   * The mock sniffs magic bytes too. It would be much less code to believe the
+   * declared type — and a client built against a mock that believes it ships
+   * without ever handling `mime-mismatch`, which is the whole failure mode
+   * `syl-c1m` is about, one layer in.
+   */
+  createAttachment(input: {
+    kind: AttachmentKind;
+    mimeType: string;
+    data: Buffer;
+    width?: number | undefined;
+    height?: number | undefined;
+    durationMs?: number | undefined;
+  }): Attachment | { error: string } {
+    const sniffed = sniffMockMime(input.data);
+    if (sniffed === null) return { error: "Those bytes are not a format this service stores." };
+    if (input.mimeType.toLowerCase() !== sniffed) {
+      return { error: `That file says it is ${sniffed}; the request declared ${input.mimeType}.` };
+    }
+
+    const kind: AttachmentKind = sniffed.startsWith("video/") ? "video" : "image";
+    if (kind !== input.kind) {
+      return { error: `That file is a ${kind}; the request declared a ${input.kind}.` };
+    }
+    if (kind === "video" && (input.width === undefined || input.height === undefined)) {
+      return { error: "A video upload must declare width and height." };
+    }
+    if (kind === "video" && input.durationMs === undefined) {
+      return { error: "A video upload must declare durationMs." };
+    }
+
+    const attachment: Attachment = {
+      id: mockId("attachment"),
+      kind,
+      mimeType: sniffed,
+      bytes: input.data.length,
+      width: input.width ?? 1200,
+      height: input.height ?? 900,
+      durationMs: kind === "video" ? (input.durationMs ?? 0) : null,
+      sha256: mockSha256(input.data),
+      createdAt: nowIso(),
+      // The mock generates no previews. `hasThumbnail: false` is the honest
+      // answer and is also the branch a client is most likely to get wrong, so
+      // it is the one worth making the default here.
+      hasThumbnail: false,
+    };
+    this.attachments.push(attachment);
+    this.blobs.set(attachment.id, input.data);
+    return attachment;
+  }
+
+  attachment(id: string): Attachment | undefined {
+    return this.attachments.find((item) => item.id === id);
+  }
+
+  /** The stored bytes, or `undefined`. */
+  attachmentBytes(id: string): Buffer | undefined {
+    return this.blobs.get(id);
   }
 
   // ------------------------------------------------------------- health ---
@@ -160,7 +239,7 @@ export class MockStore {
    */
   sendMessage(
     conversationId: string,
-    body: { clientId: string; text: string },
+    body: { clientId: string; text: string; attachmentIds?: readonly string[] },
   ): { confirmation: DeliveryConfirmation; broadcasts: Broadcast[] } {
     const conversation = this.conversation(conversationId);
     const seq = this.messagesFor(conversationId).length + 1;
@@ -174,6 +253,13 @@ export class MockStore {
       text: body.text,
       createdAt: at,
       seq,
+      // Claimed from the pool the upload route filled, in the order asked for.
+      // An id the mock never issued is simply skipped: a mock that 500s on a
+      // stale id is a mock a client's outbox cannot be developed against, and
+      // the real service's refusal is asserted where it lives.
+      attachments: (body.attachmentIds ?? [])
+        .map((id) => this.attachments.find((candidate) => candidate.id === id))
+        .filter((candidate): candidate is Attachment => candidate !== undefined),
     };
     this.messages.push(message);
     this.record("message", "upsert", message.id, at);
@@ -186,6 +272,7 @@ export class MockStore {
       text: `(mock) I heard: ${body.text}`,
       createdAt: nowIso(),
       seq: seq + 1,
+      attachments: [],
     };
     this.messages.push(reply);
     this.record("message", "upsert", reply.id, reply.createdAt);
@@ -644,6 +731,51 @@ export function seedLogs(): LogEntry[] {
     entry(60_000, "warn", "job.late", { kind: "reminder_delivery", latenessMs: 41_000 }),
     entry(120_000, "error", "turn.api_error", { message: "upstream connection reset" }),
   ].reverse();
+}
+
+/**
+ * The mock's magic-byte sniff.
+ *
+ * A deliberately smaller allowlist than the service's — enough that a client
+ * developing the picker meets a real `mime-mismatch` rather than only the
+ * happy path. The service's own sniff is in
+ * `backend/src/services/attachment-store.ts` and is the authority.
+ */
+export function sniffMockMime(b: Buffer): string | null {
+  if (b.length >= 8 && b[0] === 0x89 && b.subarray(1, 4).toString("ascii") === "PNG") {
+    return "image/png";
+  }
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b.length >= 6 && ["GIF87a", "GIF89a"].includes(b.subarray(0, 6).toString("ascii"))) {
+    return "image/gif";
+  }
+  if (
+    b.length >= 12 &&
+    b.subarray(0, 4).toString("ascii") === "RIFF" &&
+    b.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  if (b.length >= 12 && b.subarray(4, 8).toString("ascii") === "ftyp") {
+    return b.subarray(8, 12).toString("ascii") === "qt  " ? "video/quicktime" : "video/mp4";
+  }
+  return null;
+}
+
+/**
+ * A digest in the contract's shape.
+ *
+ * `shared` has no runtime dependencies and this is a mock, so it is a cheap
+ * content hash padded to 64 hex characters rather than a real SHA-256. It is
+ * stable for the same bytes, which is the only property a client's cache key
+ * is testing.
+ */
+export function mockSha256(data: Buffer): string {
+  let hash = 0x811c9dc5;
+  for (const byte of data) {
+    hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0").repeat(8);
 }
 
 /** What a caller may narrow the log by. Mirrors the query string on `GET /logs`. */

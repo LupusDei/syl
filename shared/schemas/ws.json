@@ -120,7 +120,8 @@
         "role",
         "text",
         "createdAt",
-        "seq"
+        "seq",
+        "attachments"
       ],
       "description": "`text` has already had the affect hint stripped. The\n`<!--affect: concerned 0.6-->` marker that a turn may emit is removed\nby the service before display and before synthesis; it drives the\n`presence` frame and never crosses the wire as message content.\n",
       "properties": {
@@ -150,6 +151,84 @@
           "type": "integer",
           "minimum": 1,
           "description": "Monotonic per conversation. The client tracks the highest it has\nseen; the WebSocket `sync` frame replays from there.\n"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Attachment"
+          },
+          "description": "In the order they were attached. **Always present, empty when\nthere are none** — a client must never have to tell \"no\nattachments\" apart from \"this server does not send the field\",\nbecause those two look identical and mean opposite things the day\na field goes missing.\n"
+        }
+      }
+    },
+    "AttachmentKind": {
+      "type": "string",
+      "description": "Two kinds, and deliberately no third. `file` is not here: an arbitrary\ndocument is a thing the service would have to store, serve and never\nbe able to render, and adding the case later costs nothing while\nadding it now costs a surface nobody has a use for.\n",
+      "enum": [
+        "image",
+        "video"
+      ]
+    },
+    "Attachment": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "mimeType",
+        "bytes",
+        "width",
+        "height",
+        "durationMs",
+        "sha256",
+        "createdAt",
+        "hasThumbnail"
+      ],
+      "description": "A stored image or video. The row is metadata only — the bytes live on\nthe service's own disk and are fetched from\n`GET /attachments/{attachmentId}`, never from anywhere else.\n\n**There is no URL on this object, on purpose.** A remote image in a\ntranscript leaks a read receipt and the Commander's IP to whoever hosts\nit, and a client that will render whatever URL it is handed is an SSRF\nsurface pointed at the tailnet. The client composes the path from the\nid against the server it is paired with, so an attachment can only ever\ncome from Syl's own origin.\n",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "kind": {
+          "$ref": "#/$defs/AttachmentKind"
+        },
+        "mimeType": {
+          "type": "string",
+          "description": "What the file's **magic bytes** say it is, not what the uploader\ndeclared. The two are cross-checked at upload and a disagreement is\nrefused, so by the time a row exists there is only one answer.\n"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Size of the stored original, in bytes."
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Pixels. Read from the file header for an image; taken from the\nuploader for a video. Present so a bubble can reserve the right box\nbefore the bytes arrive — no layout jump on load.\n"
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Pixels. See `width`."
+        },
+        "durationMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Video only. Always null for an image."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Lower-case hex of the stored original. The client's cache key, and\nwhat makes \"is this the same picture I already have\" answerable\nwithout a download.\n"
+        },
+        "createdAt": {
+          "$ref": "#/$defs/Instant"
+        },
+        "hasThumbnail": {
+          "type": "boolean",
+          "description": "Whether `?variant=thumb` will answer with bytes. False for every\nvideo, and false for an image the service could not downscale.\nA client that asks for a thumbnail that does not exist gets `404`;\nit must read this rather than probe.\n"
         }
       }
     },
