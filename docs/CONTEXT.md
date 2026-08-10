@@ -573,6 +573,75 @@ function and no option turns the check off** — asserted over every combination
 of every option in `deploy-gate.test.ts`, so a bypass added later fails the
 suite rather than shipping.
 
+### A window has two ends, and this one was taken from the wrong one
+
+`LocalStore.messages(conversationId:limit:)` ordered **ascending** and took the
+first `limit` rows — which returns the **oldest** `limit`, not the newest.
+
+Under 200 messages this is completely invisible: everything fits, so the result
+is byte-identical. Past 200 the chat screen **freezes permanently** — it shows
+the first 200 messages ever exchanged and nothing arriving after that is ever
+visible, no matter how far you scroll or how long you wait.
+
+Three things make it worth writing down rather than just fixing:
+
+1. **It is silent and it gets worse with use.** There is no error, no empty
+   state, no log line. It simply begins lying on message 201.
+2. **It would have been debugged in the wrong layer.** The socket, the outbox,
+   the sync engine and the store writes would all have been working perfectly.
+   It presents as "sync is broken" and the bug is one word in a query.
+3. **No test could have caught it as written.** Every fixture had fewer rows
+   than the window, which is the condition under which the defect does not
+   exist. The regression test now uses a limit *smaller* than the fixture, which
+   is the only shape that can fail.
+
+Fixed by ordering descending so SQLite picks the newest rows, then reversing in
+memory to hand back reading order. Found only because pagination forced someone
+to read the query and ask which end the window came from.
+
+**The general lesson: any query with a `LIMIT` needs a test where the limit
+actually bites.** A bounded read tested only with unbounded data is untested.
+
+### `ImageRenderer` renders neither a `ScrollView` nor a `NavigationStack`
+
+The offscreen render harnesses (`HomeSnapshotRendering`, `ChatSnapshotRendering`)
+are how a design gets *looked* at, and two containers silently defeat them.
+
+- **`ScrollView`** — an offscreen host never gives it a content size, so it
+  renders an empty page. `HomeView` already carried a `scrolls: Bool` escape
+  hatch for exactly this; `ChatView` now does too.
+- **`NavigationStack`** — renders the **entire frame** as SwiftUI's unavailable
+  placeholder: a yellow field with a red slash. This is worth naming because a
+  whole-screen yellow image reads as a catastrophic palette bug, not as an
+  unsupported container, and costs twenty minutes before anyone suspects the
+  harness. `TextField` does the same thing at its own scale — it needs a live
+  host, so the composer's field renders as that placeholder while the bar and
+  the send control around it are perfectly real.
+
+### On the bare veil, `inkFaint` is not a safe colour
+
+The veil's blooms are composited `plusLighter`, so the ground under a given word
+is not the base colour — it is the base **plus** up to 60% of `luminanceCore`.
+`inkFaint` is a mid-tone: ample contrast against the base veil and almost none in
+the middle of a bloom. The first night render of chat had a timestamp that simply
+was not there.
+
+Home never hit this because home's content sits on glass, which supplies its own
+ground. It became a problem the moment `syl-008` unboxed Syl's turns and put
+small text directly on the moving backdrop. **Small text on the veil uses
+`inkSoft`; `inkFaint` is for text on glass.**
+
+### Comparing `SylTheme` colours in a test compares identity, not colour
+
+Every token in `SylTheme.Colour` is a **computed** property returning a fresh
+`UIColor(dynamicProvider:)`. So `XCTAssertEqual(someColour, SylTheme.Colour.luminance)`
+fails even when the colour is exactly right, and the failure message is two
+opaque pointer descriptions that explain nothing.
+
+Assert on resolved components instead, and **assert both appearances** — a
+colour can be right in the day and wrong at night, which is the entire reason
+this palette defines every token twice.
+
 ## 8. Design principles to hold
 
 **Never silently drop a reminder.** A late reminder is a nuisance; a vanished one
