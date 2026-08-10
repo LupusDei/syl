@@ -220,6 +220,18 @@ export interface Reactivation {
   readonly weight?: number;
 }
 
+/**
+ * What {@link MemoryGraph.promote} accepts for an observation.
+ *
+ * No crossing instant, because an observation never crosses on its own — the
+ * migration's CHECK refuses a `demote_after` on an observed row, and the two
+ * separate types are what make that unrepresentable rather than merely refused.
+ */
+export interface ObservedReactivation {
+  /** The reactivated weight, in (0, 1]. Left alone when omitted. */
+  readonly weight?: number;
+}
+
 /** What {@link MemoryGraph.listNodes} may narrow by. This is a SCAN. */
 export interface NodeFilter {
   /** Defaults to `hot`. Anything else is an explicit look at what was set aside. */
@@ -734,16 +746,27 @@ export class MemoryGraph {
    * `cold`. It stays findable by identity precisely so reflection cannot
    * recreate an edge he already rejected.
    *
-   * @throws {GraphError} `already_suppressed`.
+   * A penalised `weight` may be supplied, and it is applied in the SAME
+   * statement rather than by a second write. `syl-005.3.2` requires a rejected
+   * edge to fall further than mere disuse would carry it, and a tier move that
+   * left the weight behind — or a weight write that a crash could separate from
+   * the tier move — would leave a rejected connection looking live in the cold
+   * store. `last_touched_at` deliberately does NOT move: a rejection is not a
+   * use, and refreshing the stamp would restart the decay clock in the edge's
+   * favour.
+   *
+   * @throws {GraphError} `already_suppressed`, `bad_weight`.
    */
-  suppress(edge: MemoryEdge): MemoryEdge {
+  suppress(edge: MemoryEdge, weight?: number): MemoryEdge {
     const at = instant(this.#clock());
+    const penalised =
+      weight === undefined ? edge.weight : requireUnitInterval(weight, "bad_weight", "A weight");
     const moved = this.#db
       .prepare(
-        `UPDATE memory_edges SET tier = 'suppressed', demote_after = NULL, updated_at = ? ` +
-          `WHERE id = ? AND tier <> 'suppressed'`,
+        `UPDATE memory_edges SET tier = 'suppressed', weight = ?, demote_after = NULL, ` +
+          `updated_at = ? WHERE id = ? AND tier <> 'suppressed'`,
       )
-      .run(at, edge.id);
+      .run(penalised, at, edge.id);
 
     if (moved.changes === 0) {
       throw new GraphError(
@@ -783,10 +806,10 @@ export class MemoryGraph {
    * @throws {GraphError} `not_cold`, `bad_instant`, `bad_weight`.
    */
   promote(edge: InferredEdge, reactivation: Reactivation): InferredEdge;
-  promote(edge: ObservedEdge): ObservedEdge;
-  promote(edge: MemoryEdge, reactivation?: Reactivation): MemoryEdge {
+  promote(edge: ObservedEdge, reactivation?: ObservedReactivation): ObservedEdge;
+  promote(edge: MemoryEdge, reactivation?: Reactivation | ObservedReactivation): MemoryEdge {
     const demoteAfter =
-      reactivation === undefined
+      reactivation === undefined || !("demoteAfter" in reactivation)
         ? null
         : requireInstant(reactivation.demoteAfter, "A scheduled floor crossing");
     const weight =
@@ -811,6 +834,90 @@ export class MemoryGraph {
       );
     }
     return this.#edgeOrThrow(edge.id, edge.kind);
+  }
+
+  /**
+   * Restate a hot edge's strength, without moving it between partitions.
+   *
+   * The write half of the weight law (`syl-005.3.2`), and the one operation
+   * that is neither a tier move nor an insert. It sets `weight`,
+   * `last_touched_at` and — for an inference — the recomputed crossing instant,
+   * together, because those three are one fact: *this edge was worth something
+   * as of this moment, and here is when that runs out.* Splitting them is how a
+   * hot inference ends up with a stale `demote_after` and gets swept out from
+   * under a caller who had just strengthened it.
+   *
+   * The overloads mirror {@link MemoryGraph.promote}: an inference must supply
+   * the instant it next crosses the floor, because the migration CHECKs that a
+   * hot inferred edge always has one; an observation must not, because the same
+   * CHECK refuses it and a stamp would put every observation into the sweep's
+   * partial index.
+   *
+   * Matches `tier = 'hot'` and nothing else. A cold edge is promoted, not
+   * reweighted, so reactivation always goes through one door.
+   *
+   * @throws {GraphError} `not_hot`, `bad_instant`, `bad_weight`.
+   */
+  reweight(edge: InferredEdge, update: Reactivation): InferredEdge;
+  reweight(edge: ObservedEdge, update?: ObservedReactivation): ObservedEdge;
+  reweight(edge: MemoryEdge, update?: Reactivation | ObservedReactivation): MemoryEdge {
+    const demoteAfter =
+      update === undefined || !("demoteAfter" in update)
+        ? null
+        : requireInstant(update.demoteAfter, "A scheduled floor crossing");
+    const weight =
+      update?.weight === undefined
+        ? edge.weight
+        : requireUnitInterval(update.weight, "bad_weight", "A weight");
+    const at = instant(this.#clock());
+
+    const changed = this.#db
+      .prepare(
+        `UPDATE memory_edges SET weight = ?, last_touched_at = ?, demote_after = ?, ` +
+          `updated_at = ? WHERE id = ? AND tier = 'hot'`,
+      )
+      .run(weight, at, demoteAfter, at, edge.id);
+
+    if (changed.changes === 0) {
+      throw new GraphError(
+        "not_hot",
+        `Edge ${edge.id} is not in the hot tier, so a reweight does not reach it. A cold edge ` +
+          `is brought back by promotion, and a suppressed one not at all.`,
+      );
+    }
+    return this.#edgeOrThrow(edge.id, edge.kind);
+  }
+
+  /**
+   * Retire a node: it was true, and something truer has replaced it.
+   *
+   * The node half of constraint 6 — **nodes are superseded, edges are demoted,
+   * nothing is destroyed.** The row MOVES to the cold partition rather than
+   * being rewritten or deleted, so it leaves every scan while staying reachable
+   * by id and by subject. `syl-005.3.3`'s ledger is what decides *when*: the
+   * validity interval lives there, and this is the partition move that interval
+   * implies.
+   *
+   * There is deliberately no `deleteNode`. A superseded node is what "what did
+   * I believe in March?" is answered out of.
+   *
+   * @throws {GraphError} `not_hot` if the node is not in the hot tier — or is
+   * no longer in the store.
+   */
+  supersedeNode(node: MemoryNode): MemoryNode {
+    const at = instant(this.#clock());
+    const moved = this.#db
+      .prepare(`UPDATE memory_nodes SET tier = 'cold', updated_at = ? WHERE id = ? AND tier = 'hot'`)
+      .run(at, node.id);
+
+    if (moved.changes === 0) {
+      throw new GraphError(
+        "not_hot",
+        `Supersession only reaches a node in the hot tier, and ${node.id} is not in it ` +
+          `(or is no longer in the store).`,
+      );
+    }
+    return this.#nodeOrThrow(node.id);
   }
 
   /**
