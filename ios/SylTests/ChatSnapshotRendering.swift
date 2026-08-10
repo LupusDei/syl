@@ -54,18 +54,37 @@ final class ChatSnapshotRendering: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         print("SYL_SNAPSHOTS_AT \(directory.path)")
 
-        for scheme in [ColorScheme.light, .dark] {
-            let name = scheme == .light ? "chat-day" : "chat-night"
+        let cases: [(name: String, scheme: ColorScheme, thinking: Bool)] = [
+            ("chat-day", .light, false),
+            ("chat-night", .dark, false),
+            // She is only visible in the transcript while a turn is running, so a
+            // render with presence idle cannot show whether that works at all.
+            ("chat-thinking", .dark, true),
+        ]
 
+        for (name, scheme, thinking) in cases {
             let database = try SylDatabase.inMemory()
             let store = LocalStore(database: database)
-            try store.upsert(transcript)
+            // A short transcript for the presence case. On the non-scrolling render
+            // path the content is not clipped — it simply extends past the frame — so
+            // anything bottom-aligned (the ribbon, the composer) lands off-screen when
+            // the transcript is tall. The foot of the screen can only be photographed
+            // when the conversation is short enough to leave one.
+            try store.upsert(thinking ? Array(transcript.suffix(2)) : transcript)
 
             // Hoisted out of the closure: `now` is `@Sendable`, so it cannot capture
             // this main-actor-isolated test case.
             let now = fixedNow
             let model = ChatViewModel(store: store, now: { now })
             await model.refresh()
+
+            if thinking {
+                await model.apply(
+                    .presence(
+                        WsPresence(state: .thinking, intensity: 0.7, since: now, ttlMs: 15_000)
+                    )
+                )
+            }
 
             // No `NavigationStack` around it. `ImageRenderer` cannot host one offscreen
             // and renders the whole tree as an unavailable placeholder — a yellow frame

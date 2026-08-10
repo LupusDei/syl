@@ -57,7 +57,29 @@ struct ChatView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
+                // Presence overlays the transcript rather than living inside it.
+                //
+                // It sat inside the scrolling container at first, which meant it did
+                // not exist at all on the non-scrolling render path — and since that is
+                // the only path an offscreen render can use, the ribbon could not be
+                // looked at. Presence has nothing to do with scrolling; the coupling
+                // was accidental, and it hid the one thing worth checking.
                 transcript
+                    .overlay(alignment: .bottom) {
+                        if HomeSnapshot.isActive(model.presence) {
+                            PresenceInTranscript(
+                                presence: model.presence,
+                                intensity: model.intensity
+                            )
+                            .padding(.bottom, SylTheme.Metric.snug)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                        }
+                    }
+                    .animation(
+                        reduceMotion ? nil : SylTheme.Motion.settle,
+                        value: HomeSnapshot.isActive(model.presence)
+                    )
 
                 ChatComposer(
                     draft: $model.draft,
@@ -195,16 +217,6 @@ struct ChatView: View {
                         // Tell him instead.
                         hasUnseenTurn = true
                     }
-                }
-
-                if HomeSnapshot.isActive(model.presence) {
-                    PresenceInTranscript(
-                        presence: model.presence,
-                        intensity: model.intensity
-                    )
-                    .padding(.bottom, SylTheme.Metric.snug)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
                 }
 
                 if hasUnseenTurn {
