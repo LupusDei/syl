@@ -57,6 +57,40 @@ export const sharedTestConfig = {
     // so both are set.
     minWorkers: 1,
     maxWorkers: 3,
+    /**
+     * THE SPAWN-HEAVY FILES RUN ONE AT A TIME. `syl-6yl`.
+     *
+     * Capping workers at three fixed the pathological case and left a
+     * residual: acceptance and integration files each fork a REAL node — the
+     * fake `claude`, the launchd entrypoint, a live service, an MCP server —
+     * so three of THOSE running abreast still starve each other, while the
+     * unit tests they are racing cost almost nothing.
+     *
+     * The residual stopped being a nuisance and became a blocker on
+     * 2026-08-10. `decideDeploy` ships only a commit whose checks passed and
+     * refuses to move the checkout backwards to an older green one, so a
+     * single flaky file on HEAD strands the running service on an old build
+     * INDEFINITELY, with every other signal green. Three consecutive CI runs
+     * failed on three different tests: service-lifecycle's SIGKILL, then us2's
+     * resume, then another. Each passes in isolation.
+     *
+     * So the heavy files go to their own pool with `singleFork`, which runs
+     * them sequentially in one process. The cheap majority keeps its three
+     * workers. One spawning file at a time instead of three, and the light
+     * tests are not what starves anything.
+     *
+     * DELIBERATELY NOT A RETRY. Four "flaky" tests in this project turned out
+     * to be real races, and the whole value of the cap is that a red run means
+     * something. A suite that goes green on the second attempt teaches
+     * everyone to press the button twice, and then it is not a gate.
+     */
+    poolMatchGlobs: [
+      ["**/tests/acceptance/**", "forks"],
+      ["**/tests/integration/**", "forks"],
+    ],
+    poolOptions: {
+      forks: { singleFork: true },
+    },
     testTimeout: 20_000,
     hookTimeout: 20_000,
     coverage: {
