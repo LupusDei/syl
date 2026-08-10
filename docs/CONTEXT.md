@@ -810,6 +810,57 @@ Constitution Rule 1 and it has already paid for itself.
 **Fail loudly on auth and billing.** These are the failures that would quietly
 change what the Commander is paying, or quietly stop the assistant working.
 
+**An instruction and the capability it assumes are ONE decision, and the failure
+is always prose.** Hit three times on 2026-08-10, in both directions:
+
+- Plugin and user-level `SessionStart` hooks briefed her every turn to report to
+  an orchestrator that was not there. She was not confused, **she was obeying**.
+- Auto-memory told her to maintain a memory file after `--tools ""` removed the
+  tools that needed. Asked only "who are you?", she emitted a fabricated `Read`
+  and then **a fabricated `ls` of a directory that does not exist**, three runs
+  of three. On the contradiction turn, the empty string.
+- `SOUL.md` said she owns his to-dos and reminders before any verb existed. He
+  asked for a reminder in five minutes; she answered like an assistant who had
+  set one and wrote nothing.
+
+Remove a capability and leave the instruction, and she acts the instruction out.
+Assert a capability before it exists, and she acts *that* out. **Neither fails
+loudly — the artefact is a fluent sentence**, which no assertion can see and
+which reaches him looking exactly like success.
+
+**So derive the claim from the thing itself; never write it down twice.** The
+reflex fix — a line saying "she cannot act yet" — is stale the day the tools land
+and becomes a fourth instance of the bug it was written to fix. `harness/
+capability.ts` instead computes what she can do from `TurnOptions.tools`, the
+same value handed to the CLI. There is no second list, so there is nothing to
+keep in step: **staleness unrepresentable beats staleness unlikely.** The general
+form — when two things must agree, make one of them a function of the other —
+applies well past this one file.
+
+**A rule that is not written down cannot be violated, only unmet.** The `because`
+field was required on three verbs that CREATE and missing from the one that
+REMOVES. It was checkable only because the rule had been stated in prose in the
+schema file — there was something to check the code against. And `set_goal`
+escaped through a `TEXT` shorthand that predated the rule and quietly exempted
+its only caller: **a shorthand that hides a field is how a rule gets a hole in
+it.** That is much harder to see than a violation, because nothing was broken;
+the rule simply never reached it. Guard by shape, not by a list of names, so the
+seventh case is covered without anyone remembering the guard exists.
+
+**A red test that cannot compile is not a declared failure — it is a broken build
+with a bead attached.** `expected-failures.json` makes a test's *failure*
+legitimate and says nothing about whether the file parses. A red acceptance test
+importing a module that does not exist yet takes down the typecheck for everyone,
+and the manifest will not tell you. Declare the seam for real instead: a module
+that exports the true signature and throws a named `NotImplementedError` is
+better than a string in someone else's test file, because it hands the next
+person a typed contract and puts the warning where they will be standing.
+
+**Put the guard in before the handler.** Three of the failures above were "the
+check that was going to be added later", and later did not arrive. A red test
+declared against the bead means the next person cannot write the code without
+meeting the guard, and cannot meet it without deciding deliberately.
+
 ---
 
 ## 9. Open questions
