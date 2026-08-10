@@ -62,6 +62,8 @@ final class ChatSnapshotRendering: XCTestCase {
             ("chat-thinking", .dark, true),
         ]
 
+        try await renderPlan(into: directory)
+
         for (name, scheme, thinking) in cases {
             let database = try SylDatabase.inMemory()
             let store = LocalStore(database: database)
@@ -104,6 +106,60 @@ final class ChatSnapshotRendering: XCTestCase {
         }
     }
 
+    /// The epic's acceptance scenario, on its own.
+    ///
+    /// > The Commander asks for something structured — a plan, a brief, a comparison —
+    /// > and what arrives is legible at a glance.
+    ///
+    /// Rendered alone rather than at the foot of a conversation, because on the
+    /// non-scrolling path a long transcript pushes the interesting part off the top and
+    /// the one thing worth judging cannot be seen.
+    private func renderPlan(into directory: URL) async throws {
+        let database = try SylDatabase.inMemory()
+        let store = LocalStore(database: database)
+        try store.upsert([
+            message(index: 1, role: .user, at: "2026-08-10T13:50:00Z", text: "Plan my morning."),
+            message(
+                index: 2,
+                role: .assistant,
+                at: "2026-08-10T13:50:06Z",
+                text: """
+                    ## Before eleven
+
+                    1. Unstick the deploy gate
+                       - Re-run the check on `a91df4c`
+                       - If it stays red, look at the runner
+                    2. Quarterly review draft
+                    3. Reply to Marcus
+
+                    > Nothing has shipped since Friday.
+
+                    | Item | Due |
+                    | --- | --- |
+                    | Gate | today |
+                    | Draft | Thu |
+                    """
+            ),
+        ])
+
+        let now = fixedNow
+        let model = ChatViewModel(store: store, now: { now })
+        // Awaited directly. An `XCTWaiter` here deadlocks: this test is `@MainActor`,
+        // waiting blocks the main thread, and the refresh needs that thread to resume.
+        await model.refresh()
+
+        let view = ChatView(model: model, scrolls: false)
+            .frame(width: 393, height: 852)
+            .environment(\.colorScheme, .dark)
+
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        guard let image = renderer.uiImage, let data = image.pngData() else {
+            return XCTFail("could not render the plan")
+        }
+        try data.write(to: directory.appendingPathComponent("chat-plan.png"))
+    }
+
     // MARK: - Fixtures
 
     /// A transcript chosen to exercise the layout rather than to look flattering:
@@ -128,6 +184,8 @@ final class ChatSnapshotRendering: XCTestCase {
                     reported, so **nothing has shipped since Friday**.
 
                     1. Unstick the deploy gate
+                       - Re-run the check on `a91df4c`
+                       - If it stays red, look at the runner
                     2. Quarterly review draft
                     3. Reply to Marcus about the contract dates
 

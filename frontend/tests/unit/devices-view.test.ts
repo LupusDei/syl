@@ -87,6 +87,7 @@ function fixtureRows(): Record<string, unknown>[] {
   return (fixture("http/devices.page") as { data: { items: Record<string, unknown>[] } }).data.items;
 }
 
+
 describe("DevicesView", () => {
   it("should list every registered target, active first", async () => {
     stubApi();
