@@ -3,7 +3,11 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runReaderTurn, type ReaderTurnOptions } from "../../src/harness/reader.js";
+import { bootstrap } from "../../src/index.js";
+import { mcpToolName } from "../../src/tools/config.js";
+import { advertisedToolNames } from "../../src/tools/server.js";
 import { flagValue, loadFixture, makeFakeClaude, type FakeClaude } from "../helpers/fake-claude.js";
+import { testConfig } from "../helpers/service.js";
 import { codeOf, handsAnMcpConfigToATurn, importClosure } from "../helpers/source-scan.js";
 import { BACKEND_SRC, sourceFiles } from "../helpers/sql-tables.js";
 
@@ -45,7 +49,7 @@ const READER = resolve(BACKEND_SRC, "harness/reader.ts");
 const SESSION = resolve(BACKEND_SRC, "harness/session.ts");
 
 describe("the reader turn cannot be handed an MCP config", () => {
-  it("should still spawn with no MCP servers and no tools when a caller passes some", async () => {
+  it("should still spawn with no MCP servers, no tools, no verbs and no credential", async () => {
     // ONE subprocess for the whole file, on purpose. The fake `claude` is a
     // real executable and every test that spawns one costs a process; the suite
     // is measurably load-sensitive (see the note on `testTimeout` in
@@ -72,12 +76,22 @@ describe("the reader turn cannot be handed an MCP config", () => {
       tools: "Bash",
     } as unknown as ReaderTurnOptions;
 
-    const result = await runReaderTurn(
-      { instruction: "Summarise this.", untrusted: "Some ordinary prose." },
-      smuggled,
-    );
+    // A real agent credential, minted the way the service mints one, held by
+    // this process for the length of the spawn. `syl-009.6`: "no credential"
+    // is only a claim worth testing while one exists to leak.
+    const built = bootstrap(testConfig({ databasePath: ":memory:" }));
+    let result: Awaited<ReturnType<typeof runReaderTurn>>;
+    try {
+      result = await runReaderTurn(
+        { instruction: "Summarise this.", untrusted: "Some ordinary prose." },
+        smuggled,
+      );
+    } finally {
+      built.database.close();
+    }
 
-    const argv = fake.invocation()?.argv ?? [];
+    const invocation = fake.invocation();
+    const argv = invocation?.argv ?? [];
     // Not "only ours" — none. An MCP tool is a tool, and a reader turn that
     // could reach `create_reminder` is a reader turn an article can use.
     expect(argv).not.toContain("--mcp-config");
@@ -88,6 +102,26 @@ describe("the reader turn cannot be handed an MCP config", () => {
     // And the CLI agreed. The flags going out prove what was asked for; this is
     // what came back.
     expect(result.toolSurface).toEqual([]);
+
+    // NO ACTING VERB, anywhere the turn can read. `--tools ""` empties the
+    // built-ins only, so "she has no tools" would be satisfied by a turn told
+    // in prose that it may call `remind_me` — and the whole failure mode this
+    // project keeps meeting is a model acting out an instruction whose
+    // capability is absent. The verbs are derived from the surface rather than
+    // listed, so a sixth one is covered the day it is declared.
+    const everythingTheTurnSaw = [...argv, invocation?.stdin ?? ""].join("\n");
+    for (const verb of advertisedToolNames()) {
+      expect(everythingTheTurnSaw, `the reader was shown ${verb}`).not.toContain(verb);
+      expect(everythingTheTurnSaw).not.toContain(mcpToolName(verb));
+    }
+
+    // NO CREDENTIAL. `runTurn` hands the child `process.env` minus the two
+    // Anthropic keys, so there are exactly two doors — the argv this call
+    // assembled, and the environment this process holds — and both are shut
+    // here. The credential's only home is `hands.json`, handed by name to one
+    // lane that is not this one.
+    expect(everythingTheTurnSaw).not.toContain(built.agentKey.token);
+    expect(Object.values(process.env).join("\n")).not.toContain(built.agentKey.token);
   });
 
   it("should not be able to reach a module that hands an MCP config to a turn", () => {
@@ -118,6 +152,19 @@ describe("the reader turn cannot be handed an MCP config", () => {
     const reachable = importClosure(READER)
       .map((file) => file.slice(BACKEND_SRC.length))
       .filter((file) => file.startsWith("tools/"));
+
+    expect(reachable).toEqual([]);
+  });
+
+  it("should not reach the module that mints her credential", () => {
+    // `syl-009.6`. The behavioural assertion above says no credential reached
+    // one spawn; this says there is no path by which one could. `agent-key.ts`
+    // is where an `agent` token comes into existence — `agent-credential.test.ts`
+    // proves it is the only such place — so a reader that cannot see it cannot
+    // hold one however the code is rearranged.
+    const reachable = importClosure(READER)
+      .map((file) => file.slice(BACKEND_SRC.length))
+      .filter((file) => file === "services/agent-key.ts" || file === "services/api-key-service.ts");
 
     expect(reachable).toEqual([]);
   });

@@ -207,6 +207,38 @@ describe("SylApiClient, when the service refuses", () => {
     expect(failure.message).toMatch(/reminders, to-dos and goals/u);
   });
 
+  it("should say her own credential stopped working, not 'Re-pair this device'", async () => {
+    // `syl-009.5.2`. The service's 401 is one sentence for every rejection, on
+    // purpose — telling malformed from revoked is an oracle for guessing
+    // tokens — and that sentence ends "Re-pair this device". Said by Syl it
+    // sends the Commander to fix his phone, which is the one thing that is not
+    // broken. She knows what the middleware refuses to guess: which credential
+    // she presented. See `revokedCredential` in `tools/client.ts`.
+    built.deps.keys.revoke(
+      built.deps.keys.liveKeysWithScope("agent")[0]?.id ?? "",
+      "taken away by hand",
+    );
+
+    const failure = failureOf(await client.post("/reminders", A_REMINDER));
+
+    expect(failure.status).toBe(401);
+    expect(failure.code).toBe("UNAUTHORIZED");
+    expect(failure.message).toMatch(/credential/iu);
+    expect(failure.message).toMatch(/nothing was written/iu);
+    expect(failure.message).not.toMatch(/re-pair this device/iu);
+    expect(failure.retryable).toBe(false);
+  });
+
+  it("should leave every other refusal in the service's own words", async () => {
+    // The translation above is for ONE code and must not spread. Everything
+    // else the service says is written to be repeated to him verbatim, and a
+    // client that rewrote refusals would be a second opinion that drifts.
+    const failure = failureOf(await client.get("/logs"));
+
+    expect(failure.message).toMatch(/reminders, to-dos and goals/u);
+    expect(failure.message).not.toMatch(/credential is no longer accepted/u);
+  });
+
   it("should render a 404 as a refusal rather than an empty success", async () => {
     const failure = failureOf(await client.get("/reminders/syl:reminder:nope"));
 

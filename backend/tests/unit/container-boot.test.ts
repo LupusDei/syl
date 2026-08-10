@@ -150,6 +150,29 @@ describe("bootstrap — the container", () => {
       expect(seen[0]?.mcpConfig).toBe(INTENDED_MCP[lane]?.(dir));
     });
 
+    it("should carry the path to her hands and never their contents", async () => {
+      // `syl-009.6`. Which lane gets a declaration is settled above and in
+      // `tests/integration/mcp-config-wiring.test.ts`; this is the separate
+      // question of what travels with it. The commander lane is handed a
+      // **path**, and the credential stays in a `0600` file that Claude Code
+      // reads when it starts the server — so a turn's options, which are the
+      // thing assembled from a prompt and logged and passed around, never hold
+      // the one string that can write the Commander's reminders.
+      //
+      // Swept over the whole options object rather than field by field: the
+      // leak worth catching is the one somebody adds to a field this test does
+      // not know about.
+      const { databasePath } = home();
+      const { runner, seen } = recordingRunner();
+      const built = bootstrap(testConfig({ databasePath }), { runner });
+      closers.push(() => built.database.close());
+
+      await built.agent.forLane(lane).ask("who are you?");
+
+      expect(built.agentKey.token).not.toBe("");
+      expect(JSON.stringify(seen[0] ?? {})).not.toContain(built.agentKey.token);
+    });
+
     it("should load none of this machine's settings, hooks or plugins", async () => {
       // The third door, and the one still open after `cwd` and `tools` were
       // fixed. Hooks and plugins are not read from the working directory, so
