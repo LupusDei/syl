@@ -277,6 +277,9 @@ export async function startLiveService(
     // must not serve whatever `frontend/dist` happens to hold on this machine,
     // or the suite's answer depends on whether somebody ran a build.
     adminDir: join(directory ?? tmpdir(), "admin-not-built"),
+    // Beside the store, as production has it — a live-service test that wrote
+    // blobs into the repo would leak between runs.
+    attachmentDir: join(directory ?? tmpdir(), "attachments"),
   };
 
   // When a fake `claude` is asked for it is a real executable replaying a real

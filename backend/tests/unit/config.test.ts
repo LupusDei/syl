@@ -8,6 +8,7 @@ import {
 } from "../../src/memory/auto-memory.js";
 import {
   ConfigError,
+  DEFAULT_ATTACHMENT_DIR,
   DEFAULT_DATABASE_PATH,
   DEFAULT_HOST,
   DEFAULT_PORT,
@@ -84,6 +85,7 @@ describe("loadConfig", () => {
         // the environment: the admin bundle is a build artefact of this
         // checkout, not a deployment setting.
         adminDir: DEFAULT_ADMIN_DIR,
+        attachmentDir: DEFAULT_ATTACHMENT_DIR,
       });
     });
 

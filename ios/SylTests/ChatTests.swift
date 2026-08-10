@@ -486,6 +486,138 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(model.presence, .thinking)
     }
 
+    // MARK: - Reaching back through history (T039)
+
+    @MainActor
+    func testShouldNotOfferEarlierMessagesWhenTheWindowIsNotFull() async throws {
+        try store.upsert((1...3).map { message(id: id($0), seq: $0) })
+        let model = makeModel(limit: 10)
+
+        await model.refresh()
+
+        XCTAssertFalse(model.snapshot.mayHaveEarlier)
+    }
+
+    @MainActor
+    func testShouldOfferEarlierMessagesWhenTheWindowFills() async throws {
+        try store.upsert((1...10).map { message(id: id($0), seq: $0) })
+        let model = makeModel(limit: 5)
+
+        await model.refresh()
+
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, 5)
+        XCTAssertTrue(model.snapshot.mayHaveEarlier)
+    }
+
+    @MainActor
+    func testShouldRevealOlderMessagesWhenAskedForEarlierOnes() async throws {
+        // The defect this fixes: the loader was hard-capped with no way to reach
+        // anything older, so a month-old conversation had no beginning.
+        try store.upsert((1...10).map { message(id: id($0), seq: $0) })
+        let model = makeModel(limit: 5)
+        await model.refresh()
+
+        await model.loadEarlier()
+
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, 10)
+        XCTAssertFalse(model.snapshot.mayHaveEarlier, "everything is now on screen")
+        XCTAssertFalse(model.isLoadingEarlier)
+    }
+
+    @MainActor
+    func testShouldDoNothingWhenThereIsNothingEarlierToLoad() async throws {
+        try store.upsert((1...3).map { message(id: id($0), seq: $0) })
+        let model = makeModel(limit: 10)
+        await model.refresh()
+
+        await model.loadEarlier()
+
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, 3)
+    }
+
+    // MARK: - The parse cache (T040)
+
+    func testShouldParseAMessageOnceAndReuseIt() {
+        // Asserted by handing the cache the SAME id with DIFFERENT text: a cached
+        // entry wins, which is the proof that no second parse happened.
+        //
+        // It also pins the assumption the cache rests on — a message's text is
+        // immutable once written, so id is a safe key. If editing ever arrives, this
+        // test is the one that must be changed, deliberately, rather than discovered.
+        let cache = MarkdownCache()
+        let first = message(id: id(1), seq: 1, text: "# First")
+        let impostor = message(id: id(1), seq: 1, text: "# Second")
+
+        XCTAssertEqual(cache.blocks(for: [first])[id(1)], [.heading(level: 1, text: "First")])
+        XCTAssertEqual(
+            cache.blocks(for: [impostor])[id(1)],
+            [.heading(level: 1, text: "First")],
+            "the cached parse was reused"
+        )
+    }
+
+    func testShouldForgetMessagesThatHaveLeftTheWindow() {
+        // Otherwise a long-running session accumulates the parse of every message ever
+        // seen, and the cache becomes a leak with a nice name.
+        let cache = MarkdownCache()
+        _ = cache.blocks(for: [message(id: id(1), seq: 1, text: "one")])
+
+        let second = cache.blocks(for: [message(id: id(2), seq: 2, text: "two")])
+
+        XCTAssertNil(second[id(1)])
+        XCTAssertNotNil(second[id(2)])
+    }
+
+    // MARK: - Stalled sends and retry (T018)
+
+    @MainActor
+    func testShouldNotCallAQueuedTurnStalledWhileTheSocketIsUp() async throws {
+        let model = makeModel()
+        try store.upsert([message(id: "syl:message:0198f2c0-0001-7000-8000-00000000c001", seq: 1)])
+        await model.apply(.connectionState(.connected))
+        await model.refresh()
+
+        let group = try XCTUnwrap(model.snapshot.groups.first)
+        XCTAssertFalse(model.isStalled(group), "not pending, and connected")
+    }
+
+    @MainActor
+    func testShouldCallAQueuedTurnStalledOnceTheSocketIsDown() async throws {
+        let model = makeModel()
+        model.draft = "Remind me at six."
+        await model.send()
+        await model.apply(.connectionState(.offline))
+
+        let group = try XCTUnwrap(model.snapshot.groups.first)
+        XCTAssertTrue(group.isPending)
+        XCTAssertTrue(model.isStalled(group))
+    }
+
+    @MainActor
+    func testShouldNotCryWolfWhileTheConnectionIsMerelyReconnecting() async throws {
+        // A tailnet handoff is not a failure, and telling him to retry during one
+        // trains him to ignore the warning that matters.
+        let model = makeModel()
+        model.draft = "Remind me at six."
+        await model.send()
+        await model.apply(.connectionState(.reconnecting(attempt: 1)))
+
+        let group = try XCTUnwrap(model.snapshot.groups.first)
+        XCTAssertFalse(model.isStalled(group))
+    }
+
+    @MainActor
+    func testShouldRunTheOutboxWhenAskedToTryAgain() async {
+        let flushed = Flag()
+        let model = makeModel(flush: { await flushed.raise() })
+
+        await model.retryQueued()
+
+        let didFlush = await flushed.value
+        XCTAssertTrue(didFlush)
+        XCTAssertNil(model.notice)
+    }
+
     // MARK: - Harness
 
     @MainActor
@@ -493,10 +625,12 @@ final class ChatViewModelTests: XCTestCase {
         sendOverSocket: @escaping @Sendable (String, String, String) async throws -> Void = { _, _, _ in },
         flush: @escaping @Sendable () async -> Void = {},
         makeClientId: @escaping @Sendable () -> String = { UUID().uuidString },
-        now: @escaping @Sendable () -> Date = { try! Instant.parse("2026-08-09T06:59:48.220Z") }
+        now: @escaping @Sendable () -> Date = { try! Instant.parse("2026-08-09T06:59:48.220Z") },
+        limit: Int = 200
     ) -> ChatViewModel {
         ChatViewModel(
             store: store,
+            limit: limit,
             sendOverSocket: sendOverSocket,
             flush: flush,
             now: now,
@@ -541,16 +675,25 @@ final class ChatViewModelTests: XCTestCase {
         func set(_ newValue: Int) { value = newValue }
     }
 
-    private func message(id: SylID, seq: Int) -> Message {
+    private func message(id: SylID, seq: Int, text: String = "Done.") -> Message {
         Message(
             id: id,
             conversationId: SylIDs.interactiveConversation,
             clientId: nil,
             role: .assistant,
-            text: "Done.",
-            createdAt: instant("2026-08-09T07:00:03.114Z"),
+            text: text,
+            // Spread far enough apart that grouping never merges them: these fixtures
+            // are counted per MESSAGE, and a merged group would make a count assertion
+            // pass or fail for reasons that have nothing to do with the window.
+            createdAt: instant("2026-08-09T07:00:03.114Z")
+                .addingTimeInterval(Double(seq) * (MessageGrouping.maximumGap + 1)),
             seq: seq
         )
+    }
+
+    /// A distinct, well-formed message id for an index.
+    private func id(_ index: Int) -> SylID {
+        "syl:message:0198f2c0-0001-7000-8000-\(String(format: "%012d", index))"
     }
 
     private func confirmation() -> DeliveryConfirmation {

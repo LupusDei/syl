@@ -1,4 +1,4 @@
--- 0018_memory_deletions.sql — the Commander's explicit order, made structural.
+-- 0020_memory_deletions.sql — the Commander's explicit order, made structural.
 -- `syl-eg3`, `syl-010.3.1`, `syl-010.3.2`.
 --
 -- His ruling, 2026-08-10: *"if I give the explicit order to delete a memory,
@@ -244,7 +244,7 @@ BEGIN
     ABORT,
     'an inferred edge is never deleted, only demoted: move it to the cold or suppressed tier ' ||
     '(the sole exception is the Commander''s explicit order, which opens an audited authority ' ||
-    'window naming this exact edge — see 0018_memory_deletions.sql)'
+    'window naming this exact edge — see 0020_memory_deletions.sql)'
   );
 END;
 
@@ -263,6 +263,6 @@ BEGIN
     ABORT,
     'an assertion is never deleted, only superseded: close it and open the new value instead ' ||
     '(the sole exception is the Commander''s explicit order, which opens an audited authority ' ||
-    'window naming this exact row — see 0018_memory_deletions.sql)'
+    'window naming this exact row — see 0020_memory_deletions.sql)'
   );
 END;

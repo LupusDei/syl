@@ -8,6 +8,12 @@
       "summary": "A deferral must always return a strictly later instant. This is the guarantee refusing to be broken."
     },
     {
+      "file": "errors/attachment_mime_mismatch.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "CAPTURED from the live route. The refusal an upload gets when its bytes disagree with the type it declared — the one failure the whole magic-byte cross-check exists to produce, and the one a client that only ever tested the happy path will not handle. `details.reason` carries the store's own name for it, because `VALIDATION_FAILED` alone cannot tell a caller whether to re-encode or relabel."
+    },
+    {
       "file": "errors/forbidden.json",
       "schema": "ErrorEnvelope",
       "envelope": "raw",
@@ -90,6 +96,18 @@
       "schema": "Principal",
       "envelope": "ok",
       "summary": "There is exactly one principal."
+    },
+    {
+      "file": "http/attachment.image.json",
+      "schema": "Attachment",
+      "envelope": "ok",
+      "summary": "CAPTURED from the live route, not written by hand. `mimeType` and the dimensions are the SERVER's answers — sniffed from the file's magic bytes and read from its header — never the uploader's claims. `hasThumbnail` is true here because the image is large enough that downscaling it is actually cheaper; see `attachment-store.ts` for the case where it is not."
+    },
+    {
+      "file": "http/messages.attachments.json",
+      "schema": "MessagePage",
+      "envelope": "ok",
+      "summary": "CAPTURED from the live route. A message carrying a picture, which is the whole shape Phase 6 renders. Compare `http/messages.page.json`, where `attachments` is the empty array it must always be rather than a missing field."
     },
     {
       "file": "http/conversation.interactive.json",
@@ -270,6 +288,12 @@
       "schema": "TodoPage",
       "envelope": "ok",
       "summary": "Includes the delegatedJobId seam between the life model and the job system."
+    },
+    {
+      "file": "requests/create_attachment.json",
+      "schema": "CreateAttachmentRequest",
+      "envelope": "raw",
+      "summary": "`data` is a real, decodable 24x24 PNG in base64 — not a placeholder string. A fixture whose bytes are not a real file cannot exercise the one thing this endpoint is for: sniffing them."
     },
     {
       "file": "requests/acknowledge_delivery.json",

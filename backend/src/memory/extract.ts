@@ -513,7 +513,7 @@ export function renderTranscript(transcript: readonly TranscriptMessage[]): stri
  * Taken over the RENDERED transcript — exactly the bytes the model was shown —
  * rather than over message ids, because that is what makes "this has already
  * been extracted" a statement about what was actually judged. See
- * `0019_extraction_ledger.sql`.
+ * `0021_extraction_ledger.sql`.
  */
 export function transcriptDigest(transcript: readonly TranscriptMessage[]): string {
   return createHash("sha256").update(renderTranscript(transcript), "utf8").digest("hex");

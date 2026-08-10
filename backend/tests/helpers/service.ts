@@ -1,3 +1,4 @@
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +15,7 @@ import { MemoryMetrics } from "../../src/memory/metrics.js";
 import { EdgeWeights } from "../../src/memory/weights.js";
 import type { MemoryViews } from "../../src/routes/memory.js";
 import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api-key-service.js";
+import { AttachmentStore } from "../../src/services/attachment-store.js";
 import { fixedClock, type Clock } from "../../src/services/clock.js";
 import { ConversationService } from "../../src/services/conversation-service.js";
 import { IN_MEMORY, openDatabase, type SylDatabase } from "../../src/services/database.js";
@@ -100,6 +102,10 @@ export function testConfig(overrides: Partial<SylConfig> = {}): SylConfig {
     // which would make the suite's answer depend on whether somebody had run a
     // build. Tests about the admin pass their own directory.
     adminDir: join(tmpdir(), "syl-test-no-admin-bundle"),
+    // Per-process, under the OS temp directory: a unit test must never write
+    // blobs into the repo's `.syl/`, which is where the running service keeps
+    // the Commander's own. `testDeps` points the store at its own directory.
+    attachmentDir: join(tmpdir(), `syl-test-attachments-${String(process.pid)}`),
     ...overrides,
   };
 }
@@ -123,9 +129,41 @@ export interface TestKeyOptions {
   readonly pairingCodeTtlMs?: number;
 }
 
-/** A `MessageStore` on a fixed clock. */
-export function testMessages(db: SylDatabase, clock: Clock = fixedClock(TEST_NOW)): MessageStore {
-  return new MessageStore({ db: db.handle, clock });
+/**
+ * An `AttachmentStore` writing into a fresh temp directory.
+ *
+ * A real directory, not a double: the blob layer's interesting failures are
+ * filesystem failures — a name that escapes, a file that is not there — and a
+ * fake filesystem has none of them. The thumbnailer is off by default because
+ * `sips` is macOS-only and CI is ubuntu; `attachment-store.test.ts` drives
+ * both branches explicitly.
+ */
+export function testAttachments(
+  db: SylDatabase,
+  clock: Clock = fixedClock(TEST_NOW),
+): AttachmentStore {
+  return new AttachmentStore({
+    db: db.handle,
+    clock,
+    blobDir: mkdtempSync(join(tmpdir(), "syl-test-attachments-")),
+    thumbnailer: () => false,
+  });
+}
+
+/**
+ * A `MessageStore` on a fixed clock, with attachments wired.
+ *
+ * `attachments` is a parameter rather than something this builds, because
+ * `testDeps` has to hand the SAME object to the store and the router —
+ * `bootstrap` does, and two stores over one table would let a test pass
+ * against a wiring production does not have.
+ */
+export function testMessages(
+  db: SylDatabase,
+  clock: Clock = fixedClock(TEST_NOW),
+  attachments: AttachmentStore = testAttachments(db, clock),
+): MessageStore {
+  return new MessageStore({ db: db.handle, clock, attachments });
 }
 
 /**
@@ -243,13 +281,17 @@ export function testDeps(db: SylDatabase): {
   readonly idempotency: IdempotencyStore;
   readonly intake: ArticleIntake;
   readonly memory: MemoryViews;
+  readonly attachments: AttachmentStore;
   readonly presence: PresenceService;
   readonly intakeQueue: IntakeQueue;
   readonly memoryRuntime: MemoryRuntime;
 } {
   const clock = fixedClock(TEST_NOW);
   const intakeQueue = new IntakeQueue();
-  const messages = testMessages(db);
+  // One object, handed to both the store that reads attachments and the router
+  // that writes them — exactly as `bootstrap` does it.
+  const attachments = testAttachments(db, clock);
+  const messages = testMessages(db, clock, attachments);
   const devices = new DeviceTokenService({ db: db.handle, clock });
   // No quiet hours by default: a route test asserting on delivery would
   // otherwise depend on what hour TEST_NOW happens to be in.
@@ -288,6 +330,7 @@ export function testDeps(db: SylDatabase): {
       scheduler: intakeQueue,
     }),
     memory,
+    attachments,
     // No sink. `startServer` attaches one; a test that wants to watch frames
     // hands its own to `PresenceService` directly.
     presence: new PresenceService({ clock }),

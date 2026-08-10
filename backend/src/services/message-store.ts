@@ -1,4 +1,5 @@
 import type {
+  Attachment,
   Conversation,
   ConversationLane,
   ConversationPage,
@@ -7,6 +8,7 @@ import type {
   MessageRole,
 } from "@syl/shared";
 
+import type { AttachmentStore } from "./attachment-store.js";
 import { instant, systemClock, type Clock } from "./clock.js";
 import { INTERACTIVE_CONVERSATION_ID } from "./database.js";
 import { newId } from "./id.js";
@@ -117,6 +119,16 @@ export interface AppendMessage {
   readonly clientId?: string | null;
   readonly role: MessageRole;
   readonly text: string;
+  /**
+   * Attachments to claim for this message, in render order.
+   *
+   * Linked inside the same transaction as the insert, which is what makes the
+   * sync feed correct for free: `sync_messages_ai` fires for the message row,
+   * and `GET /sync` resolves the message *fresh* — so by the time anything
+   * reads it, the pictures are already on it. A link written afterwards would
+   * race a device that paged in between.
+   */
+  readonly attachmentIds?: readonly string[];
 }
 
 /** The result of an append. */
@@ -173,7 +185,7 @@ const MESSAGE_COLUMNS = "id, conversation_id, client_id, role, text, created_at,
 const CONVERSATION_COLUMNS =
   "id, lane, title, created_at, updated_at, last_message_at, message_count";
 
-function toMessage(row: MessageRow): Message {
+function toMessage(row: MessageRow, attachments: readonly Attachment[] = []): Message {
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -182,6 +194,10 @@ function toMessage(row: MessageRow): Message {
     text: row.text,
     createdAt: row.created_at,
     seq: row.seq,
+    // Always an array. The contract makes this field required precisely so a
+    // client never has to tell "nothing attached" apart from "this build does
+    // not send the field" — those look identical and mean opposite things.
+    attachments: [...attachments],
   };
 }
 
@@ -212,15 +228,27 @@ function pageLimit(limit: number | undefined): number {
 export interface MessageStoreOptions {
   readonly db: Database;
   readonly clock?: Clock;
+  /**
+   * Where a message's pictures come from.
+   *
+   * Optional, and absent means "this store never returns an attachment" rather
+   * than "this store throws" — most of the suite is about text and should not
+   * have to construct a blob directory to append a sentence. Every read path
+   * still emits `attachments: []`, so the wire shape is the contract's whether
+   * or not the seam is wired.
+   */
+  readonly attachments?: AttachmentStore;
 }
 
 export class MessageStore {
   readonly #db: Database;
   readonly #clock: Clock;
+  readonly #attachments: AttachmentStore | undefined;
 
   constructor(options: MessageStoreOptions) {
     this.#db = options.db;
     this.#clock = options.clock ?? systemClock;
+    this.#attachments = options.attachments;
   }
 
   /**
@@ -280,6 +308,16 @@ export class MessageStore {
         )
         .run(createdAt, createdAt, conversationId);
 
+      // Inside the transaction, before the commit. A picture that arrives a
+      // moment after its message is a picture a device can page past.
+      const attachmentIds = input.attachmentIds ?? [];
+      if (attachmentIds.length > 0) {
+        if (this.#attachments === undefined) {
+          throw new Error("This MessageStore has no attachment store; it cannot link attachments.");
+        }
+        this.#attachments.link(id, attachmentIds);
+      }
+
       this.#db.exec("COMMIT");
 
       return {
@@ -291,6 +329,10 @@ export class MessageStore {
           text: stripped.text,
           createdAt,
           seq: nextSeq,
+          attachments:
+            attachmentIds.length === 0
+              ? []
+              : [...(this.#attachments?.forMessages([id]).get(id) ?? [])],
         },
         replayed: false,
         affect: stripped.affect,
@@ -308,7 +350,8 @@ export class MessageStore {
   /** One message by id, or `null`. */
   get(id: string): Message | null {
     const row = this.#db.prepare(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = ?`).get(id);
-    return row === undefined ? null : toMessage(row as unknown as MessageRow);
+    if (row === undefined) return null;
+    return this.#hydrate([row as unknown as MessageRow])[0] ?? null;
   }
 
   /**
@@ -342,7 +385,7 @@ export class MessageStore {
       .all(conversationId, before, limit + 1);
 
     const hasMore = rows.length > limit;
-    const items = rows.slice(0, limit).map((row) => toMessage(row as unknown as MessageRow));
+    const items = this.#hydrate(rows.slice(0, limit) as unknown as MessageRow[]);
     const last = items.at(-1);
 
     return {
@@ -377,7 +420,7 @@ export class MessageStore {
             LIMIT ?`,
         )
         .all(query, limit);
-      return rows.map((row) => toMessage(row as unknown as MessageRow));
+      return this.#hydrate(rows as unknown as MessageRow[]);
     } catch {
       return [];
     }
@@ -463,13 +506,28 @@ export class MessageStore {
     };
   }
 
+  /**
+   * Attach the pictures to a set of rows, in ONE query for the whole page.
+   *
+   * Not per message: a fifty-message page asking SQLite fifty times to find
+   * that forty-nine of them have no picture is the N+1 everyone ships once.
+   * With no attachment seam wired, every message gets `[]` — which is the
+   * contract's shape, not a missing field.
+   */
+  #hydrate(rows: readonly MessageRow[]): Message[] {
+    if (this.#attachments === undefined) return rows.map((row) => toMessage(row));
+    const byMessage = this.#attachments.forMessages(rows.map((row) => row.id));
+    return rows.map((row) => toMessage(row, byMessage.get(row.id) ?? []));
+  }
+
   #byClientId(conversationId: string, clientId: string): Message | null {
     const row = this.#db
       .prepare(
         `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation_id = ? AND client_id = ?`,
       )
       .get(conversationId, clientId);
-    return row === undefined ? null : toMessage(row as unknown as MessageRow);
+    if (row === undefined) return null;
+    return this.#hydrate([row as unknown as MessageRow])[0] ?? null;
   }
 
   #nextSeq(conversationId: string): number {

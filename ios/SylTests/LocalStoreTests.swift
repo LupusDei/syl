@@ -37,6 +37,24 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertEqual(messages.map(\.seq), [1, 2])
     }
 
+    func testShouldReturnTheMostRecentMessagesWhenTheHistoryIsLongerThanTheWindow() throws {
+        // The window exists to bound the read, and it must bound it from the RECENT
+        // end. Ordering ascending and taking the first N returns the OLDEST N, which
+        // means that past the window a conversation freezes: the screen shows the first
+        // messages ever exchanged and nothing arriving is ever visible.
+        try store.upsert((1...10).map {
+            message(
+                id: "syl:message:0198f2c0-0001-7000-8000-\(String(format: "%012d", $0))",
+                seq: $0,
+                offset: Double($0) * 60
+            )
+        })
+
+        let messages = try store.messages(conversationId: SylIDs.interactiveConversation, limit: 3)
+
+        XCTAssertEqual(messages.map(\.seq), [8, 9, 10], "the newest three, still oldest-first")
+    }
+
     func testShouldReplaceARowRatherThanDuplicateItWhenTheSameMessageArrivesTwice() throws {
         // Sync pages overlap by design; a device that duplicated on re-delivery would
         // show the same message twice after every reconnect.

@@ -1,4 +1,4 @@
--- 0016_memory_retrieval.sql — the keyword half of hybrid retrieval, and the
+-- 0018_memory_retrieval.sql — the keyword half of hybrid retrieval, and the
 -- trust that ranking multiplies by. `syl-005.2.2` and `syl-005.2.3`.
 --
 -- `0012_memory_core.sql` built the graph and decided the partition key. This

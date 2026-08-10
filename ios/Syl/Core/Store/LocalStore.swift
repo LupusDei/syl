@@ -32,13 +32,27 @@ struct LocalStore: Sendable {
 
     /// History, oldest first — which is the order a chat view renders in, so the read
     /// does the sorting rather than every caller.
+    /// The most recent `limit` messages, returned oldest-first.
+    ///
+    /// **The window has to be taken from the recent end, and it was not.** This ordered
+    /// ascending and took the first `limit`, which returns the *oldest* `limit`. Under
+    /// the window that is invisible — every message fits, so the result is identical.
+    /// Past it the screen freezes: chat shows the first 200 messages ever exchanged and
+    /// nothing arriving after that is ever visible, no matter how long you scroll. The
+    /// bug is silent, gets worse with use, and would have looked like sync failing
+    /// rather than like a query being wrong.
+    ///
+    /// So: order descending to let SQLite pick the newest rows, then reverse in memory
+    /// to hand back the reading order a transcript renders in. The reverse is over at
+    /// most `limit` rows and costs nothing next to the read.
     func messages(conversationId: SylID, limit: Int = 200) throws -> [Message] {
         try database.queue.read { db in
             try MessageRecord
                 .filter(Column("conversationId") == conversationId)
-                .order(Column("createdAt"), Column("seq"))
+                .order(Column("createdAt").desc, Column("seq").desc)
                 .limit(limit)
                 .fetchAll(db)
+                .reversed()
                 .map { try $0.model() }
         }
     }

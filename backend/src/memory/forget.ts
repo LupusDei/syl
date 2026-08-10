@@ -9,7 +9,7 @@ import type { MemoryGraph } from "./graph.js";
  * Explicit deletion: when the Commander says delete this memory, it is deleted.
  * `syl-eg3`, `syl-010.3.1`, `syl-010.3.2`.
  *
- * `0018_memory_deletions.sql` carries the argument for the mechanism. This
+ * `0020_memory_deletions.sql` carries the argument for the mechanism. This
  * module is the only code that uses it, and four of its decisions are the ones
  * worth reading before changing anything.
  *

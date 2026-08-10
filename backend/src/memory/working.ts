@@ -25,7 +25,7 @@ import type { MemoryNodeKind } from "./schema.js";
  * errors. Syl simply starts being confidently out of date.
  *
  * A projection has one defence and it is total: it is thrown away and rebuilt
- * from the graph. `0017_working_memory.sql` makes that a fact about the schema
+ * from the graph. `0019_working_memory.sql` makes that a fact about the schema
  * — the table has `CHECK (id = 1)` and therefore cannot hold a second
  * generation — rather than a discipline someone has to maintain.
  *

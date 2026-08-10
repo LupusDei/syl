@@ -31,8 +31,15 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var notice: String?
     @Published var draft = ""
 
+    /// True while an older page is being read. Kept so the affordance can say it is
+    /// working and so a fast scroll cannot queue five overlapping loads.
+    @Published private(set) var isLoadingEarlier = false
+
     private let store: LocalStore
-    private let loader: ChatSnapshotLoader
+    /// `var`: the window grows as the Commander reaches back through history.
+    private var loader: ChatSnapshotLoader
+    /// How much further back each "load earlier" reaches.
+    private let pageSize: Int
     private let conversationId: SylID
     private let sendOverSocket: @Sendable (_ text: String, _ clientId: String, _ key: String) async throws -> Void
     private let flush: @Sendable () async -> Void
@@ -65,6 +72,7 @@ final class ChatViewModel: ObservableObject {
     ) {
         self.store = store
         self.conversationId = conversationId
+        self.pageSize = limit
         self.loader = ChatSnapshotLoader(store: store, conversationId: conversationId, limit: limit)
         self.sendOverSocket = sendOverSocket
         self.flush = flush
@@ -91,6 +99,27 @@ final class ChatViewModel: ObservableObject {
             return
         }
         self.snapshot = snapshot
+    }
+
+    /// Widen the window and read again.
+    ///
+    /// The transcript was hard-capped at 200 messages with no way to reach anything
+    /// older — a conversation that has run for a month simply had no beginning. This is
+    /// the whole of the fix: the window grows, the loader re-reads, and the markdown
+    /// cache keeps every message it has already parsed, so reaching further back costs
+    /// only the new page.
+    ///
+    /// Guarded on `isLoadingEarlier` because the affordance fires from an `onAppear`,
+    /// and a fast flick to the top would otherwise queue several overlapping reads that
+    /// each widen the window again.
+    func loadEarlier() async {
+        guard snapshot.mayHaveEarlier, !isLoadingEarlier else { return }
+
+        isLoadingEarlier = true
+        defer { isLoadingEarlier = false }
+
+        loader.limit += pageSize
+        await refresh()
     }
 
     // MARK: - Sending
@@ -261,5 +290,36 @@ final class ChatViewModel: ObservableObject {
     var isConnectionNoteworthy: Bool {
         if case .connected = connection { return snapshot.pendingCount > 0 }
         return true
+    }
+
+    /// Whether a queued turn is going nowhere for now.
+    ///
+    /// Deliberately derived from what is actually known — the turn is pending and the
+    /// socket is not up — rather than from a `failed` flag, because no such flag
+    /// exists. Inventing one in the view layer would mean claiming a send failed when
+    /// all that is known is that it has not happened yet. The intent is durable either
+    /// way; the outbox will carry it when the tailnet returns.
+    ///
+    /// A real per-message failure state (a rejected message, a permanent error) is
+    /// `syl-008.3.8` and needs the store, not the view.
+    func isStalled(_ group: MessageGroup) -> Bool {
+        guard group.isPending else { return false }
+        switch connection {
+        case .connected, .connecting, .authenticating, .reconnecting:
+            return false
+        case .idle, .offline, .unauthenticated:
+            return true
+        }
+    }
+
+    /// Run the outbox now, rather than waiting for the next scheduled sync.
+    ///
+    /// The retry affordance is not cosmetic: without it a queued message sits until
+    /// something else happens to trigger a flush, and the Commander's only recourse is
+    /// to guess whether it went.
+    func retryQueued() async {
+        notice = nil
+        await flush()
+        await refresh()
     }
 }

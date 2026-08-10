@@ -21,6 +21,10 @@ export type IdType =
   | "pairing_code"
   | "conversation"
   | "message"
+  // Images and video (`0015_attachments.sql`). An attachment is addressable on
+  // its own because it is created before the message that claims it — see the
+  // header of that migration.
+  | "attachment"
   | "reminder"
   | "todo"
   | "goal"
@@ -35,12 +39,12 @@ export type IdType =
   // shape must never address two different stores.
   | "memory_node"
   | "memory_edge"
-  // The supersession ledger (`0015_supersession_ledger.sql`). A row is a CLAIM
+  // The supersession ledger (`0017_supersession_ledger.sql`). A row is a CLAIM
   // with a validity interval, not a node: facts are never deleted, they are
   // retired, and the closed rows are what answers "what did I believe in
   // March?".
   | "memory_assertion"
-  // The audit record of an explicit deletion (`0018_memory_deletions.sql`).
+  // The audit record of an explicit deletion (`0020_memory_deletions.sql`).
   // Type-prefixed because it IS referenced from outside: the scope table points
   // at it, and every redaction tombstone left in surviving prose names it — so
   // a dangling reference to a deletion has to stay legible.

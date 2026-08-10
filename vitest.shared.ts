@@ -36,6 +36,27 @@ export const sharedTestConfig = {
      * `hookTimeout` matches, because a `beforeAll` that builds the backend is
      * subject to exactly the same starvation as the tests it prepares.
      */
+    // THE SUITE COMPETES WITH ITSELF BEFORE THE MACHINE IS EVEN BUSY.
+    //
+    // vitest forks one worker per core, and this suite's heaviest files then
+    // fork a REAL node each — the fake `claude` binary, the launchd entrypoint,
+    // a live service. So the spawn-heavy tests are racing the rest of the suite
+    // for the same cores before anything else on the machine is counted.
+    //
+    // Measured: on a full run the failures moved every time — us5 + Devices,
+    // then session twice, then us2 + us5, then fourteen at once, all "Test timed
+    // out in 20000ms" — while the same files passed 66/66 in isolation. Capped
+    // at three workers the whole suite went green twice consecutively, 3129
+    // passed, at the same fleet load.
+    //
+    // That is why raising the timeout was not enough on its own: the tests were
+    // not slow, they were starved. A timeout treats the symptom; this removes
+    // the contention.
+    //
+    // `maxWorkers` alone throws "minThreads and maxThreads must not conflict",
+    // so both are set.
+    minWorkers: 1,
+    maxWorkers: 3,
     testTimeout: 20_000,
     hookTimeout: 20_000,
     coverage: {

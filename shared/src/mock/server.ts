@@ -86,6 +86,16 @@ interface HandlerContext {
 
 type Result =
   | { readonly ok: true; readonly status?: number; readonly data: unknown }
+  /**
+   * Raw bytes, for the one operation whose success body is not an envelope.
+   *
+   * `GET /attachments/{id}` answers the file. The mock has to be able to do
+   * that too, or a client's image loader would be developed against a shape
+   * the real service never sends — which is the exact divergence this mock
+   * exists to prevent, and it would show up as a broken picture rather than
+   * as a failing test.
+   */
+  | { readonly ok: true; readonly binary: { readonly mimeType: string; readonly bytes: Buffer } }
   | { readonly ok: false; readonly status: number; readonly code: ErrorCode; readonly message: string };
 
 const ok = (data: unknown, status?: number): Result =>
@@ -241,6 +251,47 @@ export class MockServer {
       const ordered = query.get("direction") === "forward" ? items : [...items].reverse();
       return ok(page(ordered));
     },
+    createAttachment: ({ body, store }) => {
+      const kind = body["kind"];
+      if (kind !== "image" && kind !== "video") {
+        return { ok: false, status: 400, code: "VALIDATION_FAILED", message: "kind must be image or video." };
+      }
+      const mimeType = typeof body["mimeType"] === "string" ? body["mimeType"] : "";
+      const raw = typeof body["data"] === "string" ? body["data"] : "";
+      if (mimeType === "" || raw === "") {
+        return { ok: false, status: 400, code: "VALIDATION_FAILED", message: "kind, mimeType and data are all required." };
+      }
+      if (raw.startsWith("data:")) {
+        return { ok: false, status: 400, code: "VALIDATION_FAILED", message: "data must be base64, not a data URI." };
+      }
+      const created = store.createAttachment({
+        kind,
+        mimeType,
+        data: Buffer.from(raw, "base64"),
+        width: numberOr(body["width"]),
+        height: numberOr(body["height"]),
+        durationMs: numberOr(body["durationMs"]),
+      });
+      if ("error" in created) {
+        return { ok: false, status: 400, code: "VALIDATION_FAILED", message: created.error };
+      }
+      return ok(created, 201);
+    },
+    getAttachment: ({ params, query, store }) => {
+      const id = params["attachmentId"] ?? "";
+      const found = store.attachment(id);
+      const bytes = store.attachmentBytes(id);
+      if (found === undefined || bytes === undefined) return notFound("attachment");
+      // The mock generates no previews, so `variant=thumb` is always a 404 —
+      // and that is the branch a client is likeliest to get wrong. Never a
+      // silent fallback to the original.
+      if (query.get("variant") === "thumb") return notFound("thumbnail for that attachment");
+      if (query.get("variant") !== null && query.get("variant") !== "original") {
+        return { ok: false, status: 400, code: "VALIDATION_FAILED", message: "variant must be original or thumb." };
+      }
+      return { ok: true, binary: { mimeType: found.mimeType, bytes } };
+    },
+
     sendMessage: ({ params, body, store, server }) => {
       const conversationId = params["conversationId"] ?? "";
       const clientId = body["clientId"];
@@ -259,7 +310,14 @@ export class MockServer {
       if (text.length === 0) {
         return { ok: false, status: 400, code: "VALIDATION_FAILED", message: "text must not be empty." };
       }
-      const { confirmation, broadcasts } = store.sendMessage(conversationId, { clientId, text });
+      const attachmentIds = Array.isArray(body["attachmentIds"])
+        ? body["attachmentIds"].filter((item): item is string => typeof item === "string")
+        : undefined;
+      const { confirmation, broadcasts } = store.sendMessage(conversationId, {
+        clientId,
+        text,
+        ...(attachmentIds === undefined ? {} : { attachmentIds }),
+      });
       server.afterSend(broadcasts);
       return ok(confirmation, 201);
     },
@@ -603,6 +661,19 @@ export class MockServer {
       store: this.store,
       server: this,
     });
+
+    if (result.ok && "binary" in result) {
+      // Bytes, with the sniffed type — no envelope. See the note on `Result`.
+      this.log(`${method} ${url.pathname} -> 200 (${result.binary.bytes.length} bytes)`);
+      res.writeHead(200, {
+        "Content-Type": result.binary.mimeType,
+        "Content-Length": result.binary.bytes.length,
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
+      });
+      res.end(result.binary.bytes);
+      return;
+    }
 
     const status = result.ok ? (result.status ?? 200) : result.status;
     const payload = result.ok
@@ -966,6 +1037,11 @@ export class MockServer {
   broadcastUnnumbered(frame: Record<string, unknown>): void {
     for (const socket of this.sockets) send(socket, frame);
   }
+}
+
+/** A number the caller may or may not have sent. Anything else is `undefined`. */
+function numberOr(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) ? value : undefined;
 }
 
 function presence(state: PresenceState, intensity: number, ttl: number): Record<string, unknown> {

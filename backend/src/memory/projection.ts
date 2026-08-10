@@ -54,7 +54,7 @@ import { isMemoryNodeKind, type MemoryNodeKind } from "./schema.js";
  * ## Regeneration, and why it is idempotent
  *
  * A handle is looked up by `(ref, type)` — `subject_id` and `kind` in the
- * store — and `memory_nodes_handle_idx` in `0017_working_memory.sql` makes
+ * store — and `memory_nodes_handle_idx` in `0019_working_memory.sql` makes
  * that pair UNIQUE for the kinds a projector mints, so a second handle for one
  * row is a database error rather than a silent fork.
  *

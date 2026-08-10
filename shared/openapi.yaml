@@ -121,6 +121,7 @@ tags:
   - name: health
   - name: auth
   - name: conversation
+  - name: attachments
   - name: reminders
   - name: todos
   - name: goals
@@ -321,6 +322,120 @@ paths:
                     required: [data]
                     properties:
                       data: { $ref: "#/components/schemas/DeliveryConfirmation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # --------------------------------------------------------- attachments ---
+  /attachments:
+    post:
+      tags: [attachments]
+      operationId: createAttachment
+      summary: Store an image or a short video, and get an id for it.
+      description: |
+        Two steps, always: upload the bytes here, then name the returned id in
+        `SendMessageRequest.attachmentIds`. An attachment exists on its own
+        until a message claims it, which is what lets a client write its local
+        row and start the upload *before* it has a message to attach it to —
+        `ChatViewModel.send()`'s "disk first" rule applied to bytes.
+
+        ## The bytes are base64 in a JSON body
+
+        Not multipart, and not a raw octet stream. Every write in this contract
+        is a JSON body carrying an `Idempotency-Key`, and the retry semantics
+        that header buys are computed from the body — an upload that arrived
+        through a different mechanism would be the one write in the service
+        with a different failure model, on the client that retries most.
+        Base64 costs 33% on the way up, which is the price of that uniformity
+        and is bounded by the size ceiling.
+
+        ## `mimeType` is what you *claim*, not what you get back
+
+        The service sniffs the file's magic bytes and cross-checks them against
+        the declared type. A disagreement is refused rather than resolved: a
+        client that mislabels its own upload has a bug, and quietly believing
+        the bytes over the label would hide it. The `mimeType` on the response
+        is the sniffed one.
+
+        ## Dimensions
+
+        For an image the server reads width and height out of the file header
+        and ignores anything declared — the file is the authority about itself.
+        For a video it cannot (that needs a demuxer), so `width`, `height` and
+        `durationMs` are **required** on a video upload and are taken on trust.
+        They are a layout hint — they exist so a thumbnail reserves the right
+        box before its bytes arrive — and never a security property.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateAttachmentRequest" }
+      responses:
+        "201":
+          description: Stored. The bytes are at `GET /attachments/{id}`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Attachment" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /attachments/{attachmentId}:
+    get:
+      tags: [attachments]
+      operationId: getAttachment
+      summary: The stored bytes themselves.
+      description: |
+        ## The one operation whose SUCCESS body is not an envelope
+
+        Everything else in this contract answers `{ success, data }`. This
+        answers the file, with its sniffed `Content-Type`. Base64-wrapping an
+        image so that it could be spelled the same way as a to-do would add a
+        third to every byte on the exact path where bytes are dearest — a
+        phone on cellular over a tailnet — and would make the response
+        unstreamable and uncacheable at the same time.
+
+        The invariant the envelope rule protects still holds, restated for a
+        media endpoint: **every FAILURE from this operation is the ordinary
+        error envelope**, and the discriminator is `Content-Type`. JSON means
+        Syl refused; the declared media type means these are the bytes;
+        anything else — `text/html` from a captive portal or a Tailscale error
+        page — is a transport failure, exactly as the envelope rule intends.
+
+        ## Variants
+
+        `variant=thumb` serves a downscaled JPEG, roughly two orders of
+        magnitude smaller, for the inline bubble. Ask for it only when
+        `Attachment.hasThumbnail` is true; there is no thumbnail for a video
+        and there may be none for an image the server could not downscale.
+        Asking for one that does not exist is `404`, never a silent fallback
+        to the full file — a fallback would turn a 60 KB request into a 4 MB
+        one on the connection least able to afford it, invisibly.
+      parameters:
+        - $ref: "#/components/parameters/AttachmentId"
+        - name: variant
+          in: query
+          required: false
+          description: |
+            `original` (default) is the bytes as stored. `thumb` is the
+            downscaled preview.
+          schema:
+            type: string
+            enum: [original, thumb]
+            default: original
+      responses:
+        "200":
+          description: |
+            The bytes. `Content-Type` is the sniffed type of the stored file
+            (or `image/jpeg` for a thumbnail), and the body is **not** an
+            envelope. See the description above.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
         default: { $ref: "#/components/responses/Error" }
 
   # ----------------------------------------------------------- reminders ---
@@ -1183,6 +1298,11 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/Id" }
+    AttachmentId:
+      name: attachmentId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
     ReminderId:
       name: reminderId
       in: path
@@ -1530,7 +1650,7 @@ components:
 
     Message:
       type: object
-      required: [id, conversationId, clientId, role, text, createdAt, seq]
+      required: [id, conversationId, clientId, role, text, createdAt, seq, attachments]
       description: |
         `text` has already had the affect hint stripped. The
         `<!--affect: concerned 0.6-->` marker that a turn may emit is removed
@@ -1553,6 +1673,15 @@ components:
           description: |
             Monotonic per conversation. The client tracks the highest it has
             seen; the WebSocket `sync` frame replays from there.
+        attachments:
+          type: array
+          items: { $ref: "#/components/schemas/Attachment" }
+          description: |
+            In the order they were attached. **Always present, empty when
+            there are none** — a client must never have to tell "no
+            attachments" apart from "this server does not send the field",
+            because those two look identical and mean opposite things the day
+            a field goes missing.
 
     MessagePage:
       type: object
@@ -1581,6 +1710,17 @@ components:
             - { $ref: "#/components/schemas/Id" }
             - { type: "null" }
           description: Optional; must equal the path parameter when present.
+        attachmentIds:
+          type: array
+          items: { $ref: "#/components/schemas/Id" }
+          description: |
+            Ids from `POST /attachments`, in the order they should render.
+            Every one must exist and must not already belong to another
+            message; either failure is `VALIDATION_FAILED` rather than a
+            message that silently loses its picture.
+
+            Optional and, when present, may not be empty — an empty array is a
+            client that meant to omit the field and is worth saying so about.
 
     DeliveryConfirmation:
       type: object
@@ -1596,6 +1736,104 @@ components:
         conversationId: { $ref: "#/components/schemas/Id" }
         seq: { type: integer, minimum: 1 }
         acceptedAt: { $ref: "#/components/schemas/Instant" }
+
+    # ----------------------------------------------------- attachments ---
+    AttachmentKind:
+      type: string
+      description: |
+        Two kinds, and deliberately no third. `file` is not here: an arbitrary
+        document is a thing the service would have to store, serve and never
+        be able to render, and adding the case later costs nothing while
+        adding it now costs a surface nobody has a use for.
+      enum: [image, video]
+
+    Attachment:
+      type: object
+      required:
+        [id, kind, mimeType, bytes, width, height, durationMs, sha256, createdAt, hasThumbnail]
+      description: |
+        A stored image or video. The row is metadata only — the bytes live on
+        the service's own disk and are fetched from
+        `GET /attachments/{attachmentId}`, never from anywhere else.
+
+        **There is no URL on this object, on purpose.** A remote image in a
+        transcript leaks a read receipt and the Commander's IP to whoever hosts
+        it, and a client that will render whatever URL it is handed is an SSRF
+        surface pointed at the tailnet. The client composes the path from the
+        id against the server it is paired with, so an attachment can only ever
+        come from Syl's own origin.
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        kind: { $ref: "#/components/schemas/AttachmentKind" }
+        mimeType:
+          type: string
+          description: |
+            What the file's **magic bytes** say it is, not what the uploader
+            declared. The two are cross-checked at upload and a disagreement is
+            refused, so by the time a row exists there is only one answer.
+        bytes:
+          type: integer
+          minimum: 1
+          description: Size of the stored original, in bytes.
+        width:
+          type: integer
+          minimum: 1
+          description: |
+            Pixels. Read from the file header for an image; taken from the
+            uploader for a video. Present so a bubble can reserve the right box
+            before the bytes arrive — no layout jump on load.
+        height: { type: integer, minimum: 1, description: Pixels. See `width`. }
+        durationMs:
+          type: [integer, "null"]
+          minimum: 0
+          description: Video only. Always null for an image.
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: |
+            Lower-case hex of the stored original. The client's cache key, and
+            what makes "is this the same picture I already have" answerable
+            without a download.
+        createdAt: { $ref: "#/components/schemas/Instant" }
+        hasThumbnail:
+          type: boolean
+          description: |
+            Whether `?variant=thumb` will answer with bytes. False for every
+            video, and false for an image the service could not downscale.
+            A client that asks for a thumbnail that does not exist gets `404`;
+            it must read this rather than probe.
+
+    CreateAttachmentRequest:
+      type: object
+      required: [kind, mimeType, data]
+      properties:
+        kind: { $ref: "#/components/schemas/AttachmentKind" }
+        mimeType:
+          type: string
+          minLength: 3
+          maxLength: 128
+          description: |
+            The type you believe you are uploading. Cross-checked against the
+            file's magic bytes; a disagreement is `VALIDATION_FAILED`, never a
+            quiet correction.
+        data:
+          type: string
+          minLength: 1
+          description: |
+            The file, base64. Standard alphabet, padding optional, no data
+            URI prefix. The decoded size is what the ceiling applies to.
+        width:
+          type: integer
+          minimum: 1
+          description: |
+            **Required for a video, ignored for an image.** The server reads an
+            image's dimensions out of its own header, which is the only source
+            that cannot disagree with the file.
+        height: { type: integer, minimum: 1, description: See `width`. }
+        durationMs:
+          type: integer
+          minimum: 0
+          description: Required for a video. Rejected on an image.
 
     # ------------------------------------------------------- reminders ---
     ReminderKind:

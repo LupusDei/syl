@@ -33,6 +33,7 @@ import { readBuildInfo, selfBuildStampPath } from "./ops/build-info.js";
 import { ArticleIntake } from "./connections/intake.js";
 import { IntakeStore } from "./connections/intake-store.js";
 import { requireBearerToken, requireScope } from "./middleware/auth.js";
+import { createAttachmentRouter, UPLOAD_BODY_LIMIT_BYTES } from "./routes/attachments.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createConversationRouter } from "./routes/conversations.js";
 import { createDeliveryRouter } from "./routes/deliveries.js";
@@ -71,7 +72,9 @@ import { MemoryMetrics } from "./memory/metrics.js";
 import { EdgeWeights } from "./memory/weights.js";
 import { withMemoryIndex } from "./memory/index-guarantee.js";
 import { apnsCredentialsFromEnv } from "./services/apns-service.js";
+import { ensureAgentKey, type AgentCredential } from "./services/agent-key.js";
 import { ApiKeyService } from "./services/api-key-service.js";
+import { AttachmentStore } from "./services/attachment-store.js";
 import { systemClock, type Clock } from "./services/clock.js";
 import { ConversationService } from "./services/conversation-service.js";
 import { IN_MEMORY, openDatabase, type SylDatabase } from "./services/database.js";
@@ -103,7 +106,16 @@ import { SylSocketServer, WS_PATH } from "./services/ws-server.js";
  * incompatibility that only appears at integration time.
  */
 
-/** JSON bodies larger than this are refused. Syl exchanges text, not uploads. */
+/**
+ * JSON bodies larger than this are refused.
+ *
+ * This used to say "Syl exchanges text, not uploads", and for every route but
+ * one it still does. `POST /attachments` is the exception and it is mounted
+ * with its own, larger parser at its own path — see `createApp`. Keeping the
+ * general limit at one megabyte is the point: an upload surface that widened
+ * the ceiling for `POST /reminders` at the same time would be a surface that
+ * had quietly changed what every other endpoint accepts.
+ */
 const MAX_BODY_BYTES = "1mb";
 
 /** The contract's base path. Not configurable — it is part of the contract. */
@@ -244,6 +256,15 @@ export interface AppDependencies {
    * feature. See `routes/memory.ts`.
    */
   readonly memory: MemoryViews;
+  /**
+   * Images and video: the bytes on disk and the rows that describe them.
+   *
+   * Also handed to `MessageStore`, which is what makes `Message.attachments`
+   * anything other than an empty array. Two references to one object rather
+   * than two stores over one table — the row-to-wire mapping lives in exactly
+   * one file.
+   */
+  readonly attachments: AttachmentStore;
   /** Extra health probes. The billing check is always present. */
   readonly probes?: readonly HealthProbe[];
 }
@@ -291,15 +312,41 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // Destructured in full, and reached through the names below rather than
   // through `deps.` — see the note on `AppDependencies`. Removing a use here
   // without removing the field does not compile.
-  const { keys, messages, chat, devices, outbox, reminders, todos, goals, sync, jobs, idempotency, intake, memory, probes } =
-    deps;
+  const {
+    keys,
+    messages,
+    chat,
+    devices,
+    outbox,
+    reminders,
+    todos,
+    goals,
+    sync,
+    jobs,
+    idempotency,
+    intake,
+    memory,
+    attachments,
+    probes,
+  } = deps;
   const app = express();
 
   // Nothing gains from telling the world which framework to look up CVEs for.
   app.disable("x-powered-by");
+  // The upload path, and only the upload path, accepts more than text. Mounted
+  // FIRST and scoped to its own prefix: body-parser marks a request it has
+  // already read, so the general parser below sees this one as done and never
+  // applies its own smaller limit. Written as two visible lines in bootstrap
+  // rather than as a condition inside one parser, because "which routes may
+  // receive thirteen megabytes" is a question worth answering by reading the
+  // mount order.
+  app.use(`${API_BASE_PATH}/attachments`, express.json({ limit: UPLOAD_BODY_LIMIT_BYTES }));
   app.use(express.json({ limit: MAX_BODY_BYTES }));
 
-  const authenticate = requireBearerToken({ keys });
+  // One authenticated chokepoint for the whole contract, and the agent
+  // confinement rides inside it — see `middleware/auth.ts`. The base path is
+  // passed rather than imported because that module cannot import this one.
+  const authenticate = requireBearerToken({ keys, basePath: API_BASE_PATH });
 
   // Mounted onto one router so the base path appears exactly once, and so a
   // route added later cannot land outside it by forgetting the prefix.
@@ -322,6 +369,9 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // permanently unpairable.
   api.use(createAuthRouter({ keys, idempotency, authenticate }));
   api.use(createConversationRouter({ messages, chat, idempotency, authenticate }));
+  // Mounted before the routes that reference an attachment id, though nothing
+  // depends on that ordering: both live under distinct prefixes.
+  api.use(createAttachmentRouter({ attachments, idempotency, authenticate }));
   api.use(createDeviceRouter({ devices, idempotency, authenticate }));
   api.use(createDeliveryRouter({ outbox, reminders, idempotency, authenticate }));
   api.use(createReminderRouter({ reminders, idempotency, authenticate }));
@@ -499,6 +549,25 @@ export function describeStartup(
 }
 
 /**
+ * Whether this machine still needs to be told how to pair a phone.
+ *
+ * The question is **"is a DEVICE paired"**, not "is any key live", and the
+ * difference became load-bearing the moment the service started minting its own
+ * `agent` credential at boot. The old spelling — every key in the table is
+ * revoked — was correct while every key was a phone. With Syl's own key present
+ * from the first boot, a brand-new machine would have concluded that something
+ * was already paired, printed no code, and left the Commander looking at a
+ * service he had no way into. Nothing would have failed; there would simply
+ * have been no line.
+ *
+ * Exported so that is a test rather than a line in a startup function nobody
+ * can call.
+ */
+export function needsPairingCode(keys: ApiKeyService): boolean {
+  return keys.liveKeysWithScope("device").length === 0;
+}
+
+/**
  * The repo root, from `backend/src/index.ts`.
  *
  * `SOUL.md`, `.mcp.json` and `.syl/` live at the root of the monorepo rather
@@ -607,11 +676,8 @@ export interface BootstrapOptions {
   readonly soul?: string;
 }
 
-/** Open the store and build the services the app needs. */
-export function bootstrap(
-  config: SylConfig,
-  options: BootstrapOptions = {},
-): {
+/** What `bootstrap` produces: the store, the services, and Syl's own key. */
+export interface Bootstrapped {
   readonly database: SylDatabase;
   readonly deps: ServiceDependencies;
   /**
@@ -625,7 +691,22 @@ export function bootstrap(
    * in the test, which is the one thing a wiring test must not do.
    */
   readonly agent: SylAgent;
-} {
+  /**
+   * Syl's own credential, minted here and held nowhere else.
+   *
+   * **Deliberately NOT a field on `ServiceDependencies`.** Every field there is
+   * destructured by `createApp` and handed to a router; putting the agent token
+   * in that bag would make it something a route could reach, which is the exact
+   * property this credential exists to not have. It is returned beside the
+   * dependencies instead, so the only callers are `startSyl` and a test.
+   *
+   * See `services/agent-key.ts` for why it cannot be obtained over the network.
+   */
+  readonly agentKey: AgentCredential;
+}
+
+/** Open the store and build the services the app needs. */
+export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bootstrapped {
   // BEFORE THE DATABASE IS OPENED, because a refusal has to be a refusal — and
   // because a service that opens a store, binds a port and only then declines
   // is a service somebody restarts until it works.
@@ -647,7 +728,6 @@ export function bootstrap(
       ...(options.turn?.mcpConfig === undefined ? {} : { mcpConfig: options.turn.mcpConfig }),
     });
   }
-
   const clock = options.clock ?? systemClock;
   // `allowExtension` must be asked for at CONSTRUCTION — `node:sqlite` offers no
   // way to turn it on later. Without it this connection can never load `vec0`,
@@ -659,7 +739,20 @@ export function bootstrap(
   // once `vec0` is in.
   const database = openDatabase({ path: config.databasePath, allowExtension: true });
   const keys = new ApiKeyService({ db: database.handle, clock });
-  const messages = new MessageStore({ db: database.handle, clock });
+  // Her hands, before anything that might want them. A boot that reached the
+  // listening socket without a credential would answer every request and
+  // quietly be unable to act — the failure `syl-act1` is about.
+  const agentKey = ensureAgentKey({ keys });
+
+  // Before `MessageStore`, which takes it: a message's pictures are read
+  // through this object, so the wiring is one direction and there is no cycle
+  // to break later.
+  const attachments = new AttachmentStore({
+    db: database.handle,
+    clock,
+    blobDir: config.attachmentDir,
+  });
+  const messages = new MessageStore({ db: database.handle, clock, attachments });
   const devices = new DeviceTokenService({ db: database.handle, clock });
   const idempotency = new IdempotencyStore({ db: database.handle, clock });
   // From the config, not from `process.env`. `loadConfig` has already refused
@@ -909,6 +1002,7 @@ export function bootstrap(
   return {
     database,
     agent,
+    agentKey,
     deps: {
       keys,
       messages,
@@ -924,6 +1018,7 @@ export function bootstrap(
       intake,
       memory,
       memoryRuntime,
+      attachments,
       presence,
       intakeQueue,
       probes: [databaseProbe(database.handle)],
@@ -1075,6 +1170,15 @@ function buildDreamJudge(
 export interface RunningSyl {
   readonly database: SylDatabase;
   readonly deps: ServiceDependencies;
+  /**
+   * Syl's own credential for this process's lifetime.
+   *
+   * Carried here so the tool wiring can reach it and nothing else can. It is
+   * deliberately absent from `startupFields` and `startupLines`: a token in the
+   * rotated JSON log is a token on disk, which is the one place this credential
+   * is never allowed to be.
+   */
+  readonly agentKey: AgentCredential;
   readonly service: RunningService;
   readonly runtime: DeliveryRuntime;
   /** The lines to print. Returned rather than printed, so a test can read them. */
@@ -1118,7 +1222,7 @@ export async function startSyl(
   config: SylConfig,
   options: StartSylOptions = {},
 ): Promise<RunningSyl> {
-  const { database, deps: bootstrapped } = bootstrap(config, options);
+  const { database, deps: bootstrapped, agentKey } = bootstrap(config, options);
   const delivery = options.delivery ?? {};
   const clock = delivery.clock ?? options.clock ?? systemClock;
 
@@ -1177,6 +1281,11 @@ export async function startSyl(
     reminders: deps.reminders,
     outbox: deps.outbox,
     devices: deps.devices,
+    // The third presence seam, and the last one made here (`syl-8l7`). The
+    // socket says whether anyone is watching, the conversation service says
+    // whether a turn is open, and the delivery loop is the only thing that
+    // knows a notification actually broke through to him.
+    presence: deps.presence,
     handlers: new Map([
       [
         "content_ingestion",
@@ -1203,8 +1312,7 @@ export async function startSyl(
   // A pairing code is only printed when there is nothing paired. Printing one
   // on every boot would train the Commander to ignore it, and a code shown
   // repeatedly is a code that is eventually shown to somebody else.
-  const unpaired = deps.keys.list().every((key) => key.revokedAt !== null);
-  const startup = unpaired
+  const startup = needsPairingCode(deps.keys)
     ? describeStartup(config, { pairingCode: deps.keys.issuePairingCode().code })
     : describeStartup(config);
 
@@ -1217,6 +1325,7 @@ export async function startSyl(
   return {
     database,
     deps,
+    agentKey,
     service,
     runtime,
     push,

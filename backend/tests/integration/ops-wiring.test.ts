@@ -62,6 +62,7 @@ function config(overrides: Partial<SylConfig> = {}): SylConfig {
     certStatusPath: join(directory, "cert-status.json"),
     // Not built, on purpose — see the note in `tests/helpers/service.ts`.
     adminDir: join(directory, "admin-not-built"),
+    attachmentDir: join(directory, "attachments"),
     ...overrides,
   };
 }

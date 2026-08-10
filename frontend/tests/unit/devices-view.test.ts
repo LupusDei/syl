@@ -12,9 +12,26 @@ import { AuthProvider } from "../../src/auth/AuthProvider";
 import { createMemoryStorage, type StorageLike } from "../../src/storage";
 import { fixture, fixtureResponse } from "../helpers/fixtures";
 
+/**
+ * An hour after the newest `lastSeenAt` in `http/devices.page`.
+ *
+ * Fixed, because "active" is a statement about how long ago a device was last
+ * heard from and every fixture instant is in the past — so a view test read on
+ * the real clock is a test whose answer changes with the day it is run.
+ */
+const JUST_AFTER_THE_FIXTURE = new Date("2026-08-09T07:58:00.000Z");
+
+beforeEach(() => {
+  // `Date` only. Faking `setTimeout` would stop `waitFor` making progress and
+  // every assertion in this file would time out instead.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(JUST_AFTER_THE_FIXTURE);
+});
+
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -34,7 +51,8 @@ function renderView(storage: StorageLike = signedIn()): void {
   render(
     h(AuthProvider, {
       storage,
-      children: h(MemoryRouter, { initialEntries: ["/devices"] }, h(DevicesView)),
+      // Pinned to the fixture, never to the wall clock — see fixtureNow().
+      children: h(MemoryRouter, { initialEntries: ["/devices"] }, h(DevicesView, { now: fixtureNow() })),
     }),
   );
 }
@@ -44,6 +62,26 @@ function pageOf(rows: readonly unknown[]): Response {
     JSON.stringify({ success: true, data: { items: rows, nextCursor: null, hasMore: false } }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
+}
+
+/**
+ * A moment pinned to the FIXTURE, not to the wall clock.
+ *
+ * `standingOf` calls a device stale after 24 hours of silence, and the fixture's
+ * timestamps are absolute. Rendering against the real clock meant these
+ * assertions aged out: the healthy device turned stale a day after the fixture
+ * was written and "active" stopped appearing, which reads as a regression in the
+ * view and is not one.
+ *
+ * Derived from the newest `lastSeenAt` in the fixture, so it stays correct if the
+ * fixture is regenerated — a hard-coded instant here would simply move the bomb.
+ */
+function fixtureNow(): Date {
+  const newest = fixtureRows()
+    .map((device) => Date.parse(String(device["lastSeenAt"])))
+    .filter((value) => !Number.isNaN(value))
+    .reduce((a, b) => Math.max(a, b), 0);
+  return new Date(newest + 60_000);
 }
 
 function fixtureRows(): Record<string, unknown>[] {
@@ -108,6 +146,13 @@ describe("DevicesView", () => {
   });
 
   it("should describe an unregistered device as unregistered, not missing", async () => {
+    // The clock is frozen an hour after the fixture's newest `lastSeenAt`, and
+    // that is the whole reason this test has a `beforeEach` at all. `active`
+    // means "registered and heard from within a day" — so on the real clock
+    // this assertion was true on the day the fixture was captured and has been
+    // false ever since, which is the one-day-fuse time bomb the backend suite
+    // documents, wearing a frontend hat. Only `Date` is faked: `waitFor` needs
+    // real timers to make progress.
     stubApi();
     renderView();
 

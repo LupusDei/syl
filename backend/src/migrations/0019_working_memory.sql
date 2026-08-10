@@ -1,4 +1,4 @@
--- 0017_working_memory.sql — the working-memory projection, and the uniqueness
+-- 0019_working_memory.sql — the working-memory projection, and the uniqueness
 -- that makes a projected handle a handle.
 --
 -- ## Working memory is NOT a fourth store

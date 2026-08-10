@@ -4,6 +4,8 @@ import type { WsAuthChallenge, WsPresence } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { fixedClock } from "../../src/services/clock.js";
+import { PRESENCE_TTL_MS } from "../../src/services/presence.js";
+import { startFakeApns, type FakeApns } from "../helpers/fake-apns.js";
 import { BACKEND_SRC, sourceFiles } from "../helpers/sql-tables.js";
 import { startLiveService, type LiveService } from "../helpers/live-service.js";
 import { TestClient } from "../helpers/ws.js";
@@ -37,6 +39,12 @@ import { TestClient } from "../helpers/ws.js";
 
 /** 12:00 in Chicago on a Monday. Outside quiet hours by a wide margin. */
 const NOON_IN_CHICAGO = Date.UTC(2026, 7, 10, 17, 0, 0, 0);
+
+/** A device token for the phone the alert stories push at. */
+const APNS_TOKEN = "7ab34c19".repeat(8);
+
+/** 16:00 in Chicago the same day: the instant those stories' reminder fires. */
+const FIRE_AT = Date.UTC(2026, 7, 10, 21, 0, 0, 0);
 
 describe("presence on the live socket", () => {
   let syl: LiveService;
@@ -226,22 +234,30 @@ describe("presence on the live socket", () => {
       }
     }
 
-    expect([...callers.keys()].sort()).toEqual(["setAttached", "turnEnded", "turnStarted"]);
+    expect([...callers.keys()].sort()).toEqual([
+      "alerted",
+      "setAttached",
+      "turnEnded",
+      "turnStarted",
+    ]);
     expect(callers.get("setAttached")).toEqual(["services/ws-server.ts"]);
     // `syl-vls` wired the turn. Both halves, in the one place that owns a turn's
     // lifetime — a `turnStarted` without a matching `turnEnded` pins Syl on
     // `thinking` until the process restarts.
     expect(callers.get("turnStarted")).toEqual(["services/conversation-service.ts"]);
     expect(callers.get("turnEnded")).toEqual(["services/conversation-service.ts"]);
+    // `syl-8l7` wired the interruption. In the delivery path, because that is
+    // the only place that knows a notification was `time-sensitive` AND that
+    // Apple took it — the two facts `alert` is rationed by.
+    expect(callers.get("alerted")).toEqual(["jobs/reminder-delivery-job.ts"]);
   });
 
   /**
    * What is still not wired, named rather than left to be rediscovered.
    *
-   * `alerted` belongs to the delivery path — `jobs/reminder-delivery-job.ts`
-   * decides that a notification is time-sensitive, and that file belongs to
-   * another lane. `audioStarted` and `micOpened` need a voice and a microphone,
-   * neither of which reaches this service yet.
+   * `audioStarted` and `micOpened` need a voice and a microphone, neither of
+   * which reaches this service yet. `manifested` needs the set piece, and
+   * `setMuted` needs a control on a surface that does not exist.
    *
    * This is an exemption list and it is a **finding, not a configuration**: the
    * assertion above fails the moment one of these gains a caller, so nobody can
@@ -265,6 +281,123 @@ describe("presence on the live socket", () => {
     // `ws-server.ts` declares it; `index.ts` is the one place that hands it to
     // presence as a sink.
     expect(announcing.sort()).toEqual(["index.ts", "services/ws-server.ts"]);
+  });
+
+  /**
+   * A live service with a phone registered, a fake Apple behind it, and one
+   * reminder waiting at 16:00 Chicago.
+   *
+   * The stores — and therefore presence — stay frozen at noon, so what the
+   * character does is a statement about the story rather than about the hour
+   * the suite ran. Only the delivery loop walks forward, which is the same
+   * asymmetry every timing story in this repo uses.
+   */
+  async function serviceWithReminderDue(reminder: {
+    readonly text: string;
+    readonly kind?: string;
+  }): Promise<{
+    readonly syl: LiveService;
+    readonly apple: FakeApns;
+    /** Move the delivery loop to the reminder's instant and run one pass. */
+    fire(): Promise<void>;
+    close(): Promise<void>;
+  }> {
+    const apple = await startFakeApns();
+    let deliveryNow = NOON_IN_CHICAGO;
+    const syl = await startLiveService({
+      clock: fixedClock(NOON_IN_CHICAGO),
+      delivery: { apple, clock: () => deliveryNow },
+    });
+
+    syl.deps.devices.register({
+      token: APNS_TOKEN,
+      environment: "production",
+      platform: "ios",
+      name: "Commander's iPhone",
+      appVersion: "0.1.0",
+      osVersion: "26.1",
+    });
+    syl.deps.reminders.create({
+      ...reminder,
+      wallTime: "16:00",
+      tz: "America/Chicago",
+      date: "2026-08-10",
+    });
+
+    return {
+      syl,
+      apple,
+      fire: async () => {
+        deliveryNow = FIRE_AT;
+        // The service's own runtime, driven by hand — Apple was redirected when
+        // it booted, so this is the production assembly rather than one the
+        // test built out of the same pieces.
+        await syl.runtime.runner.tick();
+      },
+      close: async () => {
+        await syl.close();
+        await apple.close();
+      },
+    };
+  }
+
+  /** Attach, authenticate, and swallow the `idle` frame the attach produces. */
+  async function attach(syl: LiveService): Promise<TestClient> {
+    const client = await TestClient.connect(syl.wsUrl);
+    clients.push(client);
+    const challenge = (await client.next()) as WsAuthChallenge;
+    client.send({ type: "auth_response", token: syl.token, nonce: challenge.nonce });
+    await client.next(); // connected
+    await client.next(); // the `idle` frame the attach produced
+    return client;
+  }
+
+  it("should say she is alert when a time-sensitive reminder actually goes out", async () => {
+    // `syl-8l7`, the third seam and the behavioural half of it. The static
+    // assertion above proves `alerted` has a caller; this proves the caller is
+    // on the path a real reminder takes, with a real fake Apple at the end of
+    // it. A grep cannot tell a call that runs from a call that is unreachable.
+    //
+    // A commitment, so `payloadFor` marks the notification `time-sensitive` —
+    // which is the one thing that earns the character an interruption.
+    const story = await serviceWithReminderDue({
+      text: "Call the pharmacy — the refill lapses today.",
+    });
+
+    try {
+      const client = await attach(story.syl);
+      await story.fire();
+
+      const frame = (await client.next()) as WsPresence;
+      expect(frame.type).toBe("presence");
+      expect(frame.state).toBe("alert");
+      // Exactly the window `alerted()` opened, and no longer. A frame that
+      // outlives the state it describes is the same defect as no frame at all,
+      // seen from the other end of the wire.
+      expect(frame.ttl_ms).toBe(PRESENCE_TTL_MS.alert);
+      expect(story.apple.pushes).toHaveLength(1);
+    } finally {
+      await story.close();
+    }
+  });
+
+  it("should stay silent when what went out was not worth interrupting him for", async () => {
+    // The ration, end to end. A rhythm message is `active`, not
+    // `time-sensitive`: it arrives on the phone and the character does not
+    // move. Without this, `alert` degrades into "a notification happened",
+    // which is the state it is defined against.
+    const story = await serviceWithReminderDue({ text: "Evening review.", kind: "rhythm" });
+
+    try {
+      const client = await attach(story.syl);
+      await story.fire();
+
+      expect(story.apple.pushes).toHaveLength(1);
+      await client.expectSilence(300);
+      expect(story.syl.deps.presence.current.state).toBe("idle");
+    } finally {
+      await story.close();
+    }
   });
 
   it("should be absent, not idle, when a client attaches inside quiet hours", async () => {

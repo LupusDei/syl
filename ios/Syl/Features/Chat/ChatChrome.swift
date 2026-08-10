@@ -1,0 +1,171 @@
+import SwiftUI
+import SylKit
+
+/// The connection state, said plainly.
+///
+/// The server genuinely will be unreachable sometimes — the Mac reboots, the tailnet
+/// drops on a WiFi-to-cellular handoff, the phone goes through a tunnel. An assistant
+/// that silently fails to sync is worse than one that says so, which is why this is kept
+/// rather than designed away.
+///
+/// It used to appear and disappear with no animation at all — a bare `if` in a `VStack`,
+/// so the entire transcript jumped every time the connection state changed. That is now
+/// a transition, because a layout that moves without being animated reads as a glitch.
+struct ConnectionBanner: View {
+    let summary: String
+    let notice: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(summary)
+                .font(SylTheme.Typeface.detail.weight(.medium))
+                .foregroundStyle(SylTheme.Colour.ink)
+            if let notice {
+                Text(notice)
+                    .font(SylTheme.Typeface.numeral)
+                    .foregroundStyle(SylTheme.Colour.inkFaint)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, SylTheme.Metric.gutter)
+        .padding(.vertical, SylTheme.Metric.snug)
+        // A hairline and nothing else.
+        //
+        // This carried `.ultraThinMaterial` across the full width and it was the one
+        // element left on the screen that read as iOS rather than as Syl — an opaque
+        // grey strip capping the veil, exactly like a system banner. Nothing else in
+        // this app puts a filled bar above content. The rule alone separates it, and
+        // the veil runs unbroken from the navigation bar to the composer.
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(SylTheme.Colour.hairline)
+                .frame(height: SylTheme.Metric.hair)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The conversation before there is one.
+///
+/// Deliberately two lines and no more. Starter-prompt chips were considered and
+/// rejected: they are useful for ten minutes on day one and dead weight for the
+/// following year, and this is a daily tool for one person who knows what it is for.
+struct EmptyConversation: View {
+    var body: some View {
+        VStack(spacing: SylTheme.Metric.snug) {
+            Text("Nothing here yet.")
+                .font(SylTheme.Typeface.title)
+                .foregroundStyle(SylTheme.Colour.ink)
+            Text("Ask her for something, or wait — she starts most mornings.")
+                .font(SylTheme.Typeface.detail)
+                .foregroundStyle(SylTheme.Colour.inkSoft)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, SylTheme.Metric.gutter)
+        .padding(.vertical, SylTheme.Metric.chapter)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Syl, present in her own conversation.
+///
+/// `ChatViewModel` has published `presence` since the screen was written and `ChatView`
+/// never rendered it — she was visible on the home screen and absent from the one place
+/// the Commander is actually waiting on her.
+///
+/// The ribbon and nothing else: no three grey dots. Three dots are another app's
+/// furniture, and this app already has a vocabulary for "she is doing something" —
+/// light. It appears only while she is *active*, which is the same rule the home screen
+/// applies, and for the same reason: drawn continuously it stops meaning anything.
+struct PresenceInTranscript: View {
+    let presence: PresenceState
+    let intensity: Double
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Group {
+            if reduceMotion {
+                // Reduce Motion asks for no movement, not for no information. A moving
+                // ribbon conveys "thinking" to everyone else; this conveys it here.
+                Text(label)
+                    .sylLabelStyle()
+                    .foregroundStyle(SylTheme.Colour.inkSoft)
+                    .padding(.horizontal, SylTheme.Metric.step)
+                    .frame(height: SylTheme.Metric.minimumTouchTarget)
+                    .sylGlass(radius: SylTheme.Metric.minimumTouchTarget / 2, presence: 0.7)
+            } else {
+                SylRibbon(state: presence, intensity: intensity)
+                    .frame(height: 44)
+                    .opacity(0.75)
+                    .blendMode(.plusLighter)
+            }
+        }
+        .accessibilityElement()
+        .accessibilityLabel(label)
+    }
+
+    private var label: String {
+        switch presence {
+        case .thinking: return "Thinking"
+        case .speaking: return "Replying"
+        case .listening: return "Listening"
+        case .alert: return "Something needs attention"
+        case .delighted, .manifest: return "Here"
+        case .absent, .idle, .concerned: return "Here"
+        }
+    }
+}
+
+/// The head of the transcript, when there is more behind it.
+///
+/// `ChatSnapshotLoader` was hard-capped at 200 messages with no way to reach anything
+/// older, so a conversation that had run for a month had no beginning. This is the way
+/// back.
+struct EarlierMessages: View {
+    let isLoading: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(isLoading ? "Loading earlier…" : "Earlier messages")
+                .sylLabelStyle()
+                .foregroundStyle(SylTheme.Colour.inkSoft)
+                .frame(maxWidth: .infinity)
+                .frame(height: SylTheme.Metric.minimumTouchTarget)
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoading)
+        .accessibilityLabel("Load earlier messages")
+    }
+}
+
+/// "Syl replied" — the pill that appears when something arrives while he is reading
+/// history.
+///
+/// The transcript used to scroll to the newest turn unconditionally, which meant a
+/// message landing while he was reading back through yesterday yanked the view out from
+/// under him. Auto-scrolling only when he is already at the bottom fixes that, but it
+/// leaves a second problem: he now has no idea anything arrived. This is the answer to
+/// the second problem, and the two are only correct together.
+struct NewTurnPill: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: SylTheme.Metric.snug) {
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Syl replied")
+                    .font(SylTheme.Typeface.detail)
+            }
+            .foregroundStyle(SylTheme.Colour.ink)
+            .padding(.horizontal, SylTheme.Metric.step)
+            .frame(height: SylTheme.Metric.minimumTouchTarget)
+            .sylGlass(radius: SylTheme.Metric.minimumTouchTarget / 2, presence: 0.85)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Syl replied. Scroll to the newest message.")
+    }
+}

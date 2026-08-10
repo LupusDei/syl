@@ -217,16 +217,46 @@ find on his own.
 
 Nothing here replaces T014–T019; it makes them decidable. New work, in dependency order:
 
-| # | Work | Why it is new |
-|---|---|---|
-| D1 | **Decide §1** — unboxed page vs. glass bubbles | Blocks T015. Reversing it later is a rewrite |
-| D2 | `Typeface.Prose` — the block scale in `SylTheme` | T005/T015 currently have no scale to render into |
-| D3 | Parse in `ChatSnapshotLoader`, cache by message id | US2 scenario 4 cannot pass otherwise |
-| D4 | Day dividers and turn-time rhythm | Named nowhere; cheapest same-product win |
-| D5 | Entrance choreography + presence in the veil | "Beauty and magic" is mostly this |
-| D6 | The composer: glass bar, igniting send, **44pt** | T016 says "restyle"; the touch target is a defect |
-| D7 | Scroll-position defect + "Syl replied" pill | A real bug today |
-| D8 | Failed-send state, and VoiceOver per turn | Missing states, one of them accessibility |
+| # | Work | Why it is new | Status |
+|---|---|---|---|
+| D1 | **Decide §1** — unboxed page vs. glass bubbles | Blocks T015. Reversing it later is a rewrite | **Decided & built** — unboxed |
+| D2 | `Typeface.Prose` — the block scale in `SylTheme` | T005/T015 currently have no scale to render into | **Built** |
+| D3 | Parse in `ChatSnapshotLoader`, cache by message id | US2 scenario 4 cannot pass otherwise | **Built** — `MarkdownCache`, keyed by id, evicts on window change |
+| D4 | Day dividers and turn-time rhythm | Named nowhere; cheapest same-product win | **Built** — `TranscriptRhythm`, pure, breaks on *local* midnight |
+| D5 | Entrance choreography + presence in the veil | "Beauty and magic" is mostly this | **Built** — `SylRibbon` in the transcript while active; Reduce Motion gets a labelled pill |
+| D6 | The composer: glass bar, igniting send, **44pt** | T016 says "restyle"; the touch target is a defect | **Built** |
+| D7 | Scroll-position defect + "Syl replied" pill | A real bug today | **Built** |
+| D8 | Failed-send state, and VoiceOver per turn | Missing states, one of them accessibility | **Partly built** — "waiting to send" + retry + per-turn VoiceOver; a true *failed* state needs the store (`syl-008.3.8`) |
+
+## 10. What the build changed about this document
+
+Three things were decided here and found wrong, or incomplete, once rendered.
+
+**`inkFaint` is not usable on the bare veil.** §2 and §4 both specify it for
+timestamps and labels. The veil's blooms composite `plusLighter`, so the ground
+under a word is the base colour *plus* up to 60% of `luminanceCore` — ample
+contrast against the base, almost none mid-bloom. The first night render had a
+timestamp that simply was not there. **Small text on the veil is `inkSoft`;
+`inkFaint` is for text on glass.** This is the real cost of D1: unboxing her put
+small text on a moving background.
+
+**Links needed a colour and this document never said so.** §2's table covers
+block elements and stops. Inline links take the ambient tint, which resolves to
+stock system blue, in the middle of her sentences — the most conspicuous
+possible violation of "no stock system colours remain". They are `luminance` and
+underlined now, and the styling deliberately runs *after* `LinkPolicy` so a
+refused scheme is never painted to look tappable.
+
+**Chat had no serif at all, and §2 did not notice.** Every heading rule here is
+about markdown; an ordinary conversation contains no headings, so an ordinary
+conversation contained no serif. Home's identity is carried as much by New York
+as by the palette. Her name in the navigation bar is now the display face — a
+one-line change that does more for "same product" than any of the block styling.
+
+The lesson for the next design document in this repo: **specify the chrome, not
+only the content.** Two of the three gaps were in the parts of the screen that
+are always visible, while the document exhaustively covered the part that only
+appears when she writes markdown.
 
 ## 9. Rejected, with reasons
 

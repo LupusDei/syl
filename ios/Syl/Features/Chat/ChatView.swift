@@ -3,190 +3,240 @@ import SylKit
 
 /// The conversation.
 ///
-/// Renders from `ChatViewModel`, which renders from disk. There is no loading state
-/// on the way in, deliberately: the first frame after launch shows his conversation,
-/// and anything the network brings arrives on top of it.
+/// Renders from `ChatViewModel`, which renders from disk. There is no loading state on
+/// the way in, deliberately: the first frame after launch shows his conversation, and
+/// anything the network brings arrives on top of it.
+///
+/// ## What this screen is, after `syl-008`
+///
+/// A veil with her light running down the left margin of everything she says. It is the
+/// home screen's composition — living backdrop, suspended particles, content sitting
+/// *on* the atmosphere — applied to a transcript. Before this it was a competent generic
+/// SwiftUI chat that shared not one symbol with the rest of the app.
 struct ChatView: View {
     @ObservedObject var model: ChatViewModel
     @FocusState private var composerFocused: Bool
 
+    /// Whether the newest turn is on screen. Drives whether an arriving message scrolls
+    /// or merely announces itself.
+    @State private var isAtBottom = true
+
+    /// Set when a turn arrives while he is reading history.
+    @State private var hasUnseenTurn = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Off for the offscreen render path.
+    ///
+    /// `ImageRenderer` lays out nothing inside a `ScrollView` — an offscreen host never
+    /// gives the scroll view a content size, so it renders an empty page. `HomeView`
+    /// carries the same switch for the same reason, and the first chat render came back
+    /// as a blank frame exactly as its comment predicts.
+    var scrolls: Bool = true
+
+    /// The id of the sentinel at the foot of the transcript.
+    private static let footAnchor = "transcript-foot"
+
     var body: some View {
-        VStack(spacing: 0) {
-            if model.isConnectionNoteworthy {
-                ConnectionBanner(
-                    summary: model.connectionSummary,
-                    notice: model.notice
+        ZStack {
+            // The same backdrop as home, and for the same reason: the thing that
+            // separates "a nice gradient" from "somewhere that exists" is the light
+            // moving and the air having something in it.
+            SylTheme.Veil()
+                .ignoresSafeArea()
+            MoteField(count: 28, presence: 0.8)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+
+            VStack(spacing: 0) {
+                if model.isConnectionNoteworthy {
+                    ConnectionBanner(
+                        summary: model.connectionSummary,
+                        notice: model.notice
+                    )
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                // Presence overlays the transcript rather than living inside it.
+                //
+                // It sat inside the scrolling container at first, which meant it did
+                // not exist at all on the non-scrolling render path — and since that is
+                // the only path an offscreen render can use, the ribbon could not be
+                // looked at. Presence has nothing to do with scrolling; the coupling
+                // was accidental, and it hid the one thing worth checking.
+                transcript
+                    .overlay(alignment: .bottom) {
+                        if HomeSnapshot.isActive(model.presence) {
+                            PresenceInTranscript(
+                                presence: model.presence,
+                                intensity: model.intensity
+                            )
+                            .padding(.bottom, SylTheme.Metric.snug)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                        }
+                    }
+                    .animation(
+                        reduceMotion ? nil : SylTheme.Motion.settle,
+                        value: HomeSnapshot.isActive(model.presence)
+                    )
+
+                ChatComposer(
+                    draft: $model.draft,
+                    isFocused: $composerFocused,
+                    send: { Task { await model.send() } }
                 )
             }
-
-            messageList
-
-            Composer(
-                draft: $model.draft,
-                isFocused: $composerFocused,
-                send: { Task { await model.send() } }
-            )
         }
+        .animation(
+            reduceMotion ? nil : SylTheme.Motion.settle,
+            value: model.isConnectionNoteworthy
+        )
         .navigationTitle("Syl")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                // Her name, in the display serif.
+                //
+                // Screenshotting chat beside home showed they shared palette, glass,
+                // motes and letterspacing — and that chat contained **no serif at all**.
+                // Home's identity is carried as much by New York as by the colours, and
+                // a conversation with no headings in it had nothing of that. The nav
+                // title was the stock system face, which is to say Settings' face.
+                Text("Syl")
+                    .font(SylTheme.Typeface.title)
+                    .foregroundStyle(SylTheme.Colour.ink)
+                    .accessibilityAddTraits(.isHeader)
+            }
+        }
+        // The nav bar must not paint an opaque strip over the veil — that was the single
+        // most visible seam between this screen and home.
+        .toolbarBackground(.hidden, for: .navigationBar)
         .task { await model.refresh() }
     }
 
     /// The transcript, which is also the keyboard's dismiss target.
     ///
-    /// Two mechanisms rather than one, because they cover different intentions: a drag
-    /// means "I want to read what is above", a tap means "I am done typing". Shipping
-    /// only the scroll dismissal leaves someone who taps a message stuck behind the
-    /// keyboard with no obvious way out, and there is no Done button on a chat composer
-    /// to fall back to.
-    private var messageList: some View {
+    /// Two dismiss mechanisms rather than one, because they cover different intentions:
+    /// a drag means "I want to read what is above", a tap means "I am done typing".
+    /// Shipping only the scroll dismissal leaves someone who taps a message stuck behind
+    /// the keyboard with no obvious way out, and there is no Done button on a chat
+    /// composer to fall back to. **Both are kept verbatim from the original — they were
+    /// the best thing about it.**
+    @ViewBuilder
+    private var transcript: some View {
+        if scrolls {
+            scrollingTranscript
+        } else {
+            VStack {
+                transcriptContent
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    /// The rows themselves, independent of the container they sit in.
+    private var transcriptContent: some View {
+        LazyVStack(alignment: .leading, spacing: SylTheme.Metric.gutter) {
+            if model.snapshot.groups.isEmpty {
+                EmptyConversation()
+            }
+
+            if model.snapshot.mayHaveEarlier {
+                // Automatic on reaching the top, with a visible control as the fallback
+                // — an `onAppear` that misfires would otherwise leave no way back at
+                // all, which is the state this replaces.
+                EarlierMessages(isLoading: model.isLoadingEarlier) {
+                    Task { await model.loadEarlier() }
+                }
+                .onAppear { Task { await model.loadEarlier() } }
+            }
+
+            ForEach(rows) { row in
+                switch row {
+                case .day(let day):
+                    DayDivider(day: day)
+                case .turn(let group, let showsTime):
+                    ChatTurn(
+                        group: group,
+                        showsTime: showsTime,
+                        blocks: model.snapshot.blocks,
+                        isStalled: model.isStalled(group),
+                        retry: { Task { await model.retryQueued() } }
+                    )
+                    .id(group.id)
+                }
+            }
+
+            // A zero-height sentinel. Its visibility *is* the answer to "is he at the
+            // bottom", which no SwiftUI API gives directly on every version this app
+            // supports.
+            Color.clear
+                .frame(height: 1)
+                .id(Self.footAnchor)
+                .onAppear {
+                    isAtBottom = true
+                    hasUnseenTurn = false
+                }
+                .onDisappear { isAtBottom = false }
+        }
+        .padding(.horizontal, SylTheme.Metric.gutter)
+        .padding(.vertical, SylTheme.Metric.step)
+    }
+
+    private var scrollingTranscript: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    if model.snapshot.groups.isEmpty {
-                        EmptyConversation()
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    transcriptContent
+                }
+                .scrollIndicators(.hidden)
+                // Land at the newest turn on first paint rather than relying solely on
+                // an `onChange` that has nothing to react to yet — the pattern Adjutant
+                // records as intermittently failing on long transcripts.
+                .defaultScrollAnchor(.bottom)
+                // `.interactively` rather than `.immediately` so the keyboard tracks the
+                // finger and can be pulled back by reversing. The gesture is reversible,
+                // which `.immediately` is not.
+                .scrollDismissesKeyboard(.interactively)
+                // A plain `.onTapGesture` on the ScrollView would swallow taps on the
+                // messages themselves and compete with the scroll gesture. A
+                // simultaneous, zero-distance drag recogniser dismisses without
+                // consuming anything: text stays selectable and scrolling is unaffected.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 0).onEnded { _ in
+                        composerFocused = false
                     }
-                    ForEach(model.snapshot.groups) { group in
-                        MessageGroupView(group: group)
-                            .id(group.id)
+                )
+                .onChange(of: model.snapshot.groups.last?.id) { _, id in
+                    guard id != nil else { return }
+                    if isAtBottom {
+                        scrollToFoot(proxy)
+                    } else {
+                        // Do not yank the view out from under someone reading history.
+                        // Tell him instead.
+                        hasUnseenTurn = true
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-            }
-            // Drag the transcript, lose the keyboard. `.interactively` rather than
-            // `.immediately` so the keyboard tracks the finger and can be pulled back
-            // by reversing — the gesture is reversible, which `.immediately` is not.
-            .scrollDismissesKeyboard(.interactively)
-            // Tap anywhere in the transcript to dismiss.
-            //
-            // A plain `.onTapGesture` on the ScrollView would swallow taps on the
-            // messages themselves, and it competes with the scroll gesture. A
-            // simultaneous, zero-distance drag recogniser dismisses without consuming
-            // anything: text stays selectable and scrolling is unaffected.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0).onEnded { _ in
-                    composerFocused = false
-                }
-            )
-            .onChange(of: model.snapshot.groups.last?.id) { _, id in
-                guard let id else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(id, anchor: .bottom)
+
+                if hasUnseenTurn {
+                    NewTurnPill { scrollToFoot(proxy) }
+                        .padding(.bottom, SylTheme.Metric.step)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            .animation(reduceMotion ? nil : SylTheme.Motion.settle, value: hasUnseenTurn)
         }
     }
-}
 
-/// One run of consecutive messages from the same speaker.
-struct MessageGroupView: View {
-    let group: MessageGroup
+    private var rows: [TranscriptRow] {
+        TranscriptRhythm.rows(for: model.snapshot.groups)
+    }
 
-    private var isFromCommander: Bool { group.role == .user }
-
-    var body: some View {
-        VStack(alignment: isFromCommander ? .trailing : .leading, spacing: 4) {
-            ForEach(group.messages) { message in
-                Text(message.text)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(bubbleBackground)
-                    .foregroundStyle(isFromCommander ? Color.white : Color.primary)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    // A pending bubble is visibly unfinished rather than
-                    // indistinguishable from a sent one.
-                    .opacity(group.isPending ? 0.55 : 1)
-                    .frame(maxWidth: .infinity, alignment: isFromCommander ? .trailing : .leading)
-            }
-
-            Text(footnote)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+    private func scrollToFoot(_ proxy: ScrollViewProxy) {
+        hasUnseenTurn = false
+        withAnimation(reduceMotion ? nil : SylTheme.Motion.settle) {
+            proxy.scrollTo(Self.footAnchor, anchor: .bottom)
         }
-        .frame(maxWidth: .infinity, alignment: isFromCommander ? .trailing : .leading)
-    }
-
-    private var bubbleBackground: Color {
-        isFromCommander ? .accentColor : Color(.secondarySystemBackground)
-    }
-
-    private var footnote: String {
-        let time = group.startedAt.formatted(date: .omitted, time: .shortened)
-        return group.isPending ? "\(time) · sending" : time
-    }
-}
-
-struct EmptyConversation: View {
-    var body: some View {
-        VStack(spacing: 8) {
-            Text("Nothing here yet.")
-                .font(.headline)
-            Text("Ask her for something, or wait — she starts most mornings.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 48)
-    }
-}
-
-/// The connection state, said plainly.
-///
-/// The server genuinely will be unreachable sometimes — the Mac reboots, the tailnet
-/// drops on a WiFi-to-cellular handoff, the phone goes through a tunnel. An assistant
-/// that silently fails to sync is worse than one that says so.
-struct ConnectionBanner: View {
-    let summary: String
-    let notice: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(summary)
-                .font(.footnote.weight(.medium))
-            if let notice {
-                Text(notice)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(Color(.secondarySystemBackground))
-    }
-}
-
-struct Composer: View {
-    @Binding var draft: String
-    var isFocused: FocusState<Bool>.Binding
-    let send: () -> Void
-
-    private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Message", text: $draft, axis: .vertical)
-                .lineLimit(1...6)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .focused(isFocused)
-
-            Button(action: send) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.title2)
-            }
-            .disabled(!canSend)
-            .accessibilityLabel("Send")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.bar)
     }
 }

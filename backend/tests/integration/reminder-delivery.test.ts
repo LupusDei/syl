@@ -24,7 +24,14 @@ import { TodoService } from "../../src/services/todo-service.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import { startFakeApns, type FakeApns } from "../helpers/fake-apns.js";
 import { startTestApp, type RunningApp } from "../helpers/http.js";
-import { testChat, testConfig, testDatabase, testKeys, testMemory } from "../helpers/service.js";
+import {
+  testAttachments,
+  testChat,
+  testConfig,
+  testDatabase,
+  testKeys,
+  testMemory,
+} from "../helpers/service.js";
 
 /**
  * `syl-002.5.1` — the end-to-end proof, and the point of the whole feature.
@@ -121,7 +128,8 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
     reminders = new ReminderService({ db: db.handle, clock });
     jobs = new JobStore({ db: db.handle, clock });
     const keys = testKeys(db, { clock });
-    const messages = new MessageStore({ db: db.handle, clock });
+    const attachments = testAttachments(db, clock);
+    const messages = new MessageStore({ db: db.handle, clock, attachments });
     const todos = new TodoService({ db: db.handle, clock });
     const goals = new GoalService({ db: db.handle, clock });
 
@@ -144,6 +152,7 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         idempotency: new IdempotencyStore({ db: db.handle, clock }),
         intake: new ArticleIntake({ store: new IntakeStore({ db: db.handle, clock }), clock }),
         memory: testMemory(db, clock),
+        attachments,
       }),
     );
     token = keys.pair(keys.issuePairingCode().code, "Commander's iPhone").token;
