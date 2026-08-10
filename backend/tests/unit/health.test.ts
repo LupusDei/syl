@@ -124,6 +124,89 @@ describe("GET /api/v1/health", () => {
   });
 });
 
+/**
+ * The stale-build question, which every other check on this endpoint is blind
+ * to by construction: an old build is perfectly healthy, so nothing here can
+ * fail because of it. `build` is the only field that can say "she is answering,
+ * and she is answering with code from three hours ago".
+ */
+describe("GET /api/v1/health — what code is answering", () => {
+  const STAMP = {
+    commit: "49ac2dce862dfca27edaeb6c2e69c157ea434eda",
+    builtAt: "2026-08-09T19:58:11.000Z",
+    dirty: false,
+    branch: "main",
+  };
+
+  it("should report the commit and build time the running process was built from", async () => {
+    const app = express();
+    app.use("/api/v1", createHealthRouter({ config: testConfig(), clock: fixedClock(TEST_NOW), build: STAMP }));
+    running = await startTestApp(app);
+
+    const body = (await (await fetch(`${running.baseUrl}/api/v1/health`)).json()) as {
+      data: HealthStatus;
+    };
+
+    expect(body.data.build).toEqual(STAMP);
+  });
+
+  it("should report build as an explicit null when running from source, never omit it", async () => {
+    // An absent field is indistinguishable from an old build that never had
+    // the field — which is exactly the question being asked. Null says "this
+    // process was not built"; missing says nothing at all.
+    const data = await serve();
+
+    expect(data).toHaveProperty("build");
+    expect(data.build).toBeNull();
+  });
+
+  it("should keep reporting the build it was given even after the working tree moves on", async () => {
+    // The whole point. The stamp is a value captured at boot from inside
+    // dist/, not a question asked of git per request, so nothing that happens
+    // to the checkout can change this answer.
+    const app = express();
+    app.use("/api/v1", createHealthRouter({ config: testConfig(), build: STAMP }));
+    running = await startTestApp(app);
+
+    const first = (await (await fetch(`${running.baseUrl}/api/v1/health`)).json()) as { data: HealthStatus };
+    const second = (await (await fetch(`${running.baseUrl}/api/v1/health`)).json()) as { data: HealthStatus };
+
+    expect(first.data.build).toEqual(STAMP);
+    expect(second.data.build).toEqual(STAMP);
+  });
+
+  it("should report how many turns are in flight, so a deploy can decline to restart her mid-sentence", async () => {
+    let turns = 0;
+    const app = express();
+    app.use("/api/v1", createHealthRouter({ config: testConfig(), turnsInFlight: () => turns }));
+    running = await startTestApp(app);
+
+    const idle = (await (await fetch(`${running.baseUrl}/api/v1/health`)).json()) as { data: HealthStatus };
+    turns = 2;
+    const busy = (await (await fetch(`${running.baseUrl}/api/v1/health`)).json()) as { data: HealthStatus };
+
+    expect(idle.data.turnsInFlight).toBe(0);
+    expect(busy.data.turnsInFlight).toBe(2);
+  });
+
+  it("should omit turnsInFlight when there is no conversation surface to ask", async () => {
+    const data = await serve();
+
+    expect(data.turnsInFlight).toBeUndefined();
+  });
+
+  it("should say she is busy without saying what about — this endpoint takes no bearer token", async () => {
+    const app = express();
+    app.use("/api/v1", createHealthRouter({ config: testConfig(), turnsInFlight: () => 3 }));
+    running = await startTestApp(app);
+
+    const raw = await (await fetch(`${running.baseUrl}/api/v1/health`)).text();
+
+    expect(raw).toContain('"turnsInFlight":3');
+    expect(raw).not.toMatch(/conversation|message|lane/i);
+  });
+});
+
 describe("worstStatus", () => {
   it("should be ok when there is nothing to report", () => {
     expect(worstStatus([])).toBe("ok");

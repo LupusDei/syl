@@ -76,6 +76,7 @@ describe("AdminClient paths", () => {
     await client.getConversation("syl:conversation:00000000-0000-7000-8000-000000000001");
     await client.listMessages("syl:conversation:00000000-0000-7000-8000-000000000001");
     await client.listDevices();
+    await client.listLogs();
 
     expect(paths).toEqual([
       "/health",
@@ -89,6 +90,7 @@ describe("AdminClient paths", () => {
       "/conversations/syl%3Aconversation%3A00000000-0000-7000-8000-000000000001",
       "/conversations/syl%3Aconversation%3A00000000-0000-7000-8000-000000000001/messages",
       "/devices",
+      "/logs",
     ]);
   });
 
@@ -102,6 +104,13 @@ describe("AdminClient paths", () => {
     await client.listMessages("syl:conversation:1", { direction: "forward", limit: 5 });
     await client.listJobRuns("syl:job:1", { cursor: "c2" });
     await client.listDevices({ limit: 2 });
+    await client.listLogs({
+      event: "turn.tool",
+      level: "warn",
+      since: "2026-08-10T00:00:00.000Z",
+      until: "2026-08-10T23:59:59.999Z",
+      limit: 200,
+    });
 
     expect(paths).toEqual([
       "/jobs?cursor=c1&limit=10&state=failed&kind=morning_agenda",
@@ -110,6 +119,7 @@ describe("AdminClient paths", () => {
       "/conversations/syl%3Aconversation%3A1/messages?limit=5&direction=forward",
       "/jobs/syl%3Ajob%3A1/runs?cursor=c2",
       "/devices?limit=2",
+      "/logs?limit=200&event=turn.tool&level=warn&since=2026-08-10T00%3A00%3A00.000Z&until=2026-08-10T23%3A59%3A59.999Z",
     ]);
   });
 });

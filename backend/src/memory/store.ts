@@ -15,7 +15,7 @@ import {
  * The hybrid store: `vec0` vectors and an FTS5 keyword index over the same
  * nodes, plus the audit that proves they still describe the same graph.
  *
- * `0014_memory_retrieval.sql` is the argument for the keyword half and the
+ * `0016_memory_retrieval.sql` is the argument for the keyword half and the
  * trust column; read it before changing anything here. `0012_memory_core.sql`
  * decided the partition key, and `vectorTableDdl()` in `schema.ts` is the only
  * route that decision takes to the vector table — this module never writes
@@ -97,7 +97,7 @@ export class StoreError extends Error {
 /** The `vec0` virtual table. Created here, not by a migration — see the header. */
 export const VECTOR_TABLE = "memory_vectors";
 
-/** The FTS5 index. Created by `0014_memory_retrieval.sql`. */
+/** The FTS5 index. Created by `0016_memory_retrieval.sql`. */
 export const KEYWORD_TABLE = "memory_nodes_fts";
 
 /**
@@ -417,7 +417,7 @@ export class MemoryStore {
    * Keyword candidates, best first.
    *
    * A SCAN. The FTS5 index holds hot rows only — see §1 of
-   * `0014_memory_retrieval.sql` — so a `tier` other than `hot` returns nothing
+   * `0016_memory_retrieval.sql` — so a `tier` other than `hot` returns nothing
    * and says so by returning nothing rather than by pretending to have looked.
    * The option exists so the signature matches {@link searchVector} and a
    * caller cannot believe it partitions when it does not.
@@ -793,7 +793,7 @@ export class MemoryStore {
     if (row === undefined) {
       throw new StoreError(
         "table_mismatch",
-        `${KEYWORD_TABLE} does not exist. It is created by 0014_memory_retrieval.sql, so this ` +
+        `${KEYWORD_TABLE} does not exist. It is created by 0016_memory_retrieval.sql, so this ` +
           `database has not been migrated — and an unmigrated database is what a build that ` +
           `emitted JavaScript and no SQL looks like.`,
       );

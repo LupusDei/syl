@@ -40,7 +40,25 @@ export const sharedTestConfig = {
     hookTimeout: 20_000,
     coverage: {
       provider: "v8",
-      reporter: ["text", "lcov"],
+      // `json-summary` is what `scripts/check-coverage.mjs` reads. Coverage has to
+      // be judged SEPARATELY from whether tests passed, because `vitest run
+      // --coverage` exits 1 for a failed test and a missed threshold
+      // indistinguishably — harmless under "zero failures", useless under
+      // "failures == declared".
+      reporter: ["text", "lcov", "json-summary"],
+      // Report coverage even when tests FAIL, which is now the normal state.
+      //
+      // vitest writes no coverage report at all on a failed run — no table, no
+      // summary file. That was harmless while the gate was "zero failures":
+      // a red run had a bigger problem than its coverage. Under "failures ==
+      // declared" it is a hole, because a declared acceptance test is red on
+      // PURPOSE and permanently, so the coverage floor would quietly stop being
+      // enforced and nothing would say so.
+      //
+      // Found by building the split check and discovering there was no summary
+      // to read. The floor is constitution rule 1; it must not lapse because a
+      // test is red for a reason we chose.
+      reportOnFailure: true,
       // Thin argv/stdout entry points. They are exercised by `npm run ping`,
       // not by unit tests, and counting them only dilutes the signal from the
       // logic that does have tests.
@@ -58,6 +76,18 @@ export const sharedTestConfig = {
         "**/vitest.shared.ts",
         "**/dist/**",
         "**/coverage/**",
+        // AGENT WORKTREES, which are full copies of this repository living
+        // inside it. v8 coverage runs with `all: true`, so every file in every
+        // worktree was counted as uncovered source: 3,427 of the 3,698 files
+        // measured, against roughly 135 real ones. Coverage read 3.6% lines
+        // with 3,039 tests passing.
+        //
+        // It was invisible because vitest writes NO coverage report when a run
+        // fails, and something was usually failing. Two faults hiding each
+        // other: the gate was not running, and when it did it was measuring the
+        // wrong thing.
+        "**/.claude/**",
+        "**/worktrees/**",
       ],
       thresholds: {
         lines: 80,

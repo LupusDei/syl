@@ -16,7 +16,15 @@ import {
   type Scenario,
   scenarioFromHeaders,
 } from "./scenario.js";
-import { type Broadcast, MockCursorError, MockStore, nowIso, page } from "./store.js";
+import {
+  filterLogs,
+  isLogLevel,
+  type Broadcast,
+  MockCursorError,
+  MockStore,
+  nowIso,
+  page,
+} from "./store.js";
 
 /**
  * The mock server.
@@ -366,6 +374,39 @@ export class MockServer {
     getRun: ({ params, store }) => {
       const found = store.run(params["runId"] ?? "");
       return found === undefined ? notFound("run") : ok(found);
+    },
+
+    /**
+     * The log, newest first.
+     *
+     * **The mock does not enforce the scope, and that is on purpose.** The real
+     * service refuses a device-scoped token with `403 FORBIDDEN`; the mock hands
+     * out one token shape and has no console at which an admin key could be
+     * minted, so a scope check here could only ever be a coin flip that made the
+     * endpoint unusable for the squad building the view. The refusal is a
+     * property of the service and is tested there
+     * (`backend/tests/unit/logs.test.ts`); this is a data source.
+     */
+    listLogs: ({ store, query }) => {
+      const level = query.get("level");
+      if (level !== null && level !== "" && !isLogLevel(level)) {
+        return {
+          ok: false,
+          status: 400,
+          code: "VALIDATION_FAILED",
+          message: "That is not a log level.",
+        };
+      }
+      return ok(
+        page(
+          filterLogs(store.logs, {
+            event: query.get("event") ?? undefined,
+            level: level ?? undefined,
+            since: query.get("since") ?? undefined,
+            until: query.get("until") ?? undefined,
+          }),
+        ),
+      );
     },
 
     syncSinceCursor: ({ query, store }) => {

@@ -500,6 +500,123 @@ session answered `VESPENE-7741` instead of `NONE`. The second rebuild was a
 no-op, which is the steady state — the cost of running it after every turn is one
 `readdir`, no tokens and no subprocess.
 
+### The log needed a scope, and a scope needed somewhere it cannot be minted
+
+`GET /logs` (`syl-dep1.2`) put the first asymmetry into an API that had none.
+Everything in the contract until then was *the Commander's data* — reminders,
+to-dos, conversations — and a paired phone is supposed to have all of it. One
+principal, one kind of token, no roles, and that simplicity was load-bearing.
+
+The log is a different kind of thing. Syl runs with `bypassPermissions` on the
+Commander's own machine, so `turn.tool` is the record of what a pre-authorised
+program **did there**. A phone left in a taxi, or a pairing code read over a
+shoulder, must not turn into a transcript of the machine's activity — and that
+is a strictly worse leak than the to-do list sitting next to it.
+
+**Alternatives considered and rejected.**
+
+- *A second credential — an admin password, a separate token table.* Two
+  authentication mechanisms means two revocation stories, two expiry stories and
+  two places to get constant-time comparison right. The instruction was to look
+  at how `ApiKeyService` already distinguishes keys and extend that, and it was
+  the correct instinct.
+- *Serving the log to any valid token and relying on the tailnet.* The tailnet
+  is what makes the service reachable at all; it is not a boundary between the
+  Commander's own devices.
+- *Backfilling existing keys to `admin`.* It would have avoided one console
+  command and silently handed the surface to every phone already paired — the
+  exact outcome the scope exists to prevent, arriving invisibly because nothing
+  would fail.
+
+**What makes the scope defensible is not the column, it is where it can be
+created.** `POST /auth/pair` always mints `device`, and `pair()` takes no scope
+argument at all so no future route can be one refactor away from accepting one.
+`admin` comes from `npm run pair -- --admin`, which needs write access to
+`syl.db` — already full compromise of the machine. The scope therefore cannot be
+escalated *into* remotely; it is a statement about which side of the loopback
+boundary a credential was born on.
+
+Two smaller consequences worth remembering:
+
+- **Authenticate first, authorise second.** An anonymous caller gets the ordinary
+  indistinguishable 401 and never learns a scope exists. Reversing the two would
+  disclose the surface to someone with no credential at all.
+- **403 is not 401, and the admin frontend had been treating them as one.**
+  `authed-fetch.ts` signed out on both, which was right while every key reached
+  every route. Left alone, a device key opening the logs view would have been
+  dropped, the operator returned to the gate, and invited to paste the same
+  working key back in.
+
+### A stale build is invisible by construction — `syl-dep1.4`
+
+Every health check passes against an old build, because an old build is
+perfectly healthy: it answers, its store is fine, its certificate is fine, and
+it is simply not the code anybody believes is running. It cost three hours — the
+service came up at 19:58, an MCP fix landed at 20:18, and Syl went on answering
+through a tool surface that had been removed, diagnosed only because the
+Commander thought something read oddly and asked.
+
+The fix is one line of provenance and one rule about where it comes from.
+`backend/scripts/write-build-info.mjs` writes `dist/build-info.json` **during the
+build**; `/health` reports it; `scripts/syl-verify.sh stale` compares it with
+`HEAD`.
+
+**Never read git at request time.** It is the obvious implementation and it is
+worthless: a service that shells out to `git rev-parse HEAD` would have reported
+the *new* commit throughout those three hours. The running process must report
+what it was BUILT FROM. The working tree is a different question, and the value
+is entirely in the two answers disagreeing.
+
+A second property fell out of putting the stamp inside `dist/` rather than
+beside it: **it travels with the artifact**. `npm run deploy` rolls back by
+restoring the previous `dist/`, and the restored build reports the previous
+commit immediately — nothing to keep in sync, and no way for provenance to
+disagree with the code it describes.
+
+### Deploy: the health gate is not "does she answer" — `syl-dep1.5`
+
+The subtle one, and it is why (e) had to come before (c). If a new build fails
+to load, launchd's `KeepAlive` can leave the **previous** process answering
+perfectly, so a deploy that polled for a 200 would report success while nothing
+had changed. The gate is "does she answer **as the new commit**", which is only
+askable because the build stamp exists.
+
+Two further shapes worth keeping:
+
+- **A soak window.** A process that starts and dies thirty seconds later looks
+  identical to a healthy one for those thirty seconds, and `KeepAlive` restarts
+  it into the same broken build forever. The soak watches `startedAt`: if it
+  moves, she restarted herself, and that is a crash loop rather than a deploy.
+- **Save `dist/` before building, not after.** The build writes over it in
+  place, so after `tsc` starts there is no previous build to go back to — and a
+  build that fails half way leaves a directory that is neither.
+
+What it does **not** do is roll back the database. Migrations run forward and
+there is no down path, so a rollback restores the code and leaves the schema
+ahead of it. That is stated in the outcome rather than papered over, and there
+is a red acceptance test — `syl-dep1.7` — that says what should happen instead.
+
+### The CI gate is a safety boundary, not a convenience — `syl-dep1.6`
+
+"If `origin/main` moved, build and restart" is the obvious auto-deploy and the
+wrong one: it would let a 2am commit with red CI take the Commander's assistant
+down while he sleeps, and the first symptom would be a 07:00 agenda that never
+arrives.
+
+Everything ambiguous means do not deploy — checks pending, a commit with **no**
+check runs (merge commits produce exactly that, and absence of evidence is not
+evidence of passing), a conclusion string GitHub has not used before, and above
+all **the API being unreachable**. The two errors are not symmetrical: waiting
+costs a few hours of staleness, which `/health` now makes visible, and guessing
+costs the 07:00 agenda.
+
+The Commander's stated direction is that Syl may eventually update herself. She
+is not being given that, and nothing here builds toward it. What makes the
+eventual version survivable is that **everything which deploys goes through one
+function and no option turns the check off** — asserted over every combination
+of every option in `deploy-gate.test.ts`, so a bypass added later fails the
+suite rather than shipping.
+
 ## 8. Design principles to hold
 
 **Never silently drop a reminder.** A late reminder is a nuisance; a vanished one

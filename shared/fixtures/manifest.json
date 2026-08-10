@@ -8,6 +8,12 @@
       "summary": "A deferral must always return a strictly later instant. This is the guarantee refusing to be broken."
     },
     {
+      "file": "errors/forbidden.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "A valid token that is not for this surface. The only place Syl tells a caller apart from an unauthenticated one, and it is safe because they already hold a working credential."
+    },
+    {
       "file": "errors/idempotency_key_required.json",
       "schema": "ErrorEnvelope",
       "envelope": "raw",
@@ -149,13 +155,13 @@
       "file": "http/health.degraded.json",
       "schema": "HealthStatus",
       "envelope": "ok",
-      "summary": "Reachable, but APNs is failing. Reminders still queue."
+      "summary": "Reachable, but APNs is failing. Reminders still queue. `build` is null and turnsInFlight absent: this one was started from source by hand, which is a real state and not a missing field."
     },
     {
       "file": "http/health.ok.json",
       "schema": "HealthStatus",
       "envelope": "ok",
-      "summary": "Everything up."
+      "summary": "Everything up, and saying which commit is answering. A stale build passes every other check on this page, so `build` is the only field that can catch it."
     },
     {
       "file": "http/job.reminder_delivery.json",

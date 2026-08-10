@@ -116,7 +116,7 @@ export type FeedbackVerdict = "helpful" | "unhelpful";
  * no-op for every memory that had never been marked wrong, which is most of
  * them — the reward would be unreachable and only the punishment would work.
  *
- * Must match the DEFAULT in `0014_memory_retrieval.sql`; a test asserts it does.
+ * Must match the DEFAULT in `0016_memory_retrieval.sql`; a test asserts it does.
  */
 export const DEFAULT_TRUST = 0.8;
 

@@ -48,6 +48,11 @@
       "why": "Same defect in probe(): the fact whose entity is Grace ranks FIRST for probe('Ada'), ahead of both facts that actually carry Ada. related() and contradict() are the two kernels that work today; the nightly sweep (syl-005.4.2) must use those and not these."
     },
     {
+      "test": "deploy — a rollback after a migration should restore the schema the restored build expects",
+      "bead": "syl-dep1.7",
+      "why": "A health-gated rollback restores the CODE and leaves the SCHEMA forward. Migrations run on the way up and there is no down path, so after a failed deploy the restored build runs against a database it has never seen. Additive migrations usually survive that and a destructive one does not, and nothing today tells the two apart. The deploy reports the migrations involved and reports schemaRestored: false rather than pretending — but 'the code is back' and 'the system is back' are different claims, and only the first is true. Fixing it needs either down-migrations or a snapshot of the SQLite file taken before the deploy."
+    },
+    {
       "test": "what the nightly sweep must record should report tonight's floor crossings from the sweep that actually moved the edges",
       "bead": "syl-005.4.2",
       "why": "The metrics in syl-005.6.3/6.4 are a DERIVED VIEW over the dream log, and the dream does not run yet. The test drives the real demotion sweep (MemoryGraph.demoteDueEdges), which moves three edges into the cold partition and tells the log nothing, so the audit reports a night that demoted zero while the cold store holds three. The sweep in syl-005.4.2 has to call DreamLog.recordCounts({ edgesDemoted }) with the `changes` its UPDATE already returns — it is free, and without it the growth of the cold set is invisible however fast it grows. Note the direction: the SWEEP writes to both stores; neither store writes to the other, so constraint 7 is untouched."

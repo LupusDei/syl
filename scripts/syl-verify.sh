@@ -12,11 +12,24 @@
 #             3am failure, reproduced exactly, with `kill -CONT` as the undo.
 #   reboot  — nobody can automate this. `after-reboot` is the checklist.
 #
-# `status` is read-only and safe to run any time. Everything else deliberately
-# breaks the running service, which is the point.
+# And one question none of those can ask: WHICH BUILD IS ANSWERING.
+#
+#   stale   — compare the commit /health reports against HEAD.
+#
+# That check exists because a stale build is invisible by construction. Every
+# other line this script prints passes against an old build, because an old
+# build is perfectly healthy. It cost three hours once: the service came up at
+# 19:58, a fix landed at 20:18, and Syl went on answering through a tool surface
+# that had been removed until the Commander noticed something read oddly and
+# asked. `status` now includes it; `stale` is the same check on its own, so it
+# can be scripted — exit 0 means the running build is HEAD.
+#
+# `status` and `stale` are read-only and safe to run any time. Everything else
+# deliberately breaks the running service, which is the point.
 #
 # Usage:
 #   scripts/syl-verify.sh status
+#   scripts/syl-verify.sh stale
 #   scripts/syl-verify.sh kill
 #   scripts/syl-verify.sh wedge
 #   scripts/syl-verify.sh after-reboot
@@ -30,6 +43,9 @@ HEALTH_URL="${SYL_HEALTH_URL:-http://127.0.0.1:$PORT/api/v1/health}"
 LAUNCHCTL="${SYL_LAUNCHCTL:-/bin/launchctl}"
 STATUS_FILE="${SYL_CERT_STATUS:-$HOME/.syl/cert-status.json}"
 LOG_DIR="${SYL_LOG_DIR:-$HOME/Library/Logs/Syl}"
+# The checkout HEAD is read from. Overridable so the build comparison can be
+# driven against a scratch repository in a test rather than against this one.
+REPO_DIR="${SYL_VERIFY_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # How long launchd's KeepAlive may take. ThrottleInterval is 10.
 RESTART_DEADLINE="${SYL_VERIFY_RESTART_DEADLINE:-60}"
 # How long the watchdog may take: StartInterval 60 times a threshold of 3, plus
@@ -81,6 +97,72 @@ await_new_pid() {
   return 1
 }
 
+# The health body, or the empty string if she does not answer.
+health_body() {
+  curl -fsS --max-time "${SYL_VERIFY_TIMEOUT:-5}" "$HEALTH_URL" 2>/dev/null
+}
+
+# Pull one field out of the health body.
+#
+# Deliberately anchored on the KEY rather than on a position, so a field added
+# to the endpoint later cannot shift the answer. `build.commit` is the only
+# `"commit"` key the body has; `"build":null` matches nothing, which is exactly
+# the right answer for a service running from source.
+health_field() {
+  /usr/bin/sed -n "s/.*\"$1\":\"\\([^\"]*\\)\".*/\\1/p" | head -1
+}
+
+# WHICH BUILD IS ANSWERING.
+#
+# Every other check in this file passes against a stale build, because a stale
+# build is perfectly healthy. This is the only one that can fail because of one.
+# The two sides of the comparison come from deliberately different places: the
+# running service reports what it was BUILT FROM (a stamp inside `dist/`, never
+# a `git` call at request time), and HEAD is what the checkout says now. It is
+# the disagreement between those two that is the whole signal.
+cmd_stale() {
+  heading "Which build is answering"
+
+  local body
+  body="$(health_body)"
+  if [ -z "$body" ]; then
+    fail "$HEALTH_URL does not answer, so nothing can be said about which build is running"
+    return
+  fi
+
+  local running built head
+  running="$(printf '%s' "$body" | health_field commit)"
+  built="$(printf '%s' "$body" | health_field builtAt)"
+  head="$(/usr/bin/git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null)"
+
+  if [ -z "$running" ]; then
+    fail "the service reports no build commit — it is running from source, or from a build made before provenance existed"
+    note "if she is supposed to be a launchd service, this is itself the finding: rebuild and redeploy"
+    return
+  fi
+
+  case "$body" in
+  *'"dirty":true'*)
+    fail "the running build was made from a DIRTY working tree — it cannot be reproduced from ${running:0:7}"
+    ;;
+  esac
+
+  note "running ${running:0:7}, built $built"
+
+  if [ -z "$head" ]; then
+    fail "cannot read HEAD from $REPO_DIR, so there is nothing to compare against"
+    return
+  fi
+
+  if [ "$running" = "$head" ]; then
+    pass "that is the commit at HEAD"
+  else
+    fail "STALE: she is running ${running:0:7} and HEAD is ${head:0:7}"
+    note "she is healthy and she is not the code you are reading. Deploy: npm run deploy"
+    note "what changed:  git -C $REPO_DIR log --oneline ${running:0:7}..${head:0:7}"
+  fi
+}
+
 cmd_status() {
   heading "The machine"
   local sleep_setting autorestart
@@ -115,6 +197,8 @@ cmd_status() {
   else
     fail "$HEALTH_URL does not answer"
   fi
+
+  cmd_stale
 
   # The check that would have saved an evening.
   #
@@ -245,11 +329,12 @@ cmd_after_reboot() {
 
 case "${1:-status}" in
 status) cmd_status ;;
+stale) cmd_stale ;;
 kill) cmd_kill ;;
 wedge) cmd_wedge ;;
 after-reboot) cmd_after_reboot ;;
 *)
-  printf 'usage: %s [status|kill|wedge|after-reboot]\n' "$0" >&2
+  printf 'usage: %s [status|stale|kill|wedge|after-reboot]\n' "$0" >&2
   exit 64
   ;;
 esac

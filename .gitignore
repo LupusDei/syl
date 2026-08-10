@@ -3,6 +3,11 @@ node_modules/
 coverage/
 dist/
 
+# The build a deploy can roll back to. Same shape as dist/, kept beside it
+# rather than inside it so a build cannot copy the previous one into the new
+# one recursively. Machine state, never source.
+.dist-previous/
+
 # Agent worktrees live inside the repo. Never track them: committing a
 # worktree's contents is how adj-204 broke the entire Adjutant fleet — a
 # node_modules symlink pointing into a peer worktree got committed to main,

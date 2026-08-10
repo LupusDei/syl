@@ -73,12 +73,43 @@ export type PageInfo = {
   readonly hasMore: boolean;
 };
 
+/**
+ * Liveness, dependency status, and — the part that is not obvious —
+ * **what code is answering**.
+ *
+ * A stale build is invisible by construction: every check passes, because
+ * the old build is perfectly healthy. It has already cost real time here.
+ * The service ran from 19:58 while a fix landed at 20:18, so for three
+ * hours Syl answered through a tool surface that had been removed, and it
+ * was noticed only because the Commander thought something read oddly and
+ * asked. `build` is what turns that silent failure into a visible one.
+ */
 export type HealthStatus = {
   readonly status: "ok" | "degraded" | "down";
   readonly version: string;
   readonly startedAt: Instant;
   readonly now: Instant;
   readonly checks: HealthCheck[];
+  readonly build?: BuildInfo | null;
+  readonly turnsInFlight?: number;
+};
+
+/**
+ * Provenance for the artifact that is running, written by
+ * `backend/scripts/write-build-info.mjs` at build time into
+ * `dist/build-info.json`.
+ *
+ * **Stamped at build time, never read from git at request time.** Those
+ * two answers differ, and the difference is the entire point: the running
+ * service must report the commit it was BUILT FROM, not whatever the
+ * working tree happens to say now. Because the stamp lives inside `dist/`,
+ * it also travels with a rolled-back build automatically.
+ */
+export type BuildInfo = {
+  readonly commit: string | null;
+  readonly builtAt: Instant;
+  readonly dirty: boolean;
+  readonly branch?: string | null;
 };
 
 export type HealthCheck = {
@@ -616,6 +647,48 @@ export type Run = {
 
 export type RunPage = {
   readonly items: Run[];
+  readonly nextCursor: string | null;
+  readonly hasMore: boolean;
+};
+
+/**
+ * Severity, ordered. `warn` and above is what an operator looks for.
+ */
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
+/**
+ * One line of `syl.log`, as it was written.
+ *
+ * `event` is a dotted, stable name rather than prose, because a search is
+ * built on it and prose is not. The ones worth knowing:
+ *
+ * | Event | What it means |
+ * |---|---|
+ * | `service.start` | The process came up. Carries the whole configuration. |
+ * | `turn.start` | A turn began, with its Claude Code session id. |
+ * | `turn.tool` | **She called a tool.** The record of what she actually did. |
+ * | `turn.done` | A turn ended, with its turn count and cost. |
+ * | `turn.api_error` | The CLI reported an API failure mid-turn. |
+ * | `chat` | The conversation service said something about a message. |
+ *
+ * `fields` is deliberately **unmodelled**. A log line's fields are
+ * whatever the call site passed, and pinning them in the contract would
+ * mean a spec change every time somebody adds one — which is the fastest
+ * way to train people to stop adding them. Clients render it generically.
+ */
+export type LogEntry = {
+  readonly ts: Instant;
+  readonly level: LogLevel;
+  readonly event: string;
+  readonly pid: number;
+  readonly fields: { readonly [key: string]: unknown };
+};
+
+/**
+ * Newest first, unlike every other page in this contract.
+ */
+export type LogPage = {
+  readonly items: LogEntry[];
   readonly nextCursor: string | null;
   readonly hasMore: boolean;
 };

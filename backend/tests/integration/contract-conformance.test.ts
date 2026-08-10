@@ -631,6 +631,39 @@ describe("the live service against shared/openapi.yaml", () => {
     });
   });
 
+  describe("logs", () => {
+    it("should conform on a page of the service's own log", async () => {
+      // The live service writes its log into the test's temp directory and
+      // nothing has written to it, so an empty page is the expected content.
+      // The claim being made here is about the SHAPE — `LogPage` as the
+      // contract declares it — which is the half a client depends on.
+      const response = await syl.api("/logs", { token: syl.adminToken });
+      const page = await expectConformingSuccess<{ items: unknown[]; hasMore: boolean }>(
+        response,
+        "listLogs",
+      );
+
+      expect(Array.isArray(page.items)).toBe(true);
+      expect(page.hasMore).toBe(false);
+    });
+
+    it("should refuse the paired device's own token in the contract's failure envelope", async () => {
+      // `syl.token` came from `POST /auth/pair` — it is a phone's token, and a
+      // phone may not read what Syl has been doing on the machine. The refusal
+      // has to be one of the contract's two envelopes like everything else.
+      const response = await syl.api("/logs");
+      const error = await expectConformingFailure(response, "FORBIDDEN");
+
+      expect(response.status).toBe(403);
+      expect(error["retryable"]).toBe(false);
+    });
+
+    it("should give an anonymous caller 401 rather than disclosing that a scope exists", async () => {
+      const response = await syl.api("/logs", { anonymous: true });
+      await expectConformingFailure(response, "UNAUTHORIZED");
+    });
+  });
+
   describe("jobs", () => {
     it("should conform on the job list, one job, its runs, and a run", async () => {
       const page = await expectConformingSuccess<{ items: Job[] }>(

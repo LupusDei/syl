@@ -56,17 +56,23 @@ struct RootView: View {
 
     private var paired: some View {
         TabView {
+            // Home first, because it is the screen that answers "what do I need to do"
+            // and `SOUL.md` says that is what the first thing on any surface must
+            // answer. It is also the only tab that leads anywhere else.
+            Group {
+                if let home = appDelegate.home {
+                    HomeScreen(model: home)
+                } else {
+                    unopenableStore
+                }
+            }
+            .tabItem { Label("Today", systemImage: "sparkles") }
+
             NavigationStack {
                 if let chat = appDelegate.chat {
                     ChatView(model: chat)
                 } else {
-                    // A database that will not open is a real state, not a crash. The
-                    // status tab still works and still says what is wrong.
-                    ContentUnavailableView(
-                        "This device's copy of Syl could not be opened",
-                        systemImage: "externaldrive.badge.exclamationmark",
-                        description: Text("Check free space, then relaunch.")
-                    )
+                    unopenableStore
                 }
             }
             .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
@@ -81,6 +87,7 @@ struct RootView: View {
             )
             .tabItem { Label("Settings", systemImage: "gearshape") }
         }
+        .tint(SylTheme.Colour.accent)
         .task {
             network.start()
             appDelegate.notifications.refreshAuthorization()
@@ -96,6 +103,16 @@ struct RootView: View {
             guard phase == .active else { return }
             Task { await appDelegate.synchroniseNow() }
         }
+    }
+
+    /// A database that will not open is a real state, not a crash. The status tab still
+    /// works and still says what is wrong.
+    private var unopenableStore: some View {
+        ContentUnavailableView(
+            "This device's copy of Syl could not be opened",
+            systemImage: "externaldrive.badge.exclamationmark",
+            description: Text("Check free space, then relaunch.")
+        )
     }
 }
 

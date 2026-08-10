@@ -31,7 +31,7 @@ import { DatabaseSync, type Database } from "../../src/services/sqlite.js";
  * The hybrid store, against the REAL shipped migrations and the REAL `vec0`
  * extension.
  *
- * Nothing here is stubbed. `0014_memory_retrieval.sql` is where the FTS5
+ * Nothing here is stubbed. `0016_memory_retrieval.sql` is where the FTS5
  * triggers live and `vectorTableDdl()` is where the partition key lives, so a
  * test that built its own tables would be testing a copy of both decisions —
  * the same argument `memory-core-migration.test.ts` makes, and the reason the

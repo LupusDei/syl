@@ -46,8 +46,19 @@ jobs:
       - name: Build (every workspace)
         run: npm run build
 
+      # `test:gate`, NOT `npm test`. The repository's gate is "failures ==
+      # declared" (tests/expected-failures.json), not "zero failures" — an
+      # acceptance test for unbuilt behaviour stays RED on purpose. This step
+      # ran `npm test` and so was red on EVERY commit to main from the moment
+      # the manifest landed, while `npm run verify` was green locally. CI and
+      # the repository disagreed about what green means, which is worse than
+      # either definition.
+      #
+      # It also blocked the auto-deployer before it existed: the update job
+      # deploys only CI-green commits, so it would have declined every commit
+      # forever, silently — the exact failure class syl-dep1 exists to kill.
       - name: Test (every workspace)
-        run: npm test
+        run: npm run test:gate
 
       # Blocking. Thresholds live in vitest.shared.ts (80/70/60, constitution
       # rule 1) so no workspace can quietly lower its own bar. This step ran

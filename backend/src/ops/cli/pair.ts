@@ -33,9 +33,25 @@ import { readCertStatus } from "../tailnet-cert.js";
  * Guessing it is the failure this project has already had once, and a printed
  * `localhost` is worse than a printed nothing.
  *
+ * ## `--admin`, and why it is here rather than behind a route
+ *
+ * `GET /logs` needs a token with `admin` scope, and **no HTTP endpoint mints
+ * one**. That is the whole security argument for the scope: pairing is
+ * reachable over the tailnet and gated on eight digits that live for ten
+ * minutes, whereas this command needs write access to `syl.db` — which is
+ * already full compromise of the machine. An admin key therefore cannot be
+ * escalated *into* remotely; it can only be created by someone standing at the
+ * console, or with a shell on it.
+ *
+ * It prints the token itself, once, because there is nothing to redeem: a
+ * pairing code exists so a *phone* never has to be shown the token, and a
+ * browser on this machine has no such flow. The token is never stored in
+ * recoverable form, so a lost one means minting another and revoking this.
+ *
  * Usage:
  *   npm run pair                 issue a code, print it and the URL
  *   npm run pair -- --json       the same, for a script
+ *   npm run pair -- --admin      mint an admin token for the web admin's logs view
  */
 
 /** What the command worked out, before any of it is printed. */
@@ -196,6 +212,64 @@ export function describePairing(briefing: PairingBriefing): readonly string[] {
   return lines;
 }
 
+/** What minting an admin key produced, before any of it is printed. */
+export interface AdminGrant {
+  readonly token: string;
+  readonly expiresAt: string;
+  /** How many admin keys were already live. Printed so a pile-up is visible. */
+  readonly existingAdminKeys: number;
+  readonly databasePath: string;
+}
+
+/**
+ * Mint an admin token against an already-open store.
+ *
+ * Named `deviceName` on the row because that is what the column is called; the
+ * value says what it actually is, so `npm run pair` and any future admin screen
+ * both render something truthful.
+ */
+export function mintAdmin(
+  db: SylDatabase,
+  databasePath: string,
+  label = "Web admin (console)",
+): AdminGrant {
+  const keys = new ApiKeyService({ db: db.handle });
+  const existing = keys.liveKeysWithScope("admin").length;
+  const grant = keys.mint(label, { scope: "admin" });
+  return {
+    token: grant.token,
+    expiresAt: grant.expiresAt,
+    existingAdminKeys: existing,
+    databasePath: resolve(databasePath),
+  };
+}
+
+/** The lines to print for an admin mint. Returned, so a test can read them. */
+export function describeAdminGrant(grant: AdminGrant): readonly string[] {
+  const lines = [
+    "",
+    "  ADMIN TOKEN — shown once, and never recoverable from the database.",
+    "",
+    `  Token          ${grant.token}`,
+    `  Expires        ${grant.expiresAt}`,
+    `  Store          ${grant.databasePath}`,
+    "",
+    "  Paste it into the web admin at /admin. It unlocks the logs view, which",
+    "  no paired phone can reach — a device token is refused there with 403.",
+  ];
+
+  if (grant.existingAdminKeys > 0) {
+    lines.push(
+      "",
+      `  ${String(grant.existingAdminKeys)} admin key(s) were already live. This does not revoke them;`,
+      "  a browser you no longer trust keeps working until you revoke it.",
+    );
+  }
+
+  lines.push("");
+  return lines;
+}
+
 /** Open the store, issue a code, say what to do with it. */
 export function main(argv: readonly string[] = []): number {
   const config = loadConfig();
@@ -209,6 +283,16 @@ export function main(argv: readonly string[] = []): number {
   assertExistingStore(databasePath, process.env["HOME"]);
   const db = openDatabase({ path: databasePath });
   try {
+    if (argv.includes("--admin")) {
+      const grant = mintAdmin(db, databasePath);
+      if (argv.includes("--json")) {
+        console.log(JSON.stringify(grant, null, 2));
+      } else {
+        for (const line of describeAdminGrant(grant)) console.log(line);
+      }
+      return 0;
+    }
+
     const briefing = issueBriefing(db, config, databasePath);
     if (argv.includes("--json")) {
       console.log(JSON.stringify(briefing, null, 2));

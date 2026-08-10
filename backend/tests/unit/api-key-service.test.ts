@@ -454,6 +454,89 @@ describe("list", () => {
   });
 });
 
+/**
+ * The scope, and the asymmetry that makes it worth having.
+ *
+ * The claim being tested is not "there is a column". It is that **the only way
+ * to obtain an admin key is to be able to write to this database** — no HTTP
+ * path reaches it — and that everything already paired stays weak.
+ */
+describe("key scope", () => {
+  it("should mint `device` from a pairing code, always", () => {
+    const grant = keys.pair(keys.issuePairingCode().code, "Commander's iPhone");
+    const record = keys.list()[0];
+
+    expect(keys.verify(grant.token)).toMatchObject({ ok: true, key: { scope: "device" } });
+    expect(record?.scope).toBe("device");
+  });
+
+  it("should default a console mint to `device` as well, so admin is always deliberate", () => {
+    // The weak default is the point: a caller that forgets to say what it wants
+    // gets the scope that can do less. A widening default turns every future
+    // `mint` call site into a potential hole.
+    const grant = keys.mint("Console bootstrap");
+
+    expect(keys.verify(grant.token)).toMatchObject({ ok: true, key: { scope: "device" } });
+  });
+
+  it("should mint `admin` only when the console asks for it by name", () => {
+    const grant = keys.mint("Web admin (console)", { scope: "admin" });
+
+    expect(keys.verify(grant.token)).toMatchObject({ ok: true, key: { scope: "admin" } });
+  });
+
+  it("should keep the two scopes apart on the same store", () => {
+    const device = keys.pair(keys.issuePairingCode().code, "Commander's iPhone");
+    const admin = keys.mint("Web admin (console)", { scope: "admin" });
+
+    expect(keys.verify(device.token)).toMatchObject({ key: { scope: "device" } });
+    expect(keys.verify(admin.token)).toMatchObject({ key: { scope: "admin" } });
+    expect(keys.liveKeysWithScope("admin").map((key) => key.deviceName)).toEqual([
+      "Web admin (console)",
+    ]);
+  });
+
+  it("should stop counting a revoked admin key as live", () => {
+    const admin = keys.mint("Web admin (console)", { scope: "admin" });
+    const record = keys.liveKeysWithScope("admin")[0];
+    keys.revoke(record?.id ?? "", "browser retired");
+
+    expect(keys.liveKeysWithScope("admin")).toEqual([]);
+    expect(keys.verify(admin.token)).toEqual({ ok: false, reason: "revoked" });
+  });
+
+  it("should refuse a scope the schema does not know", () => {
+    // The CHECK constraint in 0014. A typo must fail at the write: an
+    // unrecognised scope compared against "admin" denies access, which is safe
+    // and then looks exactly like a bug in the middleware.
+    expect(() =>
+      db.handle
+        .prepare(
+          `INSERT INTO api_keys (id, token_hash, token_suffix, device_name, scope, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run("syl:apikey:x", "hash", "aaaa", "Typo", "Admin", "2026-08-09T07:00:00.000Z"),
+    ).toThrow(/CHECK/i);
+  });
+
+  it("should read an unrecognised stored scope as the weaker one", () => {
+    // A database restored from a future version, or edited by hand. Widening
+    // on an unknown value would turn a stray string into an open door; the
+    // CHECK above means this service can never write one itself.
+    const grant = keys.mint("Console bootstrap");
+    // The CHECK is what stops this service writing such a row, so it has to be
+    // stood down to produce one at all — which is itself the evidence that the
+    // constraint above is load-bearing rather than decorative.
+    db.handle.exec("PRAGMA ignore_check_constraints = ON");
+    db.handle
+      .prepare("UPDATE api_keys SET scope = 'superuser' WHERE token_hash = ?")
+      .run(hashToken(grant.token));
+    db.handle.exec("PRAGMA ignore_check_constraints = OFF");
+
+    expect(keys.verify(grant.token)).toMatchObject({ ok: true, key: { scope: "device" } });
+  });
+});
+
 describe("hashToken", () => {
   it("should be SHA-256 hex", () => {
     expect(hashToken("abc")).toBe(createHash("sha256").update("abc", "utf8").digest("hex"));

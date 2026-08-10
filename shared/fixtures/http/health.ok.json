@@ -26,6 +26,13 @@
         "status": "ok",
         "detail": "/Users/commander/.local/bin/claude"
       }
-    ]
+    ],
+    "build": {
+      "commit": "49ac2dce862dfca27edaeb6c2e69c157ea434eda",
+      "builtAt": "2026-08-09T05:12:39.402Z",
+      "dirty": false,
+      "branch": "main"
+    },
+    "turnsInFlight": 0
   }
 }
