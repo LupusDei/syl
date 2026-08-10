@@ -861,6 +861,36 @@ check that was going to be added later", and later did not arrive. A red test
 declared against the bead means the next person cannot write the code without
 meeting the guard, and cannot meet it without deciding deliberately.
 
+**A phrase can be checked against what he actually wrote; a boolean cannot be
+checked against anything.** `remind_me` first took `urgent: boolean`, and
+`schedule.ts` honours that unconditionally — so a flag Syl set on her own
+judgement pierced quiet hours. `SOUL.md` says overnight items wait "unless
+explicitly urgent", and *explicit* means he said so, not that she concluded it.
+Anticipation plus self-judged urgency is a 3am wake-up for a friend's birthday,
+which is the one place his own order to anticipate collides with his sleep.
+
+The field is now `urgentBecauseHeSaid` — his words, quoted, the same shape
+`WHEN.said` already used for time. The general form: **whenever she reports her
+own judgement, take the evidence instead of the conclusion.** A conclusion can
+only be trusted; evidence can be compared to something.
+
+And half a fix here is worse than none, because it looks finished. The one-liner
+that suggests itself in the handler —
+`urgent: input.urgentBecauseHeSaid !== undefined` — restores the defect in full,
+since a presence check is satisfied by any string at all. Quoting is a safeguard
+only while something compares the quote to his message; otherwise it is a longer
+way of writing `true`. Match forgivingly on case and punctuation and
+unforgivingly on everything else, and let absent, empty and unmatched all mean
+*not urgent*: too strict costs a reminder that waits until morning, too lax costs
+his house at three, and those are not comparable.
+
+**A red test that cannot compile is not a declared failure — it is a broken
+build with a bead attached.** `tests/expected-failures.json` makes a test's
+*failure* legitimate and says nothing about whether the file parses. A declared
+test whose import does not resolve fails for a reason the manifest was never
+asked about, and reads as tracked work while the build is simply broken. Check
+that a red test fails for the reason it is named for, not merely that it is red.
+
 ---
 
 ## 9. Open questions
