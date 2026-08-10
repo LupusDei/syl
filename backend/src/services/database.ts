@@ -134,6 +134,21 @@ export interface OpenDatabaseOptions {
   readonly busyTimeoutMs?: number;
   /** Injected so `applied_at` is assertable rather than "roughly now". */
   readonly now?: () => string;
+  /**
+   * Whether this connection may load a SQLite extension.
+   *
+   * Off by default, and it has to be asked for at CONSTRUCTION — `node:sqlite`
+   * offers no way to turn it on later, so a connection opened without it can
+   * never load `vec0` and the memory store's vector half is simply absent.
+   *
+   * Turning it on is not the same as loading anything: `loadExtension` still
+   * requires `enableLoadExtension(true)` immediately beforehand, and
+   * `memory/store.ts` is the only caller, which re-disables it the moment the
+   * one extension it wants is in. Two switches rather than one is what keeps
+   * "this process can load native code" a decision somebody made rather than a
+   * property every connection quietly has.
+   */
+  readonly allowExtension?: boolean;
 }
 
 /** An open, migrated database. */
@@ -447,7 +462,7 @@ export function openDatabase(options: OpenDatabaseOptions): SylDatabase {
     mkdirSync(dirname(path), { recursive: true });
   }
 
-  const handle = new DatabaseSync(path);
+  const handle = new DatabaseSync(path, { allowExtension: options.allowExtension ?? false });
   try {
     const pragmaOptions: ApplyPragmaOptions = {
       busyTimeoutMs: options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS,
