@@ -40,8 +40,12 @@ struct HomeView: View {
     var onSelect: (DayMoment) -> Void = { _ in }
     var onOpen: (Destination) -> Void = { _ in }
 
-    /// Where an orb goes. Only `today` is wired; the other two are the next screens.
-    enum Destination: Equatable, Sendable {
+    /// Where an orb goes.
+    ///
+    /// `Hashable` since `syl-011.5.3`, because it is now a navigation path value:
+    /// `HomeScreen` pushes `.goals` onto a `NavigationStack`. Goals is wired; `memory`
+    /// belongs to `syl-010` and `today` is already this screen.
+    enum Destination: Hashable, Sendable {
         case goals
         case memory
         case today

@@ -12,7 +12,13 @@ final class HomeViewModel: ObservableObject {
     @Published private(set) var intensity: Double = 0
     @Published private(set) var now: Date = Date()
 
-    private let store: LocalStore
+    /// The device's copy of everything, readable by the screen that owns this model.
+    ///
+    /// Internal rather than private since `syl-011.5.3`: the Goals orb is a door, and the
+    /// screen behind it reads from the same store this one does. Passing it down from
+    /// `SylApp` instead would mean a second route to the same object and one more place
+    /// for the two to disagree about which database is open.
+    let store: LocalStore
     private let clock: @Sendable () -> Date
 
     /// The decayed view of presence. **Not** the last frame's raw state.
