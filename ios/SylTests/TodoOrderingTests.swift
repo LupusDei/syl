@@ -273,7 +273,77 @@ final class TodoOrderingTests: XCTestCase {
         XCTAssertEqual(Array(byHand), byDisk)
     }
 
+    // MARK: - Agreement with the goal read, which is a second copy of the same hazard
+
+    func testShouldOrderAGoalsTodosExactlyAsTheGoalReadDoes() throws {
+        // **`todos(goalId:)` is the same hazard on a second read, and the consequence is
+        // worse.** It carries its own `limit` (200), and it is where a goal's *evidence*
+        // comes from — so a disagreement here does not scramble a page, it makes a goal
+        // quietly under-report what has actually happened on it. That is precisely the
+        // failure US4 exists to prevent, arriving through the back door.
+        //
+        // The two reads share an `ORDER BY` string today. That is enough today, and it
+        // stops being enough the moment someone tunes one and not the other — which is
+        // exactly how these two got out of step in the first place.
+        let store = try LocalStore(database: SylDatabase.inMemory())
+        try store.upsert(evidenceFixture)
+
+        let fromDisk = try store.todos(goalId: goalUnderTest)
+
+        XCTAssertEqual(
+            TodoOrdering.order(fromDisk).map(\.id),
+            fromDisk.map(\.id),
+            "TodoOrdering must be a no-op on what todos(goalId:) already returned"
+        )
+    }
+
+    func testShouldChooseTheSameEvidenceAsTheDatabaseDoesUnderALimit() throws {
+        let store = try LocalStore(database: SylDatabase.inMemory())
+        try store.upsert(evidenceFixture)
+
+        let byHand = TodoOrdering.order(evidenceFixture.filter { $0.goalId == goalUnderTest })
+            .prefix(3)
+            .map(\.id)
+        let byDisk = try store.todos(goalId: goalUnderTest, limit: 3).map(\.id)
+
+        XCTAssertEqual(Array(byHand), byDisk)
+    }
+
+    func testShouldOrderFinishedWorkByTheSameRuleAsOpenWork() throws {
+        // The case `openTodos` can never reach. Evidence is *mostly* finished work, so the
+        // goal read deliberately returns closed rows — and `TodoOrdering` reads no status
+        // at all, which is only correct if the database does not either. If a `status`
+        // term ever appeared in one of them, the parity tests above would catch it and
+        // this one says why it would matter.
+        let store = try LocalStore(database: SylDatabase.inMemory())
+        try store.upsert(evidenceFixture)
+
+        let fromDisk = try store.todos(goalId: goalUnderTest)
+
+        XCTAssertTrue(
+            fromDisk.contains { $0.status == .done },
+            "the precondition: closed work is part of the evidence"
+        )
+        XCTAssertEqual(TodoOrdering.order(fromDisk).map(\.id), fromDisk.map(\.id))
+    }
+
     // MARK: - Harness
+
+    private let goalUnderTest: SylID = "syl:goal:0198f2c3-0001-7000-8000-00000000d001"
+
+    /// What a goal's evidence is made of: finished work, dropped work, and what is still
+    /// open — plus a to-do belonging to a *different* goal, so a query that forgot its
+    /// filter would be visible rather than merely lucky.
+    private var evidenceFixture: [Todo] {
+        [
+            todo(id: "e-open-undated", due: nil, updated: "2026-08-02T12:00:00Z", goalId: goalUnderTest),
+            todo(id: "b-done-dated", due: "2026-08-09T16:00:00Z", goalId: goalUnderTest, status: .done),
+            todo(id: "d-open-pinned", due: nil, updated: "2026-08-06T12:00:00Z", pinned: true, goalId: goalUnderTest),
+            todo(id: "a-done-earlier", due: "2026-08-03T16:00:00Z", goalId: goalUnderTest, status: .done),
+            todo(id: "c-dropped", due: "2026-08-15T16:00:00Z", goalId: goalUnderTest, status: .dropped),
+            todo(id: "z-other-goal", due: "2026-08-04T16:00:00Z", goalId: "syl:goal:0198f2c3-0001-7000-8000-00000000d002"),
+        ]
+    }
 
     /// One of every case that matters, in an order that is not the answer: pinned and
     /// not, dated and not, overdue and future, and no two rows tied on every term.
@@ -308,7 +378,8 @@ final class TodoOrderingTests: XCTestCase {
         due: String?,
         updated: String = "2026-08-08T12:00:00Z",
         pinned: Bool = false,
-        goalId: SylID? = nil
+        goalId: SylID? = nil,
+        status: TodoStatus = .open
     ) -> Todo {
         Todo(
             id: "syl:todo:\(id)",
@@ -316,12 +387,12 @@ final class TodoOrderingTests: XCTestCase {
             goalId: goalId,
             dueAt: due.map(instant),
             pinned: pinned,
-            status: .open,
+            status: status,
             source: .commander,
             delegatedJobId: nil,
             createdAt: instant("2026-08-01T12:00:00Z"),
             updatedAt: instant(updated),
-            completedAt: nil
+            completedAt: status == .done ? instant("2026-08-09T18:00:00Z") : nil
         )
     }
 }
