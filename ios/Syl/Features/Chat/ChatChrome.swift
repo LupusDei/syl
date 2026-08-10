@@ -1,4 +1,5 @@
 import SwiftUI
+import SylKit
 
 /// The connection state, said plainly.
 ///
@@ -64,6 +65,56 @@ struct EmptyConversation: View {
         .padding(.horizontal, SylTheme.Metric.gutter)
         .padding(.vertical, SylTheme.Metric.chapter)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Syl, present in her own conversation.
+///
+/// `ChatViewModel` has published `presence` since the screen was written and `ChatView`
+/// never rendered it — she was visible on the home screen and absent from the one place
+/// the Commander is actually waiting on her.
+///
+/// The ribbon and nothing else: no three grey dots. Three dots are another app's
+/// furniture, and this app already has a vocabulary for "she is doing something" —
+/// light. It appears only while she is *active*, which is the same rule the home screen
+/// applies, and for the same reason: drawn continuously it stops meaning anything.
+struct PresenceInTranscript: View {
+    let presence: PresenceState
+    let intensity: Double
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Group {
+            if reduceMotion {
+                // Reduce Motion asks for no movement, not for no information. A moving
+                // ribbon conveys "thinking" to everyone else; this conveys it here.
+                Text(label)
+                    .sylLabelStyle()
+                    .foregroundStyle(SylTheme.Colour.inkSoft)
+                    .padding(.horizontal, SylTheme.Metric.step)
+                    .frame(height: SylTheme.Metric.minimumTouchTarget)
+                    .sylGlass(radius: SylTheme.Metric.minimumTouchTarget / 2, presence: 0.7)
+            } else {
+                SylRibbon(state: presence, intensity: intensity)
+                    .frame(height: 44)
+                    .opacity(0.75)
+                    .blendMode(.plusLighter)
+            }
+        }
+        .accessibilityElement()
+        .accessibilityLabel(label)
+    }
+
+    private var label: String {
+        switch presence {
+        case .thinking: return "Thinking"
+        case .speaking: return "Replying"
+        case .listening: return "Listening"
+        case .alert: return "Something needs attention"
+        case .delighted, .manifest: return "Here"
+        case .absent, .idle, .concerned: return "Here"
+        }
     }
 }
 

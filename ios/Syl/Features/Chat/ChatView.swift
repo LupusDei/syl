@@ -72,6 +72,21 @@ struct ChatView: View {
         )
         .navigationTitle("Syl")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                // Her name, in the display serif.
+                //
+                // Screenshotting chat beside home showed they shared palette, glass,
+                // motes and letterspacing — and that chat contained **no serif at all**.
+                // Home's identity is carried as much by New York as by the colours, and
+                // a conversation with no headings in it had nothing of that. The nav
+                // title was the stock system face, which is to say Settings' face.
+                Text("Syl")
+                    .font(SylTheme.Typeface.title)
+                    .foregroundStyle(SylTheme.Colour.ink)
+                    .accessibilityAddTraits(.isHeader)
+            }
+        }
         // The nav bar must not paint an opaque strip over the veil — that was the single
         // most visible seam between this screen and home.
         .toolbarBackground(.hidden, for: .navigationBar)
@@ -180,6 +195,16 @@ struct ChatView: View {
                         // Tell him instead.
                         hasUnseenTurn = true
                     }
+                }
+
+                if HomeSnapshot.isActive(model.presence) {
+                    PresenceInTranscript(
+                        presence: model.presence,
+                        intensity: model.intensity
+                    )
+                    .padding(.bottom, SylTheme.Metric.snug)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
                 }
 
                 if hasUnseenTurn {
