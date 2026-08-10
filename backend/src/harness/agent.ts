@@ -201,8 +201,32 @@ export interface SylAgentOptions {
    * **With exactly one exception: {@link MEMORYLESS_LANES}.** See there.
    */
   readonly autoMemory?: AutoMemory;
-  /** Extra options forwarded to every turn. */
-  readonly turnOptions?: TurnOptions;
+  /**
+   * Extra options forwarded to a turn.
+   *
+   * A function form for the same reason {@link contributors} has one, and under
+   * `syl-009` it is no longer a nicety: **the tool surface is lane-dependent.**
+   * The commander lane is handed an MCP configuration and the other three are
+   * not — the dream must not be able to write a reminder while judging, and the
+   * heartbeat and agenda read rather than act. One shared options object cannot
+   * express that, and the version of this that could was "give every lane hands
+   * and hope none of them use them".
+   */
+  readonly turnOptions?: TurnOptions | ((lane: Lane) => TurnOptions);
+  /**
+   * The MCP verbs a lane will really have, named as the CLI presents them.
+   *
+   * Only for the capability section, and it exists because `--tools ""` empties
+   * the **built-ins alone**: a lane can have an empty `tools` string and a full
+   * MCP surface at once, and `capabilityFromToolsOption` reading `tools` by
+   * itself would tell the commander lane it cannot act while it is holding
+   * `remind_me`. See `harness/capability.ts`.
+   *
+   * Pass what the wiring actually attached. A list written out beside it is a
+   * list that disagrees with it, which is the failure that whole module exists
+   * to make unrepresentable.
+   */
+  readonly hands?: readonly string[] | ((lane: Lane) => readonly string[]);
 }
 
 /** A resume failure means the stored id is unusable — not that Claude is down. */
@@ -226,7 +250,8 @@ export class SylAgent {
   readonly #recall: (() => string) | undefined;
   readonly #contributors: SylAgentOptions["contributors"];
   readonly #autoMemory: AutoMemory | undefined;
-  readonly #turnOptions: TurnOptions;
+  readonly #turnOptions: SylAgentOptions["turnOptions"];
+  readonly #hands: SylAgentOptions["hands"];
   readonly #lane: Lane;
 
   constructor(options: SylAgentOptions = {}) {
@@ -235,9 +260,22 @@ export class SylAgent {
     this.#recall = options.recall;
     this.#contributors = options.contributors;
     this.#autoMemory = options.autoMemory;
-    this.#turnOptions = options.turnOptions ?? {};
+    this.#turnOptions = options.turnOptions;
+    this.#hands = options.hands;
     this.#store = options.store ?? memorySessionStore();
     this.#lane = assertLane(options.lane ?? LANES.commander);
+  }
+
+  /** The extra options this lane's turns carry. */
+  #turnOptionsFor(lane: Lane): TurnOptions {
+    if (typeof this.#turnOptions === "function") return this.#turnOptions(lane);
+    return this.#turnOptions ?? {};
+  }
+
+  /** The MCP verbs this lane really has. Empty for every lane but the one. */
+  #handsFor(lane: Lane): readonly string[] {
+    if (typeof this.#hands === "function") return this.#hands(lane);
+    return this.#hands ?? [];
   }
 
   /**
@@ -276,8 +314,15 @@ export class SylAgent {
         // land — the fourth instance of the bug it was written to fix. Reading
         // the real option makes staleness UNREPRESENTABLE in both directions:
         // there is no second list, so there is nothing to keep in step.
+        //
+        // Both halves of the surface, because `--tools ""` empties the
+        // built-ins and leaves an attached MCP server untouched: a lane can
+        // hold `remind_me` and an empty `tools` string at the same time, and
+        // reading only `tools` would hand the commander lane NO_HANDS_YET while
+        // it is holding hands. Same rule, one more input.
         ...(() => {
-          const text = capabilityFromToolsOption(this.#turnOptions.tools);
+          const options = this.#turnOptionsFor(lane);
+          const text = capabilityFromToolsOption(options.tools, this.#handsFor(lane));
           return text === undefined ? [] : [{ id: "capability", kind: "capability", text } as const];
         })(),
         ...extra,
@@ -315,7 +360,12 @@ export class SylAgent {
       runner: this.#runner,
       store: this.#store,
       lane: assertLane(lane),
-      turnOptions: this.#turnOptions,
+      // Carried as given — a function stays a function — so a lane view answers
+      // the same lane-dependent questions the original does. Collapsing it to
+      // one lane's options here would hand the dream whatever the commander
+      // lane was given, which is the one thing this shape exists to prevent.
+      ...(this.#turnOptions !== undefined ? { turnOptions: this.#turnOptions } : {}),
+      ...(this.#hands !== undefined ? { hands: this.#hands } : {}),
       ...(this.#soul !== undefined ? { soul: this.#soul } : {}),
       ...(this.#recall !== undefined ? { recall: this.#recall } : {}),
       // Carried for the same reason as `recall`: a contributor forgotten here is
@@ -371,6 +421,7 @@ export class SylAgent {
   }
 
   #buildOptions(lane: Lane, resume: string | undefined): TurnOptions {
+    const forLane = this.#turnOptionsFor(lane);
     return {
       // Unattended means pre-authorised: in `-p` mode there is nobody to
       // approve, so the CLI's default denies every call and the assistant burns
@@ -404,7 +455,7 @@ export class SylAgent {
       // named capability handed to a specific lane — not an ambient surface
       // every turn inherits.
       strictMcpConfig: true,
-      ...this.#turnOptions,
+      ...forLane,
       // After the spread, not before: if the agent was told where its memory
       // lives, an incidental `turnOptions` must not be able to move it.
       ...((): { autoMemory?: AutoMemory } => {
@@ -418,7 +469,7 @@ export class SylAgent {
       ...(resume ? { resume } : {}),
       onSessionId: (sessionId) => {
         this.#store.write(lane, sessionId);
-        this.#turnOptions.onSessionId?.(sessionId);
+        forLane.onSessionId?.(sessionId);
       },
     };
   }

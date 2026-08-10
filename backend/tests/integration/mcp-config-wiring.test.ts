@@ -5,9 +5,12 @@ import { join, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { LANES, SylAgent, memorySessionStore } from "../../src/harness/agent.js";
+import { NO_HANDS_YET } from "../../src/harness/capability.js";
 import { runTurn, type TurnOptions } from "../../src/harness/session.js";
+import { bootstrap } from "../../src/index.js";
+import { mcpToolName, toolConfigPath } from "../../src/tools/config.js";
 import { flagValue, loadFixture, makeFakeClaude, type FakeClaude } from "../helpers/fake-claude.js";
-import { silentRunner } from "../helpers/service.js";
+import { silentRunner, testConfig } from "../helpers/service.js";
 import { filesHandingAnMcpConfig, handsAnMcpConfigToATurn } from "../helpers/source-scan.js";
 import { BACKEND_SRC } from "../helpers/sql-tables.js";
 
@@ -65,16 +68,21 @@ import { BACKEND_SRC } from "../helpers/sql-tables.js";
 const MAY_HAND_OUT_THE_TOOLS: readonly string[] = [
   // `index.ts`, and it serves the COMMANDER lane and no other.
   //
-  // Declared before it provides anything, deliberately. It forwards a config
-  // path to `assertContainer` today and will attach the surface itself when
-  // `syl-009.3.3` lands — and that transition is the exact event this guard
-  // exists to catch. Parked in a validators list it would go on passing on the
-  // day its meaning changed, which is the failure this whole file is about.
+  // `syl-009.3.3` has landed, so this entry now means what it was declared to
+  // mean: `bootstrap` builds `SylAgent.turnOptions` as a FUNCTION OF THE LANE,
+  // and `handsFor` returns the declaration for `LANES.commander` and
+  // `undefined` for every other lane. That is the whole containment argument,
+  // made in one function, in one file — which is why this list must stay at one
+  // entry.
   //
   // The other lanes get nothing: the dream must not be able to write a reminder
-  // while judging, the heartbeat and agenda read rather than act, and the
-  // extraction turn is a sealed reader. An empty-but-declared intent is what
-  // this list is for.
+  // while judging what matters, the heartbeat and agenda read rather than act,
+  // and the extraction turn is a sealed reader that never reaches this object.
+  //
+  // `startSyl` also names the option indirectly — it writes the file the path
+  // points at, once the port is known — and that is the same file and the same
+  // decision, which is the point of keeping both in here rather than splitting
+  // the declaration from the wiring.
   "index.ts",
 ];
 
@@ -230,6 +238,102 @@ describe("what a turn gets when it is given one", () => {
     for (const options of seen) {
       expect(options.strictMcpConfig).toBe(true);
       expect(options.mcpConfig).toBeUndefined();
+    }
+  });
+});
+
+describe("which lane the service actually gives them to", () => {
+  /**
+   * The other half of this file, and the half the static scan cannot reach.
+   *
+   * `MAY_HAND_OUT_THE_TOOLS` proves only ONE FILE can attach a surface. It
+   * cannot prove that file attaches it to one lane, and "index.ts hands out
+   * tools" would still be true of a version that handed them to all four. So
+   * this drives the real `bootstrap`, on a real home, and asks each lane what
+   * it was carrying.
+   */
+  interface LaneProbe {
+    /** Take a turn on `lane` and remember the options it carried. */
+    record(lane: string): Promise<void>;
+    readonly options: Map<string, TurnOptions>;
+    close(): void;
+  }
+
+  function lanesOf(home: string): LaneProbe {
+    let last: TurnOptions | undefined;
+    const built = bootstrap(testConfig({ databasePath: join(home, "syl.db") }), {
+      runner: (prompt, options) => {
+        last = options;
+        return silentRunner(prompt, options);
+      },
+    });
+
+    const options = new Map<string, TurnOptions>();
+    return {
+      options,
+      close: () => built.database.close(),
+      record: async (lane) => {
+        await built.agent.ask("Say hello.", lane);
+        if (last !== undefined) options.set(lane, last);
+      },
+    };
+  }
+
+  /** A fresh home, cleaned up with the rest of this file's temporaries. */
+  function aHome(): string {
+    const home = mkdtempSync(join(tmpdir(), "syl-lane-"));
+    temps.push(home);
+    return home;
+  }
+
+  it("should be the commander lane, and no other", async () => {
+    const home = aHome();
+    const lanes = lanesOf(home);
+
+    try {
+      for (const lane of [LANES.commander, LANES.heartbeat, LANES.agenda, LANES.consolidation]) {
+        await lanes.record(lane);
+      }
+
+      // Under her home, absolute, from configuration. A path into this source
+      // tree would reattach her to the workshop through the one door that is
+      // deliberately open, and `ops/container.ts` refuses to boot on one.
+      const commander = lanes.options.get(LANES.commander)?.mcpConfig;
+      expect(commander).toBe(toolConfigPath(home));
+      expect(commander?.startsWith(home)).toBe(true);
+
+      // The dream must not be able to write a reminder while judging what
+      // matters; the heartbeat and the agenda read rather than act.
+      for (const lane of [LANES.heartbeat, LANES.agenda, LANES.consolidation]) {
+        expect(lanes.options.get(lane)?.mcpConfig, `${lane} was given hands`).toBeUndefined();
+        expect(lanes.options.get(lane)?.strictMcpConfig).toBe(true);
+      }
+    } finally {
+      lanes.close();
+    }
+  });
+
+  it("should tell only that lane it can act, because only that lane can", async () => {
+    // `--tools ""` empties the built-ins alone, so every lane here has an empty
+    // `tools` string and exactly one of them has hands. A capability section
+    // derived from `tools` by itself would tell the commander lane it cannot
+    // act while it is holding `remind_me` — `NO_HANDS_YET` becoming the lie it
+    // was written to prevent.
+    const lanes = lanesOf(aHome());
+
+    try {
+      await lanes.record(LANES.commander);
+      await lanes.record(LANES.heartbeat);
+
+      const commander = lanes.options.get(LANES.commander)?.systemPrompt ?? "";
+      expect(commander).toContain(mcpToolName("remind_me"));
+      expect(commander).not.toContain(NO_HANDS_YET);
+
+      const heartbeat = lanes.options.get(LANES.heartbeat)?.systemPrompt ?? "";
+      expect(heartbeat).toContain(NO_HANDS_YET);
+      expect(heartbeat).not.toContain(mcpToolName("remind_me"));
+    } finally {
+      lanes.close();
     }
   });
 });

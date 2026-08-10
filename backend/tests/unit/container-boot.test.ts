@@ -8,6 +8,7 @@ import { LANES } from "../../src/harness/agent.js";
 import type { TurnOptions, TurnRunner } from "../../src/harness/session.js";
 import { bootstrap, sylHome } from "../../src/index.js";
 import { ContainerViolationError, describeContainer } from "../../src/ops/container.js";
+import { toolConfigPath } from "../../src/tools/config.js";
 import { silentRunner, testConfig } from "../helpers/service.js";
 
 const dirs: string[] = [];
@@ -43,18 +44,26 @@ afterEach(() => {
  * inherit a decision nobody made. That is exactly how the heartbeat and the
  * agenda ended up waking her in the source repository.
  *
- * Every lane is `undefined` today — no MCP at all. It will not stay that way.
- * `syl-009` gives her hands as a **narrow, named** MCP surface (`remind_me`,
- * not `Bash`): she loses the engineer's built-ins and gains an assistant's
- * verbs. When that lands, the lane that gets it changes its entry here, in one
- * visible line, and every other lane still fails if a surface appears.
+ * Every lane was `undefined` and one of them no longer is. `syl-009.3.3` gives
+ * her hands as a **narrow, named** MCP surface (`remind_me`, not `Bash`): she
+ * loses the engineer's built-ins and gains an assistant's verbs. The lane that
+ * gets it changed its entry here, in one visible line, and every other lane
+ * still fails if a surface appears.
  *
- * The config path itself is checked by `assertContainer`: absolute and under
- * her home. A path in the source tree reattaches her to the workshop through
- * the one door left open.
+ * A function of her home rather than a literal path, because the whole claim is
+ * that the declaration lives **under her home** — a constant would have to be
+ * either a path in the source tree, which is the thing this is defending
+ * against, or a value copied from the implementation, which asserts that the
+ * implementation equals itself. The config path is also checked by
+ * `assertContainer` at boot; this is the same rule at the lane.
  */
-const INTENDED_MCP: Readonly<Record<(typeof LANES)[keyof typeof LANES], string | undefined>> = {
-  commander: undefined,
+const INTENDED_MCP: Readonly<
+  Record<(typeof LANES)[keyof typeof LANES], ((home: string) => string) | undefined>
+> = {
+  // HER HANDS. The Commander's own conversation, and no other lane: the dream
+  // must not be able to write a reminder while judging what matters, and the
+  // heartbeat and agenda read rather than act.
+  commander: toolConfigPath,
   heartbeat: undefined,
   agenda: undefined,
   consolidation: undefined,
@@ -125,7 +134,7 @@ describe("bootstrap — the container", () => {
       // Stated per lane so this test does not have to be loosened when `syl-009`
       // hands her a narrow named surface — loosening it is how it would end up
       // in a shape that also passes with `Bash` attached.
-      const { databasePath } = home();
+      const { dir, databasePath } = home();
       const { runner, seen } = recordingRunner();
       const built = bootstrap(testConfig({ databasePath }), { runner });
       closers.push(() => built.database.close());
@@ -138,7 +147,7 @@ describe("bootstrap — the container", () => {
       // tooling — because it was simply there, and the reply never reached the
       // Commander's phone.
       expect(seen[0]?.strictMcpConfig).toBe(true);
-      expect(seen[0]?.mcpConfig).toBe(INTENDED_MCP[lane]);
+      expect(seen[0]?.mcpConfig).toBe(INTENDED_MCP[lane]?.(dir));
     });
 
     it("should load none of this machine's settings, hooks or plugins", async () => {
