@@ -109,6 +109,12 @@ import { MEMORY_NODE_KINDS, type MemoryNodeKind } from "./schema.js";
  *   derived FROM the graph. Keeping the two apart keeps the direction of
  *   dependency legible.
  *
+ * Concretely: the nightly job calls `DreamJudge.dream(...)` and then
+ * {@link WorkingMemory.regenerate} in a `finally`. `dream()` already returns a
+ * `JudgeReport` for every outcome it has and throws for the rest, so the
+ * `finally` is what makes "a failed night still leaves working memory correct"
+ * true rather than intended.
+ *
  * The consolidation lane asserts auto-memory OFF, so what this produces goes
  * to `working_memory` and never to Claude Code's own memory directory.
  */

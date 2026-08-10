@@ -1,6 +1,3 @@
-import type { GraftSink } from "../connections/intake.js";
-import type { IntakeSource, IntakeStore, StoredExtract } from "../connections/intake-store.js";
-import type { RetentionClass } from "../connections/retention.js";
 import type { MemoryGraph, MemoryNode } from "./graph.js";
 import { handle, projectInto, projectSource, type ProjectedNode } from "./projection.js";
 import { MEMORY_TIERS } from "./schema.js";
@@ -92,6 +89,75 @@ import { MEMORY_TIERS } from "./schema.js";
  * shown exactly what is left rather than being told it is all gone.
  */
 
+/**
+ * ## Why this module imports NOTHING from `connections/`
+ *
+ * US4's acceptance test holds a structural fence: nothing outside
+ * `connections/` may import it except `index.ts`, the composition root.
+ * "Exactly one door in, and the reader has exactly one caller." That fence is
+ * a security boundary and it is not something to widen for convenience — so
+ * the dependency is inverted instead. Everything this module needs from intake
+ * is declared below as a narrow PORT, and the real `IntakeStore` satisfies
+ * every one of them structurally, with no import in either direction.
+ *
+ * That leaves one duplicated vocabulary — {@link SourceRetention}, the three
+ * retention classes — which is exactly the kind of copy that drifts. It is
+ * pinned by a test that imports both this file and `connections/retention.ts`
+ * and asserts they still agree; a test file is outside the fence, so the
+ * assertion costs nothing and the drift cannot happen quietly.
+ */
+
+/**
+ * How long a source lives and how carefully it is deleted.
+ *
+ * Mirrors `RetentionClass` in `connections/retention.ts`. See above for why it
+ * is a copy and what stops it drifting.
+ */
+export type SourceRetention = "ephemeral" | "standard" | "sensitive";
+
+/** The slice of an intake source row this module reads. */
+export interface SourceRow {
+  readonly id: string;
+  readonly title: string | null;
+  readonly canonicalUrl: string;
+  readonly retention: SourceRetention;
+}
+
+/** The slice of a stored extract this module reads. */
+export interface SourceExtractRow {
+  readonly id: string;
+  readonly sourceId: string;
+  readonly chunkIndex: number;
+  readonly extract: { readonly summary: string };
+}
+
+/**
+ * The slice of `IntakeStore` this module calls.
+ *
+ * Three methods. `purge` is the one that matters: it is a real hard delete
+ * through the foreign-key cascade, and this module's job is to give it the
+ * reach into the graph that a foreign key cannot have.
+ */
+export interface SourceStore {
+  get(id: string): SourceRow | null;
+  extracts(sourceId: string): readonly SourceExtractRow[];
+  purge(sourceId: string): { readonly chunks: number; readonly extracts: number };
+}
+
+/**
+ * What intake's `graft` option wants.
+ *
+ * Structurally identical to `GraftSink` in `connections/intake.ts`, declared
+ * here so the fence stays intact. A test pins that {@link MemorySources.sink}
+ * is assignable to the real one.
+ */
+export interface SourceGraftSink {
+  graft(input: {
+    readonly source: SourceRow;
+    readonly extracts: readonly SourceExtractRow[];
+  }): void | Promise<void>;
+}
+
 /** The relation an extract handle hangs off its source by. */
 export const EXTRACTED_RELATION = "extracted";
 
@@ -102,7 +168,7 @@ export const TOMBSTONE_PREFIX = "forgotten:";
 export const SOURCE_LABEL_MAX_CHARS = 160;
 
 /** How restrictive each class is. Higher governs when several apply. */
-const RETENTION_SEVERITY: Readonly<Record<RetentionClass, number>> = {
+const RETENTION_SEVERITY: Readonly<Record<SourceRetention, number>> = {
   ephemeral: 0,
   standard: 1,
   sensitive: 2,
@@ -115,9 +181,9 @@ export interface SourceProvenance {
   /** The `source` handle that asserted it — possibly the node itself. */
   readonly sourceNodeId: string;
   /** The intake row. The authority on retention, stage and expiry. */
-  readonly source: IntakeSource;
+  readonly source: SourceRow;
   /** Read from the row, never from the node. */
-  readonly retention: RetentionClass;
+  readonly retention: SourceRetention;
 }
 
 /** What one graft wrote. */
@@ -133,7 +199,7 @@ export interface GraftReport {
 /** What one forget destroyed, and — as importantly — what it did not. */
 export interface ForgetReport {
   readonly sourceId: string;
-  readonly retention: RetentionClass;
+  readonly retention: SourceRetention;
   readonly chunksPurged: number;
   readonly extractsPurged: number;
   /** Observed edges withdrawn. */
@@ -163,21 +229,21 @@ function truncate(value: string, max: number): string {
  * `memory_nodes` refuses a blank label and a graft must not fail because a
  * reader turn returned an empty summary for one chunk of thirty.
  */
-export function extractLabel(extract: StoredExtract): string {
+export function extractLabel(extract: SourceExtractRow): string {
   const summary = oneLine(extract.extract.summary);
   if (summary !== "") return truncate(summary, SOURCE_LABEL_MAX_CHARS);
   return `extract ${String(extract.chunkIndex)} of ${extract.sourceId}`;
 }
 
 export interface MemorySourcesOptions {
-  readonly store: IntakeStore;
+  readonly store: SourceStore;
   readonly graph: MemoryGraph;
 }
 
 /**
  * The graph's view of what the Commander has read.
  *
- * {@link MemorySources.sink} adapts it to {@link GraftSink}, which is the seam
+ * {@link MemorySources.sink} adapts it to {@link SourceGraftSink} — structurally `GraftSink`, the seam
  * intake left open for "the memory graph does not exist yet". The adapter is a
  * one-liner rather than an `implements` clause because `GraftSink.graft`
  * returns nothing: intake does not want the report, and a method typed to
@@ -185,7 +251,7 @@ export interface MemorySourcesOptions {
  * caller too.
  */
 export class MemorySources {
-  readonly #store: IntakeStore;
+  readonly #store: SourceStore;
   readonly #graph: MemoryGraph;
 
   constructor(options: MemorySourcesOptions) {
@@ -194,7 +260,7 @@ export class MemorySources {
   }
 
   /** This module as the `graft` option `ArticleIntake` takes. */
-  get sink(): GraftSink {
+  get sink(): SourceGraftSink {
     return {
       graft: (input) => {
         this.graft(input);
@@ -215,8 +281,8 @@ export class MemorySources {
    * contract.
    */
   graft(input: {
-    readonly source: IntakeSource;
-    readonly extracts: readonly StoredExtract[];
+    readonly source: SourceRow;
+    readonly extracts: readonly SourceExtractRow[];
   }): GraftReport {
     const source = projectInto(this.#graph, projectSource(input.source));
     const extracts: ProjectedNode[] = [];
