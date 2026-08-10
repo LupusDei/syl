@@ -33,6 +33,11 @@
   ],
   "expected": [
     {
+      "test": "US6 — she can act should turn 'remind me in five minutes' into a stored reminder five minutes from now",
+      "bead": "syl-009.7.1",
+      "why": "syl-act1, stated as the acceptance criterion of syl-009: he asked for a reminder in five minutes, she replied like an assistant, and NOTHING WAS WRITTEN. Every piece of the machinery exists — ReminderService, the scheduler, the outbox, quiet hours, APNs, and the routes for all of it — and nothing connects a conversation to any of it. The test drives the real HTTP write path, ConversationService, the per-lane queue and SylAgent, and substitutes only the model: a stand-in that spawns whatever MCP server the turn was handed, speaks real MCP over stdio, and calls create_reminder with arguments built from that tool's own schema. It fails at the first step, because the commander lane's turn carries no mcpConfig at all — she has no hands. It goes green when syl-009.3.x wires them, and then it must be promoted out of this file."
+    },
+    {
       "test": "holographic query kernels — behaviour reason should rank the fact matching ALL entities above facts matching one, by a margin above the noise floor",
       "bead": "syl-b97",
       "why": "reason() is documented upstream as compositional retrieval no embedding DB can do. It does not discriminate: every fact scores 0.489-0.491, a spread of 0.002, which is the noise floor. Verified digit-for-digit against the Python original on the same corpus, so this is an inherited defect and not a porting error. Root cause: bundle() is a circular mean, which discards the magnitude that classic HRR unbinding needs to recover a composed vector. related() on the same data separates by 0.30 and works."
