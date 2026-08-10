@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { GraphError, MemoryGraph } from "../../src/memory/graph.js";
+import { MEMORY_NODE_KINDS } from "../../src/memory/schema.js";
 import {
   buildWorkingMemory,
   toCandidate,
@@ -166,10 +167,17 @@ describe("buildWorkingMemory", () => {
   });
 
   it("should have a section for every node kind, so nothing hot is unrenderable", () => {
+    // A new kind added to `MEMORY_NODE_KINDS` with no section here would be
+    // selected into the projection and then rendered nowhere — hot, chosen,
+    // and invisible, with nothing failing.
     const kinds = WORKING_MEMORY_SECTIONS.map((section) => section.kind);
 
     expect(new Set(kinds).size).toBe(kinds.length);
-    expect(buildWorkingMemory(kinds.map((kind, index) => candidate({ id: `n${String(index)}`, kind }))).dropped).toEqual([]);
+    expect([...kinds].sort()).toEqual([...MEMORY_NODE_KINDS].sort());
+    expect(
+      buildWorkingMemory(kinds.map((kind, index) => candidate({ id: `n${String(index)}`, kind })))
+        .dropped,
+    ).toEqual([]);
   });
 });
 

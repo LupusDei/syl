@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { instant, systemClock, type Clock } from "../services/clock.js";
 import type { Database } from "../services/sqlite.js";
 import type { MemoryGraph, SalientNode } from "./graph.js";
-import { MEMORY_NODE_KINDS, type MemoryNodeKind } from "./schema.js";
+import type { MemoryNodeKind } from "./schema.js";
 
 /**
  * Working memory: a PROJECTION of the graph's hot region.
@@ -69,7 +69,7 @@ import { MEMORY_NODE_KINDS, type MemoryNodeKind } from "./schema.js";
  * - what did not fit is counted in the text (`…and N more`), never dropped
  *   silently;
  * - the store refuses to write anything over budget
- *   ({@link WorkingMemoryOverflowError}), and `0015`'s
+ *   ({@link WorkingMemoryOverflowError}), and `0017`'s
  *   `CHECK (bytes <= 4096)` is the backstop under that.
  *
  *
@@ -389,7 +389,7 @@ interface StoredRow {
 
 const ROW_COLUMNS = "text, digest, bytes, lines, included, dropped, generated_at";
 
-/** The one row's primary key. There is no second row; `0015` CHECKs it. */
+/** The one row's primary key. There is no second row; `0017` CHECKs it. */
 const ONLY_ROW = 1;
 
 /** The stored projection, and the one operation that replaces it. */
@@ -501,6 +501,3 @@ export class WorkingMemory {
     return { row, plan, changed: true };
   }
 }
-
-/** Every node kind, so a test can assert the section list covers all of them. */
-export const ALL_NODE_KINDS: readonly MemoryNodeKind[] = MEMORY_NODE_KINDS;
