@@ -192,6 +192,26 @@ describe("the handshake", () => {
     await client.waitForClose();
   });
 
+  it("should close on Syl's own agent key, which has no business on this socket", async () => {
+    // The socket is the Commander's conversation. `confineAgent` guards the
+    // HTTP contract and cannot guard this, because the handshake calls
+    // `keys.verify` directly — so a credential that reaches reminders over
+    // loopback would otherwise be able to send chat frames AS HIM here.
+    //
+    // Indistinguishable from any other rejection on the wire, for the same
+    // reason every other one is: this end of the socket does not tell a caller
+    // why a token was not good enough.
+    const agent = keys.mint("Syl (her own hands)", { scope: "agent" }).token;
+    const { client, challenge } = await connect();
+
+    client.send({ type: "auth_response", token: agent, nonce: challenge.nonce });
+
+    const frame = (await client.next()) as WsError;
+    expect(frame.error.code).toBe("UNAUTHORIZED");
+    expect(frame.fatal).toBe(true);
+    await client.waitForClose();
+  });
+
   it("should refuse a nonce belonging to somebody else's challenge", async () => {
     const other = await connect();
     const { client } = await connect();

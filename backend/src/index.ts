@@ -54,6 +54,7 @@ import { runTurn, type TurnOptions, type TurnRunner } from "./harness/session.js
 import { autoMemoryAt } from "./memory/auto-memory.js";
 import { withMemoryIndex } from "./memory/index-guarantee.js";
 import { apnsCredentialsFromEnv } from "./services/apns-service.js";
+import { ensureAgentKey, type AgentCredential } from "./services/agent-key.js";
 import { ApiKeyService } from "./services/api-key-service.js";
 import { systemClock, type Clock } from "./services/clock.js";
 import { ConversationService } from "./services/conversation-service.js";
@@ -261,7 +262,10 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   app.disable("x-powered-by");
   app.use(express.json({ limit: MAX_BODY_BYTES }));
 
-  const authenticate = requireBearerToken({ keys });
+  // One authenticated chokepoint for the whole contract, and the agent
+  // confinement rides inside it — see `middleware/auth.ts`. The base path is
+  // passed rather than imported because that module cannot import this one.
+  const authenticate = requireBearerToken({ keys, basePath: API_BASE_PATH });
 
   // Mounted onto one router so the base path appears exactly once, and so a
   // route added later cannot land outside it by forgetting the prefix.
@@ -448,6 +452,25 @@ export function describeStartup(
 }
 
 /**
+ * Whether this machine still needs to be told how to pair a phone.
+ *
+ * The question is **"is a DEVICE paired"**, not "is any key live", and the
+ * difference became load-bearing the moment the service started minting its own
+ * `agent` credential at boot. The old spelling — every key in the table is
+ * revoked — was correct while every key was a phone. With Syl's own key present
+ * from the first boot, a brand-new machine would have concluded that something
+ * was already paired, printed no code, and left the Commander looking at a
+ * service he had no way into. Nothing would have failed; there would simply
+ * have been no line.
+ *
+ * Exported so that is a test rather than a line in a startup function nobody
+ * can call.
+ */
+export function needsPairingCode(keys: ApiKeyService): boolean {
+  return keys.liveKeysWithScope("device").length === 0;
+}
+
+/**
  * The repo root, from `backend/src/index.ts`.
  *
  * `SOUL.md`, `.mcp.json` and `.syl/` live at the root of the monorepo rather
@@ -534,17 +557,33 @@ export interface BootstrapOptions {
   readonly soul?: string;
 }
 
-/** Open the store and build the services the app needs. */
-export function bootstrap(
-  config: SylConfig,
-  options: BootstrapOptions = {},
-): {
+/** What `bootstrap` produces: the store, the services, and Syl's own key. */
+export interface Bootstrapped {
   readonly database: SylDatabase;
   readonly deps: ServiceDependencies;
-} {
+  /**
+   * Syl's own credential, minted here and held nowhere else.
+   *
+   * **Deliberately NOT a field on `ServiceDependencies`.** Every field there is
+   * destructured by `createApp` and handed to a router; putting the agent token
+   * in that bag would make it something a route could reach, which is the exact
+   * property this credential exists to not have. It is returned beside the
+   * dependencies instead, so the only callers are `startSyl` and a test.
+   *
+   * See `services/agent-key.ts` for why it cannot be obtained over the network.
+   */
+  readonly agentKey: AgentCredential;
+}
+
+/** Open the store and build the services the app needs. */
+export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bootstrapped {
   const clock = options.clock ?? systemClock;
   const database = openDatabase({ path: config.databasePath });
   const keys = new ApiKeyService({ db: database.handle, clock });
+  // Her hands, before anything that might want them. A boot that reached the
+  // listening socket without a credential would answer every request and
+  // quietly be unable to act — the failure `syl-act1` is about.
+  const agentKey = ensureAgentKey({ keys });
   const messages = new MessageStore({ db: database.handle, clock });
   const devices = new DeviceTokenService({ db: database.handle, clock });
   const idempotency = new IdempotencyStore({ db: database.handle, clock });
@@ -651,6 +690,7 @@ export function bootstrap(
 
   return {
     database,
+    agentKey,
     deps: {
       keys,
       messages,
@@ -745,6 +785,15 @@ export interface StartSylOptions extends BootstrapOptions {
 export interface RunningSyl {
   readonly database: SylDatabase;
   readonly deps: ServiceDependencies;
+  /**
+   * Syl's own credential for this process's lifetime.
+   *
+   * Carried here so the tool wiring can reach it and nothing else can. It is
+   * deliberately absent from `startupFields` and `startupLines`: a token in the
+   * rotated JSON log is a token on disk, which is the one place this credential
+   * is never allowed to be.
+   */
+  readonly agentKey: AgentCredential;
   readonly service: RunningService;
   readonly runtime: DeliveryRuntime;
   /** The lines to print. Returned rather than printed, so a test can read them. */
@@ -788,7 +837,7 @@ export async function startSyl(
   config: SylConfig,
   options: StartSylOptions = {},
 ): Promise<RunningSyl> {
-  const { database, deps: bootstrapped } = bootstrap(config, options);
+  const { database, deps: bootstrapped, agentKey } = bootstrap(config, options);
   const delivery = options.delivery ?? {};
   const clock = delivery.clock ?? options.clock ?? systemClock;
 
@@ -864,8 +913,7 @@ export async function startSyl(
   // A pairing code is only printed when there is nothing paired. Printing one
   // on every boot would train the Commander to ignore it, and a code shown
   // repeatedly is a code that is eventually shown to somebody else.
-  const unpaired = deps.keys.list().every((key) => key.revokedAt !== null);
-  const startup = unpaired
+  const startup = needsPairingCode(deps.keys)
     ? describeStartup(config, { pairingCode: deps.keys.issuePairingCode().code })
     : describeStartup(config);
 
@@ -878,6 +926,7 @@ export async function startSyl(
   return {
     database,
     deps,
+    agentKey,
     service,
     runtime,
     push,

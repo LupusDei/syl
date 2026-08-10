@@ -433,7 +433,15 @@ export class SylSocketServer {
     }
 
     const result = this.#keys.verify(token);
-    if (!result.ok) {
+    // `agent` is refused here as well as rejected tokens, and it is refused
+    // *identically*. This socket is the Commander's conversation: a chat frame
+    // arriving on it is authored by him. Syl's own credential reaching it would
+    // let her write messages as him, which is the one thing that would make the
+    // transcript untrustworthy — and `confineAgent` cannot help, because this
+    // handshake calls `keys.verify` directly rather than going through the HTTP
+    // middleware. There is nothing for her to learn from a distinguishable
+    // answer, and a client looping on "wrong scope" is a client looping.
+    if (!result.ok || result.key.scope === "agent") {
       // `fatal: true` is what tells the client to stop reconnecting and
       // re-pair rather than loop against a wall.
       this.#send(connection.socket, authError());

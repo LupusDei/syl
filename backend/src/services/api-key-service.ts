@@ -129,28 +129,45 @@ export const LAST_USED_WRITE_INTERVAL_MS = 60_000;
  * * `admin` — minted at the machine's own console and by no HTTP route at all.
  *   Getting one requires write access to `syl.db`, which is already full
  *   compromise, so this scope cannot be escalated *into* remotely.
+ * * `agent` — minted by this SERVICE, FOR ITSELF, at boot: `ensureAgentKey` in
+ *   `services/agent-key.ts`, called from `bootstrap`. No route returns one and
+ *   no CLI mints one, so the same statement holds as for `admin` and holds
+ *   more strongly — there is no code path at all that puts an agent token on a
+ *   socket.
  *
- * The one surface it gates is `GET /logs`, and the reason is that the log is
+ * The surface `admin` gates is `GET /logs`, and the reason is that the log is
  * not the Commander's data — it is the record of what Syl *did* on his machine
  * while running pre-authorised. A shoulder-surfed pairing code should not
  * become a transcript of the machine's activity.
+ *
+ * `agent` is gated the other way round: rather than opening a surface it
+ * *closes* every one except the product's own nouns. See `confineAgent` in
+ * `middleware/auth.ts`, which is where the content of this scope actually
+ * lives — the column only makes the value expressible.
  */
-export type KeyScope = "device" | "admin";
+export type KeyScope = "device" | "admin" | "agent";
 
 /** Every scope, for validation and for a CLI's help text. */
-export const KEY_SCOPES: readonly KeyScope[] = ["device", "admin"];
+export const KEY_SCOPES: readonly KeyScope[] = ["device", "admin", "agent"];
 
 /**
- * Narrow a stored scope, defaulting to the *weaker* one.
+ * Narrow a stored scope, defaulting to the *weakest* one.
  *
- * `0014_api_key_scope.sql` has a CHECK constraint, so an unrecognised value
- * cannot be written by this service. It could still arrive from a database
- * edited by hand or restored from a future version — and in that case the safe
- * reading is "not admin". A widening default here would turn a typo into an
- * open door.
+ * `0014_api_key_scope.sql` has a CHECK constraint, widened by
+ * `0015_agent_scope.sql`, so an unrecognised value cannot be written by this
+ * service. It could still arrive from a database edited by hand or restored
+ * from a future version — and in that case the safe reading is "neither admin
+ * nor agent". A widening default here would turn a typo into an open door.
+ *
+ * `device` is the fallback rather than `agent` even though `agent` reaches
+ * fewer routes, because the two are not ordered: `agent` is *confined*, not
+ * merely weak, and reading a stray value as Syl's own credential would let a
+ * corrupt row speak as her.
  */
 function toScope(value: unknown): KeyScope {
-  return value === "admin" ? "admin" : "device";
+  if (value === "admin") return "admin";
+  if (value === "agent") return "agent";
+  return "device";
 }
 
 /** A paired device's key, as an admin screen sees it. Never the token. */
@@ -202,7 +219,10 @@ export interface PairingCode {
 
 /** What a console mint may say that pairing may not. */
 export interface MintOptions {
-  /** Defaults to `device`. `admin` is only ever passed by a console command. */
+  /**
+   * Defaults to `device`. `admin` is only ever passed by a console command,
+   * and `agent` only by the service minting its own credential at boot.
+   */
   readonly scope?: KeyScope;
   /** Overrides the clock, for a test about expiry. */
   readonly now?: number;
@@ -407,10 +427,10 @@ export class ApiKeyService {
    * deliberately separate from `pair` so the pairing rules live in exactly one
    * place and cannot be bypassed by accident.
    *
-   * **This is the only way an `admin` token comes into existence**, and it is
-   * reachable only by a process that can open `syl.db`. There is deliberately
-   * no HTTP route that mints one, and `pair` cannot be asked for a scope — see
-   * {@link KeyScope}.
+   * **This is the only way an `admin` or an `agent` token comes into
+   * existence**, and it is reachable only by a process that can open `syl.db`.
+   * There is deliberately no HTTP route that mints one, and `pair` cannot be
+   * asked for a scope — see {@link KeyScope}.
    */
   mint(deviceName: string, options: MintOptions = {}): TokenGrant {
     return this.#insertKey(deviceName, options.now ?? this.#clock(), null, options.scope ?? "device");
