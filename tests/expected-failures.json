@@ -66,11 +66,6 @@
       "test": "the memory epic, as wired into the running service should be constructed somewhere in the service, not only in its own tests",
       "bead": "syl-63n",
       "why": "Every module of syl-005 \u2014 schema, graph, weights, supersede, store, retrieve, embed, holographic, metrics, dream/log \u2014 has a green unit suite and ZERO call sites outside backend/src/memory/. Nothing in bootstrap constructs a MemoryGraph, MemoryStore, Retriever, SupersessionLedger, EdgeWeights, DreamLog or MemoryMetrics, so the tables migrate, the triggers fire, and Syl never writes a memory. This is the syl-vls shape a third time: the missing thing is a line in bootstrap, which is exactly what no test of a component can see \u2014 which is why it gets a wiring test rather than another unit test."
-    },
-    {
-      "test": "the memory epic, as wired into the running service should open the service database with extension loading allowed, or vec0 can never be loaded into it",
-      "bead": "syl-63n",
-      "why": "index.ts calls openDatabase({ path: config.databasePath }) with no allowExtension. node:sqlite can only be granted extension loading at CONSTRUCTION and offers no way to turn it on afterwards, so the service connection can never load vec0 however the store is wired in later \u2014 vector search would simply be absent on the running service while every unit test stayed green, because the tests open their own connection and do pass the flag. Half of hybrid retrieval, missing, with nothing failing to say so."
     }
   ]
 }

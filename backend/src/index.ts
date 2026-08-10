@@ -543,7 +543,15 @@ export function bootstrap(
   readonly deps: ServiceDependencies;
 } {
   const clock = options.clock ?? systemClock;
-  const database = openDatabase({ path: config.databasePath });
+  // `allowExtension` must be asked for at CONSTRUCTION — `node:sqlite` offers no
+  // way to turn it on later. Without it this connection can never load `vec0`,
+  // so the memory store's vector half would simply be absent on the running
+  // service while every unit test stayed green, because the tests open their own
+  // connection and do pass the flag. Silent, and invisible from the test suite:
+  // `syl-63n`. Granting it is not loading anything — `memory/store.ts` still has
+  // to call `enableLoadExtension(true)` immediately before, and re-disables it
+  // once `vec0` is in.
+  const database = openDatabase({ path: config.databasePath, allowExtension: true });
   const keys = new ApiKeyService({ db: database.handle, clock });
   const messages = new MessageStore({ db: database.handle, clock });
   const devices = new DeviceTokenService({ db: database.handle, clock });
