@@ -56,6 +56,11 @@
       "test": "deploy — a rollback after a migration should restore the schema the restored build expects",
       "bead": "syl-dep1.7",
       "why": "A health-gated rollback restores the CODE and leaves the SCHEMA forward. Migrations run on the way up and there is no down path, so after a failed deploy the restored build runs against a database it has never seen. Additive migrations usually survive that and a destructive one does not, and nothing today tells the two apart. The deploy reports the migrations involved and reports schemaRestored: false rather than pretending — but 'the code is back' and 'the system is back' are different claims, and only the first is true. Fixing it needs either down-migrations or a snapshot of the SQLite file taken before the deploy."
+    },
+    {
+      "test": "urgency should reach the quiet-hours bypass only when his message actually contains those words",
+      "bead": "syl-p8k",
+      "why": "syl-j55 fixed the half that faces her: remind_me asks for urgentBecauseHeSaid — his words, quoted — rather than urgent: boolean, because a phrase can be checked against what he wrote and a boolean cannot be checked against anything. THE HALF THAT ENFORCES IT DOES NOT EXIST, and the obvious way to write it is the wrong one: `urgent: input.urgentBecauseHeSaid !== undefined` is the one-liner that suggests itself when the handler lands, and it restores the defect in full, because the model satisfies a presence check by emitting any string at all. Quoting his words is a safeguard only if something COMPARES them to what he wrote; otherwise it is a longer way of saying true. Declared red rather than left as a channel note so the guard exists BEFORE the handler and cannot be forgotten while writing it — the exact shape of the failure that bit us three times in one day. Defends his sleep, the constraint most likely to cost trust and the one place his anticipation order collides with a rule. Names the signature the seam must have (verifyUrgency in harness/urgency.ts) rather than describing what is there, because a test asserting the current behaviour of a known defect is worse than no test."
     }
   ]
 }
