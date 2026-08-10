@@ -22,6 +22,17 @@ const TONE_TOKEN: Record<Tone, SemanticToken> = {
   accent: "accent",
 };
 
+/**
+ * The token reference a tone resolves to.
+ *
+ * Exported because a chip is not the only thing that carries a tone — the memory
+ * graph draws its edges in one — and a second copy of this map is exactly how
+ * two surfaces end up disagreeing about what "pending" looks like.
+ */
+export function toneColour(tone: Tone): string {
+  return token[TONE_TOKEN[tone]];
+}
+
 export interface BadgeProps {
   readonly tone: Tone;
   readonly children: ReactNode;
@@ -30,7 +41,7 @@ export interface BadgeProps {
 }
 
 export function Badge({ tone, children, title }: BadgeProps): ReactElement {
-  const colour = token[TONE_TOKEN[tone]];
+  const colour = toneColour(tone);
   return (
     <span className="badge" style={{ color: colour, borderColor: colour }} title={title}>
       {children}
