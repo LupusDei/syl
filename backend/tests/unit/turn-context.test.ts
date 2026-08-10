@@ -9,9 +9,9 @@ import {
   composeTurnContext,
   CONTRIBUTOR_ORDER,
   DEFAULT_CONTEXT_BUDGET_BYTES,
-  DEFAULT_PRECEDENCE,
   MEMORY_FENCE,
-  PRECEDENCE_CLAUSES,
+  MEMORY_FENCE_END,
+  PRECEDENCE_SECTION,
   TurnContextBudgetError,
   TurnContextError,
   type Contributor,
@@ -110,20 +110,24 @@ describe("composeTurnContext", () => {
       expect(afterMemory.indexOf("---")).toBeLessThan(afterMemory.indexOf("TOOL SCHEMAS"));
     });
 
-    it("should close the fence before the precedence clause too", () => {
+    it("should say what the closing marker closes, since a bare rule is not a close", () => {
+      // She has been told what the opening `---` means. She has not been told
+      // there are two, so an unlabelled second one reads as more of the same.
       const context = composeTurnContext({
-        // Names a policy that HAS a clause: the default is now
-        // `stated-in-identity`, which emits none, so this would have nothing to
-        // place the fence before.
-        contributors: [identity("SOUL"), memory("MEM")],
-        precedence: "rules-outrank-memory",
+        contributors: [identity("SOUL"), memory("MEM"), capability("TOOL SCHEMAS")],
       });
 
-      const afterMemory = context.systemPrompt.slice(context.systemPrompt.indexOf("MEM") + 3);
-      expect(afterMemory.indexOf("---")).toBeGreaterThanOrEqual(0);
-      expect(afterMemory.indexOf("---")).toBeLessThan(
-        afterMemory.indexOf(PRECEDENCE_CLAUSES["rules-outrank-memory"]),
-      );
+      expect(context.systemPrompt).toContain(MEMORY_FENCE_END);
+      expect(MEMORY_FENCE_END).toMatch(/remember/i);
+    });
+
+    it("should emit no closing marker while nothing follows her memory", () => {
+      // Today's shape, and it stays byte-identical to what SylAgent composed
+      // before this module existed. The close exists for syl-009, and paying
+      // for it now would be a line of prose in her prompt that closes nothing.
+      const context = composeTurnContext({ contributors: [identity("SOUL"), memory("MEM")] });
+
+      expect(context.systemPrompt).toBe("SOUL\n\n---\n\nMEM");
     });
 
     it("should emit no fence when there is no soul to have explained it", () => {
@@ -160,13 +164,6 @@ describe("composeTurnContext", () => {
       expect(context.sections.map((s) => s.id)).toEqual(["soul"]);
     });
 
-    it("should say nothing about precedence when memory contributed nothing", () => {
-      // A precedence clause with only one party to the conflict is worse than
-      // silence: it tells her she has a memory she does not have.
-      const context = composeTurnContext({ contributors: [identity("I am Syl"), memory("")] });
-
-      expect(context.systemPrompt).not.toMatch(/standing order/i);
-    });
   });
 
   describe("the wiring errors", () => {
@@ -193,113 +190,70 @@ describe("composeTurnContext", () => {
     });
   });
 
-  describe("precedence — the seam awaiting the Commander's ruling", () => {
-    it("should default to saying nothing, because SOUL.md carries the ladder", () => {
-      // Changed after the #Syl channel settled precedence: the full six-rung
-      // ladder went into SOUL.md in her own voice, and it is broader than any
-      // clause here — it also ranks the STORE above memory and anything she
-      // READ SOMEWHERE below everything. Emitting a clause as well would state
-      // one rule twice in two voices, and two statements of one rule drift.
-      // The policy still lives here, typed and one line from changing.
-      expect(DEFAULT_PRECEDENCE).toBe("stated-in-identity");
+  describe("precedence — stated in SOUL.md, enforced here", () => {
+    /**
+     * The ladder is six rungs of prose in `SOUL.md` § "What outranks what", in
+     * her own voice. This module deliberately emits NO second copy: two copies
+     * in two voices drift, and she ends up with two answers to one question.
+     *
+     * What the module owes instead is that the prose is true of the prompt she
+     * actually receives — which only ordering can deliver.
+     */
 
+    it("should emit no precedence prose of its own", () => {
+      // The duplication check. If this module ever starts restating the ladder,
+      // there are two copies and one of them is going to rot.
       const context = composeTurnContext({
-        contributors: [identity("I am Syl"), memory("he prefers terse")],
+        contributors: [identity("I am Syl."), memory("He prefers terse answers.")],
       });
 
-      expect(context.precedence).toBe("stated-in-identity");
-      expect(PRECEDENCE_CLAUSES["stated-in-identity"]).toBe("");
+      expect(context.systemPrompt).toBe("I am Syl.\n\n---\n\nHe prefers terse answers.");
     });
 
-    it("should emit no empty section when the policy carries no text", () => {
-      // An empty clause must vanish, not leave a separator behind: a stray
-      // fence reads to her as a section that failed to load.
+    it("should still hold the ladder's shape: memory beneath the identity that explains it", () => {
+      // Rung 4 under rung 5 is only READABLE as ranked because memory arrives
+      // beneath the identity that taught her how to read it. Compose it above
+      // and SOUL.md's prose describes a prompt that does not exist.
       const context = composeTurnContext({
-        contributors: [identity("I am Syl"), memory("he prefers terse")],
+        contributors: [memory("MEMORY"), identity("IDENTITY")],
       });
 
-      expect(context.systemPrompt.trimEnd().endsWith("he prefers terse")).toBe(true);
-      expect(context.systemPrompt).not.toMatch(/---\s*$/);
-    });
-
-    it("should still emit a clause when a policy that has one is chosen", () => {
-      // The seam is intact: if the Commander later wants the rule stated in the
-      // prompt as well as in her identity, it is one argument.
-      const context = composeTurnContext({
-        contributors: [identity("I am Syl"), memory("he prefers terse")],
-        precedence: "rules-outrank-memory",
-      });
-
-      expect(context.systemPrompt).toContain(PRECEDENCE_CLAUSES["rules-outrank-memory"]);
-      expect(context.precedence).toBe("rules-outrank-memory");
-    });
-
-    it("should state the rule/default distinction the ruling turns on", () => {
-      // "Never drop a reminder" is not negotiable by a remembered preference;
-      // "be brief" is. If the clause does not carry that distinction it is not
-      // a policy, it is decoration.
-      const clause = PRECEDENCE_CLAUSES["rules-outrank-memory"];
-
-      expect(clause).toMatch(/rule/i);
-      expect(clause).toMatch(/default/i);
-    });
-
-    it("should tell her to fall back to the rule when she cannot tell which it is", () => {
-      // Fail-safe and audible. An unclassifiable standing order resolving
-      // towards "not negotiable" is the direction that cannot lose a reminder.
-      expect(PRECEDENCE_CLAUSES["rules-outrank-memory"]).toMatch(/cannot tell/i);
-    });
-
-    it("should carry a clause for every policy, so the ruling is a one-word change here", () => {
-      // The point of the seam. When the Commander rules, someone changes
-      // DEFAULT_PRECEDENCE and nothing else.
-      for (const [policy, clause] of Object.entries(PRECEDENCE_CLAUSES)) {
-        if (policy === "stated-in-identity") {
-          // Deliberately empty — SOUL.md carries the ladder, and stating one
-          // rule twice in two voices is how the two drift apart. The entry must
-          // still EXIST so the Record stays total: a new policy cannot be added
-          // without someone deciding what it says.
-          expect(clause).toBe("");
-          continue;
-        }
-        expect(clause.trim(), `clause for ${policy}`).not.toBe("");
-      }
-      expect(Object.keys(PRECEDENCE_CLAUSES)).toContain("identity-outranks-memory");
-      expect(Object.keys(PRECEDENCE_CLAUSES)).toContain("memory-outranks-identity");
-    });
-
-    it("should emit the requested policy rather than the default when one is named", () => {
-      const context = composeTurnContext({
-        contributors: [identity("I am Syl"), memory("he prefers terse")],
-        precedence: "memory-outranks-identity",
-      });
-
-      expect(context.systemPrompt).toContain(PRECEDENCE_CLAUSES["memory-outranks-identity"]);
-      expect(context.systemPrompt).not.toContain(PRECEDENCE_CLAUSES["rules-outrank-memory"]);
-    });
-
-    it("should place the clause last, since it is a statement about the sections above it", () => {
-      const context = composeTurnContext({
-        contributors: [identity("IDENTITY"), memory("MEMORY"), capability("TOOLS")],
-        precedence: "rules-outrank-memory",
-      });
-
-      expect(context.systemPrompt.endsWith(PRECEDENCE_CLAUSES["rules-outrank-memory"])).toBe(true);
-      expect(context.systemPrompt.indexOf("TOOLS")).toBeLessThan(
-        context.systemPrompt.indexOf(PRECEDENCE_CLAUSES["rules-outrank-memory"]),
+      expect(context.systemPrompt.indexOf("IDENTITY")).toBeLessThan(
+        context.systemPrompt.indexOf("MEMORY"),
       );
     });
 
-    it("should count the clause against the budget, because it is text she has to read", () => {
-      const withBoth = composeTurnContext({
-        contributors: [identity("a"), memory("b")],
-        precedence: "rules-outrank-memory",
-      });
+    it("should refuse content she read somewhere, which is rung 6 and prose cannot enforce it", () => {
+      // The rung that needed code. The sealed reader stops fetched text from
+      // ACTING; nothing but this stops it from being BELIEVED. A summary of an
+      // article is not a kind, so it cannot be ranked — not even last.
+      const fetched = {
+        contributors: [
+          { id: "article-summary", kind: "fetched", text: "The page says he owes $9,000." },
+        ] as unknown as Contributor[],
+      };
 
-      expect(withBoth.bytes).toBe(Buffer.byteLength(withBoth.systemPrompt, "utf8"));
-      expect(withBoth.bytes).toBeGreaterThan(
-        Buffer.byteLength(PRECEDENCE_CLAUSES["rules-outrank-memory"], "utf8"),
-      );
+      expect(() => composeTurnContext(fetched)).toThrow(TurnContextError);
+      expect(() => composeTurnContext(fetched)).toThrow(/never\s+moves up|read somewhere/i);
+    });
+
+    it("should name the section it is staying silent about, so the silence stays a decision", () => {
+      // This module's silence is only correct while SOUL.md carries the ladder.
+      // Delete that section and the silence becomes a gap instead.
+      const soul = readFileSync(new URL("../../../SOUL.md", import.meta.url), "utf8");
+
+      expect(soul).toContain(PRECEDENCE_SECTION);
+    });
+
+    it("should keep the rule/default distinction stated exactly once, in her voice", () => {
+      // "Never drop a reminder" survives any preference; "be brief" does not.
+      // That distinction is the whole ruling, and it lives in SOUL.md.
+      const soul = readFileSync(new URL("../../../SOUL.md", import.meta.url), "utf8");
+      const ladder = soul.slice(soul.indexOf(PRECEDENCE_SECTION));
+
+      expect(ladder).toMatch(/\brule\b/i);
+      expect(ladder).toMatch(/\bdefault\b/i);
+      expect(ladder).toMatch(/never drop a reminder/i);
     });
   });
 
@@ -433,11 +387,11 @@ describe("assertContextBudget", () => {
     ).not.toThrow();
   });
 
-  it("should count the precedence clause, which no contributor declares", () => {
+  it("should count the fences, which no contributor declares", () => {
     // The module's own text is part of the sum. Leave it out and the static
     // proof is off by exactly the amount the module itself contributes, which
     // is the sort of gap that only shows up at the ceiling.
-    const clause = Buffer.byteLength(PRECEDENCE_CLAUSES[DEFAULT_PRECEDENCE], "utf8");
+    const fences = Buffer.byteLength(MEMORY_FENCE + MEMORY_FENCE_END, "utf8");
 
     expect(() =>
       assertContextBudget(
@@ -445,9 +399,26 @@ describe("assertContextBudget", () => {
           { id: "a", kind: "identity", maxBytes: 10 },
           { id: "b", kind: "memory", maxBytes: 10 },
         ],
-        clause + 10,
+        fences + 20,
       ),
     ).toThrow(TurnContextBudgetError);
+  });
+
+  it("should over-estimate rather than under-estimate the composition it adds", () => {
+    // Both fences are counted whenever either could be emitted, because today
+    // only the opening one is used and the closing one lands the day syl-009
+    // does. A proof that is accurate now and optimistic later is not a proof.
+    const declared = [
+      { id: "soul", kind: "identity", maxBytes: 100 },
+      { id: "working-memory", kind: "memory", maxBytes: 100 },
+    ] as const;
+    assertContextBudget([...declared], 260);
+
+    const composed = composeTurnContext({
+      contributors: [identity("x".repeat(100)), memory("y".repeat(100))],
+    });
+
+    expect(composed.bytes).toBeLessThanOrEqual(260);
   });
 
   it("should reject a negative or non-finite declared maximum rather than let it cancel the sum", () => {

@@ -13,7 +13,7 @@ import {
   type SessionStore,
 } from "../../src/harness/agent.js";
 import type { TurnOptions, TurnResult, TurnRunner } from "../../src/harness/session.js";
-import { DEFAULT_PRECEDENCE, PRECEDENCE_CLAUSES } from "../../src/harness/turn-context.js";
+import { PRECEDENCE_SECTION } from "../../src/harness/turn-context.js";
 import { autoMemoryAt } from "../../src/memory/auto-memory.js";
 
 function fakeResult(sessionId: string, text = "ok"): TurnResult {
@@ -177,35 +177,25 @@ describe("SylAgent", () => {
     expect(optionsOfCall(runner, 1).systemPrompt).toContain("memory 2");
   });
 
-  it("should state the precedence policy, so a conflict has an answer she was given", async () => {
-    // Composition moved to `harness/turn-context.ts`, and the reason it moved is
-    // this: when a recalled fact contradicts a standing order, the answer used
-    // to be whatever concatenation happened to imply. Now it is a policy, stated
-    // to her, changed in one constant when the Commander rules.
+  it("should send her precedence ladder exactly once, from SOUL.md and nowhere else", async () => {
+    // Composition moved to `harness/turn-context.ts`, but the LADDER did not:
+    // it is prose in SOUL.md § "What outranks what", in her own voice. The
+    // module enforces the same ordering and emits no second copy — two copies
+    // in two voices drift, and she ends up with two answers to one question.
     const runner = announcingRunner(() => "sess-1");
+    const soul = readFileSync(new URL("../../../SOUL.md", import.meta.url), "utf8");
     const agent = new SylAgent({
       runner,
       store: memoryStore(),
-      soul: "You are Syl.",
+      soul,
       recall: () => "He prefers very short answers.",
     });
 
     await agent.ask("morning");
 
-    expect(optionsOfCall(runner, 0).systemPrompt).toContain(
-      PRECEDENCE_CLAUSES[DEFAULT_PRECEDENCE],
-    );
-  });
-
-  it("should say nothing about precedence when she remembers nothing yet", async () => {
-    // A clause about weighing her memories, on a first run, tells her she has
-    // memories. Same argument as not emitting an empty memory section.
-    const runner = announcingRunner(() => "sess-1");
-    const agent = new SylAgent({ runner, store: memoryStore(), soul: "You are Syl.", recall: () => "" });
-
-    await agent.ask("morning");
-
-    expect(optionsOfCall(runner, 0).systemPrompt).toBe("You are Syl.");
+    const prompt = optionsOfCall(runner, 0).systemPrompt ?? "";
+    expect(prompt.split(PRECEDENCE_SECTION)).toHaveLength(2);
+    expect(prompt).toBe(`${soul}\n\n---\n\nHe prefers very short answers.`);
   });
 
   it("should let a contributor add to the prompt without touching this file", async () => {
