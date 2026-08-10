@@ -52,6 +52,20 @@ struct SylHero: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Width ÷ height of the shipped art.
+    ///
+    /// Hard-coded, and it has to be. The edge masks below only work if they are measured
+    /// against *the picture*, and SwiftUI will not tell you where a `.fit` image actually
+    /// landed inside its frame — `.aspectRatio(.fit)` letterboxes, and a `.mask` applied
+    /// afterwards is measured against the frame, so the gradient spends its whole fade
+    /// in the empty margin and the picture keeps a hard rectangular edge. That shipped:
+    /// the device showed a sharp-cornered rectangle floating on the veil.
+    ///
+    /// Knowing the ratio lets the frame be sized to the art exactly, so there is no
+    /// letterbox and mask space and image space are the same space. Both appearance
+    /// variants are exported at 1179×1652, and a test pins that.
+    static let artAspect: Double = 1179.0 / 1652.0
+
     var body: some View {
         GeometryReader { geometry in
             if reduceMotion {
@@ -74,7 +88,12 @@ struct SylHero: View {
     }
 
     private func figure(in size: CGSize, drift: Double, roll: Double, breath: Double) -> some View {
-        ZStack {
+        // Fit the art to the space *by computing it*, so the view's bounds and the
+        // picture's bounds are identical and the masks below land on the picture.
+        let height = min(size.height, size.width / Self.artAspect)
+        let width = height * Self.artAspect
+
+        return ZStack {
             // The aura behind her. Brightens with presence, so `alert` genuinely lights
             // her up and `absent` leaves only the art.
             RadialGradient(
@@ -85,19 +104,18 @@ struct SylHero: View {
                 ],
                 center: .center,
                 startRadius: 0,
-                endRadius: size.width * 0.62
+                endRadius: width * 0.62
             )
             .blendMode(.plusLighter)
 
             Image("SylHero")
                 .resizable()
-                // `.fit`, not `.fill`. Filling a 0.85-ratio frame with a 0.71-ratio
-                // portrait crops top and bottom, and what it crops first is her head —
-                // the render came back decapitated. Fitting leaves margins instead, and
-                // the margins cost nothing because the art's own background is the same
-                // pale veil it sits on.
-                .aspectRatio(contentMode: .fit)
-                .frame(width: size.width, height: size.height)
+                // No `.fit` and no letterbox: the frame is already the art's own ratio,
+                // so `.fill` and `.fit` would agree. Stated as `.fill` because it is the
+                // one that cannot leave a margin if the ratio is ever slightly off.
+                .aspectRatio(contentMode: .fill)
+                .frame(width: width, height: height)
+                .clipped()
                 // Melts her into the veil instead of ending at a rectangle.
                 //
                 // This was a single radial with `endRadius: width * 0.78`, and it did
@@ -115,9 +133,9 @@ struct SylHero: View {
                     LinearGradient(
                         stops: [
                             .init(color: .clear, location: 0.00),
-                            .init(color: .white, location: 0.10),
-                            .init(color: .white, location: 0.56),
-                            .init(color: .white.opacity(0.55), location: 0.82),
+                            .init(color: .white, location: 0.16),
+                            .init(color: .white, location: 0.58),
+                            .init(color: .white.opacity(0.50), location: 0.84),
                             .init(color: .clear, location: 1.00),
                         ],
                         startPoint: .top,
@@ -128,8 +146,8 @@ struct SylHero: View {
                     LinearGradient(
                         stops: [
                             .init(color: .clear, location: 0.00),
-                            .init(color: .white, location: 0.14),
-                            .init(color: .white, location: 0.86),
+                            .init(color: .white, location: 0.18),
+                            .init(color: .white, location: 0.82),
                             .init(color: .clear, location: 1.00),
                         ],
                         startPoint: .leading,

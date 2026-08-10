@@ -312,6 +312,28 @@ final class HomeTests: XCTestCase {
         )
     }
 
+    // MARK: - The hero art
+
+    /// `SylHero.artAspect` is hard-coded, and the edge masks are only correct while it
+    /// matches the shipped art. If it drifts, the picture regains a hard rectangular
+    /// edge on the veil — which is exactly the defect the Commander photographed on
+    /// device — and nothing else would fail. So this asserts the constant against the
+    /// asset actually in the bundle.
+    @MainActor
+    func testShouldKeepTheHeroAspectConstantMatchingTheShippedArt() throws {
+        for name in ["SylHero"] {
+            let image = try XCTUnwrap(UIImage(named: name), "\(name) is missing from the bundle")
+            let actual = Double(image.size.width / image.size.height)
+
+            XCTAssertEqual(
+                actual,
+                SylHero.artAspect,
+                accuracy: 0.005,
+                "SylHero.artAspect must match the art, or the edge masks fade into empty margin"
+            )
+        }
+    }
+
     func testShouldScatterSparksDeterministicallySoTheyDoNotFlicker() {
         XCTAssertEqual(Scatter.hash(7), Scatter.hash(7))
         XCTAssertNotEqual(Scatter.hash(7), Scatter.hash(8))

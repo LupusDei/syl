@@ -116,7 +116,7 @@ struct HomeView: View {
                         .transition(.opacity)
                 }
             }
-            .frame(height: max(viewport.height * 0.62, 340))
+            .frame(height: max(viewport.height * 0.58, 320))
             .animation(SylTheme.Motion.breathe, value: presence)
 
             // Her name, in the one piece of real display type in the app. The glow
@@ -145,7 +145,19 @@ struct HomeView: View {
             orbs
                 .padding(.bottom, SylTheme.Metric.chapter)
         }
-        .frame(height: viewport.height)
+        // One *visible* screen, not one raw geometry height.
+        //
+        // `GeometryReader` inside this scroll view reports a height that runs underneath
+        // the tab bar, so sizing the hero to it pushed the day's first two lines into
+        // the space behind the bar — they showed through it, clipped mid-word, on the
+        // device. `containerRelativeFrame` measures the scroll container's own visible
+        // extent and honours its safe-area insets, which is exactly the quantity "one
+        // screen" was always supposed to mean.
+        //
+        // It needs a scroll container to measure, so the offscreen render path — which
+        // has none — falls back to the raw viewport. That path has no tab bar either,
+        // so there is nothing for it to get wrong.
+        .modifier(OneScreenTall(active: scrolls, fallback: viewport.height))
     }
 
     private var orbs: some View {
@@ -211,6 +223,23 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .transition(.opacity.combined(with: .scale(scale: 0.98)))
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Sizes a view to one visible screen of its scroll container.
+///
+/// Split out as a modifier because `containerRelativeFrame` and a plain `frame` cannot
+/// be selected between inline without changing the view's type on each branch.
+private struct OneScreenTall: ViewModifier {
+    let active: Bool
+    let fallback: CGFloat
+
+    func body(content: Content) -> some View {
+        if active {
+            content.containerRelativeFrame(.vertical)
+        } else {
+            content.frame(height: fallback)
+        }
     }
 }
 
