@@ -110,7 +110,7 @@ Each phase leaves the app shippable.
 | 2 | `syl-008.2` | Her replies render as written | **yes** |
 | 3 | `syl-008.3` | Chat belongs to the same world as home | **yes** |
 | 4 | `syl-008.4` | She is visibly present while thinking | yes (gated on `syl-8l7`) |
-| 5 | `syl-008.5` | The contract and backend carry attachments | no UI change |
+| 5 | `syl-008.5` | The contract and backend carry attachments | no UI change, but **not alone** — see below |
 | 6 | `syl-008.6` | Images and video appear in the conversation | **yes** |
 | 7 | `syl-008.7` | The transcript survives scale | yes |
 
