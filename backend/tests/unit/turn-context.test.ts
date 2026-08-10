@@ -474,21 +474,18 @@ describe("the budget over the contributors that actually exist", () => {
     ).not.toThrow();
   });
 
-  it("should still leave room for the tools track that has not landed yet", () => {
-    // syl-009 adds tool schemas as a capability contributor. If the headroom
-    // has already gone, that is worth knowing before it is written rather than
-    // after — and it earned that already: a paragraph added to SOUL.md took
-    // this from 4,400 to 3,745 and this test failed in the same run that wrote
-    // it, before the number reached anyone as a promise.
-    //
-    // Deliberately measured WITHOUT the capability contributor, because the
-    // tools track does not add to that slot, it REPLACES what is in it:
-    // `NO_HANDS_YET` exists only while there is nothing to describe. So this is
-    // the true budget for the schemas.
-    const headroom = DEFAULT_CONTEXT_BUDGET_BYTES - soulBytes - WORKING_MEMORY_MAX_BYTES;
-
-    expect(headroom).toBeGreaterThan(4_000);
-  });
+  // SUPERSEDED, and deleted rather than adjusted.
+  //
+  // This asserted `headroom > 4_000` — a placeholder standing in for a tool
+  // surface that had not been written. The surface now exists and costs 3,484
+  // bytes, and `tool-surface-budget.test.ts` measures THE REAL THING against
+  // the real slot. Keeping a made-up reservation beside a measured one is the
+  // duplication we have spent the day removing: two numbers that must agree,
+  // kept in two places, and the placeholder is the one that quietly goes wrong.
+  //
+  // It also had to be adjusted the moment a paragraph landed in SOUL.md, which
+  // is the tell — a guard that fails for a legitimate change and is edited back
+  // to green teaches people to edit guards.
 
   it("should fail if SOUL.md ever grows past what the ceiling can carry", () => {
     // Not a hypothetical: SOUL.md went from 1,785 bytes to 5,502 in one day. The

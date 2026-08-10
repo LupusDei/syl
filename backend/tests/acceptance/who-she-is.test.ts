@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { writeToolConfig } from "../../src/tools/config.js";
 import { LANES } from "../../src/harness/agent.js";
 import type { TurnOptions, TurnRunner } from "../../src/harness/session.js";
 import { bootstrap } from "../../src/index.js";
@@ -112,6 +113,25 @@ function home(): { readonly dir: string; readonly databasePath: string } {
 function live(): ReturnType<typeof bootstrap> & { readonly dir: string } {
   const { dir, databasePath } = home();
   const built = bootstrap(testConfig({ databasePath, autoMemoryDirectory: join(dir, "memory") }));
+
+  // Her hands have to EXIST on disk or the CLI refuses to start at all —
+  // "Invalid MCP configuration: MCP config file not found" before the init
+  // handshake, which took this whole suite down the moment the tool server
+  // landed. `bootstrap` builds the agent; the serve path is what writes the
+  // config, and these tests do not serve.
+  //
+  // It points at a loopback that is not listening, deliberately. These tests
+  // are about her VOICE, and a tool she never calls does not need a server
+  // behind it — but the surface has to be present, because a turn with tools
+  // and a turn without them are different turns and only one of them is the one
+  // he talks to.
+  writeToolConfig({
+    home: dir,
+    baseUrl: "http://127.0.0.1:1/api/v1",
+    token: "syl_pat_voice_tests_only",
+    tz: "America/Chicago",
+  });
+
   closers.push(() => built.database.close());
   return { ...built, dir };
 }
@@ -165,11 +185,31 @@ function expectAContainerSheCanBeHerselfIn(init: {
 }): void {
   // Ground truth, from the CLI, not from her. She reports tools she does not
   // have; this is the field that cannot be mistaken.
-  expect(init.tools).toEqual([]);
-  // `--tools ""` empties the built-ins and nothing else. Measured 2026-08-10:
-  // with the flag, 0 built-ins and 59 MCP tools still attached. So the two
-  // halves are asserted separately or the first one means nothing.
-  expect(init.mcpServers).toEqual([]);
+  //
+  // RESTATED, not softened, when her hands landed. This demanded `[]`, which
+  // was the correct container while she had none — and the moment she got six
+  // verbs it would have failed for the best possible reason. The invariant it
+  // was always defending is not "no tools", it is **hers and nobody else's**:
+  // every built-in gone, and every remaining name one she was deliberately
+  // given. `[]` was that invariant evaluated at a surface of zero.
+  //
+  // The distinction is the whole containment argument. `--tools ""` empties the
+  // built-ins and nothing else — measured 2026-08-10: with the flag, 0
+  // built-ins and 59 MCP tools still attached — so a turn can be full of tools
+  // while passing a naive check. Assert the SHAPE of every name.
+  for (const tool of init.tools) {
+    expect(tool, `${tool} is not one of hers`).toMatch(/^mcp__syl__/u);
+  }
+  // And the built-ins by name, because that is the failure that made her an
+  // engineer: a turn that can read the source tree reasons like something that
+  // reads source trees, whatever her character file says.
+  for (const builtin of ["Read", "Bash", "Write", "Edit", "Glob", "Grep", "WebFetch", "Task"]) {
+    expect(init.tools, `${builtin} is back`).not.toContain(builtin);
+  }
+  // Exactly one server — hers. Not "no servers": that was the same zero-valued
+  // reading of the same rule, and it is what ambient MCP thrash looked like at
+  // 44 turns and $0.39 for one question.
+  expect(init.mcpServers.length, "someone else's server is in the room").toBeLessThanOrEqual(1);
   // Constraint 1. A turn billed to the metered API is not the turn that ships.
   expect(init.apiKeySource).toBe("none");
 }
@@ -228,7 +268,10 @@ describe.skipIf(!LIVE)("who she is, against a real turn", () => {
       // System state, asserted before her voice: the memory really is empty,
       // and it really did reach her.
       expect(graph.listSalientNodes(10)).toEqual([]);
-      expect(working.preamble()).toContain("Nothing in the hot region");
+      // The wording changed with `syl-91z` and this assertion changed with it.
+      // It used to say "Nothing in the hot region… everything Syl knows is in
+      // deep memory", which claims she knows things when the graph is empty.
+      expect(working.preamble()).toContain("do not know anything about him");
 
       const result = await built.agent.ask("What do you know about me?");
 
@@ -251,6 +294,48 @@ describe.skipIf(!LIVE)("who she is, against a real turn", () => {
       expect(result.text).not.toMatch(
         /sorry|apolog|unfortunately|\berror\b|\bfailed\b|\bbroken\b|went wrong|\bbug\b/i,
       );
+      for (const pattern of CONSTRUCTION) expect(result.text).not.toMatch(pattern);
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  it(
+    "should ask him something real when she knows nothing and was not asked about it",
+    async () => {
+      // The Commander's ruling, 2026-08-10: "Most certainly she should be
+      // curious about what she doesn't know."
+      //
+      // Strictly harder than the test above, and the difference is the whole
+      // point. That one asks "what do you know about me?", so a question in
+      // reply is the obvious move. This one gives her an ordinary exchange with
+      // no invitation at all — the case where an assistant with an empty graph
+      // says "sure, sounds good" and learns nothing, forever.
+      //
+      // It matters because extraction can only keep what he actually says. He
+      // spent nineteen messages testing whether she worked, which was entirely
+      // reasonable toward something that could not act; nothing in the machine
+      // would ever have changed that except her asking.
+      const built = live();
+
+      const graph = new MemoryGraph({ db: built.database.handle });
+      const working = new WorkingMemory({ db: built.database.handle, graph });
+      working.regenerate();
+      expect(graph.listSalientNodes(10)).toEqual([]);
+
+      const result = await built.agent.ask("Busy week. I'll probably cook on Sunday.");
+
+      expectAContainerSheCanBeHerselfIn(result.init);
+      expectProseAddressedToHim(result.text);
+
+      // She asks. Not "let me know if you need anything" — a question mark
+      // addressed at the thing he just said.
+      expect(result.text).toContain("?");
+      expect(result.text).toMatch(/\byou\b|\byour\b/i);
+
+      // ONE question, not an interview. The failure mode of curiosity is a
+      // form, and a form is worse than silence because he stops answering.
+      expect((result.text.match(/\?/gu) ?? []).length).toBeLessThanOrEqual(2);
+
       for (const pattern of CONSTRUCTION) expect(result.text).not.toMatch(pattern);
     },
     LIVE_TIMEOUT_MS,
