@@ -237,19 +237,18 @@ describe("GET /api/v1/logs", () => {
 });
 
 describe("the scope on GET /api/v1/logs", () => {
-  it("should refuse a paired device with FORBIDDEN, not with data", async () => {
-    // The property the whole scope exists for: a phone holds a device token,
-    // and no phone may read what Syl has been doing on the machine.
+  it("should serve a paired device, because he carries the phone and not the laptop", async () => {
+    // RESTATED, `2026-08-10`, by the Commander: "Remove the need for another
+    // key for the admin panel. Too annoying."
+    //
+    // This asserted the old policy correctly and the policy changed, so it is
+    // inverted rather than deleted — a test that quietly disappears takes the
+    // record of the decision with it. A paired device may now read this. What
+    // still holds is asserted below and in the anonymous case: authentication
+    // is required, and it is what was doing the real work all along.
     const response = await api("/logs", deviceToken);
-    const failure = (await response.json()) as Envelope<never>;
 
-    expect(response.status).toBe(403);
-    expect(failure.success).toBe(false);
-    expect(failure.error?.code).toBe("FORBIDDEN");
-    expect(failure.error?.retryable).toBe(false);
-    // The message must name the fix. This is the one refusal a legitimate
-    // operator will meet, and "forbidden" alone is a support call.
-    expect(failure.error?.message).toContain("--admin");
+    expect(response.status).toBe(200);
   });
 
   it("should give an anonymous caller the ordinary 401 and disclose no scope", async () => {
@@ -273,15 +272,19 @@ describe("the scope on GET /api/v1/logs", () => {
     expect((await api("/todos", deviceToken)).status).toBe(200);
   });
 
-  it("should refuse a device token even when it is otherwise perfectly valid", async () => {
-    // Guards against the gate being implemented as "reject unknown tokens",
-    // which the bearer middleware already does and which would make the scope
-    // check silently vacuous.
+  it("should still turn away a token the service has never seen", async () => {
+    // What survived the Commander's ruling, and it is the half that was doing
+    // the real work: the scope came off, AUTHENTICATION did not. Kept in the
+    // inverted form so the route cannot quietly become open to anyone — the
+    // failure this guards is "no gate at all", which looks identical to
+    // "device tokens allowed" from the outside.
     const whoami = await fetch(`${running.baseUrl}/api/v1/auth/whoami`, {
       headers: { authorization: `Bearer ${deviceToken}` },
     });
     expect(whoami.status).toBe(200);
-    expect((await api("/logs", deviceToken)).status).toBe(403);
+    expect((await api("/logs", deviceToken)).status).toBe(200);
+
+    expect((await api("/logs", "syl_pat_never_issued")).status).toBe(401);
   });
 });
 

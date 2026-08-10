@@ -580,10 +580,12 @@ describe("MemoryView — the empty state", () => {
     renderMemory();
 
     await waitFor(() => expect(screen.getAllByRole("alert").length).toBeGreaterThan(0));
-    const notice = await screen.findByTestId("admin-key-needed");
+    const notice = await screen.findByTestId("key-not-accepted");
 
-    expect(notice.textContent).toContain("admin");
-    expect(within(notice).getByText("npm run pair -- --admin").tagName).toBe("CODE");
+    expect(notice.textContent).toContain("npm run pair");
+    // And must NOT send him after a key that is no longer required.
+    expect(notice.textContent).not.toContain("--admin");
+    expect(within(notice).getByText("npm run pair").tagName).toBe("CODE");
     expect(screen.queryByTestId("memory-empty")).toBeNull();
   });
 

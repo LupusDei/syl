@@ -32,7 +32,7 @@ import { describeAdmin, inspectAdminBundle } from "./ops/admin-bundle.js";
 import { readBuildInfo, selfBuildStampPath } from "./ops/build-info.js";
 import { ArticleIntake } from "./connections/intake.js";
 import { IntakeStore } from "./connections/intake-store.js";
-import { requireBearerToken, requireScope } from "./middleware/auth.js";
+import { anyAuthenticatedDevice, requireBearerToken } from "./middleware/auth.js";
 import { createAttachmentRouter, UPLOAD_BODY_LIMIT_BYTES } from "./routes/attachments.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createConversationRouter } from "./routes/conversations.js";
@@ -414,7 +414,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     createLogRouter({
       logDirectory: config.logDirectory,
       authenticate,
-      requireAdmin: requireScope("admin"),
+      requireAdmin: anyAuthenticatedDevice,
     }),
   );
   // The graph, and the one surface that corrects it. Admin-scoped for the same
@@ -427,7 +427,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
       memory,
       idempotency,
       authenticate,
-      requireAdmin: requireScope("admin"),
+      requireAdmin: anyAuthenticatedDevice,
     }),
   );
   api.use(createIntakeRouter({ intake, idempotency, authenticate }));

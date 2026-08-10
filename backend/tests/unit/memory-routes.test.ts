@@ -231,12 +231,15 @@ describe("GET /api/v1/memory/graph", () => {
     expect(failure.error?.code).toBe("VALIDATION_FAILED");
   });
 
-  it("should refuse a paired device, exactly as the log does", async () => {
+  it("should serve a paired device, which is the whole point of the view", async () => {
+    // RESTATED by the Commander, 2026-08-10. Inverted rather than deleted: the
+    // old assertion recorded a real decision and this records the one that
+    // replaced it. He asked for this view specifically so he could judge
+    // whether the inferred engine is any good, and a view that needs a
+    // console-minted key pasted into a phone is a view he does not open.
     const response = await api("/memory/graph", deviceToken);
-    const failure = (await response.json()) as Envelope<never>;
 
-    expect(response.status).toBe(403);
-    expect(failure.error?.code).toBe("FORBIDDEN");
+    expect(response.status).toBe(200);
   });
 
   it("should give an anonymous caller the ordinary 401 and disclose no scope", async () => {
@@ -302,10 +305,12 @@ describe("GET /api/v1/memory/metrics", () => {
     expect(page.data?.cold.shape.oldestAgeMs).toBeNull();
   });
 
-  it("should refuse a paired device", async () => {
+  it("should serve a paired device, same as the graph it describes", async () => {
+    // Same ruling. The metrics are the numbers under the picture — gating them
+    // separately would leave him a graph he can see and a legend he cannot.
     const response = await api("/memory/metrics", deviceToken);
 
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(200);
   });
 });
 
@@ -414,11 +419,16 @@ describe("POST /api/v1/memory/edges/:edgeId/feedback", () => {
     expect(dreams.surfacedOf(session.id)[0]?.response).toBe("rejected");
   });
 
-  it("should refuse a paired device the correction surface", async () => {
+  it("should let a paired device correct an edge, which is where he will be when he spots one", async () => {
+    // The write, and the one I would have argued to keep behind admin: killing
+    // an edge changes what Syl believes. He ruled otherwise and the reasoning
+    // holds — confirming a wrong inference is only useful at the moment he
+    // notices it, and he notices it on the phone. An edge is demoted rather
+    // than destroyed (constraint 6), so a mis-tap costs relevance, not a fact.
     const seeded = seedInferred();
 
     const response = await verdict(seeded.edgeId, "reject", { token: deviceToken });
 
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(200);
   });
 });

@@ -249,6 +249,39 @@ const DEFAULT_BASE_PATH = "/api/v1";
  * Adding an entry is a decision about what she can do, not a convenience. There
  * is a test asserting this list exactly, so it cannot grow as a side effect.
  */
+/**
+ * No second key. The Commander's ruling, 2026-08-10: *"Remove the need for
+ * another key for the admin panel. Too annoying."*
+ *
+ * `GET /logs` and the memory graph used to demand `admin` scope, which no HTTP
+ * route can mint — so looking at either meant going to the machine, running
+ * `npm run pair -- --admin`, and pasting a second token into a phone. The
+ * argument for it was real: the log is the record of what a pre-authorised
+ * program did on his machine, the graph's feedback endpoint writes into Syl's
+ * memory, and a shoulder-surfed eight-digit pairing code should not reach
+ * either.
+ *
+ * **He has weighed that and decided the friction costs more.** It is his
+ * machine, his data, and his tailnet, and a view he needs a laptop to open is
+ * a view he does not look at — which was the actual outcome: the memory graph
+ * is the one he asked for specifically so he could judge the inferred engine,
+ * and he could not get to it from the device he actually carries.
+ *
+ * What still holds, and is doing the real work either way: a caller must be
+ * **authenticated**. Pairing is over the tailnet behind eight digits, and an
+ * unpaired caller gets the same indistinguishable 401 it always did. This
+ * removes a second factor on two routes; it does not open anything to a
+ * stranger.
+ *
+ * The `scope` column stays, and `npm run pair -- --admin` still mints `admin`.
+ * Nothing reads it today. It is left in place because taking a distinction OUT
+ * of a schema is expensive and putting this one back is one line — see
+ * `0014_api_key_scope.sql`.
+ */
+export const anyAuthenticatedDevice: RequestHandler = (_request, _response, next) => {
+  next();
+};
+
 export const AGENT_SURFACE: readonly string[] = ["/reminders", "/todos", "/goals"];
 
 /**

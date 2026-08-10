@@ -130,7 +130,7 @@ export function MemoryView(): ReactElement {
       </div>
 
       {graph.error !== null && <ErrorNotice error={graph.error} onRetry={graph.reload} />}
-      {graph.error?.code === "FORBIDDEN" && <AdminKeyNeeded />}
+      {graph.error?.code === "FORBIDDEN" && <KeyNotAccepted />}
       {graph.error === null && graph.loading && view === null && (
         <Loading label="Reading the graph…" />
       )}
@@ -215,17 +215,21 @@ export function MemoryView(): ReactElement {
  * a working key everywhere else, so the 403 is an instruction rather than a
  * reason to sign anybody out.
  */
-function AdminKeyNeeded(): ReactElement {
+/**
+ * Shown when the service will not accept this browser's key at all.
+ *
+ * It used to say "this needs a key with admin scope, run `pair -- --admin`",
+ * which was true until the Commander ruled otherwise on 2026-08-10: no second
+ * key for the admin panel. Leaving that copy would have been a screen telling
+ * him to perform a workflow that no longer exists — the stale-instruction
+ * failure, in the one place he would actually read it.
+ */
+function KeyNotAccepted(): ReactElement {
   return (
-    <div className="notice" data-testid="admin-key-needed">
+    <div className="notice" data-testid="key-not-accepted">
       <p className="notice__body">
-        This key is a paired device&rsquo;s. The memory graph is the record of what Syl inferred on
-        this machine, and confirming or rejecting an edge writes into her memory — so it needs a key
-        with <strong>admin</strong> scope, and no endpoint mints one.
-      </p>
-      <p className="notice__body">
-        Run <code>npm run pair -- --admin</code> at the machine&rsquo;s own console and sign in with
-        the token it prints. Everything else in this admin keeps working with the key you have.
+        This view needs a key the service recognises, and the one in this browser was not
+        accepted. Sign in again with a token from <code>npm run pair</code>.
       </p>
     </div>
   );

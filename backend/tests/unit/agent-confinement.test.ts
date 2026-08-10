@@ -224,13 +224,26 @@ describe("the agent scope, over HTTP", () => {
       expect((await call("GET", "/reminders", { token })).status).toBe(200);
     });
 
-    it("should still refuse a paired device the logs, which is admin's alone", async () => {
-      const response = await call("GET", "/logs", { token: await deviceToken() });
+    it("should give his phone the logs, and still refuse SYL her own", async () => {
+      // RESTATED, Commander's ruling 2026-08-10 — and this is the one where
+      // restating mattered, because the two halves are different mechanisms
+      // that happened to agree.
+      //
+      // The device half was `scope`, and he has taken it off: the log is his
+      // own record of his own machine and he reads it on the phone he carries.
+      //
+      // The Syl half is `AGENT_SURFACE`, which is untouched and must stay
+      // that way. The log is where a turn's every tool call is written down,
+      // and a turn that can read it can read its own audit trail — which is
+      // the one thing that would make the record worth less than nothing.
+      // Asserting both here so that opening the first can never be mistaken
+      // for opening the second.
+      expect((await call("GET", "/logs", { token: await deviceToken() })).status).toBe(200);
 
-      expect(response.status).toBe(403);
+      expect((await call("GET", "/logs", { token: agentToken() })).status).toBe(403);
     });
 
-    it("should leave an admin key reaching the logs", async () => {
+    it("should leave an admin key reaching the logs, which it always did", async () => {
       const token = keys.mint("Web admin (console)", { scope: "admin" }).token;
       const response = await call("GET", "/logs", { token });
 

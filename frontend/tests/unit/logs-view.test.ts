@@ -206,19 +206,25 @@ describe("LogsView", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("should explain a FORBIDDEN as a scope problem with the command that fixes it", async () => {
-    // The refusal a device-scoped key gets. "Forbidden" alone reads as a bug in
-    // the admin rather than as the deliberate boundary it is.
+  it("should explain a refusal with the command that fixes it", async () => {
+    // The refusal a key the service will not accept gets. "Forbidden" alone
+    // reads as a bug in the admin rather than as something he can act on.
+    //
+    // It no longer mentions admin scope: the Commander removed the second key
+    // on 2026-08-10, and a panel telling him to mint one would be instructions
+    // for a workflow that does not exist.
     stubApi(() => forbidden());
     renderLogs();
 
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
-    const notice = await screen.findByTestId("admin-key-needed");
+    const notice = await screen.findByTestId("key-not-accepted");
 
-    expect(notice.textContent).toContain("admin");
+    expect(notice.textContent).toContain("npm run pair");
+    // And must NOT send him after a key that is no longer required.
+    expect(notice.textContent).not.toContain("--admin");
     // The command, spelled out as its own element rather than only buried in
     // the server's sentence — this is the thing to copy.
-    expect(within(notice).getByText("npm run pair -- --admin").tagName).toBe("CODE");
+    expect(within(notice).getByText("npm run pair").tagName).toBe("CODE");
   });
 
   it("should keep the operator signed in when the log refuses their key", async () => {

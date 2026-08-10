@@ -661,15 +661,19 @@ describe("the live service against shared/openapi.yaml", () => {
       expect(page.hasMore).toBe(false);
     });
 
-    it("should refuse the paired device's own token in the contract's failure envelope", async () => {
-      // `syl.token` came from `POST /auth/pair` — it is a phone's token, and a
-      // phone may not read what Syl has been doing on the machine. The refusal
-      // has to be one of the contract's two envelopes like everything else.
+    it("should serve the paired device's own token, in the contract's success envelope", async () => {
+      // RESTATED, Commander's ruling 2026-08-10: no second key for the admin
+      // panel. `syl.token` came from `POST /auth/pair` — a phone's token — and
+      // the phone is the device he actually has with him.
+      //
+      // Still a CONFORMANCE test, and that is why it is inverted rather than
+      // dropped: the reply has to be one of the contract's two envelopes
+      // whichever way the policy goes, and changing which envelope is expected
+      // is exactly the check that the change was made in the schema too.
       const response = await syl.api("/logs");
-      const error = await expectConformingFailure(response, "FORBIDDEN");
 
-      expect(response.status).toBe(403);
-      expect(error["retryable"]).toBe(false);
+      expect(response.status).toBe(200);
+      await expectConformingSuccess(response, "listLogs");
     });
 
     it("should give an anonymous caller 401 rather than disclosing that a scope exists", async () => {
