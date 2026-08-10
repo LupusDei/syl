@@ -20,6 +20,7 @@ function fakeResult(sessionId: string, text = "ok"): TurnResult {
   return {
     sessionId,
     text,
+    result: text,
     costUsd: 0.001,
     numTurns: 1,
     init: {

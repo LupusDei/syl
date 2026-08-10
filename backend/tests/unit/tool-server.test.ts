@@ -897,3 +897,129 @@ describe("when something goes wrong that nothing anticipated", () => {
     if (!envelope.ok) expect(envelope.reason).toContain("the turn file exploded");
   });
 });
+/**
+ * `cancel_reminder` and `change_reminder` — the verbs he asked for by name.
+ *
+ * He told her to remove two reminders and she could not, and said so:
+ *
+ * > "I could not remove the 1:45 and 5:45 ones... I'm not going to tell you
+ * > they're gone when they aren't."
+ *
+ * The honesty was right and the gap was real: a thing that can only create and
+ * never cancel accumulates junk until he stops trusting the list. These tests
+ * hold the two properties that make handing her the verbs safe — she reads
+ * before she writes, and whatever she says afterwards NAMES what she touched,
+ * because him hearing the wrong reminder read back is the last place a wrong id
+ * is catchable.
+ */
+describe("cancel_reminder — the verb that stops something firing", () => {
+  const REMINDER_PATH = "/reminders/syl%3Areminder%3A0000";
+
+  function reminderApi(initial = storedReminder()): FakeApi {
+    let row = initial;
+    return fakeApi({
+      [REMINDER_PATH]: (made) => {
+        if (made.method === "DELETE") row = storedReminder({ ...row, deliveryState: "cancelled" });
+        if (made.method === "PATCH") row = storedReminder({ ...row, ...made.body });
+        return ok(row);
+      },
+    });
+  }
+
+  it("should cancel it and name what it cancelled", async () => {
+    const api = reminderApi();
+
+    const { envelope } = await call(contextFor(api), "cancel_reminder", {
+      id: "syl:reminder:0000",
+      because: "He asked me to remove it.",
+    });
+
+    expect(envelope).toMatchObject({ ok: true, action: "cancel_reminder" });
+    if (envelope.ok) {
+      const row = envelope.subject as { text: string; deliveryState: string };
+      expect(row.text).toBe("Take the bread out of the oven.");
+      expect(row.deliveryState).toBe("cancelled");
+    }
+  });
+
+  it("should look it up before it writes, so a wrong id cancels nothing", async () => {
+    const api = fakeApi({
+      [REMINDER_PATH]: () => failure(404, "NOT_FOUND", "There is no such reminder.", false),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "cancel_reminder", {
+      id: "syl:reminder:0000",
+      because: "He asked me to remove it.",
+    });
+
+    expect(isError).toBe(true);
+    expect(api.calls.some((made) => made.method === "DELETE")).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("nothing has been called off");
+  });
+
+  it("should refuse rather than claim it just cancelled one that was already cancelled", async () => {
+    // The write would SUCCEED and she would announce having stopped something
+    // she did not touch — about a reminder she may have picked by mistake.
+    const api = reminderApi(storedReminder({ deliveryState: "cancelled" }));
+
+    const { envelope } = await call(contextFor(api), "cancel_reminder", {
+      id: "syl:reminder:0000",
+      because: "He asked me to remove it.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toContain("already cancelled");
+      expect(envelope.retryable).toBe(false);
+    }
+  });
+
+  it("should move a reminder without disturbing what he did not mention", async () => {
+    // The reason this is not "cancel it and make a new one": he is thinking of
+    // it as the SAME reminder, and a patch that sent every field back would
+    // quietly overwrite the ones she did not think to include.
+    const api = reminderApi();
+
+    const { envelope } = await call(contextFor(api), "change_reminder", {
+      id: "syl:reminder:0000",
+      when: { said: "at 8pm", kind: "time_of_day", wallTime: "20:00" },
+      because: "He moved it.",
+    });
+
+    expect(envelope).toMatchObject({ ok: true, action: "change_reminder" });
+    const patch = api.calls.find((made) => made.method === "PATCH")?.body ?? {};
+    expect(patch["wallTime"]).toBe("20:00");
+    // Untouched, and absent rather than sent back as itself.
+    expect(patch["text"]).toBeUndefined();
+  });
+
+  it("should ask rather than guess when he is vague about the new time", async () => {
+    // The vagueness veto applies to a MOVE exactly as it does to a creation —
+    // "push it back a bit" has the same way of being wrong.
+    const api = reminderApi();
+
+    const { envelope } = await call(contextFor(api), "change_reminder", {
+      id: "syl:reminder:0000",
+      when: { said: "later", kind: "relative" },
+      because: "He moved it.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    expect(api.calls.some((made) => made.method === "PATCH")).toBe(false);
+  });
+
+  it("should refuse a change that changes nothing rather than report success", async () => {
+    // A silent no-op reads to her as success, and she tells him it moved.
+    const api = reminderApi();
+
+    const { envelope } = await call(contextFor(api), "change_reminder", {
+      id: "syl:reminder:0000",
+      because: "He said to change it.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("did not catch what to change");
+    expect(api.calls.some((made) => made.method === "PATCH")).toBe(false);
+  });
+});
+

@@ -149,6 +149,7 @@ function scriptedRunner(script: readonly StubTurn[]): {
     return {
       sessionId,
       text: step?.text ?? acceptEverything(),
+      result: step?.text ?? acceptEverything(),
       costUsd: 0.02,
       numTurns: 1,
       init: {

@@ -353,6 +353,151 @@ const finishTodo: ToolHandler = async (input, context) => {
   return readBack("finish_todo", context, path, (row: Todo) => row.completedAt);
 };
 
+/**
+ * Call off a reminder, and say which one you called off.
+ *
+ * The verb he asked for by name. He told her to remove two reminders, she had
+ * no way to, and she said so rather than claiming otherwise:
+ *
+ * > "I could not remove the 1:45 and 5:45 ones... I'm not going to tell you
+ * > they're gone when they aren't."
+ *
+ * Two things make this safe enough to hand her. **The row survives** —
+ * `DELETE /reminders/:id` sets `cancelled` and keeps the history, because a row
+ * that disappears takes with it the proof that nothing was silently dropped
+ * (constraint 4). And **she reads it before she touches it**, so the reply can
+ * name the text and the time she just called off. That is the only moment a
+ * wrong id is still catchable: he can hear "not that one" and say so.
+ */
+const cancelReminder: ToolHandler = async (input, context) => {
+  const id = text(input, "id");
+  if (id === null) {
+    return missing("cancel_reminder", "id", "I need to know which one — ask me what is outstanding.");
+  }
+  if (text(input, "because") === null) {
+    return missing(
+      "cancel_reminder",
+      "because",
+      "This stops something firing, so it has to say why.",
+    );
+  }
+
+  const path = `/reminders/${encodeURIComponent(id)}`;
+
+  const before = await context.client.get<Reminder>(path);
+  if (!before.ok) {
+    return {
+      ok: false,
+      action: "cancel_reminder",
+      // True whichever way the read failed, because it describes what THIS
+      // handler did rather than what the store said.
+      reason: `${before.failure.message} I looked it up before touching it, so nothing has been called off.`,
+      retryable: before.failure.retryable,
+    };
+  }
+
+  if (before.data.deliveryState === "cancelled") {
+    // A refusal, not a success. Cancelling twice would return happily and she
+    // would announce having just called off something she did not touch —
+    // about an item she may have picked by mistake.
+    return {
+      ok: false,
+      action: "cancel_reminder",
+      reason:
+        `"${before.data.text}" was already cancelled. I have changed nothing. ` +
+        "If that is not the one you meant, tell me which it is.",
+      retryable: false,
+    };
+  }
+
+  const cancelled = await context.client.del<Reminder>(path);
+  if (!cancelled.ok) return refused("cancel_reminder", cancelled.failure);
+
+  return readBack("cancel_reminder", context, path, (row: Reminder) => row.updatedAt);
+};
+
+/**
+ * Move or reword a reminder he already has.
+ *
+ * Deliberately not "cancel it and make a new one". He is thinking of it as the
+ * same reminder — "move the 6pm one to 8" — and a system that answers by
+ * destroying one thing and creating another gives him a new id, a new history,
+ * and a cancelled row he never asked for.
+ *
+ * **Only the named fields move.** A patch that sent the whole reminder back
+ * would silently overwrite every field she did not think to include, which is
+ * the failure where a reword quietly loses the time.
+ */
+const changeReminder: ToolHandler = async (input, context) => {
+  const id = text(input, "id");
+  if (id === null) {
+    return missing("change_reminder", "id", "I need to know which one — ask me what is outstanding.");
+  }
+  if (text(input, "because") === null) {
+    return missing("change_reminder", "because", "A change to something he set has to say why.");
+  }
+
+  const path = `/reminders/${encodeURIComponent(id)}`;
+
+  const before = await context.client.get<Reminder>(path);
+  if (!before.ok) {
+    return {
+      ok: false,
+      action: "change_reminder",
+      reason: `${before.failure.message} I looked it up before touching it, so nothing has changed.`,
+      retryable: before.failure.retryable,
+    };
+  }
+
+  const patch: Record<string, unknown> = {};
+  const reworded = text(input, "text");
+  if (reworded !== null) patch["text"] = reworded;
+
+  const when = input["when"];
+  if (when !== undefined) {
+    // The same resolution `remind_me` uses, including the vagueness veto — a
+    // move has exactly the same way of being misunderstood as a creation, and
+    // "push it back a bit" must ask rather than guess.
+    const said =
+      typeof when === "object" && when !== null && !Array.isArray(when)
+        ? ((when as Record<string, unknown>)["said"] ?? "")
+        : "";
+
+    const now = await serviceNow(context.client);
+    if (!now.ok) return refused("change_reminder", now.failure);
+
+    const resolution = resolveTime({
+      said: typeof said === "string" ? said : "",
+      spec: when,
+      clock: () => now.data,
+      tz: context.tz,
+    });
+    if (resolution.outcome === "ambiguous") {
+      return { ok: false, action: "change_reminder", reason: resolution.question, retryable: true };
+    }
+
+    Object.assign(patch, reminderInputFrom(resolution));
+  }
+
+  if (Object.keys(patch).length === 0) {
+    // Nothing to do is not the same as done. A silent no-op here reads to her
+    // as success and she tells him it moved.
+    return {
+      ok: false,
+      action: "change_reminder",
+      reason:
+        `I did not catch what to change about "${before.data.text}". ` +
+        "Tell me the new wording or the new time.",
+      retryable: false,
+    };
+  }
+
+  const changed = await context.client.patch<Reminder>(path, patch);
+  if (!changed.ok) return refused("change_reminder", changed.failure);
+
+  return readBack("change_reminder", context, path, (row: Reminder) => row.updatedAt);
+};
+
 /** Record something he is working toward. */
 const setGoal: ToolHandler = async (input, context) => {
   const title = text(input, "text");
@@ -472,7 +617,12 @@ async function readBack<T>(
  * are both simply absent rather than half-present.
  */
 export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
+  // Order matches `TOOLS`, and a test asserts it. Not cosmetic: `tools/list` is
+  // built from the schemas and this is what she is told she has, so a mismatch
+  // is the advertised surface disagreeing with the implemented one.
   remind_me: remindMe,
+  cancel_reminder: cancelReminder,
+  change_reminder: changeReminder,
   add_todo: addTodo,
   finish_todo: finishTodo,
   set_goal: setGoal,

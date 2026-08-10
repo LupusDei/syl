@@ -95,6 +95,7 @@ function turnResult(sessionId = "s-1"): TurnResult {
   return {
     sessionId,
     text: "ok",
+    result: "ok",
     costUsd: 0,
     numTurns: 1,
     init: { kind: "init", sessionId, tools: [], apiKeySource: "none" },

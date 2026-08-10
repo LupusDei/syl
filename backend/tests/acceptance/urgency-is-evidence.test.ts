@@ -140,6 +140,7 @@ describe("urgency, through the machine that has to enforce it", () => {
         return {
           sessionId,
           text: failure === null ? "Done." : `I could not: ${failure}`,
+          result: failure === null ? "Done." : `I could not: ${failure}`,
           costUsd: 0,
           numTurns: 1,
           init: {

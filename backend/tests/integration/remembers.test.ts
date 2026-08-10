@@ -90,6 +90,7 @@ function scriptedRunner(reply: string): {
     return Promise.resolve({
       sessionId,
       text: reply,
+      result: reply,
       costUsd: 0,
       numTurns: 1,
       init: {

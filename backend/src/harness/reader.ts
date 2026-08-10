@@ -112,6 +112,15 @@ export interface ReaderTurnOptions {
 export interface ReaderTurnResult {
   /** The assistant's reply. Untrusted: it is derived from untrusted input. */
   readonly text: string;
+  /**
+   * The CLI's own `result` — the last thing said, unjoined.
+   *
+   * What {@link readStructured} parses. `text` joins every assistant message,
+   * which is right for prose and wrong for JSON: a model that says "OK" before
+   * the object turns valid output into `"OK\n\n{…}"` and the whole reply is
+   * discarded as unparseable.
+   */
+  readonly result: string;
   /** What the CLI said was on the tool surface. Expected to be empty. */
   readonly toolSurface: readonly string[];
   readonly costUsd: number;
@@ -235,6 +244,7 @@ export async function runReaderTurn(
 
   return {
     text: result.text,
+    result: result.result,
     toolSurface,
     costUsd: result.costUsd,
     events: result.events,
@@ -263,11 +273,29 @@ export async function readStructured<T>(
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(stripCodeFence(result.text));
+    // THE LAST THING SHE SAID, which is neither `text` nor `result`.
+    //
+    // `text` joins every assistant message, so a model that says "OK" before
+    // the JSON yields `"OK\n\n{…}"` — not JSON, discarded, and with it the
+    // extraction. That regressed memory formation on `main` and said nothing,
+    // because the failure path is "returned no facts", which is also the
+    // correct answer most of the time.
+    //
+    // `result` alone is not the fix either: against a real subprocess the
+    // structured reply arrives as an assistant message and the CLI's own
+    // `result` field can be empty, which took the dream down in exactly the
+    // test that drives a real binary.
+    //
+    // `result` is what a structured reply is parsed from, and "the last
+    // assistant message" is NOT a safe substitute: measured against the
+    // captured injection fixtures, her final message is prose describing the
+    // injection she refused, and the JSON is not it. The CLI's own `result` is
+    // the field that carries the answer.
+    parsed = JSON.parse(stripCodeFence(result.result));
   } catch {
     throw new ReaderOutputError(
       `The reader turn did not return JSON, so its output was discarded. Reply began: ` +
-        `${JSON.stringify(result.text.slice(0, 120))}`,
+        `${JSON.stringify(result.result.slice(0, 120))}`,
     );
   }
 

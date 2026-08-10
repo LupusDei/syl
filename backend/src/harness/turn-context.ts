@@ -151,16 +151,35 @@ export const MEMORY_FENCE_END = "--- END OF WHAT YOU REMEMBER ---";
 /**
  * The ceiling on everything a turn's system prompt carries.
  *
- * Measured today: `SOUL.md` is 5,502 bytes, the working-memory projection is
- * capped at 4,000 (enforced three ways in `memory/working.ts`), tool schemas are
- * zero and grow under `syl-009`. 9,502 against 16,000 leaves real headroom for
- * the tools track without the ceiling being so generous it never fires.
+ * This is not a token-economy measure — 16 KB was nothing against a 200k
+ * window and 24 KB is nothing either. **It is a tripwire on a contributor that
+ * has RUN AWAY, sized so that it cannot fire on the contributors that exist.**
+ * That sentence is the whole specification and it is what decides the number.
  *
- * This is not a token-economy measure — 16 KB is nothing against a 200k window.
- * It is a tripwire on a contributor that has run away, sized so that it cannot
- * fire on the contributors that exist.
+ * Originally 16,000, sized when `SOUL.md` was 5,502 bytes and the tool schemas
+ * were zero. Both grew for reasons that were reviewed one at a time:
+ *
+ * | contributor | then | now | why |
+ * |---|---|---|---|
+ * | `SOUL.md` | 5,502 | ~8,400 | the personality work, and the Commander's ruling that she be curious |
+ * | working memory | 4,000 | 4,000 | a hard cap, enforced three ways |
+ * | tool schemas | 0 | ~5,700 | nine verbs, so she can manage his data rather than only add to it |
+ *
+ * At 16,000 the tripwire had begun firing on **contributors that all exist and
+ * were all deliberate**, which is the exact case its own definition says it
+ * must not fire on. A tripwire that goes off on the intended state is not a
+ * guard, it is a thing people learn to edit — and the file that first hit it
+ * was `SOUL.md` gaining a paragraph, where the temptation is to write a worse
+ * paragraph rather than to ask whether the number is still right.
+ *
+ * 24,000 restores the margin it was built to have. `tools/schemas.ts` says
+ * "narrow the surface rather than raise the ceiling", and that is right for a
+ * surface that is too large FOR AN ASSISTANT — nine verbs covering reminders,
+ * to-dos, goals and memory is not that. Raise it when the intended contributors
+ * outgrow it; narrow the contributor when one of them is bloated. The two rules
+ * are not in conflict, they are answers to different questions.
  */
-export const DEFAULT_CONTEXT_BUDGET_BYTES = 16_000;
+export const DEFAULT_CONTEXT_BUDGET_BYTES = 24_000;
 
 /** A contributor was wired up wrong. A programming error, not a runtime condition. */
 export class TurnContextError extends Error {

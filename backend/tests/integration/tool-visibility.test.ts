@@ -85,6 +85,7 @@ function callsATool(input: () => Record<string, unknown>): TurnRunner {
     return {
       sessionId,
       text: "Done.",
+      result: "Done.",
       costUsd: 0,
       numTurns: 1,
       init: {

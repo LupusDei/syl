@@ -330,6 +330,7 @@ function aModelThatUsesHerTools(hands: Hands): TurnRunner {
     return {
       sessionId,
       text,
+      result: text,
       costUsd: 0,
       numTurns: 1,
       init: {

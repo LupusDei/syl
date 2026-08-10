@@ -68,6 +68,7 @@ function result(text: string, sessionId = "session-1"): TurnResult {
   return {
     sessionId,
     text,
+    result: text,
     costUsd: 0,
     numTurns: 1,
     init: {

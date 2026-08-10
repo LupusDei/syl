@@ -121,6 +121,52 @@ export const TOOLS: readonly ToolSchema[] = [
     },
   },
   {
+    name: "cancel_reminder",
+    description:
+      "Call off a reminder he no longer wants. It stops firing; the record of it stays.",
+    inputSchema: {
+      type: "object",
+      // The `id` comes from `whats_outstanding`, so she has to look before she
+      // touches. That is not friction, it is the only moment a wrong guess is
+      // still catchable — she can read him the text and the time she is about
+      // to call off, and he can say "not that one".
+      required: ["id", "because"],
+      properties: {
+        id: { type: "string", description: "The reminder's id, from whats_outstanding." },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
+    name: "change_reminder",
+    description:
+      "Move or reword a reminder that already exists. Prefer this to cancelling and making a new one — he is thinking of it as the same reminder.",
+    inputSchema: {
+      type: "object",
+      // Only `id` and `because` are required: a change names the fields it
+      // changes and leaves the rest alone. Sending a whole reminder back would
+      // silently overwrite whatever she did not think to include.
+      required: ["id", "because"],
+      properties: {
+        id: { type: "string", description: "The reminder's id, from whats_outstanding." },
+        text: { type: "string", description: "New wording, if he reworded it." },
+        when: WHEN,
+        because: BECAUSE,
+      },
+    },
+  },
+  // `drop_todo` BELONGS HERE AND IS NOT HERE YET, deliberately.
+  //
+  // He needs to abandon a to-do as well as finish one — done and given-up are
+  // different things and he may want to tell them apart later. I wrote the
+  // schema, and the surface test caught that it had no handler and no route:
+  // `DELETE /todos/:id` does not exist, and `TodoService` has no abandon.
+  //
+  // Advertising it anyway would have been the exact defect we have chased all
+  // week — a verb that tells her she can do something she cannot, so she says
+  // "taken off your list" and nothing happens. `syl-3d7` carries the route,
+  // the service method and the verb together, because they are one change.
+  {
     name: "remember",
     description:
       "Keep something he told you about his life — a person, a preference, a date, something he is worried about. Use it when a detail is worth having in a month, not for what is already in front of you.",

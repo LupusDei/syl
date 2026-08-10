@@ -148,6 +148,7 @@ describe("presence on the live socket", () => {
         return {
           sessionId: "held-session",
           text: "Yes.",
+          result: "Yes.",
           costUsd: 0,
           numTurns: 1,
           init: {
