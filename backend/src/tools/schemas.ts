@@ -97,9 +97,25 @@ export const TOOLS: readonly ToolSchema[] = [
         text: { type: "string", description: "What to bring back, in his words where you have them." },
         when: WHEN,
         because: BECAUSE,
-        urgent: {
-          type: "boolean",
-          description: "Reaches him inside quiet hours. For things that are worse late than unwelcome.",
+        // URGENCY IS DESCRIBED, NEVER DECIDED — `syl-j55`.
+        //
+        // This was `urgent: boolean`, and a boolean is a DECISION. `schedule.ts`
+        // honours it unconditionally, so a flag she set on her own judgement
+        // pierced quiet hours. `SOUL.md` says overnight items wait "unless
+        // explicitly urgent", and explicit means HE said so — not that she
+        // concluded it. Anticipation plus self-judged urgency is a 3am wake-up
+        // for a friend's birthday, which is the one place his anticipation
+        // order and his sleep actually collide.
+        //
+        // So she carries his words instead, exactly as `WHEN.said` does, and
+        // the service rules on them. A phrase can be CHECKED against what he
+        // actually wrote; a boolean cannot be checked against anything. Absent
+        // or unverifiable means not urgent — the safe answer is the default,
+        // and the failure is a reminder that waits rather than a house woken.
+        urgentBecauseHeSaid: {
+          type: "string",
+          description:
+            "Only if HE asked for it tonight — his words, quoted. Leave it out otherwise; you do not decide this.",
         },
       },
     },
