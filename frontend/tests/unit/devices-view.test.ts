@@ -49,6 +49,28 @@ function fixtureRows(): Record<string, unknown>[] {
   return (fixture("http/devices.page") as { data: { items: Record<string, unknown>[] } }).data.items;
 }
 
+/**
+ * The fixture rows, with the live device seen just now.
+ *
+ * `DevicesView` decides "active" versus "not seen recently" against the REAL
+ * clock, and the fixture's `lastSeenAt` is a fixed instant captured on
+ * 2026-08-09. So the badge said "active" on the day this test was written and
+ * said "not seen recently" from the following morning onwards, with no change
+ * to any code — the same one-day fuse that migration `0001` lit with
+ * `strftime('now')` (see `backend/tests/helpers/service.ts`).
+ *
+ * Anchoring the live row to the moment the test runs keeps the assertion about
+ * what it is actually about — an unregistered device reads "unregistered" and a
+ * live one reads "active" — rather than about how long ago the fixture was
+ * captured. The fixture itself is left alone: it is captured wire output, and
+ * the other cases here depend on its instants.
+ */
+function seenJustNow(): Record<string, unknown>[] {
+  return fixtureRows().map((device) =>
+    device["active"] === true ? { ...device, lastSeenAt: new Date().toISOString() } : device,
+  );
+}
+
 describe("DevicesView", () => {
   it("should list every registered target, active first", async () => {
     stubApi();
@@ -87,7 +109,7 @@ describe("DevicesView", () => {
   });
 
   it("should describe an unregistered device as unregistered, not missing", async () => {
-    stubApi();
+    stubApi(() => pageOf(seenJustNow()));
     renderView();
 
     await waitFor(() => expect(screen.getByText("unregistered")).toBeTruthy());
