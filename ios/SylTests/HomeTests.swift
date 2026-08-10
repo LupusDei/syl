@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 import SylKit
 
 @testable import Syl
@@ -332,6 +333,54 @@ final class HomeTests: XCTestCase {
                 "SylHero.artAspect must match the art, or the edge masks fade into empty margin"
             )
         }
+    }
+
+    /// The loop must have the same shape as the still.
+    ///
+    /// This is the guard for the swap the Commander is about to make. The hero's frame
+    /// is computed from ``SylHero/artAspect``, and the edge masks are computed from the
+    /// frame — so a video at a different ratio letterboxes inside it and the hard-edged
+    /// rectangle comes straight back. That failure is silent, it only shows on a device,
+    /// and it already cost one TestFlight build.
+    ///
+    /// Skips rather than fails when no loop is bundled, because shipping the still alone
+    /// is a supported state.
+    @MainActor
+    func testShouldKeepAnyBundledHeroLoopAtTheSameAspectAsTheStill() async throws {
+        let url = try XCTUnwrap(HeroMedia.videoURL(dark: false), "no hero loop bundled")
+
+        let tracks = try await AVURLAsset(url: url).loadTracks(withMediaType: .video)
+        let track = try XCTUnwrap(tracks.first, "the hero loop has no video track")
+
+        // The preferred transform matters: a portrait video is commonly stored
+        // landscape with a rotation, and reading `naturalSize` alone would compare the
+        // wrong ratio and pass a video that letterboxes on screen.
+        let natural = try await track.load(.naturalSize)
+        let transform = try await track.load(.preferredTransform)
+        let size = natural.applying(transform)
+        let aspect = Double(abs(size.width) / abs(size.height))
+
+        XCTAssertEqual(
+            aspect,
+            SylHero.artAspect,
+            accuracy: 0.01,
+            "a hero loop at a different ratio letterboxes and restores the hard rectangle"
+        )
+    }
+
+    /// A hero loop must carry no audio track at all.
+    ///
+    /// Muting the player is not enough to be sure: a video with an audio track is a
+    /// candidate for the audio session, and a home screen that pauses the Commander's
+    /// podcast the moment he opens the app is a defect he feels before he sees anything.
+    /// The bundled file is stripped with `-an`; this is what stops that being forgotten
+    /// the next time somebody exports one.
+    @MainActor
+    func testShouldShipTheHeroLoopSilentSoItCannotStealTheAudioSession() async throws {
+        let url = try XCTUnwrap(HeroMedia.videoURL(dark: false), "no hero loop bundled")
+        let audio = try await AVURLAsset(url: url).loadTracks(withMediaType: .audio)
+
+        XCTAssertTrue(audio.isEmpty, "export the hero loop with -an; an audio track can interrupt playback")
     }
 
     func testShouldScatterSparksDeterministicallySoTheyDoNotFlicker() {

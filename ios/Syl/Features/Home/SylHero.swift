@@ -51,6 +51,8 @@ struct SylHero: View {
     var intensity: Double
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.scenePhase) private var scenePhase
 
     /// Width ÷ height of the shipped art.
     ///
@@ -108,12 +110,23 @@ struct SylHero: View {
             )
             .blendMode(.plusLighter)
 
-            Image("SylHero")
-                .resizable()
-                // No `.fit` and no letterbox: the frame is already the art's own ratio,
-                // so `.fill` and `.fit` would agree. Stated as `.fill` because it is the
-                // one that cannot leave a margin if the ratio is ever slightly off.
-                .aspectRatio(contentMode: .fill)
+            // A bundled loop when there is one, the still otherwise. Both are framed
+            // and masked identically, which is the whole point: swapping the media
+            // must not change the composition by a pixel.
+            Group {
+                if let video = HeroMedia.videoURL(dark: scheme == .dark),
+                   HeroMedia.shouldAnimate(reduceMotion: reduceMotion) {
+                    LoopingVideo(url: video, isPlaying: scenePhase == .active)
+                } else {
+                    Image("SylHero")
+                        .resizable()
+                        // No `.fit` and no letterbox: the frame is already the art's own
+                        // ratio, so `.fill` and `.fit` would agree. Stated as `.fill`
+                        // because it is the one that cannot leave a margin if the ratio
+                        // is ever slightly off.
+                        .aspectRatio(contentMode: .fill)
+                }
+            }
                 .frame(width: width, height: height)
                 .clipped()
                 // Melts her into the veil instead of ending at a rectangle.

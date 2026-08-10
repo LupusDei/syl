@@ -116,7 +116,10 @@ struct HomeView: View {
                         .transition(.opacity)
                 }
             }
-            .frame(height: max(viewport.height * 0.58, 320))
+            // Enlarged on the Commander's note. The ceiling is the art's own ratio: at
+            // this height she is already as wide as the screen, so any more height
+            // would only add margin above and below her rather than making her bigger.
+            .frame(height: max(viewport.height * 0.66, 360))
             .animation(SylTheme.Motion.breathe, value: presence)
 
             // Her name, in the one piece of real display type in the app. The glow
@@ -140,10 +143,10 @@ struct HomeView: View {
                 .padding(.top, SylTheme.Metric.tight)
                 .padding(.horizontal, SylTheme.Metric.gutter)
 
-            Spacer(minLength: SylTheme.Metric.step)
+            Spacer(minLength: SylTheme.Metric.snug)
 
             orbs
-                .padding(.bottom, SylTheme.Metric.chapter)
+                .padding(.bottom, SylTheme.Metric.gutter)
         }
         // One *visible* screen, not one raw geometry height.
         //
