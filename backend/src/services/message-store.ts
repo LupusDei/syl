@@ -264,8 +264,23 @@ export class MessageStore {
     const clientId = input.clientId ?? null;
     const stripped = stripAffectHint(input.text);
 
-    if (stripped.text === "") {
-      throw new MessageStoreError("empty_text", "A message must carry some text.");
+    // A message must say something. A picture says something.
+    //
+    // The rule used to be "text is never empty", which was right while Syl
+    // exchanged only text and became wrong the moment a message could carry a
+    // picture: sending a photo with no caption is the most ordinary thing
+    // anyone does with a photo, and it was impossible. The Commander's call,
+    // 2026-08-10, on `syl-008.8`.
+    //
+    // What is NOT relaxed: an empty message with nothing attached is still
+    // refused. That is a client that lost its payload, not a user with nothing
+    // to add, and accepting it would put a blank bubble in his transcript
+    // forever.
+    if (stripped.text === "" && (input.attachmentIds?.length ?? 0) === 0) {
+      throw new MessageStoreError(
+        "empty_text",
+        "A message must carry some text, or at least one attachment.",
+      );
     }
 
     if (this.conversation(conversationId) === null) {

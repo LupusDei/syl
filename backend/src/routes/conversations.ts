@@ -127,6 +127,41 @@ function requireString(body: unknown, field: string, maxLength: number): string 
 }
 
 /**
+ * Read a required string field that is ALLOWED to be empty.
+ *
+ * `requireString` above conflates two rules — "present and a string" and "not
+ * blank" — which is right for a client id and wrong for a message's text, now
+ * that a picture with no caption is a real message carrying `""`.
+ *
+ * A second function rather than a flag, because the blank check is the useful
+ * half for almost every caller and `requireString(body, "text", 4000, true)`
+ * reads as nothing at all at the call site.
+ *
+ * Whether an empty message is acceptable depends on its attachments, so that
+ * rule lives in `MessageStore.append`, where they are known. This only says the
+ * field was sent and is a string of a sane length.
+ */
+function requirePossiblyEmptyString(body: unknown, field: string, maxLength: number): string {
+  const value =
+    typeof body === "object" && body !== null
+      ? // Safe assertion: guarded above, and the value is re-tested.
+        (body as Record<string, unknown>)[field]
+      : undefined;
+
+  if (typeof value !== "string") {
+    throw new ApiFailure("VALIDATION_FAILED", `${field} is required.`, {
+      details: { field, reason: "must be a string" },
+    });
+  }
+  if (value.length > maxLength) {
+    throw new ApiFailure("VALIDATION_FAILED", `${field} is too long.`, {
+      details: { field, reason: `must be at most ${maxLength} characters` },
+    });
+  }
+  return value;
+}
+
+/**
  * Read `attachmentIds` off a send, or refuse it.
  *
  * Absent is fine; present-and-empty is not. An empty array reaches here only
@@ -275,7 +310,9 @@ export function createConversationRouter(options: ConversationRouterOptions): Ro
       response,
       runIdempotent(idempotency, request, () => {
         const clientId = requireString(request.body, "clientId", MAX_CLIENT_ID);
-        const text = requireString(request.body, "text", MAX_MESSAGE_TEXT);
+        // Empty is allowed HERE; whether it is allowed at all depends on the
+        // attachments, which only the store can see.
+        const text = requirePossiblyEmptyString(request.body, "text", MAX_MESSAGE_TEXT);
         const attachmentIds = attachmentIdsOf(request.body);
 
         try {

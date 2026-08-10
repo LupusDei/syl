@@ -166,9 +166,19 @@ final class ChatViewModel: ObservableObject {
     /// visible "not yet".
     func send(staging: [StagedAttachment] = []) async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Text is required by the contract (`minLength: 1`), so an attachment cannot be
-        // sent bare. That is the service's rule rather than this screen's opinion.
-        guard !text.isEmpty else { return }
+        // A message must say something. A picture says something.
+        //
+        // The contract required non-empty text until `syl-008.8`, which made "send a
+        // photo, no caption" impossible — the most ordinary thing anyone does with a
+        // picture. The Commander's call, 2026-08-10.
+        //
+        // What did NOT change: an empty draft with nothing staged still sends nothing.
+        // That is a stray tap on the send control, and turning it into a blank bubble
+        // in his transcript would be permanent.
+        //
+        // The client deliberately does not invent a caption here — a filename or a
+        // space in the text field would be the app putting words in his mouth.
+        guard !text.isEmpty || !staging.isEmpty else { return }
 
         let clientId = makeClientId()
         let idempotencyKey = makeIdempotencyKey()

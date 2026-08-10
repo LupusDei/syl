@@ -271,7 +271,27 @@ struct ChatTurn: View {
         let speaker = isFromCommander ? "You said" : "Syl said"
         let time = group.startedAt.formatted(date: .omitted, time: .shortened)
         let state = group.isPending ? ", sending" : ""
-        return "\(speaker), \(time)\(state). \(message.text)"
+        return "\(speaker), \(time)\(state). \(spoken(message))"
+    }
+
+    /// What the turn actually said, for someone who cannot see it.
+    ///
+    /// A message may now carry pictures and no words at all (`syl-008.8`), and the
+    /// obvious label then reads "You said, 9:14." followed by silence — which announces
+    /// that something was sent while withholding the only thing it was. What it carried
+    /// IS what he said.
+    private func spoken(_ message: Message) -> String {
+        guard message.text.isEmpty else { return message.text }
+
+        let images = message.attachments.filter { $0.kind == .image }.count
+        let videos = message.attachments.filter { $0.kind == .video }.count
+
+        var parts: [String] = []
+        if images > 0 { parts.append(images == 1 ? "A picture" : "\(images) pictures") }
+        if videos > 0 { parts.append(videos == 1 ? "A video" : "\(videos) videos") }
+        // Nothing at all should be unreachable — the service refuses an empty message
+        // with no attachments — but a label is the wrong place to assert that.
+        return parts.isEmpty ? "No message" : parts.joined(separator: ", ")
     }
 }
 
