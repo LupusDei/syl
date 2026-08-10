@@ -856,10 +856,33 @@ that exports the true signature and throws a named `NotImplementedError` is
 better than a string in someone else's test file, because it hands the next
 person a typed contract and puts the warning where they will be standing.
 
+**Where the rule CANNOT be applied, the defence is a loud failure and nothing
+else.** artanis's observation, and it is the exception that proves the rule
+rather than a counterexample to it. A migration number cannot be a function of
+anything available before the merge — `readMigrations` refuses a gap, so the
+sequence has to be contiguous across branches that cannot see each other. That
+is exactly why it collided three times in one day. When two facts must agree and
+neither can be derived from the other, the only remaining defence is that
+disagreement is **immediately and unmistakably loud** — which is why the
+duplicate-version guard naming both filenames was worth more than it looked, and
+why silently skipping a duplicate would have been catastrophic rather than
+merely untidy.
+
 **Put the guard in before the handler.** Three of the failures above were "the
 check that was going to be added later", and later did not arrive. A red test
 declared against the bead means the next person cannot write the code without
 meeting the guard, and cannot meet it without deciding deliberately.
+
+The ordering matters for a reason that only became visible once we had done it
+both ways: **a guard added AFTER is shaped by the code it finds; a guard added
+BEFORE shapes the code that meets it** (artanis). A check written afterwards
+gets written to pass — it accommodates whatever is already there, because that
+is the path of least resistance and the code looks like the specification. A
+`verifyUrgency` that throws before the handler exists forces a deliberate
+decision instead. This is also why the two rules above are really one: state the
+rule, guard it by shape, and land the guard first. An unstated rule has nothing
+to check against, and a stated rule with no guard is what `set_goal` slipped
+through for a day.
 
 **A phrase can be checked against what he actually wrote; a boolean cannot be
 checked against anything.** `remind_me` first took `urgent: boolean`, and
