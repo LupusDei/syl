@@ -134,6 +134,7 @@ describe("every response matches the contract", () => {
     { operationId: "getJob", path: `/jobs/${store.jobs[0]?.id ?? ""}` },
     { operationId: "listJobRuns", path: `/jobs/${store.jobs[0]?.id ?? ""}/runs` },
     { operationId: "getRun", path: `/runs/${store.runs[0]?.id ?? ""}` },
+    { operationId: "listLogs", path: "/logs" },
     { operationId: "syncSinceCursor", path: "/sync" },
   ];
 
@@ -376,6 +377,78 @@ describe("the delivery acknowledgement", () => {
     expect((second.body["data"] as { ackedAt: string }).ackedAt).toBe(
       (first.body["data"] as { ackedAt: string }).ackedAt,
     );
+  });
+});
+
+/**
+ * The log, as a client building the admin's logs view sees it.
+ *
+ * The mock does **not** enforce `admin` scope — it hands out one token shape
+ * and has no console at which an admin key could be minted, so a scope check
+ * here could only make the endpoint unusable for the squad building the view.
+ * The refusal is the real service's property and is tested there. What the mock
+ * must get right is the *filtering*, because a client shipping a filter that
+ * works here and returns nothing in production is exactly the divergence the
+ * mock exists to prevent.
+ */
+describe("the log", () => {
+  it("should return records newest first", async () => {
+    const { body } = await get("/logs");
+    const items = (body["data"] as { items: { ts: string; event: string }[] }).items;
+
+    expect(items.length).toBeGreaterThan(0);
+    const timestamps = items.map((item) => item.ts);
+    expect([...timestamps].sort().reverse()).toEqual(timestamps);
+  });
+
+  it("should carry turn.tool records, which are what the view leads with", async () => {
+    // A mock that produced none would let a client render that column wrong
+    // and never find out until it met a real machine.
+    const { body } = await get("/logs?event=turn.tool");
+    const items = (body["data"] as { items: { event: string; fields: Record<string, unknown> }[] })
+      .items;
+
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.every((item) => item.event === "turn.tool")).toBe(true);
+    expect(typeof items[0]?.fields["tool"]).toBe("string");
+  });
+
+  it("should match `event` as a prefix, not as an equality", async () => {
+    const family = await get("/logs?event=turn");
+    const one = await get("/logs?event=turn.tool");
+
+    expect((family.body["data"] as { items: unknown[] }).items.length).toBeGreaterThan(
+      (one.body["data"] as { items: unknown[] }).items.length,
+    );
+  });
+
+  it("should filter by level, keeping everything at or above it", async () => {
+    const { body } = await get("/logs?level=warn");
+    const items = (body["data"] as { items: { level: string }[] }).items;
+
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.every((item) => item.level === "warn" || item.level === "error")).toBe(true);
+  });
+
+  it("should refuse a level the contract does not define", async () => {
+    // The same refusal the real service makes. A mock that shrugged would let a
+    // client ship `level=warning` and discover it against production.
+    const { status, body } = await get("/logs?level=warning");
+
+    expect(status).toBe(400);
+    expect((body["error"] as { code: string }).code).toBe("VALIDATION_FAILED");
+  });
+
+  it("should honour a time range at both ends", async () => {
+    const all = (
+      (await get("/logs")).body["data"] as { items: { ts: string }[] }
+    ).items;
+    const oldest = all[all.length - 1]?.ts ?? "";
+
+    const { body } = await get(`/logs?until=${encodeURIComponent(oldest)}`);
+    const items = (body["data"] as { items: { ts: string }[] }).items;
+
+    expect(items.map((item) => item.ts)).toEqual([oldest]);
   });
 });
 

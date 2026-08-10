@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { MockCursorError, MockStore, mockId, nowIso, page } from "../src/mock/store.js";
+import {
+  filterLogs,
+  isLogLevel,
+  MockCursorError,
+  MockStore,
+  mockId,
+  nowIso,
+  page,
+} from "../src/mock/store.js";
 import { loadSchemas } from "../src/spec.js";
 import { validate } from "../src/validate.js";
 
@@ -368,5 +376,113 @@ describe("cursor sync", () => {
     const change = store.sync(undefined, 50).changes.find((c) => c.id === todo.id);
     expect(change?.op).toBe("delete");
     expect(change?.resource).toBeNull();
+  });
+});
+
+/**
+ * The log, which is the one collection here not seeded from a fixture.
+ *
+ * `shared/fixtures/manifest.json` is decoded by the Swift suite as well, and
+ * every schema it names needs a SylKit model — so a `logs.page.json` would
+ * oblige the iOS app to model the one endpoint it is specifically forbidden to
+ * call (`GET /logs` is admin scope; a phone holds a device token). Generating
+ * it keeps the fixture set describing the phone's contract. The cost is that
+ * nothing else validates it, which is what the first case below is for.
+ */
+describe("the seeded log", () => {
+  it("should decode as the contract's LogEntry", () => {
+    for (const entry of store.logs) {
+      expect(validate(registry, "LogEntry", entry)).toEqual([]);
+    }
+  });
+
+  it("should be newest first, matching the endpoint's declared order", () => {
+    const timestamps = store.logs.map((entry) => entry.ts);
+    expect([...timestamps].sort().reverse()).toEqual(timestamps);
+  });
+
+  it("should contain a whole turn, tool calls included", () => {
+    // `turn.tool` is what the admin's logs view leads with. A seed with none
+    // would let that column be built wrong and pass every test here.
+    const events = store.logs.map((entry) => entry.event);
+    expect(events).toContain("turn.start");
+    expect(events).toContain("turn.tool");
+    expect(events).toContain("turn.done");
+    expect(events.filter((event) => event === "turn.tool").length).toBeGreaterThan(1);
+  });
+
+  it("should carry something at every severity worth filtering on", () => {
+    const levels = new Set(store.logs.map((entry) => entry.level));
+    expect(levels.has("info")).toBe(true);
+    expect(levels.has("warn")).toBe(true);
+    expect(levels.has("error")).toBe(true);
+  });
+
+  it("should be restored by reset, like every other collection", () => {
+    store.logs = [];
+    store.reset();
+    expect(store.logs.length).toBeGreaterThan(0);
+  });
+});
+
+describe("filterLogs", () => {
+  it("should return everything when nothing is asked for", () => {
+    expect(filterLogs(store.logs, {})).toEqual(store.logs);
+  });
+
+  it("should treat event as a prefix, so a dotted family can be asked for at once", () => {
+    const family = filterLogs(store.logs, { event: "turn" });
+    const one = filterLogs(store.logs, { event: "turn.tool" });
+
+    expect(one.length).toBeGreaterThan(0);
+    expect(family.length).toBeGreaterThan(one.length);
+    expect(one.every((entry) => entry.event === "turn.tool")).toBe(true);
+  });
+
+  it("should keep everything at or above a level, not only that level", () => {
+    const found = filterLogs(store.logs, { level: "warn" });
+
+    expect(found.some((entry) => entry.level === "error")).toBe(true);
+    expect(found.every((entry) => entry.level === "warn" || entry.level === "error")).toBe(true);
+  });
+
+  it("should include both ends of a range", () => {
+    const oldest = store.logs[store.logs.length - 1]?.ts ?? "";
+    const newest = store.logs[0]?.ts ?? "";
+
+    expect(filterLogs(store.logs, { since: oldest, until: oldest })).toHaveLength(1);
+    expect(filterLogs(store.logs, { since: oldest, until: newest })).toEqual(store.logs);
+  });
+
+  it("should treat an empty filter value as absent rather than as a match on nothing", () => {
+    // `?event=` is how a cleared dropdown arrives. Reading it as "match the
+    // empty string" empties the view and looks like a broken endpoint.
+    expect(filterLogs(store.logs, { event: "", level: "", since: "", until: "" })).toEqual(
+      store.logs,
+    );
+  });
+
+  it("should return nothing for a range that matches nothing", () => {
+    expect(filterLogs(store.logs, { since: "2099-01-01T00:00:00.000Z" })).toEqual([]);
+  });
+});
+
+describe("isLogLevel", () => {
+  it("should accept every level the contract defines", () => {
+    for (const level of ["debug", "info", "warn", "error"]) {
+      expect(isLogLevel(level)).toBe(true);
+    }
+  });
+
+  it("should reject a plausible near-miss", () => {
+    expect(isLogLevel("warning")).toBe(false);
+    expect(isLogLevel("ERROR")).toBe(false);
+  });
+
+  it("should reject a name inherited from Object.prototype", () => {
+    // The lookup is a record; `"constructor"` is truthy on a bare object and
+    // would sail through a `!!LEVELS[value]` check.
+    expect(isLogLevel("constructor")).toBe(false);
+    expect(isLogLevel("toString")).toBe(false);
   });
 });

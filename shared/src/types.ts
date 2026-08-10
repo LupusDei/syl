@@ -620,6 +620,48 @@ export type RunPage = {
   readonly hasMore: boolean;
 };
 
+/**
+ * Severity, ordered. `warn` and above is what an operator looks for.
+ */
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
+/**
+ * One line of `syl.log`, as it was written.
+ *
+ * `event` is a dotted, stable name rather than prose, because a search is
+ * built on it and prose is not. The ones worth knowing:
+ *
+ * | Event | What it means |
+ * |---|---|
+ * | `service.start` | The process came up. Carries the whole configuration. |
+ * | `turn.start` | A turn began, with its Claude Code session id. |
+ * | `turn.tool` | **She called a tool.** The record of what she actually did. |
+ * | `turn.done` | A turn ended, with its turn count and cost. |
+ * | `turn.api_error` | The CLI reported an API failure mid-turn. |
+ * | `chat` | The conversation service said something about a message. |
+ *
+ * `fields` is deliberately **unmodelled**. A log line's fields are
+ * whatever the call site passed, and pinning them in the contract would
+ * mean a spec change every time somebody adds one — which is the fastest
+ * way to train people to stop adding them. Clients render it generically.
+ */
+export type LogEntry = {
+  readonly ts: Instant;
+  readonly level: LogLevel;
+  readonly event: string;
+  readonly pid: number;
+  readonly fields: { readonly [key: string]: unknown };
+};
+
+/**
+ * Newest first, unlike every other page in this contract.
+ */
+export type LogPage = {
+  readonly items: LogEntry[];
+  readonly nextCursor: string | null;
+  readonly hasMore: boolean;
+};
+
 export type SyncResourceType = "conversation" | "message" | "reminder" | "todo" | "goal" | "device" | "delivery" | "job" | "run";
 
 export type SyncChangeOp = "upsert" | "delete";

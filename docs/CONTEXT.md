@@ -456,6 +456,53 @@ session answered `VESPENE-7741` instead of `NONE`. The second rebuild was a
 no-op, which is the steady state — the cost of running it after every turn is one
 `readdir`, no tokens and no subprocess.
 
+### The log needed a scope, and a scope needed somewhere it cannot be minted
+
+`GET /logs` (`syl-dep1.2`) put the first asymmetry into an API that had none.
+Everything in the contract until then was *the Commander's data* — reminders,
+to-dos, conversations — and a paired phone is supposed to have all of it. One
+principal, one kind of token, no roles, and that simplicity was load-bearing.
+
+The log is a different kind of thing. Syl runs with `bypassPermissions` on the
+Commander's own machine, so `turn.tool` is the record of what a pre-authorised
+program **did there**. A phone left in a taxi, or a pairing code read over a
+shoulder, must not turn into a transcript of the machine's activity — and that
+is a strictly worse leak than the to-do list sitting next to it.
+
+**Alternatives considered and rejected.**
+
+- *A second credential — an admin password, a separate token table.* Two
+  authentication mechanisms means two revocation stories, two expiry stories and
+  two places to get constant-time comparison right. The instruction was to look
+  at how `ApiKeyService` already distinguishes keys and extend that, and it was
+  the correct instinct.
+- *Serving the log to any valid token and relying on the tailnet.* The tailnet
+  is what makes the service reachable at all; it is not a boundary between the
+  Commander's own devices.
+- *Backfilling existing keys to `admin`.* It would have avoided one console
+  command and silently handed the surface to every phone already paired — the
+  exact outcome the scope exists to prevent, arriving invisibly because nothing
+  would fail.
+
+**What makes the scope defensible is not the column, it is where it can be
+created.** `POST /auth/pair` always mints `device`, and `pair()` takes no scope
+argument at all so no future route can be one refactor away from accepting one.
+`admin` comes from `npm run pair -- --admin`, which needs write access to
+`syl.db` — already full compromise of the machine. The scope therefore cannot be
+escalated *into* remotely; it is a statement about which side of the loopback
+boundary a credential was born on.
+
+Two smaller consequences worth remembering:
+
+- **Authenticate first, authorise second.** An anonymous caller gets the ordinary
+  indistinguishable 401 and never learns a scope exists. Reversing the two would
+  disclose the surface to someone with no credential at all.
+- **403 is not 401, and the admin frontend had been treating them as one.**
+  `authed-fetch.ts` signed out on both, which was right while every key reached
+  every route. Left alone, a device key opening the logs view would have been
+  dropped, the operator returned to the gate, and invited to paste the same
+  working key back in.
+
 ## 8. Design principles to hold
 
 **Never silently drop a reminder.** A late reminder is a nuisance; a vanished one

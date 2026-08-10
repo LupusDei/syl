@@ -77,23 +77,56 @@ export interface LogQueryOptions {
   readonly minLevel?: LogLevel;
   /** Only records whose `event` starts with this. */
   readonly event?: string;
+  /**
+   * Only records at or after this instant. RFC 3339, UTC.
+   *
+   * Compared **lexically**, which is exact rather than lax: `LogRecord.ts` is
+   * always `new Date().toISOString()`, so every value has the same width, the
+   * same `Z` and the same millisecond precision, and string order is instant
+   * order. Parsing each line into a `Date` to compare it would allocate one
+   * object per record for no additional correctness.
+   */
+  readonly since?: string;
+  /** Only records at or before this instant. Inclusive, like `since`. */
+  readonly until?: string;
+  /**
+   * Skip this many matches, counting from the newest.
+   *
+   * The paging primitive. It is expressed newest-first because that is the
+   * direction the scan actually runs; a page 2 of a growing log is then "skip
+   * the 50 newest", which stays meaningful as records arrive.
+   */
+  readonly offset?: number;
   /** At most this many, most recent last. */
   readonly limit?: number;
 }
 
 /**
- * Records matching a query, oldest first.
+ * Records matching a query, **newest first**.
  *
- * Files are read newest-first and stopped as soon as `limit` is satisfied, so
- * asking for the last failure does not read a year of logs to find it.
+ * The primitive both readers are built on. Files are walked newest-first and
+ * each file backwards, and the walk stops as soon as `offset + limit` matches
+ * have been seen — so asking for the last failure does not read a year of logs
+ * to find it.
+ *
+ * **`since` does not stop the walk early, deliberately.** It would be tempting:
+ * records descend in time as the scan runs, so the first record older than
+ * `since` looks like the end. But that monotonicity is a property of the system
+ * clock, not of the file — one step backwards (an NTP correction, a VM resume)
+ * and an early stop silently truncates the answer at the step. A log reader
+ * that quietly returns *less* than the truth is the failure mode this whole
+ * module exists to avoid, and the cost of not doing it is bounded by the
+ * rotation cap.
  */
-export function queryLog(directory: string, options: LogQueryOptions = {}): readonly LogRecord[] {
+export function scanLog(directory: string, options: LogQueryOptions = {}): readonly LogRecord[] {
   const limit = options.limit ?? 100;
+  const offset = options.offset ?? 0;
+  const wanted = offset + limit;
   const floor = LEVEL_RANK[options.minLevel ?? "debug"];
   const collected: LogRecord[] = [];
 
   for (const path of logFiles(directory, options)) {
-    if (collected.length >= limit) break;
+    if (collected.length >= wanted) break;
     let contents: string;
     try {
       contents = readFileSync(path, "utf8");
@@ -103,16 +136,29 @@ export function queryLog(directory: string, options: LogQueryOptions = {}): read
     const lines = contents.split("\n");
     // Backwards: the newest record in a file is its last line.
     for (let index = lines.length - 1; index >= 0; index -= 1) {
-      if (collected.length >= limit) break;
+      if (collected.length >= wanted) break;
       const record = parseRecord(lines[index] ?? "");
       if (record === null) continue;
       if (LEVEL_RANK[record.level] < floor) continue;
       if (options.event !== undefined && !record.event.startsWith(options.event)) continue;
+      if (options.since !== undefined && record.ts < options.since) continue;
+      if (options.until !== undefined && record.ts > options.until) continue;
       collected.push(record);
     }
   }
 
-  return collected.reverse();
+  return collected.slice(offset);
+}
+
+/**
+ * Records matching a query, oldest first.
+ *
+ * What the CLI prints: a terminal reads downwards, so the newest record wants
+ * to be the last line rather than the first. {@link scanLog} is the same query
+ * in the order it was gathered.
+ */
+export function queryLog(directory: string, options: LogQueryOptions = {}): readonly LogRecord[] {
+  return [...scanLog(directory, options)].reverse();
 }
 
 /** The most recent `warn`-or-worse record, or `null` if there has not been one. */

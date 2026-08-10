@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   assertExistingStore,
+  describeAdminGrant,
   describePairing,
   issueBriefing,
+  mintAdmin,
   tailnetBaseURL,
 } from "../../src/ops/cli/pair.js";
 import {
@@ -262,6 +264,75 @@ describe("npm run pair", () => {
     expect(printed).toContain("unknown");
     expect(printed).not.toContain("localhost");
     expect(printed).not.toContain("127.0.0.1");
+  });
+
+  /**
+   * `npm run pair -- --admin`, which is the *only* way an admin key exists.
+   *
+   * The whole security argument for the scope is that this path requires write
+   * access to the service's database — already full compromise — while pairing
+   * only requires eight digits over the tailnet. These cases hold that
+   * asymmetry against a real file, because both halves of it are properties of
+   * the store rather than of a process.
+   */
+  describe("--admin", () => {
+    it("should mint a key that pairing could never have produced", () => {
+      const db = connect();
+      const grant = mintAdmin(db, databasePath);
+      const keys = new ApiKeyService({ db: db.handle });
+      const verified = keys.verify(grant.token);
+      db.close();
+
+      expect(verified).toMatchObject({ ok: true, key: { scope: "admin" } });
+      expect(grant.existingAdminKeys).toBe(0);
+    });
+
+    it("should leave a phone paired through the front door on device scope", () => {
+      // Stated as one case because it is one claim: the two doors produce
+      // different credentials, on the same store, in the same run.
+      const db = connect();
+      const keys = new ApiKeyService({ db: db.handle });
+      const briefing = issueBriefing(db, testConfig({ databasePath }));
+      const phone = keys.pair(briefing.code, "Commander's iPhone");
+      const admin = mintAdmin(db, databasePath);
+
+      expect(keys.verify(phone.token)).toMatchObject({ key: { scope: "device" } });
+      expect(keys.verify(admin.token)).toMatchObject({ key: { scope: "admin" } });
+      db.close();
+    });
+
+    it("should count the admin keys already live rather than silently piling them up", () => {
+      const db = connect();
+      mintAdmin(db, databasePath);
+      const second = mintAdmin(db, databasePath);
+      db.close();
+
+      expect(second.existingAdminKeys).toBe(1);
+      expect(describeAdminGrant(second).join("\n")).toContain("1 admin key(s) were already live");
+    });
+
+    it("should print the token, because there is nothing to redeem it with", () => {
+      // A pairing code exists so a *phone* is never shown the token. A browser
+      // on this machine has no such flow, and the token is stored only as a
+      // hash — so it is printed once and is unrecoverable afterwards.
+      const db = connect();
+      const grant = mintAdmin(db, databasePath);
+      db.close();
+
+      const printed = describeAdminGrant(grant).join("\n");
+      expect(printed).toContain(grant.token);
+      expect(printed).toContain("shown once");
+      expect(printed).toContain(resolve(databasePath));
+    });
+
+    it("should say what the token is for, so it is not mistaken for a phone's", () => {
+      const db = connect();
+      const printed = describeAdminGrant(mintAdmin(db, databasePath)).join("\n");
+      db.close();
+
+      expect(printed).toContain("/admin");
+      expect(printed).toContain("403");
+    });
   });
 
   it("should refuse to issue a code into a store it would have had to create", () => {

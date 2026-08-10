@@ -17,9 +17,17 @@ export interface AuthedFetchOptions {
   /** Injectable for tests; defaults to the global `fetch`. */
   fetch?: FetchLike | undefined;
   /**
-   * Called when the server rejects the credential (401/403). The shell wires
-   * this to sign-out, so a revoked key returns the operator to the gate
-   * instead of leaving them staring at empty panels.
+   * Called when the server rejects the credential. The shell wires this to
+   * sign-out, so a revoked key returns the operator to the gate instead of
+   * leaving them staring at empty panels.
+   *
+   * **401 only, and 403 deliberately not.** They used to be treated the same,
+   * which was right while every route accepted every key. `GET /logs` needs a
+   * key with `admin` scope, so 403 now means *this key works and is not for
+   * this view* — and signing the operator out over it would drop a perfectly
+   * good credential, send them back to the gate, and invite them to paste the
+   * same key again. 401 is the only status that means the credential itself
+   * was not accepted.
    */
   onUnauthorized?: (() => void) | undefined;
 }
@@ -54,7 +62,7 @@ export function createAuthedFetch(
     const send = options.fetch ?? ((input, requestInit) => globalThis.fetch(input, requestInit));
     const response = await send(joinUrl(options.baseUrl, path), { ...init, headers });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       options.onUnauthorized?.();
     }
     return response;

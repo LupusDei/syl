@@ -32,6 +32,8 @@ import type {
   JobKind,
   JobPage,
   JobState,
+  LogLevel,
+  LogPage,
   MessagePage,
   Run,
   RunPage,
@@ -60,6 +62,23 @@ export interface DeliveryListParams extends PageParams {
 
 export interface ConversationListParams extends PageParams {
   readonly lane?: ConversationLane | undefined;
+}
+
+/**
+ * The log filters, as the contract spells them.
+ *
+ * `event` is a **prefix**: `turn` is every turn event, `turn.tool` is only the
+ * tool calls. The distinction is the whole usefulness of the filter and is
+ * documented here because a caller reading only this file would otherwise
+ * assume equality and quietly get nothing.
+ */
+export interface LogListParams extends PageParams {
+  readonly event?: string | undefined;
+  readonly level?: LogLevel | undefined;
+  /** Inclusive lower bound, RFC 3339. */
+  readonly since?: string | undefined;
+  /** Inclusive upper bound, RFC 3339. */
+  readonly until?: string | undefined;
 }
 
 export interface MessageListParams extends PageParams {
@@ -95,6 +114,16 @@ export interface AdminClient {
   ): Promise<MessagePage>;
 
   listDevices(params?: PageParams, options?: CallOptions): Promise<DevicePage>;
+
+  /**
+   * The service's own log. **Needs a key with `admin` scope.**
+   *
+   * The only call on this client that a device token cannot make: it answers
+   * `403 FORBIDDEN`, which `unwrapEnvelope` surfaces as an ordinary API error
+   * rather than signing the session out — a device key is a *working* key for
+   * every other view, and dropping it would be the wrong response.
+   */
+  listLogs(params?: LogListParams, options?: CallOptions): Promise<LogPage>;
 }
 
 export interface AdminClientOptions extends RetryOptions {
@@ -201,5 +230,18 @@ export function createAdminClient(options: AdminClientOptions): AdminClient {
       ),
 
     listDevices: (params, call) => get<DevicePage>("/devices", pageParams(params), call),
+
+    listLogs: (params, call) =>
+      get<LogPage>(
+        "/logs",
+        {
+          ...pageParams(params),
+          event: params?.event,
+          level: params?.level,
+          since: params?.since,
+          until: params?.until,
+        },
+        call,
+      ),
   };
 }

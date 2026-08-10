@@ -4,7 +4,14 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { lastFailure, logFiles, parseRecord, queryLog, renderLog } from "../../src/ops/log-query.js";
+import {
+  lastFailure,
+  logFiles,
+  parseRecord,
+  queryLog,
+  renderLog,
+  scanLog,
+} from "../../src/ops/log-query.js";
 import {
   createLogger,
   createMemoryLogger,
@@ -288,6 +295,109 @@ describe("queryLog", () => {
     logger.close();
 
     expect(renderLog(queryLog(dir, { minLevel: "warn" }))).toContain("apns.blocked");
+  });
+});
+
+/**
+ * The paging and time-range half of the reader, which `GET /logs` is built on.
+ *
+ * Written against a hand-laid file rather than through `createLogger`, because
+ * every case here is about *which* records come back for a given `ts`, and a
+ * logger stamping them from the wall clock cannot be asked that question.
+ */
+describe("scanLog", () => {
+  /** Nine records, one per minute, newest last on disk. */
+  function nineMinutes(): string {
+    const dir = scratch();
+    const lines: string[] = [];
+    for (let index = 0; index < 9; index += 1) {
+      const ts = `2026-08-10T13:0${String(index)}:00.000Z`;
+      const level = index === 4 ? "error" : "info";
+      lines.push(
+        JSON.stringify({ ts, level, event: index % 2 === 0 ? "turn.tool" : "turn.done", pid: 1, index }),
+      );
+    }
+    writeFileSync(join(dir, "syl.log"), `${lines.join("\n")}\n`);
+    return dir;
+  }
+
+  it("should return records newest first, which is the opposite of queryLog", () => {
+    const dir = nineMinutes();
+
+    expect(scanLog(dir).map((record) => record["index"])).toEqual([8, 7, 6, 5, 4, 3, 2, 1, 0]);
+    expect(queryLog(dir).map((record) => record["index"])).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  it("should skip `offset` matches counting from the newest", () => {
+    const dir = nineMinutes();
+
+    // Page two of a three-per-page walk: the fourth, fifth and sixth newest.
+    expect(scanLog(dir, { offset: 3, limit: 3 }).map((record) => record["index"])).toEqual([5, 4, 3]);
+  });
+
+  it("should apply the offset AFTER the filters, not before", () => {
+    // The failure this pins: skipping rows and then filtering them makes page
+    // two of a filtered view show a near-random subset, and the reader has no
+    // way to notice — the page is full and the rows are real.
+    const dir = nineMinutes();
+
+    expect(
+      scanLog(dir, { event: "turn.tool", offset: 2, limit: 2 }).map((record) => record["index"]),
+    ).toEqual([4, 2]);
+  });
+
+  it("should include both ends of a time range", () => {
+    const dir = nineMinutes();
+
+    expect(
+      scanLog(dir, {
+        since: "2026-08-10T13:02:00.000Z",
+        until: "2026-08-10T13:04:00.000Z",
+      }).map((record) => record["index"]),
+    ).toEqual([4, 3, 2]);
+  });
+
+  it("should combine a time range with a level and an event prefix", () => {
+    const dir = nineMinutes();
+
+    expect(
+      scanLog(dir, {
+        since: "2026-08-10T13:01:00.000Z",
+        minLevel: "warn",
+        event: "turn",
+      }).map((record) => record["index"]),
+    ).toEqual([4]);
+  });
+
+  it("should return nothing rather than everything when the range matches nothing", () => {
+    // A filter that silently stops applying is worse than one that returns
+    // nothing: an empty page says "not then", a full one says "here is your
+    // answer" and is wrong.
+    const dir = nineMinutes();
+
+    expect(scanLog(dir, { since: "2027-01-01T00:00:00.000Z" })).toEqual([]);
+    expect(scanLog(dir, { until: "2020-01-01T00:00:00.000Z" })).toEqual([]);
+  });
+
+  it("should not truncate at a clock that stepped backwards", () => {
+    // Records descend in time as the scan runs — until an NTP correction or a
+    // VM resume writes an older `ts` after a newer one. Stopping the walk at
+    // the first out-of-range record would silently drop everything past the
+    // step, and the answer would look complete.
+    const dir = scratch();
+    writeFileSync(
+      join(dir, "syl.log"),
+      [
+        JSON.stringify({ ts: "2026-08-10T13:00:00.000Z", level: "info", event: "before", pid: 1 }),
+        JSON.stringify({ ts: "2026-08-10T09:00:00.000Z", level: "info", event: "stepped", pid: 1 }),
+        JSON.stringify({ ts: "2026-08-10T13:00:01.000Z", level: "info", event: "after", pid: 1 }),
+      ].join("\n"),
+    );
+
+    expect(scanLog(dir, { since: "2026-08-10T12:00:00.000Z" }).map((r) => r.event)).toEqual([
+      "after",
+      "before",
+    ]);
   });
 });
 

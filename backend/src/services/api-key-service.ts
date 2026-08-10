@@ -116,11 +116,49 @@ export const DEFAULT_TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1_000;
  */
 export const LAST_USED_WRITE_INTERVAL_MS = 60_000;
 
+/**
+ * What a token is allowed to ask for.
+ *
+ * Not a role system, and it must not grow into one — there is still exactly one
+ * principal. It records **which side of the loopback boundary the credential
+ * was minted on**, which is the only distinction the service can actually
+ * defend:
+ *
+ * * `device` — minted by `POST /auth/pair`. Reachable over the network, gated
+ *   on eight digits that live for ten minutes.
+ * * `admin` — minted at the machine's own console and by no HTTP route at all.
+ *   Getting one requires write access to `syl.db`, which is already full
+ *   compromise, so this scope cannot be escalated *into* remotely.
+ *
+ * The one surface it gates is `GET /logs`, and the reason is that the log is
+ * not the Commander's data — it is the record of what Syl *did* on his machine
+ * while running pre-authorised. A shoulder-surfed pairing code should not
+ * become a transcript of the machine's activity.
+ */
+export type KeyScope = "device" | "admin";
+
+/** Every scope, for validation and for a CLI's help text. */
+export const KEY_SCOPES: readonly KeyScope[] = ["device", "admin"];
+
+/**
+ * Narrow a stored scope, defaulting to the *weaker* one.
+ *
+ * `0014_api_key_scope.sql` has a CHECK constraint, so an unrecognised value
+ * cannot be written by this service. It could still arrive from a database
+ * edited by hand or restored from a future version — and in that case the safe
+ * reading is "not admin". A widening default here would turn a typo into an
+ * open door.
+ */
+function toScope(value: unknown): KeyScope {
+  return value === "admin" ? "admin" : "device";
+}
+
 /** A paired device's key, as an admin screen sees it. Never the token. */
 export interface ApiKeyRecord {
   readonly id: string;
   readonly deviceName: string;
   readonly tokenSuffix: string;
+  readonly scope: KeyScope;
   readonly createdAt: string;
   readonly expiresAt: string | null;
   readonly lastUsedAt: string | null;
@@ -160,6 +198,14 @@ export class PairingError extends Error {
 export interface PairingCode {
   readonly code: string;
   readonly expiresAt: string;
+}
+
+/** What a console mint may say that pairing may not. */
+export interface MintOptions {
+  /** Defaults to `device`. `admin` is only ever passed by a console command. */
+  readonly scope?: KeyScope;
+  /** Overrides the clock, for a test about expiry. */
+  readonly now?: number;
 }
 
 export interface ApiKeyServiceOptions {
@@ -222,6 +268,7 @@ interface KeyRow {
   readonly id: string;
   readonly token_suffix: string;
   readonly device_name: string;
+  readonly scope: string;
   readonly created_at: string;
   readonly expires_at: string | null;
   readonly last_used_at: string | null;
@@ -234,6 +281,7 @@ function toRecord(row: KeyRow): ApiKeyRecord {
     id: row.id,
     deviceName: row.device_name,
     tokenSuffix: row.token_suffix,
+    scope: toScope(row.scope),
     createdAt: row.created_at,
     expiresAt: row.expires_at,
     lastUsedAt: row.last_used_at,
@@ -243,7 +291,7 @@ function toRecord(row: KeyRow): ApiKeyRecord {
 }
 
 const SELECT_COLUMNS =
-  "id, token_suffix, device_name, created_at, expires_at, last_used_at, revoked_at, revoked_reason";
+  "id, token_suffix, device_name, scope, created_at, expires_at, last_used_at, revoked_at, revoked_reason";
 
 export class ApiKeyService {
   readonly #db: Database;
@@ -358,9 +406,19 @@ export class ApiKeyService {
    * Used by the console when the Commander bootstraps the first device. It is
    * deliberately separate from `pair` so the pairing rules live in exactly one
    * place and cannot be bypassed by accident.
+   *
+   * **This is the only way an `admin` token comes into existence**, and it is
+   * reachable only by a process that can open `syl.db`. There is deliberately
+   * no HTTP route that mints one, and `pair` cannot be asked for a scope — see
+   * {@link KeyScope}.
    */
-  mint(deviceName: string, now: number = this.#clock()): TokenGrant {
-    return this.#insertKey(deviceName, now, null);
+  mint(deviceName: string, options: MintOptions = {}): TokenGrant {
+    return this.#insertKey(deviceName, options.now ?? this.#clock(), null, options.scope ?? "device");
+  }
+
+  /** Live keys holding a scope, newest first. What the console reports. */
+  liveKeysWithScope(scope: KeyScope): readonly ApiKeyRecord[] {
+    return this.list().filter((key) => key.revokedAt === null && key.scope === scope);
   }
 
   /**
@@ -385,7 +443,10 @@ export class ApiKeyService {
         );
       }
 
-      const grant = this.#insertKey(deviceName, now, pairingCodeId);
+      // `device`, always, and not a parameter. Pairing is the one credential
+      // path that is reachable over the network; a scope argument here would be
+      // one refactor away from a route that accepts it from a caller.
+      const grant = this.#insertKey(deviceName, now, pairingCodeId, "device");
       this.#db.exec("COMMIT");
       return grant;
     } catch (error) {
@@ -409,7 +470,12 @@ export class ApiKeyService {
   }
 
   /** Write one key row and return the grant. Never called outside a mint. */
-  #insertKey(deviceName: string, now: number, pairingCodeId: string | null): TokenGrant {
+  #insertKey(
+    deviceName: string,
+    now: number,
+    pairingCodeId: string | null,
+    scope: KeyScope,
+  ): TokenGrant {
     const token = `${TOKEN_PREFIX}${randomHex(TOKEN_HEX_LENGTH / 2, this.#entropy)}`;
     const expiresAtMs = now + this.#tokenTtlMs;
     const expiresAt = instant(expiresAtMs);
@@ -417,14 +483,15 @@ export class ApiKeyService {
     this.#db
       .prepare(
         `INSERT INTO api_keys
-           (id, token_hash, token_suffix, device_name, created_at, expires_at, pairing_code_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           (id, token_hash, token_suffix, device_name, scope, created_at, expires_at, pairing_code_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         newId("apikey"),
         hashToken(token),
         token.slice(-4),
         deviceName,
+        scope,
         instant(now),
         expiresAt,
         pairingCodeId,

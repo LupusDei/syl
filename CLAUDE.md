@@ -227,6 +227,21 @@ to add is about *additional* surfaces and blocks nothing.
   bundle must never degrade into a 404, which reads as a routing bug. The
   frontend's Vite `base` and `ADMIN_BASE_PATH` must be the same string;
   `backend/tests/integration/admin-bundle.test.ts` builds for real and checks it.
+- **`GET /logs` is the one route a paired phone may not call, and the scope that
+  stops it is minted only at the console.** Every other read in the contract is
+  the Commander's own data; the log is the record of what a *pre-authorised
+  program did on his machine* — every turn, every tool call. So `api_keys` has a
+  `scope` (`0014_api_key_scope.sql`): `POST /auth/pair` always mints `device`,
+  and `admin` comes from **`npm run pair -- --admin`** and from no HTTP route at
+  all. That asymmetry is the whole security argument — pairing is reachable over
+  the tailnet behind eight digits, minting an admin key needs write access to
+  `syl.db`, which is already full compromise. A device token gets `403
+  FORBIDDEN`; an anonymous caller gets the ordinary indistinguishable 401, so
+  the scope is never disclosed to someone who has not authenticated.
+  **Existing keys backfilled to `device`**, which is why the admin's logs view
+  asks for a new token the first time. `authed-fetch.ts` deliberately no longer
+  signs out on 403 — the key works everywhere else, and dropping it would send
+  the operator back to the gate to paste the same one in again.
 - **`res.sendFile` with an ABSOLUTE path 404s if any directory in it starts with
   a dot.** `send` cannot tell caller-supplied path from request-supplied path,
   so it refuses the lot — a bundle under `~/.syl/` or an agent worktree in
