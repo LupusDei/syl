@@ -22,29 +22,59 @@ struct HomeScreen: View {
 
     /// Whether the list is up.
     ///
-    /// A sheet rather than a navigation push, and it is a considered choice. The hero is
-    /// sized with `containerRelativeFrame(.vertical)` — one *visible* screen of its scroll
-    /// container — and wrapping this screen in a `NavigationStack` changes what that
-    /// measures. The layout already had to be fixed once for exactly this reason, when
-    /// the day's first two lines ended up behind the tab bar. A sheet leaves the day's
-    /// geometry untouched.
+    /// A sheet rather than a second navigation push, and it is a considered choice. The
+    /// hero is sized with `containerRelativeFrame(.vertical)` — one *visible* screen of
+    /// its scroll container — and this layout has already been fixed once for exactly
+    /// that reason, when the day's first two lines ended up behind the tab bar. A sheet
+    /// leaves the day's geometry untouched.
     @State private var showingList = false
 
+    /// The stack the orbs open into.
+    ///
+    /// Home had no navigation stack at all, which is why `HomeView.onOpen` existed and
+    /// went nowhere. The wiring lives here rather than in `HomeView` deliberately:
+    /// `HomeView` is a pure function of values that several squads are editing, and the
+    /// call site it already carries — `SylOrb("Goals") { onOpen(.goals) }` — needed a
+    /// handler, not a change.
+    ///
+    /// **The bar is hidden on home itself, and that is what makes the stack safe here.**
+    /// A navigation bar appearing above the hero would take a strip out of precisely the
+    /// measurement `OneScreenTall` exists to get right — the same defect the sheet above
+    /// is avoiding. Two squads reached that conclusion independently, from opposite
+    /// directions; the stack is kept for the goals drill-down and the list stays a sheet.
+    @State private var path: [HomeView.Destination] = []
+
     var body: some View {
-        HomeView(
-            snapshot: model.snapshot,
-            presence: model.presence,
-            presenceIntensity: model.intensity,
-            now: model.now,
-            // The view stays a pure function of values; the tasks are owned here, which
-            // is the same split `ContentView` makes and why the day can be rendered
-            // offscreen without booting the object graph.
-            onComplete: { moment in Task { await model.complete(moment) } },
-            onPostpone: { moment in Task { await model.postpone(moment) } },
-            onDismissRefusal: { moment in model.dismissRefusal(moment.id) },
-            onCapture: capture,
-            onOpenList: { showingList = true }
-        )
+        NavigationStack(path: $path) {
+            HomeView(
+                snapshot: model.snapshot,
+                presence: model.presence,
+                presenceIntensity: model.intensity,
+                now: model.now,
+                // The view stays a pure function of values; the tasks are owned here,
+                // which is the same split `ContentView` makes and why the day can be
+                // rendered offscreen without booting the object graph.
+                onComplete: { moment in Task { await model.complete(moment) } },
+                onPostpone: { moment in Task { await model.postpone(moment) } },
+                onDismissRefusal: { moment in model.dismissRefusal(moment.id) },
+                onOpen: { destination in
+                    // Only Goals leads anywhere today. Today is already this screen, and
+                    // Memory belongs to `syl-010` — pushing a blank for either would be a
+                    // door that opens onto a wall.
+                    guard destination == .goals else { return }
+                    path.append(destination)
+                },
+                onCapture: capture,
+                onOpenList: { showingList = true }
+            )
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: HomeView.Destination.self) { destination in
+                switch destination {
+                case .goals: GoalsScreen(store: model.store)
+                case .memory, .today: EmptyView()
+                }
+            }
+        }
         .sheet(isPresented: $showingList) {
             TodoListView(
                 snapshot: list.snapshot,
