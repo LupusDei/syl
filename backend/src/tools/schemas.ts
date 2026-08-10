@@ -66,12 +66,6 @@ const WHEN = {
   },
 } as const;
 
-const TEXT = (what: string): Readonly<Record<string, unknown>> => ({
-  type: "object",
-  required: ["text"],
-  properties: { text: { type: "string", description: what } },
-});
-
 /**
  * Why every write takes `because`.
  *
@@ -95,7 +89,7 @@ export const TOOLS: readonly ToolSchema[] = [
   {
     name: "remind_me",
     description:
-      "Have Syl bring something back to him at a particular moment. Use it whenever he says he must not forget a thing, or when you notice one he would want brought back.",
+      "Bring something back to him at a particular moment. Use it whenever he says he must not forget a thing, or when you notice one he would want brought back.",
     inputSchema: {
       type: "object",
       required: ["text", "when", "because"],
@@ -140,15 +134,41 @@ export const TOOLS: readonly ToolSchema[] = [
     description: "Mark something on his list done, when he tells you it is.",
     inputSchema: {
       type: "object",
-      required: ["id"],
-      properties: { id: { type: "string", description: "The to-do's id, from whats_outstanding." } },
+      // `because` matters MOST here, not least. This is the only verb that
+      // takes something away, and the one case the description does not cover
+      // is the dangerous one: she infers he finished it. If that inference is
+      // wrong the item is gone and he never learns it existed — the silent
+      // discard that constraint 4 exists to forbid. "He said so" is a cheap
+      // answer to give and the only one that makes a wrong guess visible.
+      required: ["id", "because"],
+      properties: {
+        id: { type: "string", description: "The to-do's id, from whats_outstanding." },
+        because: BECAUSE,
+      },
     },
   },
   {
     name: "set_goal",
     description:
       "Record something he is working toward, at the level he actually thinks about it — not a task, a direction.",
-    inputSchema: TEXT("The goal, in his words."),
+    // A goal is a write like any other, and one of the most likely to be
+    // INFERRED rather than asked for — she notices a direction across three
+    // weeks of conversation and records it. That is the anticipation the
+    // Commander asked for, and exactly the case that needs its reason attached,
+    // so he can tell a good read of him from a wrong one.
+    //
+    // It used to share a `TEXT` shorthand with nothing else, which is how it
+    // came to be the one write missing `because`: the helper predated the rule
+    // and quietly exempted its only caller. Shorthand that hides a field is
+    // how a rule gets a hole in it.
+    inputSchema: {
+      type: "object",
+      required: ["text", "because"],
+      properties: {
+        text: { type: "string", description: "The goal, in his words." },
+        because: BECAUSE,
+      },
+    },
   },
   {
     name: "whats_outstanding",
