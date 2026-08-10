@@ -700,6 +700,42 @@ to read the query and ask which end the window came from.
 **The general lesson: any query with a `LIMIT` needs a test where the limit
 actually bites.** A bounded read tested only with unbounded data is untested.
 
+### A green TestFlight workflow did not mean a build he could install
+
+`ITSAppUsesNonExemptEncryption` was never set on the app. So every upload landed
+in App Store Connect and **stopped**, waiting for the export-compliance question
+to be answered by hand before a tester could see it. Syl uses HTTPS/TLS and the
+system Keychain and nothing else — all exempt — so the answer was always `NO`,
+and nobody was there to give it.
+
+Four builds shipped across one afternoon, every workflow green, and the
+Commander could install none of them.
+
+The workflow cannot tell, and that is the part worth remembering. `Fastfile`
+passes `skip_waiting_for_build_processing: true`, so fastlane returns the moment
+Apple accepts the bytes and never learns what happens next. **Acceptance of an
+upload is not availability of a build.**
+
+Fixed by declaring it in both configurations
+(`INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO`). Verify it in the **built**
+`Info.plist`, never in the project file — a build setting that never reaches the
+plist is a fix in name only:
+
+```sh
+xcodebuild build -scheme Syl -configuration Release -derivedDataPath /tmp/syl-dd …
+/usr/libexec/PlistBuddy -c "Print :ITSAppUsesNonExemptEncryption" \
+  /tmp/syl-dd/Build/Products/Release-iphonesimulator/Syl.app/Info.plist
+```
+
+Builds uploaded before the key still need the question answered once, by hand.
+
+**And a trap inside the diagnosis.** Reading `Info.plist` out of the default
+`DerivedData` showed `0.1.0 (1)` and nearly produced a report that every version
+bump that day had been cosmetic. That artifact was three days old — the build in
+question had gone to a different derived-data directory. **Always build to an
+explicit `-derivedDataPath` before believing an artifact**, which is the same
+lesson as the stale `dist/` two sections up, wearing Xcode's clothes.
+
 ### A contract change and the Swift client are not separable, and no single command tells you
 
 `syl-008`'s plan says Phase 5 — the attachments contract, migration, store and
