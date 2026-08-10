@@ -135,12 +135,58 @@ export function turnFailureText(error: unknown): string {
   return `I could not answer that — the turn failed: ${trimmed}`;
 }
 
+/**
+ * One exchange, after the reply has been persisted and put on the wire.
+ *
+ * Deliberately the SETTLED exchange rather than the live one: whatever runs on
+ * this has already missed its chance to affect what he sees, which is the
+ * property that makes it safe to run something slow and fallible here.
+ */
+export interface SettledExchange {
+  readonly conversationId: string;
+  readonly lane: Lane;
+  /** The message he sent. */
+  readonly prompt: Message;
+  /** The message Syl sent back. */
+  readonly reply: Message;
+}
+
+/**
+ * Something to do once an exchange has settled — filing what was said into
+ * memory, today.
+ *
+ * ## Why it hangs here and not on the reply path
+ *
+ * Whatever this is, it must not be able to make him wait and must not be able
+ * to make him see a failure. So it runs **after** the assistant message is
+ * appended and published, its result is never awaited by the turn, and a
+ * rejection is caught and logged.
+ *
+ * ## Why it is not chained onto the conversation's queue
+ *
+ * The queue serialises turns per conversation so two subprocesses never resume
+ * one session id. Chaining a slow follow-up onto that same chain would make his
+ * NEXT message wait for it, which is the latency this hook exists to avoid,
+ * one message later. It is tracked separately instead — {@link
+ * ConversationService.idle} waits for both, so a test stays deterministic
+ * without production paying for the ordering.
+ *
+ * ## Why only a SUCCESSFUL turn
+ *
+ * A failed turn's "reply" is `turnFailureText` — an apology, not something Syl
+ * said. Reading an exchange back where her half is "I could not answer that"
+ * teaches nothing and risks filing the apology itself.
+ */
+export type AfterExchange = (exchange: SettledExchange) => void | Promise<void>;
+
 export interface ConversationServiceOptions {
   readonly messages: MessageStore;
   /** Syl herself. One agent, many lanes. */
   readonly agent: SylAgent;
   /** Told when a turn opens and closes. Omit for a service with no character. */
   readonly presence?: TurnSink;
+  /** Run once an exchange has settled, off the reply path. See {@link AfterExchange}. */
+  readonly afterExchange?: AfterExchange;
   /** Where a failure goes. Defaults to stderr. */
   readonly log?: (line: string, error?: unknown) => void;
   readonly drainTimeoutMs?: number;
@@ -154,8 +200,17 @@ export class ConversationService {
   readonly #log: (line: string, error?: unknown) => void;
   readonly #drainTimeoutMs: number;
   readonly #clock: Clock;
+  readonly #afterExchange: AfterExchange | null;
   /** One promise chain per conversation. Its presence means work is pending. */
   readonly #queues = new Map<string, Promise<void>>();
+  /**
+   * Follow-up work in flight, off the queues on purpose.
+   *
+   * Held so `idle` and `close` can wait for it. Not a chain: two exchanges'
+   * follow-ups are independent and serialising them would rebuild the very
+   * latency the hook avoids.
+   */
+  readonly #settling = new Set<Promise<void>>();
   #sink: MessageSink | null = null;
   #closed = false;
   #lastActiveAt: number | null = null;
@@ -164,6 +219,7 @@ export class ConversationService {
     this.#messages = options.messages;
     this.#agent = options.agent;
     this.#presence = options.presence ?? null;
+    this.#afterExchange = options.afterExchange ?? null;
     this.#clock = options.clock ?? systemClock;
     this.#log =
       options.log ??
@@ -238,10 +294,10 @@ export class ConversationService {
     this.#enqueue(result.message);
   }
 
-  /** Resolve once nothing is running or queued. */
+  /** Resolve once nothing is running or queued, follow-up work included. */
   async idle(): Promise<void> {
-    while (this.#queues.size > 0) {
-      await Promise.allSettled([...this.#queues.values()]);
+    while (this.#queues.size > 0 || this.#settling.size > 0) {
+      await Promise.allSettled([...this.#queues.values(), ...this.#settling]);
     }
   }
 
@@ -329,12 +385,14 @@ export class ConversationService {
 
     const lane = laneFor(message.conversationId);
     let reply: string;
+    let failed = false;
 
     this.#presence?.turnStarted();
     try {
       const result = await this.#agent.ask(message.text, lane);
       reply = result.text.trim();
     } catch (error) {
+      failed = true;
       this.#log(`turn failed on lane ${lane}`, error);
       // Never silence. See the note at the top of this file.
       reply = turnFailureText(error);
@@ -361,8 +419,42 @@ export class ConversationService {
       });
       this.#presence?.affect(appended.affect);
       this.#publish(appended.message);
+      // Last, and only on a turn that actually answered. See `AfterExchange`.
+      if (!failed) {
+        this.#settle({
+          conversationId: message.conversationId,
+          lane,
+          prompt: message,
+          reply: appended.message,
+        });
+      }
     } catch (error) {
       this.#log(`failed to store a reply on lane ${lane}`, error);
     }
+  }
+
+  /**
+   * Start the follow-up for a settled exchange and track it.
+   *
+   * Wrapped in `Promise.resolve().then(...)` so a hook that throws
+   * SYNCHRONOUSLY is caught by the same handler as one that rejects. Without
+   * that, a synchronous throw would escape into `#turn`'s `catch` and be
+   * reported as "failed to store a reply", which is a lie about a message that
+   * was stored perfectly.
+   */
+  #settle(exchange: SettledExchange): void {
+    const hook = this.#afterExchange;
+    if (hook === null || this.#closed) return;
+
+    const running = Promise.resolve()
+      .then(() => hook(exchange))
+      .then(
+        () => undefined,
+        (error: unknown) => {
+          this.#log(`follow-up failed for exchange on lane ${exchange.lane}`, error);
+        },
+      );
+    this.#settling.add(running);
+    void running.finally(() => this.#settling.delete(running));
   }
 }

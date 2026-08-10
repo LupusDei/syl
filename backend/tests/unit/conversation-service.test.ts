@@ -7,6 +7,8 @@ import {
   ConversationService,
   laneFor,
   turnFailureText,
+  type AfterExchange,
+  type SettledExchange,
 } from "../../src/services/conversation-service.js";
 import { fixedClock } from "../../src/services/clock.js";
 import { INTERACTIVE_CONVERSATION_ID, type SylDatabase } from "../../src/services/database.js";
@@ -533,5 +535,143 @@ describe("ConversationService.lastActiveAt — the dream's yield signal", () => 
     say(service, "hello");
 
     expect(service.lastActiveAt).toBe(at);
+  });
+});
+
+/**
+ * The seam extraction hangs off (`syl-010.2.3`).
+ *
+ * Everything here is about what the follow-up must NOT be able to do: delay his
+ * reply, delay his next message, or turn a stored answer into a reported
+ * failure. Memory is worth having; it is not worth any of those.
+ */
+describe("ConversationService.afterExchange", () => {
+  /** A service whose follow-up is a function the test supplies. */
+  function withFollowUp(
+    afterExchange: AfterExchange,
+    run: (prompt: string) => Promise<TurnResult> = (prompt) => Promise.resolve(result(prompt)),
+  ): ConversationService {
+    const service = new ConversationService({
+      messages,
+      agent: new SylAgent({
+        store: memorySessionStore(),
+        runner: (prompt) => run(prompt),
+      }),
+      log: record,
+      afterExchange,
+    });
+    service.setSink((message) => published.push(message));
+    return service;
+  }
+
+  it("should run once per exchange, with both halves of it", async () => {
+    const seen: SettledExchange[] = [];
+    const service = withFollowUp((exchange) => {
+      seen.push(exchange);
+    });
+
+    say(service, "hello");
+    await service.idle();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.prompt.text).toBe("hello");
+    expect(seen[0]?.reply.text).toBe("hello");
+    expect(seen[0]?.lane).toBe(LANES.commander);
+    expect(seen[0]?.conversationId).toBe(INTERACTIVE_CONVERSATION_ID);
+  });
+
+  it("should not start until the reply is persisted and published", async () => {
+    let publishedWhenCalled = 0;
+    const service = withFollowUp(() => {
+      publishedWhenCalled = published.filter((message) => message.role === "assistant").length;
+    });
+
+    say(service, "hello");
+    await service.idle();
+
+    expect(publishedWhenCalled).toBe(1);
+  });
+
+  it("should not make his NEXT message wait for it", async () => {
+    // The reason it is tracked separately from the conversation's queue: chained
+    // onto that, a slow follow-up would become latency on the following turn.
+    const blocked = deferred<void>();
+    const prompts: string[] = [];
+    const service = withFollowUp(
+      () => blocked.promise,
+      (prompt) => {
+        prompts.push(prompt);
+        return Promise.resolve(result(prompt));
+      },
+    );
+
+    say(service, "first");
+    // Let the first turn settle and its follow-up start, but never finish.
+    for (let tick = 0; tick < 8; tick += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    say(service, "second");
+    for (let tick = 0; tick < 8; tick += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    expect(prompts).toEqual(["first", "second"]);
+    blocked.resolve();
+    await service.idle();
+  });
+
+  it("should log a rejecting follow-up rather than failing the conversation", async () => {
+    const service = withFollowUp(() => Promise.reject(new Error("extraction blew up")));
+
+    say(service, "hello");
+    await service.idle();
+
+    expect(published.filter((message) => message.role === "assistant")).toHaveLength(1);
+    expect(logged.join("\n")).toContain("extraction blew up");
+    // The reply was stored perfectly; the log must not claim otherwise.
+    expect(logged.join("\n")).not.toContain("failed to store a reply");
+  });
+
+  it("should catch a follow-up that throws SYNCHRONOUSLY too", async () => {
+    const service = withFollowUp(() => {
+      throw new Error("thrown before the first await");
+    });
+
+    say(service, "hello");
+    await service.idle();
+
+    expect(published.filter((message) => message.role === "assistant")).toHaveLength(1);
+    expect(logged.join("\n")).toContain("thrown before the first await");
+    expect(logged.join("\n")).not.toContain("failed to store a reply");
+  });
+
+  it("should not run for a turn that failed, because her half is an apology", async () => {
+    const seen: SettledExchange[] = [];
+    const service = withFollowUp(
+      (exchange) => {
+        seen.push(exchange);
+      },
+      () => Promise.reject(new Error("the turn died")),
+    );
+
+    say(service, "hello");
+    await service.idle();
+
+    // The Commander still hears about it — that rule is untouched.
+    expect(published.filter((message) => message.role === "assistant")).toHaveLength(1);
+    expect(seen).toEqual([]);
+  });
+
+  it("should be waited for by idle, so nothing escapes a shutdown unnoticed", async () => {
+    let finished = false;
+    const service = withFollowUp(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      finished = true;
+    });
+
+    say(service, "hello");
+    await service.idle();
+
+    expect(finished).toBe(true);
   });
 });

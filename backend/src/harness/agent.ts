@@ -26,6 +26,14 @@ export const LANES = {
   agenda: "agenda",
   /** The nightly review and memory consolidation pass. */
   consolidation: "consolidation",
+  /**
+   * Reading a settled exchange back to decide what is worth remembering.
+   *
+   * Its own lane rather than a step inside `commander`: his answer must not
+   * wait on filing, a failed extraction must not fail his reply, and only a
+   * separate turn can be given a narrow output contract. See `memory/extract.ts`.
+   */
+  extraction: "extraction",
 } as const;
 
 /**
@@ -48,8 +56,22 @@ export const LANES = {
  * ON BY DEFAULT in headless `-p`, so passing nothing lets the CLI write into
  * `~/.claude/projects/<slug>/memory/` instead — outside `.syl/` and not covered
  * by its gitignore. Silence is not refusal here; the lane has to say off.
+ *
+ * `extraction` is the second, and it is the dream's argument pointed the other
+ * way. That turn reads a transcript back — a transcript that may contain an
+ * article the Commander pasted, an email he forwarded, a page he quoted. A
+ * turn holding attacker-influenceable text must not also hold a writable store
+ * that is loaded at the start of every later session: that is how one
+ * injection stops being one turn's problem and becomes a standing instruction.
+ * `memory/extract.ts` runs it as a reader turn, which switches auto-memory off
+ * unconditionally and cannot be told otherwise — this entry is what keeps the
+ * guarantee if extraction is ever moved onto `SylAgent` for continuity, and
+ * `assertExtractionIsMemoryless` fails loudly if it is removed.
  */
-export const MEMORYLESS_LANES: ReadonlySet<string> = new Set<string>([LANES.consolidation]);
+export const MEMORYLESS_LANES: ReadonlySet<string> = new Set<string>([
+  LANES.consolidation,
+  LANES.extraction,
+]);
 
 /** The auto-memory a lane may use — off for {@link MEMORYLESS_LANES}. */
 function autoMemoryForLane(lane: Lane, configured: AutoMemory | undefined): AutoMemory | undefined {
