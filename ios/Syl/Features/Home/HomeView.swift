@@ -178,15 +178,13 @@ struct HomeView: View {
     /// precisely at the fold — close enough to hint that something is below, far enough
     /// that nothing competes with her.
     private func hero(viewport: CGSize) -> some View {
-        VStack(spacing: 0) {
-            // The ribbon lives *inside* the hero, drifting across her, rather than in a
-            // band of its own.
-            //
-            // As a separate strip under her name it rendered as a near-flat hairline
-            // spanning the full width — which reads as a divider rule, not as a
-            // character. Laid over her it becomes what the concept art actually shows:
-            // a current of light passing through her. It is also the only thing on this
-            // screen that can say "thinking", because a still image cannot.
+        // She fills the frame; the type and the orbs sit ON her, on a glossy fade.
+        //
+        // This was a VStack — art in a band, then the name, then the orbs beneath it —
+        // and it gave her a rectangle to stand in. Now she is the screen and everything
+        // else is composited over the bottom of it, which is what the concept art always
+        // showed and what the Commander asked for.
+        ZStack(alignment: .bottom) {
             ZStack {
                 SylHero(presence: presence, intensity: presenceIntensity, prefersStill: !scrolls)
 
@@ -201,30 +199,51 @@ struct HomeView: View {
                 if HomeSnapshot.isActive(presence) {
                     SylRibbon(state: presence, intensity: presenceIntensity)
                         .frame(height: viewport.height * 0.20)
-                        .offset(y: viewport.height * 0.16)
+                        .offset(y: viewport.height * 0.06)
                         .opacity(0.75)
                         .blendMode(.plusLighter)
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
             }
-            // Enlarged on the Commander's note. The ceiling is the art's own ratio: at
-            // this height she is already as wide as the screen, so any more height
-            // would only add margin above and below her rather than making her bigger.
-            .frame(height: max(viewport.height * 0.66, 360))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(SylTheme.Motion.breathe, value: presence)
 
-            // Her name, in the one piece of real display type in the app. The glow
-            // stands in for the light behind her, so the type belongs to the same scene
-            // rather than sitting on top of it.
+            nameplate
+        }
+        // One *visible* screen, not one raw geometry height.
+        //
+        // `GeometryReader` inside this scroll view reports a height that runs underneath
+        // the tab bar, so sizing the hero to it pushed the day's first two lines into the
+        // space behind the bar — they showed through it, clipped mid-word, on the device.
+        // `containerRelativeFrame` measures the scroll container's own visible extent and
+        // honours its safe-area insets, which is exactly the quantity "one screen" was
+        // always supposed to mean.
+        //
+        // It needs a scroll container to measure, so the offscreen render path — which
+        // has none — falls back to the raw viewport. That path has no tab bar either, so
+        // there is nothing for it to get wrong.
+        .modifier(OneScreenTall(active: scrolls, fallback: viewport.height))
+    }
+
+    /// Her name, her line, and the three doors — over a glossy fade.
+    ///
+    /// The fade is what makes this legible without a panel. Type laid directly on the art
+    /// competes with a starfield and loses; a card under it would put a rectangle back on
+    /// the screen, which is the thing we just removed. A gradient does neither: the image
+    /// deepens toward the bottom, and the words rise out of it.
+    ///
+    /// Two layers rather than one. The `veilDeep` ramp supplies the contrast the type
+    /// needs, and a thin `luminanceCore` sheen just above it catches the eye the way a
+    /// curved glass surface would — that is the "glossy" part, and without it the ramp
+    /// alone reads as a grey wash.
+    private var nameplate: some View {
+        VStack(spacing: 0) {
             Text("Syl")
                 .font(.system(size: 54, design: .serif))
                 .foregroundStyle(SylTheme.Colour.ink)
                 .shadow(color: SylTheme.Colour.luminanceCore.opacity(0.9), radius: 14)
-                .padding(.top, -SylTheme.Metric.step)
 
-            // The presence line. Letterspaced, as in the concept — it is a caption to
-            // her, not a heading of its own.
             Text(HomeSnapshot.phrase(for: presence) ?? snapshot.greeting)
                 .font(.system(.subheadline, design: .serif))
                 .tracking(2.2)
@@ -235,26 +254,45 @@ struct HomeView: View {
                 .padding(.top, SylTheme.Metric.tight)
                 .padding(.horizontal, SylTheme.Metric.gutter)
 
-            Spacer(minLength: SylTheme.Metric.snug)
-
             orbs
+                .padding(.top, SylTheme.Metric.loose)
                 .padding(.bottom, SylTheme.Metric.gutter)
         }
-        // One *visible* screen, not one raw geometry height.
-        //
-        // `GeometryReader` inside this scroll view reports a height that runs underneath
-        // the tab bar, so sizing the hero to it pushed the day's first two lines into
-        // the space behind the bar — they showed through it, clipped mid-word, on the
-        // device. `containerRelativeFrame` measures the scroll container's own visible
-        // extent and honours its safe-area insets, which is exactly the quantity "one
-        // screen" was always supposed to mean.
-        //
-        // It needs a scroll container to measure, so the offscreen render path — which
-        // has none — falls back to the raw viewport. That path has no tab bar either,
-        // so there is nothing for it to get wrong.
-        .modifier(OneScreenTall(active: scrolls, fallback: viewport.height))
+        .frame(maxWidth: .infinity)
+        .padding(.top, SylTheme.Metric.chapter)
+        .background(alignment: .top) {
+            ZStack(alignment: .top) {
+                LinearGradient(
+                    stops: [
+                        .init(color: SylTheme.Colour.veilDeep.opacity(0), location: 0.00),
+                        .init(color: SylTheme.Colour.veilDeep.opacity(0.55), location: 0.32),
+                        .init(color: SylTheme.Colour.veilDeep.opacity(0.88), location: 0.62),
+                        .init(color: SylTheme.Colour.veilDeep, location: 1.00),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                // The gloss: a single soft band of her own light along the top of the
+                // fade, so it reads as a surface catching light rather than as a scrim.
+                LinearGradient(
+                    colors: [
+                        SylTheme.Colour.luminanceCore.opacity(0),
+                        SylTheme.Colour.luminanceCore.opacity(0.16),
+                        SylTheme.Colour.luminanceCore.opacity(0),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 90)
+                .blendMode(.plusLighter)
+            }
+            .allowsHitTesting(false)
+        }
     }
 
+        // One *visible* screen, not one raw geometry height.
+        //
     private var orbs: some View {
         HStack(alignment: .top, spacing: SylTheme.Metric.chapter) {
             SylOrb(title: "Goals", symbol: "sparkle") { onOpen(.goals) }

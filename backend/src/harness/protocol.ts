@@ -268,3 +268,35 @@ export function assertSubscriptionAuth(init: InitEvent): void {
     );
   }
 }
+
+/**
+ * Everything the assistant actually said this turn, in order.
+ *
+ * **The `result` field is the FINAL assistant message, not the whole answer**, and
+ * that distinction was invisible until Syl grew hands. A turn with no tool call
+ * emits one block of prose and `result` is identical to it. A turn that reaches
+ * for a tool emits prose, then `tool_use`, then more prose — and `result` carries
+ * only the part after the tool.
+ *
+ * So the moment `syl-009` let her create a reminder mid-answer, her answers began
+ * arriving with everything before the tool call missing. The Commander saw a long
+ * reply reduced to its closing sentence, twice in one conversation, and the only
+ * reason it was ever noticed is that Syl read her own transcript back and said so.
+ * Nothing threw, nothing logged, and the message looked like a message.
+ *
+ * Joined with a blank line because these are separate assistant messages rather
+ * than fragments of one — the model emitted them as distinct turns of speech, and
+ * running them together would make one paragraph out of two thoughts.
+ *
+ * @param events every event decoded from the turn, in arrival order.
+ * @param fallback the `result` string, used when a turn produced no prose at all —
+ *   which is a real outcome, since "nothing to say" is one of Syl's standing orders.
+ */
+export function assembleReply(events: readonly SylEvent[], fallback: string): string {
+  const spoken = events
+    .filter((event): event is AssistantTextEvent => event.kind === "assistant_text")
+    .map((event) => event.text.trim())
+    .filter((text) => text !== "");
+
+  return spoken.length === 0 ? fallback : spoken.join("\n\n");
+}

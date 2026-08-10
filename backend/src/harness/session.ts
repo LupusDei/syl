@@ -16,6 +16,7 @@ import {
   parseEvent,
   type InitEvent,
   type SylEvent,
+  assembleReply,
 } from "./protocol.js";
 
 /**
@@ -342,7 +343,7 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
 
   return {
     sessionId: init.sessionId,
-    text: result.result,
+    text: assembleReply(events, result.result),
     costUsd: result.costUsd,
     numTurns: result.numTurns,
     init,
