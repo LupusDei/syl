@@ -255,6 +255,27 @@ struct SylDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v4-goals-missed-while-the-cursor-moved-on") { db in
+            // **A one-time backfill flag, and the reason it has to exist.**
+            //
+            // `SyncEngine.pullChanges` writes the cursor after every page whether or not
+            // anything in that page was applied. While `.goal` was in the ignore list,
+            // every goal that came down a page was dropped AND the cursor advanced past
+            // it — and `GET /sync` only ever returns changes since the cursor, so those
+            // rows are never sent again.
+            //
+            // The Commander hit it immediately: three goals on the server, one on the
+            // phone. Not a display bug and not a stale cache — the device had genuinely
+            // never been told, and had recorded that it was up to date.
+            //
+            // Turning `.goal` on fixes it for every goal touched from now on and cannot
+            // recover one that is simply sitting there unchanged. So the device fetches
+            // the list once, directly, and records that it has.
+            try db.alter(table: "syncState") { table in
+                table.add(column: "goalsBackfilledAt", .datetime)
+            }
+        }
+
         return migrator
     }
 

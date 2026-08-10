@@ -820,6 +820,20 @@ struct LocalStore: Sendable {
         }
     }
 
+    /// Records that the one-time goal recovery has run.
+    ///
+    /// A targeted UPDATE for the same reason `setCursor` is one: this row is written from
+    /// two actors, and a read-then-write-the-whole-row would roll the other one back.
+    func markGoalsBackfilled(at instant: Date) throws {
+        try database.queue.write { db in
+            try SyncStateRecord().insert(db, onConflict: .ignore)
+            try db.execute(
+                sql: "UPDATE syncState SET goalsBackfilledAt = ? WHERE id = ?",
+                arguments: [instant, SyncStateRecord.singletonID]
+            )
+        }
+    }
+
     /// Writes the frame-stream sequence **and the server run it belongs to**, and only
     /// those two. See `setCursor` for why it is a targeted UPDATE.
     ///

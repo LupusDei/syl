@@ -19,6 +19,13 @@ enum PushResult: Sendable, Equatable {
 struct SyncGateway: Sendable {
     var push: @Sendable (OutboxRecord) async throws -> PushResult
     var pull: @Sendable (_ since: String?) async throws -> SyncResponse
+    /// Every goal, straight from the list route rather than from the change feed.
+    ///
+    /// Needed because the change feed cannot deliver a goal it has already skipped past.
+    /// See ``SyncEngine/backfillGoals(into:)``.
+    var allGoals: @Sendable (_ cursor: String?) async throws -> GoalPage = { _ in
+        GoalPage(items: [], nextCursor: nil, hasMore: false)
+    }
 }
 
 /// What one synchronisation did. Reported rather than logged, because the app is
@@ -72,6 +79,7 @@ actor SyncEngine {
     func synchronise() async -> SyncReport {
         var report = SyncReport()
         await pushOutbox(into: &report)
+        await backfillGoals(into: &report)
         await pullChanges(into: &report)
 
         // Optimistic markers live exactly as long as the intent behind them, and this is
@@ -89,6 +97,58 @@ actor SyncEngine {
             }
         }
         return report
+    }
+
+    // MARK: - The goals the cursor walked past
+
+    /// Fetch every goal once, directly, because the change feed can no longer produce
+    /// them.
+    ///
+    /// **`pullChanges` writes the cursor after every page whether or not anything in it
+    /// was applied.** While `.goal` sat in the ignore list, each goal that came down a
+    /// page was dropped *and the cursor moved past it* — and `GET /sync` only returns
+    /// changes since the cursor. So a device upgraded into goal support believes it is
+    /// perfectly up to date and is missing every goal that has not been touched since.
+    ///
+    /// The Commander hit it within an hour: three goals on the server, one on the phone,
+    /// no error anywhere. Turning `.goal` on fixes every goal touched from now on and
+    /// cannot recover one that is merely sitting there unchanged.
+    ///
+    /// Runs **once**, recorded in `syncState`. Not on every launch: this is a full list
+    /// fetch, and doing it repeatedly would trade a one-off recovery for a permanent
+    /// cost. A failure leaves the flag unset, so it simply tries again next time — the
+    /// one thing it must not do is record success it did not have.
+    private func backfillGoals(into report: inout SyncReport) async {
+        guard (try? store.syncState())?.goalsBackfilledAt == nil else { return }
+
+        var cursor: String?
+        var recovered = 0
+
+        for _ in 0..<maxPagesPerRun {
+            let page: GoalPage
+            do {
+                page = try await gateway.allGoals(cursor)
+            } catch {
+                // Deliberately not fatal, and deliberately not recorded as done. The
+                // rest of the sync is still worth running, and this will be retried.
+                report.failures.append("goal backfill: \(error.localizedDescription)")
+                return
+            }
+
+            do {
+                try store.upsert(page.items)
+                recovered += page.items.count
+            } catch {
+                report.failures.append("goal backfill could not write: \(error)")
+                return
+            }
+
+            guard page.hasMore, let next = page.nextCursor else { break }
+            cursor = next
+        }
+
+        report.changesApplied += recovered
+        try? store.markGoalsBackfilled(at: Date())
     }
 
     // MARK: - Push
@@ -337,6 +397,9 @@ extension SyncGateway {
             },
             pull: { since in
                 try await backend.client().send(SylAPI.sync(since: since))
+            },
+            allGoals: { cursor in
+                try await backend.client().send(SylAPI.goals(cursor: cursor))
             }
         )
     }
