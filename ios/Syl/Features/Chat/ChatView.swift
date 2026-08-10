@@ -110,8 +110,13 @@ struct ChatView: View {
                 case .day(let day):
                     DayDivider(day: day)
                 case .turn(let group, let showsTime):
-                    ChatTurn(group: group, showsTime: showsTime)
-                        .id(group.id)
+                    ChatTurn(
+                        group: group,
+                        showsTime: showsTime,
+                        isStalled: model.isStalled(group),
+                        retry: { Task { await model.retryQueued() } }
+                    )
+                    .id(group.id)
                 }
             }
 

@@ -26,8 +26,14 @@ struct ChatTurn: View {
     let group: MessageGroup
     let showsTime: Bool
 
-    /// Index within the visible transcript, used only to stagger the first paint.
-    var index: Int = 0
+    /// True when this turn is queued and the connection is not up, so "sending" would
+    /// be a lie. Derived rather than stored: there is no failure state on a message yet
+    /// (`syl-008.3.8`), and inventing one in the view would be worse than saying only
+    /// what is actually known.
+    var isStalled: Bool = false
+
+    /// Runs the outbox. Nil where retrying is meaningless.
+    var retry: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -47,6 +53,24 @@ struct ChatTurn: View {
         // undifferentiated text with no sense of who was talking.
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel)
+        .contextMenu {
+            Button {
+                // The RAW text, not the rendered text. Once markdown renders, copying
+                // what is on screen would strip the structure that makes it worth
+                // copying — a plan pasted without its list is not a plan.
+                UIPasteboard.general.string = group.text
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+
+            if let retry, isStalled {
+                Button {
+                    retry()
+                } label: {
+                    Label("Try again", systemImage: "arrow.clockwise")
+                }
+            }
+        }
     }
 
     // MARK: - Her turn: a page
@@ -111,6 +135,16 @@ struct ChatTurn: View {
             // thing on screen, which is the wrong hierarchy — he is the object, she is
             // the weather.
             .sylGlass(radius: SylTheme.Metric.cardRadius, presence: 0.55)
+            // A stalled turn is outlined in `warmth` — the palette's single warm note,
+            // held in reserve for exactly this. It is the only non-cool colour that
+            // appears anywhere in the app, so it reads as "attend to this" without a
+            // word, and without the alarm of red.
+            .overlay {
+                if isStalled {
+                    RoundedRectangle(cornerRadius: SylTheme.Metric.cardRadius, style: .continuous)
+                        .strokeBorder(SylTheme.Colour.warmth.opacity(0.75), lineWidth: 1)
+                }
+            }
             // Capped rather than full-bleed. Today a long message runs edge to edge,
             // which on a wide window is a slab; the cap is what keeps it an object.
             .frame(maxWidth: commanderMeasure, alignment: .trailing)
@@ -118,10 +152,35 @@ struct ChatTurn: View {
             // sent one.
             .opacity(group.isPending ? 0.62 : 1)
 
-            if showsTime || group.isPending {
+            if isStalled {
+                stalledNote
+            } else if showsTime || group.isPending {
                 turnTime
             }
         }
+    }
+
+    /// Said plainly, with the recovery attached.
+    ///
+    /// "Waiting to send" rather than "Failed": the intent is durable in the outbox and
+    /// will go out on its own when the tailnet returns. Calling that a failure would be
+    /// both untrue and needlessly alarming — but saying nothing leaves him believing a
+    /// message landed when it did not.
+    private var stalledNote: some View {
+        Button {
+            retry?()
+        } label: {
+            HStack(spacing: SylTheme.Metric.tight) {
+                Text("Waiting to send")
+                Text("·")
+                Text("Try again").underline()
+            }
+            .sylLabelStyle()
+            .foregroundStyle(SylTheme.Colour.warmth)
+            .frame(minHeight: SylTheme.Metric.minimumTouchTarget)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Waiting to send. Try again.")
     }
 
     /// How wide his object may get.

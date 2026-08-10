@@ -262,4 +262,35 @@ final class ChatViewModel: ObservableObject {
         if case .connected = connection { return snapshot.pendingCount > 0 }
         return true
     }
+
+    /// Whether a queued turn is going nowhere for now.
+    ///
+    /// Deliberately derived from what is actually known — the turn is pending and the
+    /// socket is not up — rather than from a `failed` flag, because no such flag
+    /// exists. Inventing one in the view layer would mean claiming a send failed when
+    /// all that is known is that it has not happened yet. The intent is durable either
+    /// way; the outbox will carry it when the tailnet returns.
+    ///
+    /// A real per-message failure state (a rejected message, a permanent error) is
+    /// `syl-008.3.8` and needs the store, not the view.
+    func isStalled(_ group: MessageGroup) -> Bool {
+        guard group.isPending else { return false }
+        switch connection {
+        case .connected, .connecting, .authenticating, .reconnecting:
+            return false
+        case .idle, .offline, .unauthenticated:
+            return true
+        }
+    }
+
+    /// Run the outbox now, rather than waiting for the next scheduled sync.
+    ///
+    /// The retry affordance is not cosmetic: without it a queued message sits until
+    /// something else happens to trigger a flush, and the Commander's only recourse is
+    /// to guess whether it went.
+    func retryQueued() async {
+        notice = nil
+        await flush()
+        await refresh()
+    }
 }

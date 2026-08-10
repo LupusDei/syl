@@ -486,6 +486,56 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(model.presence, .thinking)
     }
 
+    // MARK: - Stalled sends and retry (T018)
+
+    @MainActor
+    func testShouldNotCallAQueuedTurnStalledWhileTheSocketIsUp() async throws {
+        let model = makeModel()
+        try store.upsert([message(id: "syl:message:0198f2c0-0001-7000-8000-00000000c001", seq: 1)])
+        await model.apply(.connectionState(.connected))
+        await model.refresh()
+
+        let group = try XCTUnwrap(model.snapshot.groups.first)
+        XCTAssertFalse(model.isStalled(group), "not pending, and connected")
+    }
+
+    @MainActor
+    func testShouldCallAQueuedTurnStalledOnceTheSocketIsDown() async throws {
+        let model = makeModel()
+        model.draft = "Remind me at six."
+        await model.send()
+        await model.apply(.connectionState(.offline))
+
+        let group = try XCTUnwrap(model.snapshot.groups.first)
+        XCTAssertTrue(group.isPending)
+        XCTAssertTrue(model.isStalled(group))
+    }
+
+    @MainActor
+    func testShouldNotCryWolfWhileTheConnectionIsMerelyReconnecting() async throws {
+        // A tailnet handoff is not a failure, and telling him to retry during one
+        // trains him to ignore the warning that matters.
+        let model = makeModel()
+        model.draft = "Remind me at six."
+        await model.send()
+        await model.apply(.connectionState(.reconnecting(attempt: 1)))
+
+        let group = try XCTUnwrap(model.snapshot.groups.first)
+        XCTAssertFalse(model.isStalled(group))
+    }
+
+    @MainActor
+    func testShouldRunTheOutboxWhenAskedToTryAgain() async {
+        let flushed = Flag()
+        let model = makeModel(flush: { await flushed.raise() })
+
+        await model.retryQueued()
+
+        let didFlush = await flushed.value
+        XCTAssertTrue(didFlush)
+        XCTAssertNil(model.notice)
+    }
+
     // MARK: - Harness
 
     @MainActor
