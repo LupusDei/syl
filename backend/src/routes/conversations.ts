@@ -2,6 +2,7 @@ import { Router, type Request, type RequestHandler } from "express";
 
 import type { ConversationLane, DeliveryConfirmation } from "@syl/shared";
 
+import { AttachmentError } from "../services/attachment-store.js";
 import type { ConversationService } from "../services/conversation-service.js";
 import { isId } from "../services/id.js";
 import type { IdempotencyStore } from "../services/idempotency.js";
@@ -29,6 +30,18 @@ import { runIdempotent, sendIdempotent } from "./idempotency.js";
 
 /** Turn a store refusal into the right contract failure. */
 function asFailure(error: unknown): never {
+  if (error instanceof AttachmentError) {
+    // A message that quietly lost its picture is worse than a send that failed
+    // — the first is discovered by the person who thought they had sent one.
+    if (error.code === "already-attached") {
+      throw new ApiFailure("CONFLICT", error.message, {
+        details: { field: "attachmentIds", reason: error.code },
+      });
+    }
+    throw new ApiFailure("VALIDATION_FAILED", error.message, {
+      details: { field: "attachmentIds", reason: error.code },
+    });
+  }
   if (error instanceof MessageStoreError) {
     switch (error.kind) {
       case "unknown_conversation":
@@ -113,8 +126,58 @@ function requireString(body: unknown, field: string, maxLength: number): string 
   return value;
 }
 
-/** A message longer than this is a paste accident, not a message. */
+/**
+ * Read `attachmentIds` off a send, or refuse it.
+ *
+ * Absent is fine; present-and-empty is not. An empty array reaches here only
+ * from a client that built the field and then had nothing to put in it, which
+ * is a bug on the send path worth saying out loud rather than treating as a
+ * plain text message.
+ */
+function attachmentIdsOf(body: unknown): readonly string[] | undefined {
+  const value =
+    typeof body === "object" && body !== null
+      ? // Safe assertion: guarded above, and every element is re-tested below.
+        (body as Record<string, unknown>)["attachmentIds"]
+      : undefined;
+  if (value === undefined || value === null) return undefined;
+
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new ApiFailure("VALIDATION_FAILED", "attachmentIds must be a non-empty array.", {
+      details: { field: "attachmentIds", reason: "omit it rather than sending an empty array" },
+    });
+  }
+  if (value.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+    throw new ApiFailure("VALIDATION_FAILED", "That is too many attachments for one message.", {
+      details: {
+        field: "attachmentIds",
+        reason: `at most ${String(MAX_ATTACHMENTS_PER_MESSAGE)}`,
+      },
+    });
+  }
+  for (const candidate of value) {
+    if (typeof candidate !== "string" || !isId(candidate, "attachment")) {
+      throw new ApiFailure("VALIDATION_FAILED", "That is not an attachment id.", {
+        details: { field: "attachmentIds", reason: "every element must be an attachment id" },
+      });
+    }
+  }
+  return value as readonly string[];
+}
+
+/**
+ * A message longer than this is a paste accident, not a message.
+ */
 const MAX_MESSAGE_TEXT = 32_000;
+
+/**
+ * More pictures than this on one message is a mistake, not an album.
+ *
+ * Bounded here rather than left open because each id costs a row lookup inside
+ * the message's own transaction, and an unbounded list is an unbounded time
+ * spent holding a write lock on the conversation.
+ */
+const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 /** Client ids are opaque, but a UUID is 36 characters and this is generous. */
 const MAX_CLIENT_ID = 128;
 
@@ -213,9 +276,16 @@ export function createConversationRouter(options: ConversationRouterOptions): Ro
       runIdempotent(idempotency, request, () => {
         const clientId = requireString(request.body, "clientId", MAX_CLIENT_ID);
         const text = requireString(request.body, "text", MAX_MESSAGE_TEXT);
+        const attachmentIds = attachmentIdsOf(request.body);
 
         try {
-          const result = chat.append({ conversationId, clientId, role: "user", text });
+          const result = chat.append({
+            conversationId,
+            clientId,
+            role: "user",
+            text,
+            ...(attachmentIds === undefined ? {} : { attachmentIds }),
+          });
 
           const confirmation: DeliveryConfirmation = {
             clientId,

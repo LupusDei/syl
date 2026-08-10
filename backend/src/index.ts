@@ -26,6 +26,7 @@ import { readBuildInfo, selfBuildStampPath } from "./ops/build-info.js";
 import { ArticleIntake } from "./connections/intake.js";
 import { IntakeStore } from "./connections/intake-store.js";
 import { requireBearerToken, requireScope } from "./middleware/auth.js";
+import { createAttachmentRouter, UPLOAD_BODY_LIMIT_BYTES } from "./routes/attachments.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createConversationRouter } from "./routes/conversations.js";
 import { createDeliveryRouter } from "./routes/deliveries.js";
@@ -55,6 +56,7 @@ import { autoMemoryAt } from "./memory/auto-memory.js";
 import { withMemoryIndex } from "./memory/index-guarantee.js";
 import { apnsCredentialsFromEnv } from "./services/apns-service.js";
 import { ApiKeyService } from "./services/api-key-service.js";
+import { AttachmentStore } from "./services/attachment-store.js";
 import { systemClock, type Clock } from "./services/clock.js";
 import { ConversationService } from "./services/conversation-service.js";
 import { IN_MEMORY, openDatabase, type SylDatabase } from "./services/database.js";
@@ -85,7 +87,16 @@ import { SylSocketServer, WS_PATH } from "./services/ws-server.js";
  * incompatibility that only appears at integration time.
  */
 
-/** JSON bodies larger than this are refused. Syl exchanges text, not uploads. */
+/**
+ * JSON bodies larger than this are refused.
+ *
+ * This used to say "Syl exchanges text, not uploads", and for every route but
+ * one it still does. `POST /attachments` is the exception and it is mounted
+ * with its own, larger parser at its own path — see `createApp`. Keeping the
+ * general limit at one megabyte is the point: an upload surface that widened
+ * the ceiling for `POST /reminders` at the same time would be a surface that
+ * had quietly changed what every other endpoint accepts.
+ */
 const MAX_BODY_BYTES = "1mb";
 
 /** The contract's base path. Not configurable — it is part of the contract. */
@@ -217,6 +228,15 @@ export interface AppDependencies {
   readonly idempotency: IdempotencyStore;
   /** Article intake: submission, and the resumable ladder behind it. */
   readonly intake: ArticleIntake;
+  /**
+   * Images and video: the bytes on disk and the rows that describe them.
+   *
+   * Also handed to `MessageStore`, which is what makes `Message.attachments`
+   * anything other than an empty array. Two references to one object rather
+   * than two stores over one table — the row-to-wire mapping lives in exactly
+   * one file.
+   */
+  readonly attachments: AttachmentStore;
   /** Extra health probes. The billing check is always present. */
   readonly probes?: readonly HealthProbe[];
 }
@@ -253,12 +273,34 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // Destructured in full, and reached through the names below rather than
   // through `deps.` — see the note on `AppDependencies`. Removing a use here
   // without removing the field does not compile.
-  const { keys, messages, chat, devices, outbox, reminders, todos, goals, sync, jobs, idempotency, intake, probes } =
-    deps;
+  const {
+    keys,
+    messages,
+    chat,
+    devices,
+    outbox,
+    reminders,
+    todos,
+    goals,
+    sync,
+    jobs,
+    idempotency,
+    intake,
+    attachments,
+    probes,
+  } = deps;
   const app = express();
 
   // Nothing gains from telling the world which framework to look up CVEs for.
   app.disable("x-powered-by");
+  // The upload path, and only the upload path, accepts more than text. Mounted
+  // FIRST and scoped to its own prefix: body-parser marks a request it has
+  // already read, so the general parser below sees this one as done and never
+  // applies its own smaller limit. Written as two visible lines in bootstrap
+  // rather than as a condition inside one parser, because "which routes may
+  // receive thirteen megabytes" is a question worth answering by reading the
+  // mount order.
+  app.use(`${API_BASE_PATH}/attachments`, express.json({ limit: UPLOAD_BODY_LIMIT_BYTES }));
   app.use(express.json({ limit: MAX_BODY_BYTES }));
 
   const authenticate = requireBearerToken({ keys });
@@ -284,6 +326,9 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // permanently unpairable.
   api.use(createAuthRouter({ keys, idempotency, authenticate }));
   api.use(createConversationRouter({ messages, chat, idempotency, authenticate }));
+  // Mounted before the routes that reference an attachment id, though nothing
+  // depends on that ordering: both live under distinct prefixes.
+  api.use(createAttachmentRouter({ attachments, idempotency, authenticate }));
   api.use(createDeviceRouter({ devices, idempotency, authenticate }));
   api.use(createDeliveryRouter({ outbox, reminders, idempotency, authenticate }));
   api.use(createReminderRouter({ reminders, idempotency, authenticate }));
@@ -545,7 +590,15 @@ export function bootstrap(
   const clock = options.clock ?? systemClock;
   const database = openDatabase({ path: config.databasePath });
   const keys = new ApiKeyService({ db: database.handle, clock });
-  const messages = new MessageStore({ db: database.handle, clock });
+  // Before `MessageStore`, which takes it: a message's pictures are read
+  // through this object, so the wiring is one direction and there is no cycle
+  // to break later.
+  const attachments = new AttachmentStore({
+    db: database.handle,
+    clock,
+    blobDir: config.attachmentDir,
+  });
+  const messages = new MessageStore({ db: database.handle, clock, attachments });
   const devices = new DeviceTokenService({ db: database.handle, clock });
   const idempotency = new IdempotencyStore({ db: database.handle, clock });
   // From the config, not from `process.env`. `loadConfig` has already refused
@@ -664,6 +717,7 @@ export function bootstrap(
       jobs,
       idempotency,
       intake,
+      attachments,
       presence,
       intakeQueue,
       probes: [databaseProbe(database.handle)],

@@ -13,6 +13,7 @@ function message(seq: number): Message {
     text: `message ${seq}`,
     createdAt: "2026-08-09T07:00:03.114Z",
     seq,
+    attachments: [],
   };
 }
 

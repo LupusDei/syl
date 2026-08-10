@@ -59,6 +59,7 @@ const UNDECLARED: readonly string[] = ["GET /intake/{sourceId}", "POST /intake"]
 /** Path parameters that are syntactically valid but name nothing. */
 const ABSENT_IDS: Readonly<Record<string, string>> = {
   conversationId: "syl:conversation:00000000-0000-7000-8000-0000000000ff",
+  attachmentId: "syl:attachment:00000000-0000-7000-8000-0000000000ff",
   reminderId: "syl:reminder:00000000-0000-7000-8000-0000000000ff",
   todoId: "syl:todo:00000000-0000-7000-8000-0000000000ff",
   goalId: "syl:goal:00000000-0000-7000-8000-0000000000ff",

@@ -205,6 +205,7 @@ export type Message = {
   readonly text: string;
   readonly createdAt: Instant;
   readonly seq: number;
+  readonly attachments: Attachment[];
 };
 
 export type MessagePage = {
@@ -217,6 +218,7 @@ export type SendMessageRequest = {
   readonly clientId: string;
   readonly text: string;
   readonly conversationId?: Id | null;
+  readonly attachmentIds?: Id[];
 };
 
 /**
@@ -231,6 +233,48 @@ export type DeliveryConfirmation = {
   readonly conversationId: Id;
   readonly seq: number;
   readonly acceptedAt: Instant;
+};
+
+/**
+ * Two kinds, and deliberately no third. `file` is not here: an arbitrary
+ * document is a thing the service would have to store, serve and never
+ * be able to render, and adding the case later costs nothing while
+ * adding it now costs a surface nobody has a use for.
+ */
+export type AttachmentKind = "image" | "video";
+
+/**
+ * A stored image or video. The row is metadata only — the bytes live on
+ * the service's own disk and are fetched from
+ * `GET /attachments/{attachmentId}`, never from anywhere else.
+ *
+ * **There is no URL on this object, on purpose.** A remote image in a
+ * transcript leaks a read receipt and the Commander's IP to whoever hosts
+ * it, and a client that will render whatever URL it is handed is an SSRF
+ * surface pointed at the tailnet. The client composes the path from the
+ * id against the server it is paired with, so an attachment can only ever
+ * come from Syl's own origin.
+ */
+export type Attachment = {
+  readonly id: Id;
+  readonly kind: AttachmentKind;
+  readonly mimeType: string;
+  readonly bytes: number;
+  readonly width: number;
+  readonly height: number;
+  readonly durationMs: number | null;
+  readonly sha256: string;
+  readonly createdAt: Instant;
+  readonly hasThumbnail: boolean;
+};
+
+export type CreateAttachmentRequest = {
+  readonly kind: AttachmentKind;
+  readonly mimeType: string;
+  readonly data: string;
+  readonly width?: number;
+  readonly height?: number;
+  readonly durationMs?: number;
 };
 
 /**

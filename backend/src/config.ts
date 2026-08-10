@@ -88,6 +88,16 @@ export const DEFAULT_PORT = 8888;
 export const DEFAULT_DATABASE_PATH = ".syl/syl.db";
 
 /**
+ * Attachment blobs, beside the store they are indexed by.
+ *
+ * Same `.syl/` for the same reasons — gitignored, and a deployment that points
+ * `SYL_DB_PATH` at a backed-up directory should be able to point this at one
+ * too. Rows here are useless without their bytes and vice versa; the two
+ * belong in the same backup.
+ */
+export const DEFAULT_ATTACHMENT_DIR = ".syl/attachments";
+
+/**
  * Environment variables that supply Anthropic credentials, in the order the
  * CLI resolves them. `session.ts` deletes both before spawning `claude`.
  */
@@ -188,6 +198,17 @@ export interface SylConfig {
    * forget. `ops/admin-bundle.ts` says what happens when it is not there.
    */
   readonly adminDir: string;
+  /**
+   * Where attachment blobs live. `SYL_ATTACHMENT_DIR`, or `.syl/attachments`.
+   *
+   * Beside the database rather than inside it: SQLite would happily hold a ten
+   * megabyte BLOB and would then carry it through every backup, every WAL
+   * checkpoint and every `SELECT *` a future store writes carelessly. On disk,
+   * the row is a name and the bytes are a file, and pointing a restored
+   * deployment at a different directory is configuration rather than a
+   * migration.
+   */
+  readonly attachmentDir: string;
 }
 
 /** Thrown when the environment cannot produce a usable configuration. */
@@ -451,5 +472,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SylConfig {
     logDirectory: defaultLogDirectory(env),
     certStatusPath: defaultCertStatusPath(env),
     adminDir: defaultAdminDir(env),
+    attachmentDir: read(env, "SYL_ATTACHMENT_DIR") ?? DEFAULT_ATTACHMENT_DIR,
   };
 }
