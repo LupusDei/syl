@@ -568,6 +568,103 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertNotNil(second[id(2)])
     }
 
+    // MARK: - The view renders rows, so rows must exist whenever groups do
+
+    @MainActor
+    func testShouldProduceARowForEveryTurnItGroups() async throws {
+        // `ChatView` renders `snapshot.rows`, not `snapshot.groups`. If the two ever
+        // disagree the screen goes blank while the banner cheerfully reports the
+        // pending count — a transcript that has messages and shows none.
+        try store.upsert([message(id: id(1), seq: 1), message(id: id(2), seq: 2)])
+        let model = makeModel()
+
+        await model.refresh()
+
+        XCTAssertFalse(model.snapshot.groups.isEmpty)
+        XCTAssertEqual(
+            model.snapshot.rows.filter { if case .turn = $0 { return true } else { return false } }.count,
+            model.snapshot.groups.count,
+            "every group must have a row, or it renders nowhere"
+        )
+    }
+
+    @MainActor
+    func testShouldRenderAPendingSendAsARowImmediately() async {
+        // The exact shape of the Commander's report: banner says "Sending 1…" and the
+        // transcript is empty. That can only happen if the pending message reaches
+        // `pendingCount` without reaching `rows`.
+        let model = makeModel()
+        model.draft = "Can you create a reminder for me in 1 minute?"
+
+        await model.send()
+
+        XCTAssertEqual(model.snapshot.pendingCount, 1)
+        XCTAssertFalse(
+            model.snapshot.rows.isEmpty,
+            "a message counted as pending must also be a row on screen"
+        )
+    }
+
+    // MARK: - Blocks are sliced per turn, not handed out whole
+
+    @MainActor
+    func testShouldGiveEachTurnOnlyItsOwnParsedBlocks() async throws {
+        // The row must not hold the transcript's markdown. SwiftUI compares a view's
+        // stored values to decide whether to re-render it, so a row carrying the whole
+        // map makes every update deep-compare every message — quadratic work on the main
+        // thread, which the Commander experienced as the app freezing and then dying.
+        try store.upsert([
+            message(id: id(1), seq: 1, text: "# One"),
+            message(id: id(2), seq: 2, text: "# Two"),
+        ])
+        let model = makeModel()
+
+        await model.refresh()
+
+        // Far enough apart to be separate turns, so each holds exactly one message.
+        XCTAssertEqual(model.snapshot.groups.count, 2)
+        let first = try XCTUnwrap(model.snapshot.groups.first)
+        XCTAssertEqual(
+            model.snapshot.blocks(forGroup: first.id),
+            [[.heading(level: 1, text: "One")]],
+            "a turn gets its own message's blocks and nobody else's"
+        )
+    }
+
+    @MainActor
+    func testShouldKeepBlocksInMessageOrderWithinATurn() async throws {
+        // Positional: the view indexes by position, so an out-of-order slice would put
+        // one message's words under another's.
+        let base = instant("2026-08-09T07:00:03.114Z")
+        try store.upsert([
+            Message(
+                id: id(1), conversationId: SylIDs.interactiveConversation, clientId: nil,
+                role: .assistant, text: "# First", createdAt: base, seq: 1
+            ),
+            Message(
+                id: id(2), conversationId: SylIDs.interactiveConversation, clientId: nil,
+                role: .assistant, text: "# Second", createdAt: base.addingTimeInterval(5), seq: 2
+            ),
+        ])
+        let model = makeModel()
+
+        await model.refresh()
+
+        let group = try XCTUnwrap(model.snapshot.groups.first)
+        XCTAssertEqual(group.messages.count, 2, "one turn, both messages")
+        XCTAssertEqual(
+            model.snapshot.blocks(forGroup: group.id),
+            [[.heading(level: 1, text: "First")], [.heading(level: 1, text: "Second")]]
+        )
+    }
+
+    @MainActor
+    func testShouldReturnNoBlocksForATurnItHasNeverSeen() async {
+        let model = makeModel()
+
+        XCTAssertEqual(model.snapshot.blocks(forGroup: id(99)), [])
+    }
+
     // MARK: - Stalled sends and retry (T018)
 
     @MainActor

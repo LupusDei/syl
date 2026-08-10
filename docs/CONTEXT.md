@@ -907,6 +907,24 @@ unforgivingly on everything else, and let absent, empty and unmatched all mean
 *not urgent*: too strict costs a reminder that waits until morning, too lax costs
 his house at three, and those are not comparable.
 
+**Some claims cannot be checked against anything, and then the guard is that the
+act is audible.** `urgentBecauseHeSaid` works because there is something to
+compare the quote to: *did he say this?* is a question about the conversation.
+`finish_todo` is bound by the same rule and cannot use the same mechanism — *did
+he finish it?* is a claim about the world, and no field she can fill makes it
+checkable. A `heSaidSo` string would be a boolean wearing a costume, which is
+the exact defect `syl-p8k` closed.
+
+So that guard is shaped differently, and it is three things rather than one:
+**read the row before writing**, so a stale or half-remembered id costs a read
+and never an item; **refuse an already-finished to-do** rather than reporting an
+act she did not perform, since the store's `complete` is idempotent and would
+answer happily; and **name the to-do, in his words, on every path**. The last is
+the load-bearing one — him hearing the wrong title is the only place a wrong
+inference is still catchable, and a verb that answers "done" gives him nothing
+to contradict. Generalised: *where evidence cannot be compared, make the
+consequence sayable, and say it.*
+
 **A red test that cannot compile is not a declared failure — it is a broken
 build with a bead attached.** `tests/expected-failures.json` makes a test's
 *failure* legitimate and says nothing about whether the file parses. A declared

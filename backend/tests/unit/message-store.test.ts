@@ -9,7 +9,7 @@ import {
   MessageStoreError,
   stripAffectHint,
 } from "../../src/services/message-store.js";
-import { TEST_NOW, testDatabase } from "../helpers/service.js";
+import { TEST_NOW, testAttachments, testDatabase } from "../helpers/service.js";
 
 let db: SylDatabase;
 let now: number;
@@ -24,6 +24,30 @@ beforeEach(() => {
 afterEach(() => {
   db.close();
 });
+
+/** A real 1x1 PNG — the store sniffs magic bytes, so a fake will not do. */
+function png(): Buffer {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const length = (value: number): Buffer => {
+    const out = Buffer.alloc(4);
+    out.writeUInt32BE(value);
+    return out;
+  };
+  const ihdrBody = Buffer.alloc(17);
+  ihdrBody.write("IHDR", 0, "ascii");
+  ihdrBody.writeUInt32BE(1, 4);
+  ihdrBody.writeUInt32BE(1, 8);
+  ihdrBody[12] = 8;
+  ihdrBody[13] = 6;
+  const ihdr = Buffer.concat([length(13), ihdrBody, Buffer.alloc(4)]);
+  const idatBody = Buffer.concat([
+    Buffer.from("IDAT", "ascii"),
+    Buffer.from([0x78, 0x9c, 0x63, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01]),
+  ]);
+  const idat = Buffer.concat([length(9), idatBody, Buffer.alloc(4)]);
+  const iend = Buffer.concat([length(0), Buffer.from("IEND", "ascii"), Buffer.alloc(4)]);
+  return Buffer.concat([signature, ihdr, idat, iend]);
+}
 
 /** Append `count` assistant messages, one millisecond apart. */
 function fill(count: number, conversationId?: string): void {
@@ -64,6 +88,35 @@ describe("append", () => {
     const inJob = store.append({ conversationId: job.id, role: "system", text: "in the job lane" });
 
     expect(inJob.message.seq).toBe(1);
+  });
+
+  // A message must say something. A picture says something. (`syl-008.8`,
+  // the Commander's call on 2026-08-10.)
+
+  it("should refuse an empty message when nothing is attached", () => {
+    // Still refused, and this is the half that must not be lost while relaxing
+    // the other: an empty message with no picture is a client that dropped its
+    // payload, not a user with nothing to add. Accepting it would put a blank
+    // bubble in his transcript permanently.
+    expect(() => store.append({ role: "user", text: "" })).toThrow(MessageStoreError);
+    expect(() => store.append({ role: "user", text: "" })).toThrow(/at least one attachment/);
+  });
+
+  it("should accept a picture with no caption", () => {
+    // The rule that changed. `text: ""` is honest — it says "no words" — and
+    // keeps `Message.text` non-optional in both clients.
+    const attachments = testAttachments(db);
+    const withPictures = new MessageStore({ db: db.handle, clock: () => now, attachments });
+    const picture = attachments.create({ kind: "image", declaredMime: "image/png", data: png() });
+
+    const result = withPictures.append({
+      role: "user",
+      text: "",
+      attachmentIds: [picture.id],
+    });
+
+    expect(result.message.text).toBe("");
+    expect(result.message.attachments).toHaveLength(1);
   });
 
   it("should refuse a message for a conversation that does not exist", () => {

@@ -57,29 +57,7 @@ struct ChatView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
-                // Presence overlays the transcript rather than living inside it.
-                //
-                // It sat inside the scrolling container at first, which meant it did
-                // not exist at all on the non-scrolling render path — and since that is
-                // the only path an offscreen render can use, the ribbon could not be
-                // looked at. Presence has nothing to do with scrolling; the coupling
-                // was accidental, and it hid the one thing worth checking.
                 transcript
-                    .overlay(alignment: .bottom) {
-                        if HomeSnapshot.isActive(model.presence) {
-                            PresenceInTranscript(
-                                presence: model.presence,
-                                intensity: model.intensity
-                            )
-                            .padding(.bottom, SylTheme.Metric.snug)
-                            .allowsHitTesting(false)
-                            .transition(.opacity)
-                        }
-                    }
-                    .animation(
-                        reduceMotion ? nil : SylTheme.Motion.settle,
-                        value: HomeSnapshot.isActive(model.presence)
-                    )
 
                 ChatComposer(
                     draft: $model.draft,
@@ -87,6 +65,7 @@ struct ChatView: View {
                     send: { Task { await model.send() } }
                 )
             }
+
         }
         .animation(
             reduceMotion ? nil : SylTheme.Motion.settle,
@@ -160,12 +139,31 @@ struct ChatView: View {
                     ChatTurn(
                         group: group,
                         showsTime: showsTime,
-                        blocks: model.snapshot.blocks,
+                        // This turn's blocks only. Handing every row the whole map made
+                        // SwiftUI deep-compare the entire transcript per row, per update.
+                        blocks: model.snapshot.blocks(forGroup: group.id),
                         isStalled: model.isStalled(group),
                         retry: { Task { await model.retryQueued() } }
                     )
                     .id(group.id)
                 }
+            }
+
+            // She thinks *below the last thing said*, in the flow of the conversation.
+            //
+            // This was an overlay pinned to the bottom of the viewport, which put the
+            // ribbon at the foot of the screen regardless of where the conversation
+            // ended — so after a send it floated in empty space far below his message,
+            // reading as decoration rather than as an answer to what he just asked.
+            // In flow it sits directly under his turn, it scrolls with the transcript,
+            // and `scrollToFoot` brings it to rest just above the keyboard.
+            if HomeSnapshot.isActive(model.presence) {
+                PresenceInTranscript(
+                    presence: model.presence,
+                    intensity: model.intensity
+                )
+                .allowsHitTesting(false)
+                .transition(.opacity)
             }
 
             // A zero-height sentinel. Its visibility *is* the answer to "is he at the
@@ -191,6 +189,30 @@ struct ChatView: View {
                     transcriptContent
                 }
                 .scrollIndicators(.hidden)
+                // Her turns dissolve at the top edge instead of colliding with her name.
+                //
+                // The navigation bar is deliberately transparent so the veil runs
+                // unbroken behind it — but transparent also means the transcript scrolls
+                // *under* the title, and a paragraph passing through "Syl" is unreadable
+                // in both directions. The Commander's screenshot shows exactly that.
+                //
+                // A mask rather than a painted scrim, because the mask is measured
+                // against this view and therefore lands correctly whether or not a
+                // connection banner is above it — a fixed scrim at the top of the screen
+                // is right in one of those cases and wrong in the other. It is the same
+                // edge-melt the hero uses so she ends by dissolving rather than on a
+                // rectangle.
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .black, location: 0.05),
+                            .init(color: .black, location: 1),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
                 // Land at the newest turn on first paint rather than relying solely on
                 // an `onChange` that has nothing to react to yet — the pattern Adjutant
                 // records as intermittently failing on long transcripts.
@@ -210,13 +232,37 @@ struct ChatView: View {
                 )
                 .onChange(of: model.snapshot.groups.last?.id) { _, id in
                     guard id != nil else { return }
-                    if isAtBottom {
+                    // **His own message ALWAYS scrolls.** The `isAtBottom` gate exists to
+                    // stop an arriving reply yanking the view away from someone reading
+                    // history — it was never meant to apply to the message he just typed.
+                    // Gating his own send behind it produced exactly the defect he
+                    // reported: he sends, and his words are stranded mid-screen with the
+                    // keyboard covering where they should have gone.
+                    //
+                    // The rule is the one already written down for motion: his finger
+                    // caused it, so anything other than "it goes where he put it" reads
+                    // as the app losing his message.
+                    if model.snapshot.groups.last?.role == .user || isAtBottom {
                         scrollToFoot(proxy)
                     } else {
                         // Do not yank the view out from under someone reading history.
                         // Tell him instead.
                         hasUnseenTurn = true
                     }
+                }
+                // The keyboard is a viewport change, not a content change, so nothing
+                // above fires for it. Without this the transcript keeps its old offset
+                // and the newest turn ends up behind the keyboard.
+                .onChange(of: composerFocused) { _, focused in
+                    guard focused, isAtBottom else { return }
+                    scrollToFoot(proxy)
+                }
+                // She started thinking, so the ribbon just took up room below his
+                // message. Follow it, or the thing that says "she is working on it"
+                // appears off-screen.
+                .onChange(of: HomeSnapshot.isActive(model.presence)) { _, active in
+                    guard active, isAtBottom else { return }
+                    scrollToFoot(proxy)
                 }
 
                 if hasUnseenTurn {

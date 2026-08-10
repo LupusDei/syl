@@ -1704,7 +1704,24 @@ components:
           description: |
             Client-generated. Rendered immediately as pending and swapped when
             the server confirms with the matching `serverId`.
-        text: { type: string, minLength: 1 }
+        text:
+          type: string
+          minLength: 0
+          description: |
+            What he said. **May be empty only when `attachmentIds` is present** —
+            a picture with no caption is the most ordinary thing anyone does with
+            a picture, and until this rule it was impossible.
+
+            Still a required FIELD, and still never null: a caption-less photo
+            carries `""`, which says "no words" honestly and keeps `text`
+            non-optional in both clients, so nothing downstream has to handle an
+            absent string.
+
+            Empty `text` with no attachments is `VALIDATION_FAILED`. The
+            conditional is enforced by the service rather than expressed here:
+            OpenAPI can only say it with `anyOf`, which every generator renders
+            as an awkward union and which no reader understands faster than this
+            sentence.
         conversationId:
           oneOf:
             - { $ref: "#/components/schemas/Id" }

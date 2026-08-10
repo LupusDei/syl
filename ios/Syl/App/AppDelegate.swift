@@ -23,6 +23,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     /// anything else is.
     private lazy var backend = SylBackend(tokens: tokens)
     private(set) lazy var notifications = NotificationService(backend: backend)
+
+    /// What killed the app last time, in its own words.
+    ///
+    /// Wired at launch and not lazily on some screen: MetricKit delivers the diagnostics
+    /// for a run that DIED on the following launch, so a subscriber registered later has
+    /// already missed the delivery it exists for.
+    private(set) lazy var diagnostics = CrashDiagnostics()
     private lazy var registrar = PushRegistrationService(backend: backend)
 
     /// Whether this device holds a credential at all.
@@ -100,6 +107,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         _ application: UIApplication,
         didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // First, before anything that could itself fail. A crash during startup is
+        // exactly the one nobody can otherwise see.
+        diagnostics.start()
+
         UNUserNotificationCenter.current().delegate = notifications
         notifications.registerCategories()
         notifications.refreshAuthorization()

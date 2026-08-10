@@ -60,6 +60,19 @@ struct SylHero: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
+    /// Whether this view is actually on screen.
+    ///
+    /// **Scene phase is not enough, and assuming it was is a real defect the Commander
+    /// hit.** `scenePhase == .active` means *the app is foregrounded*, which stays true
+    /// the entire time he is reading chat or changing a setting. So the eight scene
+    /// clips went on decoding forever behind another tab: a hardware video pipeline, a
+    /// two-item-deep `AVQueuePlayer` and a `CADisplayLink`'s worth of compositing, all
+    /// producing frames nobody can see, for as long as the app is open.
+    ///
+    /// A video that plays where it cannot be watched is pure cost — battery, thermals,
+    /// and the memory a jetsam kill is measured against.
+    @State private var isOnScreen = false
+
     /// Width ÷ height of the shipped art.
     ///
     /// Hard-coded, and it has to be. The edge masks below only work if they are measured
@@ -126,7 +139,9 @@ struct SylHero: View {
             // must not change the composition by a pixel.
             Group {
                 if !prefersStill, SceneCatalogue.shouldPlay(reduceMotion: reduceMotion) {
-                    SceneVideo(isPlaying: scenePhase == .active)
+                    SceneVideo(isPlaying: isOnScreen && scenePhase == .active)
+                        .onAppear { isOnScreen = true }
+                        .onDisappear { isOnScreen = false }
                 } else {
                     Image("SylHero")
                         .resizable()

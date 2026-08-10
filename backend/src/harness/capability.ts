@@ -96,10 +96,32 @@ export function describeCapability(toolNames: readonly string[]): string {
  *   returns `undefined` and adds no section. A turn that has not decided its
  *   surface has nothing honest to say about it.
  *
+ * ## `--tools ""` does not mean she has no hands
+ *
+ * It empties the **built-ins only**. Measured 2026-08-10: with the flag, zero
+ * built-in tools and fifty-nine MCP tools, the server still connected. So from
+ * `syl-009` onward a turn can have `tools: ""` and a full tool surface at the
+ * same time, and a capability section derived from `tools` alone would tell the
+ * commander lane it cannot act while it is holding `remind_me`.
+ *
+ * That is {@link NO_HANDS_YET} becoming the lie it was written to prevent, so
+ * the MCP verbs are a second argument rather than a second module: one call,
+ * one answer, and nothing that can be computed without both halves.
+ *
  * @param tools the value being handed to the turn — read from the same object
  *   the CLI is invoked with, so the description cannot drift from the surface.
+ * @param mcpTools the MCP verbs attached to this turn, named as the CLI will
+ *   present them (`mcp__syl__remind_me`). Pass what the lane was actually
+ *   given; a list maintained beside the wiring is a list that disagrees with it.
  */
-export function capabilityFromToolsOption(tools: string | undefined): string | undefined {
+export function capabilityFromToolsOption(
+  tools: string | undefined,
+  mcpTools: readonly string[] = [],
+): string | undefined {
+  // Still `undefined` even when MCP verbs are present, and deliberately:
+  // describing only the MCP half of an undecided surface is the same lie by
+  // omission in a smaller font. A turn that has not decided its built-ins has
+  // nothing honest to say about what it can do.
   if (tools === undefined) return undefined;
 
   const names = tools
@@ -107,5 +129,5 @@ export function capabilityFromToolsOption(tools: string | undefined): string | u
     .map((name) => name.trim())
     .filter((name) => name !== "");
 
-  return describeCapability(names);
+  return describeCapability([...names, ...mcpTools]);
 }

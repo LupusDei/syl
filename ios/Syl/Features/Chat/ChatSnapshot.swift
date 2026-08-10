@@ -41,6 +41,24 @@ struct ChatSnapshot: Equatable, Sendable {
     func blocks(for message: Message) -> [MarkdownBlock] {
         blocks[message.id] ?? [.paragraph(message.text)]
     }
+
+    /// The same parsed blocks, sliced per turn and in message order.
+    ///
+    /// **This exists because handing every row the whole dictionary is quadratic.**
+    /// SwiftUI decides whether to re-render a row by comparing the values stored in it,
+    /// so a `ChatTurn` holding `[SylID: [MarkdownBlock]]` makes every update deep-compare
+    /// the entire transcript's markdown — once per row. At 200 messages that is 200
+    /// comparisons of 200 entries of nested enums, on the main thread, on every state
+    /// change including each keystroke.
+    ///
+    /// It presents as the app freezing and then being killed, because a main thread that
+    /// stops answering long enough is a watchdog termination, not a slow screen. Sliced
+    /// once here, a row compares only its own handful of blocks.
+    var blocksByGroup: [SylID: [[MarkdownBlock]]] = [:]
+
+    func blocks(forGroup id: SylID) -> [[MarkdownBlock]] {
+        blocksByGroup[id] ?? []
+    }
 }
 
 /// Parsed markdown, kept between loads.
@@ -117,14 +135,26 @@ struct ChatSnapshotLoader: Sendable {
 
         let pendingIds = Set(try store.pendingMessages().map(\.id))
         let groups = MessageGrouping.group(messages, pendingIds: pendingIds)
+        let parsed = markdown.blocks(for: messages)
+
+        // Sliced here, off the main actor, so a row never holds the whole transcript's
+        // markdown just to render its own two paragraphs.
+        var byGroup: [SylID: [[MarkdownBlock]]] = [:]
+        byGroup.reserveCapacity(groups.count)
+        for group in groups {
+            byGroup[group.id] = group.messages.map {
+                parsed[$0.id] ?? [.paragraph($0.text)]
+            }
+        }
 
         return ChatSnapshot(
             groups: groups,
             rows: TranscriptRhythm.rows(for: groups),
             pendingCount: messages.filter { pendingIds.contains($0.id) }.count,
             highestSeq: messages.map(\.seq).max() ?? 0,
-            blocks: markdown.blocks(for: messages),
-            mayHaveEarlier: mayHaveEarlier
+            blocks: parsed,
+            mayHaveEarlier: mayHaveEarlier,
+            blocksByGroup: byGroup
         )
     }
 }

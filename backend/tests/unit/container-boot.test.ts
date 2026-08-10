@@ -8,6 +8,7 @@ import { LANES } from "../../src/harness/agent.js";
 import type { TurnOptions, TurnRunner } from "../../src/harness/session.js";
 import { bootstrap, sylHome } from "../../src/index.js";
 import { ContainerViolationError, describeContainer } from "../../src/ops/container.js";
+import { toolConfigPath } from "../../src/tools/config.js";
 import { silentRunner, testConfig } from "../helpers/service.js";
 
 const dirs: string[] = [];
@@ -43,18 +44,26 @@ afterEach(() => {
  * inherit a decision nobody made. That is exactly how the heartbeat and the
  * agenda ended up waking her in the source repository.
  *
- * Every lane is `undefined` today — no MCP at all. It will not stay that way.
- * `syl-009` gives her hands as a **narrow, named** MCP surface (`remind_me`,
- * not `Bash`): she loses the engineer's built-ins and gains an assistant's
- * verbs. When that lands, the lane that gets it changes its entry here, in one
- * visible line, and every other lane still fails if a surface appears.
+ * Every lane was `undefined` and one of them no longer is. `syl-009.3.3` gives
+ * her hands as a **narrow, named** MCP surface (`remind_me`, not `Bash`): she
+ * loses the engineer's built-ins and gains an assistant's verbs. The lane that
+ * gets it changed its entry here, in one visible line, and every other lane
+ * still fails if a surface appears.
  *
- * The config path itself is checked by `assertContainer`: absolute and under
- * her home. A path in the source tree reattaches her to the workshop through
- * the one door left open.
+ * A function of her home rather than a literal path, because the whole claim is
+ * that the declaration lives **under her home** — a constant would have to be
+ * either a path in the source tree, which is the thing this is defending
+ * against, or a value copied from the implementation, which asserts that the
+ * implementation equals itself. The config path is also checked by
+ * `assertContainer` at boot; this is the same rule at the lane.
  */
-const INTENDED_MCP: Readonly<Record<(typeof LANES)[keyof typeof LANES], string | undefined>> = {
-  commander: undefined,
+const INTENDED_MCP: Readonly<
+  Record<(typeof LANES)[keyof typeof LANES], ((home: string) => string) | undefined>
+> = {
+  // HER HANDS. The Commander's own conversation, and no other lane: the dream
+  // must not be able to write a reminder while judging what matters, and the
+  // heartbeat and agenda read rather than act.
+  commander: toolConfigPath,
   heartbeat: undefined,
   agenda: undefined,
   consolidation: undefined,
@@ -125,7 +134,7 @@ describe("bootstrap — the container", () => {
       // Stated per lane so this test does not have to be loosened when `syl-009`
       // hands her a narrow named surface — loosening it is how it would end up
       // in a shape that also passes with `Bash` attached.
-      const { databasePath } = home();
+      const { dir, databasePath } = home();
       const { runner, seen } = recordingRunner();
       const built = bootstrap(testConfig({ databasePath }), { runner });
       closers.push(() => built.database.close());
@@ -138,7 +147,7 @@ describe("bootstrap — the container", () => {
       // tooling — because it was simply there, and the reply never reached the
       // Commander's phone.
       expect(seen[0]?.strictMcpConfig).toBe(true);
-      expect(seen[0]?.mcpConfig).toBe(INTENDED_MCP[lane]);
+      expect(seen[0]?.mcpConfig).toBe(INTENDED_MCP[lane]?.(dir));
     });
 
     it("should load none of this machine's settings, hooks or plugins", async () => {
@@ -208,23 +217,84 @@ describe("bootstrap — the container", () => {
 });
 
 describe("describeContainer", () => {
+  const HOME = "/Users/Reason/.syl";
+  /** What `toolConfigPath` resolves to, as a value this file states for itself. */
+  const HANDS = toolConfigPath(HOME);
+
   it("should name the directory her turns run in", () => {
     // The line that did not exist. Where she thinks was inferable from a
     // launchd plist and written down nowhere, so the first person to notice she
     // was living in the repo was the Commander, from her own answer.
-    expect(describeContainer("/Users/Reason/.syl").join("\n")).toContain("/Users/Reason/.syl");
+    expect(describeContainer(HOME, undefined).join("\n")).toContain(HOME);
   });
 
   it("should be exactly one line", () => {
     // Once per boot. A container that announces itself twice is noise, and
     // noise at startup is what nobody reads.
-    expect(describeContainer("/Users/Reason/.syl")).toHaveLength(1);
+    expect(describeContainer(HOME, undefined)).toHaveLength(1);
+    expect(describeContainer(HOME, HANDS)).toHaveLength(1);
   });
 
   it("should warn, and name the launch directory, when there is no home", () => {
-    const [line] = describeContainer(undefined);
+    const [line] = describeContainer(undefined, undefined);
 
     expect(line).toContain("WARNING");
     expect(line).toContain(process.cwd());
+  });
+
+  it("should say something DIFFERENT about her hands when she has been given some", () => {
+    // The assertion that makes the notice a function of the configuration
+    // rather than a second statement of it, and the only shape of test that
+    // could have caught `syl-009.9`.
+    //
+    // The line used to end "no MCP" as a constant. `syl-009.3` handed the
+    // commander lane a declaration and the constant did not move, so on the
+    // morning the config was written the boot printed, in the same second, that
+    // she had no MCP. A test naming today's string would have gone green
+    // through exactly that — which is why this one names no string at all and
+    // asserts only that the two configurations cannot print the same line.
+    expect(describeContainer(HOME, HANDS)[0]).not.toBe(describeContainer(HOME, undefined)[0]);
+  });
+
+  it("should claim no MCP only when no declaration was resolved", () => {
+    // The claim itself, in both directions. "no MCP" is a security property and
+    // it must be printed when, and only when, it is true.
+    expect(describeContainer(HOME, undefined)[0]).toContain("no MCP");
+    expect(describeContainer(HOME, HANDS)[0]).not.toContain("no MCP");
+  });
+
+  it("should name the declaration she was actually given", () => {
+    // The path, because the next question after "she has MCP" is "from where",
+    // and the whole argument in `tools/config.ts` is that the answer is under
+    // her home rather than in a checked-out branch. A notice that says "some
+    // MCP" answers nothing.
+    expect(describeContainer(HOME, HANDS)[0]).toContain(HANDS);
+  });
+
+  it("should say the surface is one lane and not the whole service", () => {
+    // "no MCP" and "MCP on one lane of five" are different security postures,
+    // and so are "MCP on one lane" and "MCP". Somebody debugging why she did
+    // something reads this line to decide whether she could have; a notice that
+    // reported the service as tooled would send them looking in the wrong
+    // place just as surely as one that reported it as untooled.
+    const [line] = describeContainer(HOME, HANDS);
+
+    expect(line).toContain(LANES.commander);
+    expect(line).toMatch(/lane/i);
+  });
+
+  it("should be derived from the declaration the commander lane is actually given", async () => {
+    // The loop closed. The tests above prove the notice tracks its argument;
+    // this proves the argument is the same value the turn carries, so there is
+    // no third place for the two to disagree.
+    const { dir, databasePath } = home();
+    const { runner, seen } = recordingRunner();
+    const built = bootstrap(testConfig({ databasePath }), { runner });
+    closers.push(() => built.database.close());
+
+    await built.agent.forLane(LANES.commander).ask("who are you?");
+
+    expect(built.hands).toBe(seen[0]?.mcpConfig);
+    expect(describeContainer(dir, built.hands)[0]).toContain(toolConfigPath(dir));
   });
 });

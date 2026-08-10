@@ -87,7 +87,8 @@ struct RootView: View {
                 baseURL: profiles.selected.baseURL,
                 reachability: network.reachability,
                 registration: appDelegate.registration,
-                adminAccess: appDelegate.adminConsoleAccess
+                adminAccess: appDelegate.adminConsoleAccess,
+                diagnostics: appDelegate.diagnostics
             )
             .tabItem { Label("Settings", systemImage: "gearshape") }
         }
@@ -127,6 +128,7 @@ struct StatusView: View {
     let reachability: NetworkMonitor.Reachability
     let registration: AppDelegate.RegistrationState
     let adminAccess: AdminConsoleAccess
+    let diagnostics: CrashDiagnostics
 
     var body: some View {
         ContentView(
@@ -135,7 +137,8 @@ struct StatusView: View {
             reachability: reachability,
             notificationAuthorization: notifications.authorization,
             registration: registration,
-            adminAccess: adminAccess
+            adminAccess: adminAccess,
+            diagnostics: diagnostics
         )
     }
 }

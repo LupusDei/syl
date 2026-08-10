@@ -1,0 +1,899 @@
+import { loadSchemas, validateOrThrow } from "@syl/shared";
+import { describe, expect, it } from "vitest";
+
+import { SylApiClient, type FetchLike } from "../../src/tools/client.js";
+import { TOOLS } from "../../src/tools/schemas.js";
+import {
+  advertisedTools,
+  advertisedToolNames,
+  createToolServer,
+  HANDLERS,
+  type ToolContext,
+  type ToolEnvelope,
+} from "../../src/tools/server.js";
+
+/**
+ * The MCP server, at the grain of one message in and one reply out.
+ *
+ * `us6-she-can-act` drives the real thing — a spawned process, real stdio, a
+ * real service — and that is the test the epic is judged on. It is also the
+ * wrong instrument for "what happens when the store answers 409", so everything
+ * that is about a *branch* lives here, against a fake `fetch` that stands in
+ * for Syl's own API.
+ *
+ * The fake answers in the contract's envelopes, because the client reads those
+ * and a fake that answered in some convenient shape would be testing itself.
+ */
+
+const HIS_ZONE = "America/Chicago";
+/** 2026-08-10T12:00:00Z, and the service's answer to "what time is it". */
+const NOW = Date.UTC(2026, 7, 10, 12, 0, 0, 0);
+
+interface Call {
+  readonly method: string;
+  readonly path: string;
+  readonly body: Record<string, unknown> | null;
+}
+
+interface FakeApi {
+  readonly calls: Call[];
+  readonly fetch: FetchLike;
+}
+
+/** A response in the contract's success envelope. */
+function ok(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify({ success: true, data }), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** A response in the contract's failure envelope. */
+function failure(status: number, code: string, message: string, retryable = false): Response {
+  return new Response(JSON.stringify({ success: false, error: { code, message, retryable } }), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/**
+ * A stand-in for Syl's own API.
+ *
+ * `routes` is consulted in order; the first prefix that matches answers. `now`
+ * is served from the constant above, so the tool's clock is the service's clock
+ * exactly as it is in production.
+ */
+function fakeApi(routes: Record<string, (call: Call) => Response>): FakeApi {
+  const calls: Call[] = [];
+  return {
+    calls,
+    fetch: async (input, init) => {
+      const path = input.replace("http://127.0.0.1:8888/api/v1", "");
+      const call: Call = {
+        method: init?.method ?? "GET",
+        path,
+        body:
+          typeof init?.body === "string"
+            ? (JSON.parse(init.body) as Record<string, unknown>)
+            : null,
+      };
+      calls.push(call);
+
+      if (path === "/health") {
+        return ok({ status: "ok", version: "0.1.0", startedAt: "", now: new Date(NOW).toISOString(), checks: [], build: null });
+      }
+      for (const [prefix, answer] of Object.entries(routes)) {
+        if (path.startsWith(prefix)) return answer(call);
+      }
+      return failure(404, "NOT_FOUND", `nothing fake answers ${call.method} ${path}`);
+    },
+  };
+}
+
+function contextFor(api: FakeApi, hisMessage = ""): ToolContext {
+  return {
+    client: new SylApiClient({
+      baseUrl: "http://127.0.0.1:8888/api/v1",
+      token: "test-token",
+      fetch: api.fetch,
+    }),
+    tz: HIS_ZONE,
+    hisMessage: () => hisMessage,
+  };
+}
+
+/** Call a verb and read the pinned envelope back out of the MCP result. */
+async function call(
+  context: ToolContext,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ envelope: ToolEnvelope; isError: boolean }> {
+  const reply = await createToolServer(context).handle({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name, arguments: args },
+  });
+  const result = reply?.result as {
+    content: { text: string }[];
+    isError?: boolean;
+  };
+  return {
+    envelope: JSON.parse(result.content[0]?.text ?? "{}") as ToolEnvelope,
+    isError: result.isError === true,
+  };
+}
+
+/** A stored reminder, in the contract's shape. */
+function storedReminder(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: "syl:reminder:0000",
+    kind: "commitment",
+    text: "Take the bread out of the oven.",
+    todoId: null,
+    eventId: null,
+    wallTime: "07:05",
+    tz: HIS_ZONE,
+    rrule: null,
+    scheduledFor: new Date(NOW + 5 * 60_000).toISOString(),
+    nextFireAt: new Date(NOW + 5 * 60_000).toISOString(),
+    urgent: false,
+    late: false,
+    deferredFrom: null,
+    supersedesPrevious: false,
+    deliveryState: "scheduled",
+    createdAt: new Date(NOW).toISOString(),
+    updatedAt: new Date(NOW).toISOString(),
+    completedAt: null,
+    ...over,
+  };
+}
+
+/** The five minutes case, wired end to end through the fake. */
+function remindingApi(): FakeApi {
+  return fakeApi({
+    "/reminders": (made) =>
+      made.method === "POST"
+        ? ok(storedReminder(), 201)
+        : ok(storedReminder({ text: "as the store actually has it" })),
+  });
+}
+
+const FIVE_MINUTES = { said: "in five minutes", kind: "relative", minutes: 5 };
+
+/** The to-do these tests are about, and the goal. Real ids: `syl:<type>:<uuidv7>`. */
+const THE_TODO = "syl:todo:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f";
+const THE_GOAL = "syl:goal:0198f2c1-4a3b-7d21-9f00-0a0b0c0d0e0f";
+
+/** `/todos/syl%3Atodo%3A…`, so the assertions read as paths rather than as escapes. */
+const TODO_PATH = `/todos/${encodeURIComponent(THE_TODO)}`;
+const GOAL_PATH = `/goals/${encodeURIComponent(THE_GOAL)}`;
+
+/**
+ * A stored to-do, in the contract's shape.
+ *
+ * Every field, including the ones this verb never touches. A fixture written
+ * down to the fields a handler happens to read is a fixture that agrees with
+ * the handler by construction, and the drift it would have caught is exactly
+ * the kind that reaches him as a confident sentence about a row that does not
+ * look like that. `the fixtures in this file` below measures it against
+ * `openapi.yaml` rather than against our own types (constitution rule 1).
+ */
+function storedTodo(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: THE_TODO,
+    text: "Buy flour",
+    goalId: null,
+    dueAt: null,
+    pinned: false,
+    status: "open",
+    source: "commander",
+    delegatedJobId: null,
+    createdAt: new Date(NOW).toISOString(),
+    updatedAt: new Date(NOW).toISOString(),
+    completedAt: null,
+    ...over,
+  };
+}
+
+/** A stored goal, in the contract's shape. */
+function storedGoal(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: THE_GOAL,
+    parentId: null,
+    title: "Run a half marathon",
+    why: null,
+    targetDate: null,
+    metricKey: null,
+    targetValue: null,
+    cadenceDays: null,
+    status: "active",
+    statusReason: null,
+    createdAt: new Date(NOW).toISOString(),
+    updatedAt: new Date(NOW).toISOString(),
+    ...over,
+  };
+}
+
+/** A page, in the shape `/todos` and the rest actually answer with. */
+function page(items: readonly unknown[]): unknown {
+  return { items, nextCursor: null, hasMore: false };
+}
+
+/**
+ * A store holding one to-do, which remembers what was done to it.
+ *
+ * Stateful rather than a constant answer, because the two facts these tests
+ * turn on are both about state: a row read after a write must reflect the
+ * write, and completing an already-done to-do must return it **unchanged** —
+ * `TodoService.complete` says so, and it says so because the phone's outbox
+ * retries that call by design and a retry that moved `completedAt` forward
+ * would rewrite when he actually finished it.
+ */
+function todoApi(initial: Record<string, unknown> = storedTodo()): FakeApi {
+  let row = initial;
+  return fakeApi({
+    [`${TODO_PATH}/complete`]: () => {
+      if (row["status"] !== "done") {
+        row = storedTodo({ ...row, status: "done", completedAt: new Date(NOW).toISOString() });
+      }
+      return ok(row);
+    },
+    [TODO_PATH]: () => ok(row),
+    "/todos": (made) => (made.method === "POST" ? ok(row, 201) : ok(page([row]))),
+  });
+}
+
+describe("the tool surface she is offered", () => {
+  it("should advertise every verb that has a handler, with the schema from schemas.ts", async () => {
+    const reply = await createToolServer(contextFor(fakeApi({}))).handle({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/list",
+    });
+    const tools = (reply?.result as { tools: { name: string; inputSchema: unknown }[] }).tools;
+
+    expect(tools.map((tool) => tool.name)).toEqual(Object.keys(HANDLERS));
+    // The schema object itself, not a copy: a hand-written one here would drift
+    // the day somebody rewords a description, and the descriptions ARE the
+    // personality.
+    for (const tool of tools) {
+      expect(tool.inputSchema).toBe(TOOLS.find((known) => known.name === tool.name)?.inputSchema);
+    }
+  });
+
+  it("should not offer a verb it has nowhere to perform", () => {
+    // `remember` is declared in `schemas.ts` and there is no route that writes
+    // a memory — `AGENT_SURFACE` is reminders, to-dos and goals. Offering it
+    // would tell her she can keep what he said about his life and answer 403
+    // every time, which is the defect this epic exists to fix, one layer along.
+    expect(TOOLS.map((tool) => tool.name)).toContain("remember");
+    expect(advertisedToolNames()).not.toContain("remember");
+  });
+
+  it("should refuse EVERY write that arrives without its reason, whatever the verb", async () => {
+    // `tool-surface-budget` holds the same rule one layer up — that every verb
+    // which changes something DECLARES `because` — and a declaration nothing
+    // enforces is a field the model omits at 3am. This is the enforcing half,
+    // and it is guarded by shape for the same reason: a seventh verb added next
+    // month is covered without anyone remembering this file exists.
+    //
+    // A required field this table has no answer for fails loudly rather than
+    // being skipped, so a new verb cannot slip through the guard by arriving
+    // with a field nobody taught it.
+    const plausible: Readonly<Record<string, unknown>> = {
+      text: "Something he asked for.",
+      when: FIVE_MINUTES,
+      id: THE_TODO,
+      fact: "His wife's birthday is in March.",
+    };
+
+    for (const tool of advertisedTools()) {
+      const required = (tool.inputSchema as { required?: readonly string[] }).required ?? [];
+      if (!required.includes("because")) continue;
+
+      const args: Record<string, unknown> = {};
+      for (const field of required) {
+        if (field === "because") continue;
+        const value = plausible[field];
+        expect(value, `${tool.name} requires ${field} and this guard has no value for it`).toBeDefined();
+        args[field] = value;
+      }
+
+      const api = todoApi();
+      const { envelope, isError } = await call(contextFor(api), tool.name, args);
+
+      expect(envelope.ok, `${tool.name} accepted a write with no reason`).toBe(false);
+      expect(isError).toBe(true);
+      if (!envelope.ok) expect(envelope.reason).toContain("because");
+      // And nothing was written on the way to refusing. A verb that refuses
+      // AFTER it has acted has not refused.
+      expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+    }
+  });
+
+  it("should refuse a verb it does not have, in words rather than in a protocol error", async () => {
+    const { envelope, isError } = await call(contextFor(fakeApi({})), "delete_everything", {});
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    // What she CAN do, because a refusal she can act on beats a refusal she can
+    // only repeat.
+    if (!envelope.ok) expect(envelope.reason).toContain("remind_me");
+  });
+});
+
+describe("the MCP handshake", () => {
+  it("should answer initialize with a protocol version and its tool capability", async () => {
+    const reply = await createToolServer(contextFor(fakeApi({}))).handle({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {},
+    });
+
+    expect(reply?.result).toMatchObject({ capabilities: { tools: {} } });
+    expect((reply?.result as { protocolVersion: string }).protocolVersion).toMatch(/^\d{4}-\d{2}-\d{2}$/u);
+  });
+
+  it("should not answer a notification, which has no id to answer", async () => {
+    const reply = await createToolServer(contextFor(fakeApi({}))).handle({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+    });
+
+    expect(reply).toBeNull();
+  });
+
+  it("should refuse a method it does not implement, and say which", async () => {
+    const reply = await createToolServer(contextFor(fakeApi({}))).handle({
+      jsonrpc: "2.0",
+      id: 7,
+      method: "resources/list",
+    });
+
+    expect(reply?.error?.message).toContain("resources/list");
+    expect(reply?.id).toBe(7);
+  });
+});
+
+describe("remind_me", () => {
+  it("should turn 'in five minutes' into a stored reminder five minutes from the SERVICE's now", async () => {
+    const api = remindingApi();
+
+    const { envelope } = await call(contextFor(api), "remind_me", {
+      text: "Take the bread out of the oven.",
+      when: FIVE_MINUTES,
+      because: "He asked for it.",
+    });
+
+    const posted = api.calls.find((made) => made.method === "POST");
+    // Not this process's clock. A subprocess reading `Date.now()` would put the
+    // reminder five minutes from whenever the test happened to run, and the
+    // acceptance criterion of this epic is a claim about exactly this sum.
+    expect(posted?.body?.["wallTime"]).toBe(
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone: HIS_ZONE,
+        hourCycle: "h23",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(new Date(NOW + 5 * 60_000)),
+    );
+    expect(posted?.body?.["tz"]).toBe(HIS_ZONE);
+    // A place, never an offset — non-negotiable constraint 5, at the exact
+    // point a human phrase becomes stored time.
+    expect(String(posted?.body?.["tz"])).toContain("/");
+
+    expect(envelope).toMatchObject({ ok: true, action: "remind_me" });
+    if (envelope.ok) expect(envelope.at).toBe(new Date(NOW + 5 * 60_000).toISOString());
+  });
+
+  it("should report the row it READ BACK, not the one the write echoed", async () => {
+    // `syl-009.3.4`. The two differ here on purpose: if the envelope carried
+    // the write's own echo, this would pass while reporting her intention.
+    const api = remindingApi();
+
+    const { envelope } = await call(contextFor(api), "remind_me", {
+      text: "Take the bread out of the oven.",
+      when: FIVE_MINUTES,
+      because: "He asked for it.",
+    });
+
+    expect(api.calls.map((made) => `${made.method} ${made.path}`)).toEqual([
+      "GET /health",
+      "POST /reminders",
+      "GET /reminders/syl%3Areminder%3A0000",
+    ]);
+    if (envelope.ok) {
+      expect((envelope.subject as { text: string }).text).toBe("as the store actually has it");
+    }
+  });
+
+  it("should ask rather than guess when the time cannot be resolved, and write nothing", async () => {
+    const api = remindingApi();
+
+    const { envelope, isError } = await call(contextFor(api), "remind_me", {
+      text: "Call the plumber.",
+      when: { said: "later", kind: "relative", minutes: 30 },
+      because: "He asked for it.",
+    });
+
+    expect(isError).toBe(true);
+    // The question `time.ts` wrote, handed on verbatim — she says it to him.
+    if (!envelope.ok) expect(envelope.reason).toContain("when exactly");
+    expect(api.calls.filter((made) => made.method === "POST")).toEqual([]);
+  });
+
+  it("should refuse without a reason attached, because every write carries one", async () => {
+    const api = remindingApi();
+
+    const { envelope } = await call(contextFor(api), "remind_me", {
+      text: "Call the plumber.",
+      when: FIVE_MINUTES,
+    });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("because");
+    expect(api.calls).toEqual([]);
+  });
+
+  it("should say what went wrong when the store refuses, in the store's own words", async () => {
+    // `syl-009.3.5`. Silence after "I've set that for you" is the worst
+    // outcome available, so the sentence has to survive all the way out.
+    const api = fakeApi({
+      "/reminders": () =>
+        failure(422, "VALIDATION_FAILED", "That is not a wall time I can store.", false),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "remind_me", {
+      text: "Call the plumber.",
+      when: FIVE_MINUTES,
+      because: "He asked for it.",
+    });
+
+    expect(isError).toBe(true);
+    if (!envelope.ok) {
+      expect(envelope.reason).toBe("That is not a wall time I can store.");
+      expect(envelope.retryable).toBe(false);
+    }
+  });
+
+  it("should admit uncertainty when the write landed and the read back did not", async () => {
+    // The one case where "it failed" would be a lie in the dangerous direction.
+    const api = fakeApi({
+      "/reminders": (made) =>
+        made.method === "POST"
+          ? ok(storedReminder(), 201)
+          : failure(500, "INTERNAL", "the store is unwell", true),
+    });
+
+    const { envelope } = await call(contextFor(api), "remind_me", {
+      text: "Call the plumber.",
+      when: FIVE_MINUTES,
+      because: "He asked for it.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toMatch(/may well have gone through/u);
+  });
+});
+
+describe("urgency, at the one place it is decided", () => {
+  /** The urgent flag the store was actually asked for. */
+  async function urgencyOf(
+    quoted: string | undefined,
+    hisMessage: string,
+  ): Promise<unknown> {
+    const api = remindingApi();
+    await call(contextFor(api, hisMessage), "remind_me", {
+      text: "Check the deploy.",
+      when: FIVE_MINUTES,
+      because: "He asked for it.",
+      ...(quoted === undefined ? {} : { urgentBecauseHeSaid: quoted }),
+    });
+    return api.calls.find((made) => made.method === "POST")?.body?.["urgent"];
+  }
+
+  it("should let his own words through", async () => {
+    expect(await urgencyOf("wake me for this", "wake me for this one, whatever the hour")).toBe(
+      true,
+    );
+  });
+
+  it("should NOT be satisfied by the field merely being present", async () => {
+    // `syl-p8k`, stated as the assertion. `urgent: input.urgentBecauseHeSaid
+    // !== undefined` is the one-liner that suggests itself here and it restores
+    // the defect in full — the model satisfies a presence check by emitting any
+    // string at all, and the cost is his house woken at three.
+    expect(await urgencyOf("he would want this tonight", "remind me about Dave's birthday")).toBe(
+      false,
+    );
+    expect(await urgencyOf("true", "remind me about Dave's birthday")).toBe(false);
+    expect(await urgencyOf("", "remind me about Dave's birthday")).toBe(false);
+  });
+
+  it("should default to not urgent when she claims nothing", async () => {
+    expect(await urgencyOf(undefined, "remind me about Dave's birthday")).toBe(false);
+  });
+
+  it("should grant nothing when his message cannot be established at all", async () => {
+    // The unverifiable case — no turn file, or one that could not be read. It
+    // must not read as permission.
+    expect(await urgencyOf("wake me for this", "")).toBe(false);
+  });
+});
+
+describe("the fixtures in this file", () => {
+  it("should be the shapes the contract publishes, not the shapes our types allow", async () => {
+    // Constitution rule 1, applied to the one layer where it is cheap to skip:
+    // these rows never come from the service in a unit test, so nothing but
+    // this measures them against `openapi.yaml`. A handler that reads a field
+    // the contract does not carry passes every test in this file otherwise.
+    const schemas = loadSchemas();
+
+    validateOrThrow(schemas, "Todo", storedTodo(), "storedTodo()");
+    validateOrThrow(schemas, "Todo", storedTodo({ status: "done", completedAt: new Date(NOW).toISOString() }), "a finished storedTodo()");
+    validateOrThrow(schemas, "Goal", storedGoal(), "storedGoal()");
+    validateOrThrow(schemas, "TodoPage", page([storedTodo()]), "a page of to-dos");
+  });
+});
+
+describe("add_todo", () => {
+  it("should put it on his list and report the row the STORE has", async () => {
+    // `syl-009.3.4`. The echo and the stored row differ on purpose: if the
+    // envelope carried what the write said it did, this passes while reporting
+    // her intention rather than his list.
+    const api = fakeApi({
+      [TODO_PATH]: () => ok(storedTodo({ text: "as the store actually has it" })),
+      "/todos": () => ok(storedTodo(), 201),
+    });
+
+    const { envelope } = await call(contextFor(api), "add_todo", {
+      text: "Buy flour",
+      because: "He said he was out.",
+    });
+
+    expect(api.calls.map((made) => `${made.method} ${made.path}`)).toEqual([
+      "POST /todos",
+      `GET ${TODO_PATH}`,
+    ]);
+    expect(envelope).toMatchObject({ ok: true, action: "add_todo" });
+    if (envelope.ok) {
+      expect((envelope.subject as { text: string }).text).toBe("as the store actually has it");
+      // The moment the row was last written, so she can say what she did
+      // without inventing a time for it.
+      expect(envelope.at).toBe(new Date(NOW).toISOString());
+    }
+  });
+
+  it("should refuse with nothing to add, and write nothing", async () => {
+    const api = todoApi();
+
+    const { envelope, isError } = await call(contextFor(api), "add_todo", {
+      because: "He said he was out.",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("text");
+    expect(api.calls).toEqual([]);
+  });
+
+  it("should say what went wrong when the store refuses, in the store's own words", async () => {
+    const api = fakeApi({
+      "/todos": () => failure(422, "VALIDATION_FAILED", "A to-do must say something.", false),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "add_todo", {
+      text: "Buy flour",
+      because: "He said he was out.",
+    });
+
+    expect(isError).toBe(true);
+    if (!envelope.ok) {
+      expect(envelope.reason).toBe("A to-do must say something.");
+      expect(envelope.retryable).toBe(false);
+    }
+  });
+
+  it("should admit uncertainty when the write landed and the read back did not", async () => {
+    // "It failed" would be a lie in the dangerous direction here: the to-do is
+    // on his list and she would be telling him it is not.
+    const api = fakeApi({
+      [TODO_PATH]: () => failure(500, "INTERNAL", "the store is unwell", true),
+      "/todos": () => ok(storedTodo(), 201),
+    });
+
+    const { envelope } = await call(contextFor(api), "add_todo", {
+      text: "Buy flour",
+      because: "He said he was out.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toMatch(/may well have gone through/u);
+  });
+});
+
+/**
+ * The one verb that takes something away.
+ *
+ * The dangerous case is not a bad id — a bad id is loud. It is her *inferring*
+ * that he finished something. Nothing in a schema can tell a machine whether
+ * that inference is right, so the tests here are about the two things that can
+ * be arranged instead: she must never write on a guess she has not checked, and
+ * whatever she says afterwards must NAME the item, because him hearing the
+ * wrong title is the only place a wrong guess can still be caught.
+ */
+describe("finish_todo — the verb that removes", () => {
+  it("should mark it done and report the stored row, with the moment it was finished", async () => {
+    const api = todoApi();
+
+    const { envelope } = await call(contextFor(api), "finish_todo", {
+      id: THE_TODO,
+      because: "He said he had done it.",
+    });
+
+    expect(envelope).toMatchObject({ ok: true, action: "finish_todo" });
+    if (envelope.ok) {
+      const row = envelope.subject as { text: string; status: string };
+      // Named, in his words. This is the guard: she reports what LEFT his list,
+      // so a wrong inference is audible in the same breath she acts on it.
+      expect(row.text).toBe("Buy flour");
+      expect(row.status).toBe("done");
+      expect(envelope.at).toBe(new Date(NOW).toISOString());
+    }
+  });
+
+  it("should look it up before it writes, so a wrong id takes nothing off his list", async () => {
+    // A stale or half-remembered id is the shape a wrong guess usually arrives
+    // in. Reading first makes it a question rather than a write.
+    const api = fakeApi({
+      "/todos": () => failure(404, "NOT_FOUND", "There is no such to-do.", false),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "finish_todo", {
+      id: THE_TODO,
+      because: "He said he had done it.",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toContain("There is no such to-do.");
+      // And it must say so: "I could not" and "nothing changed" are different
+      // sentences, and only one of them lets him stop worrying about the list.
+      expect(envelope.reason).toMatch(/nothing has come off/iu);
+    }
+    expect(api.calls.map((made) => made.method)).toEqual(["GET"]);
+  });
+
+  it("should not claim to have finished something that was already finished", async () => {
+    // The second shape of a wrong guess: an id from a list she read two turns
+    // ago, for an item that has since been ticked off. The store would answer
+    // this happily — `complete` on a done row returns it unchanged — and she
+    // would report having just done it. That is her claiming an act she did not
+    // perform, about an item she may have picked by mistake.
+    const finished = new Date(NOW - 3_600_000).toISOString();
+    const api = todoApi(storedTodo({ status: "done", completedAt: finished, updatedAt: finished }));
+
+    const { envelope, isError } = await call(contextFor(api), "finish_todo", {
+      id: THE_TODO,
+      because: "He said he had done it.",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toContain("Buy flour");
+      expect(envelope.reason).toContain(finished);
+      expect(envelope.retryable).toBe(false);
+    }
+    // Nothing written. Not for the store's sake — it is idempotent — but so
+    // that `turn.tool` and the log do not record an act that did not happen.
+    expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+  });
+
+  it("should refuse without an id, and point at where an id comes from", async () => {
+    const api = todoApi();
+
+    const { envelope } = await call(contextFor(api), "finish_todo", {
+      because: "He said it is done.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("which one");
+    expect(api.calls).toEqual([]);
+  });
+
+  it("should admit uncertainty when the completion landed and the read back did not", async () => {
+    // Worst of both: telling him it failed would leave him doing a thing he has
+    // already done, and telling him it worked would be a guess.
+    let reads = 0;
+    const api = fakeApi({
+      [`${TODO_PATH}/complete`]: () => ok(storedTodo({ status: "done", completedAt: new Date(NOW).toISOString() })),
+      [TODO_PATH]: () => {
+        reads += 1;
+        return reads === 1 ? ok(storedTodo()) : failure(500, "INTERNAL", "the store is unwell", true);
+      },
+    });
+
+    const { envelope } = await call(contextFor(api), "finish_todo", {
+      id: THE_TODO,
+      because: "He said he had done it.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toMatch(/may well have gone through/u);
+  });
+});
+
+describe("set_goal", () => {
+  it("should record it and report the row the store has", async () => {
+    const api = fakeApi({
+      [GOAL_PATH]: () => ok(storedGoal({ why: "He has mentioned it three times this month." })),
+      "/goals": () => ok(storedGoal(), 201),
+    });
+
+    const { envelope } = await call(contextFor(api), "set_goal", {
+      text: "Run a half marathon",
+      because: "He has mentioned it three times this month.",
+    });
+
+    expect(api.calls.map((made) => `${made.method} ${made.path}`)).toEqual([
+      "POST /goals",
+      `GET ${GOAL_PATH}`,
+    ]);
+    expect(envelope).toMatchObject({ ok: true, action: "set_goal" });
+    if (envelope.ok) {
+      expect((envelope.subject as { why: string }).why).toBe(
+        "He has mentioned it three times this month.",
+      );
+    }
+  });
+
+  it("should put the reason for a goal where the goal keeps one", async () => {
+    // `because` has a home on this row and nowhere else in the contract, so it
+    // is stored rather than only logged.
+    const api = fakeApi({
+      [GOAL_PATH]: () => ok(storedGoal()),
+      "/goals": () => ok(storedGoal(), 201),
+    });
+
+    await call(contextFor(api), "set_goal", {
+      text: "Run a half marathon",
+      because: "He has mentioned it three times this month.",
+    });
+
+    expect(api.calls[0]?.body).toEqual({
+      title: "Run a half marathon",
+      why: "He has mentioned it three times this month.",
+    });
+  });
+
+  it("should refuse with no goal to record, and write nothing", async () => {
+    const api = fakeApi({ "/goals": () => ok(storedGoal(), 201) });
+
+    const { envelope, isError } = await call(contextFor(api), "set_goal", {
+      because: "He has mentioned it three times this month.",
+    });
+
+    expect(isError).toBe(true);
+    if (!envelope.ok) expect(envelope.reason).toContain("goal");
+    expect(api.calls).toEqual([]);
+  });
+
+  it("should say what went wrong when the store refuses, in the store's own words", async () => {
+    const api = fakeApi({
+      "/goals": () => failure(422, "VALIDATION_FAILED", "A goal must have a title.", false),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "set_goal", {
+      text: "Run a half marathon",
+      because: "He has mentioned it three times this month.",
+    });
+
+    expect(isError).toBe(true);
+    if (!envelope.ok) expect(envelope.reason).toBe("A goal must have a title.");
+  });
+});
+
+describe("whats_outstanding", () => {
+  it("should read what is outstanding across all three lists", async () => {
+    const api = fakeApi({
+      "/reminders": () => ok(page([storedReminder()])),
+      "/todos": () => ok(page([storedTodo()])),
+      "/goals": () => ok(page([storedGoal()])),
+    });
+
+    const { envelope } = await call(contextFor(api), "whats_outstanding", {});
+
+    expect(envelope.ok).toBe(true);
+    if (envelope.ok) {
+      expect(Object.keys(envelope.subject as object).sort()).toEqual([
+        "goals",
+        "reminders",
+        "todos",
+      ]);
+    }
+    // "Outstanding" means still to come. A reminder delivered last Tuesday is
+    // not on his plate, so the reads are filtered rather than raw.
+    expect(api.calls.map((made) => made.path)).toEqual([
+      "/reminders?state=scheduled&limit=50",
+      "/todos?status=open&limit=50",
+      "/goals?status=active&limit=50",
+    ]);
+  });
+
+  it("should read only the list she asked for", async () => {
+    const api = fakeApi({ "/todos": () => ok(page([])) });
+
+    await call(contextFor(api), "whats_outstanding", { of: "todos" });
+
+    expect(api.calls.map((made) => made.path)).toEqual(["/todos?status=open&limit=50"]);
+  });
+
+  it("should show him everything rather than nothing when the filter is not one she has", async () => {
+    // The failure this prevents is silent and is the worst answer available: a
+    // filter she misspelled matches no list, every list goes unread, and the
+    // envelope comes back `ok` and empty — which she reports as "you have
+    // nothing outstanding". Widening cannot mislead him; an empty answer can.
+    const api = fakeApi({
+      "/reminders": () => ok(page([])),
+      "/todos": () => ok(page([storedTodo()])),
+      "/goals": () => ok(page([])),
+    });
+
+    const { envelope } = await call(contextFor(api), "whats_outstanding", { of: "tasks" });
+
+    expect(envelope.ok).toBe(true);
+    if (envelope.ok) {
+      expect(Object.keys(envelope.subject as object).sort()).toEqual([
+        "goals",
+        "reminders",
+        "todos",
+      ]);
+    }
+  });
+
+  it("should refuse rather than half-answer when one of the lists cannot be read", async () => {
+    // A partial list is indistinguishable from a short one. "You have nothing
+    // else on" is a sentence she must not say from a page that never arrived.
+    const api = fakeApi({
+      "/reminders": () => ok(page([])),
+      "/todos": () => ok(page([storedTodo()])),
+      "/goals": () => failure(503, "UNAVAILABLE", "The store is not answering.", true),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "whats_outstanding", {});
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toBe("The store is not answering.");
+      expect(envelope.retryable).toBe(true);
+    }
+  });
+});
+
+describe("when something goes wrong that nothing anticipated", () => {
+  it("should still come back as a sentence rather than as a dead subprocess", async () => {
+    // The last net. A handler that throws must not cross MCP as a stack trace
+    // and reach him as silence.
+    const context: ToolContext = {
+      ...contextFor(fakeApi({})),
+      hisMessage: () => {
+        throw new Error("the turn file exploded");
+      },
+    };
+
+    const { envelope, isError } = await call(context, "remind_me", {
+      text: "Check the deploy.",
+      when: FIVE_MINUTES,
+      because: "He asked for it.",
+      urgentBecauseHeSaid: "tonight",
+    });
+
+    expect(isError).toBe(true);
+    if (!envelope.ok) expect(envelope.reason).toContain("the turn file exploded");
+  });
+});
