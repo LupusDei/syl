@@ -8,6 +8,7 @@ import { DeliveryView } from "../features/delivery/DeliveryView";
 import { DevicesView } from "../features/devices/DevicesView";
 import { JobsView } from "../features/jobs/JobsView";
 import { LogsView } from "../features/logs/LogsView";
+import { MemoryView } from "../features/memory/MemoryView";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import type { StorageLike } from "../storage";
 import { AppLayout } from "./AppLayout";
@@ -24,6 +25,7 @@ import { NotFoundView, OverviewView, PlaceholderView } from "./views";
 const VIEWS: Readonly<Record<string, ReactElement>> = {
   "/jobs": <JobsView />,
   "/logs": <LogsView />,
+  "/memory": <MemoryView />,
   "/delivery": <DeliveryView />,
   "/conversations": <ConversationsView />,
   "/devices": <DevicesView />,

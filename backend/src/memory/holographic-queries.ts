@@ -190,6 +190,30 @@ export function related(
 }
 
 /**
+ * ⚠️ **BROKEN — DO NOT USE AS A CANDIDATE PROPOSER. `syl-b97`.**
+ *
+ * The description below is what this kernel was *designed* to do. Measured, it
+ * does not discriminate at all: every fact scores 0.489–0.510 — the noise floor
+ * — and the ranking is sometimes INVERTED, with a fact lacking the queried
+ * entity outscoring one that has it.
+ *
+ * **This is an inherited defect, not a porting error.** Verified digit-for-digit
+ * against the upstream Python on the same corpus. Root cause: `bundle()` is a
+ * circular mean, which discards the magnitude classic HRR unbinding needs to
+ * recover a composed vector. `related()` survives precisely because it never
+ * recovers one — it unbinds a bare atom against a single role atom.
+ *
+ * Wiring this into a ranker feeds it a uniform score for every fact and calls
+ * it evidence. That is the astrology failure the two-tier dream exists to
+ * prevent, arriving through the cheap half that was meant to be the safeguard:
+ * a filter that passes everything is worse than no filter, because it launders
+ * noise as candidates and the expensive tier cannot tell the difference.
+ *
+ * Three acceptance tests describe the correct behaviour and stay RED against
+ * `syl-b97`. Use {@link related} and {@link contradict}, which are measured
+ * working (0.30 separation, and 1.000 vs 0.403 respectively).
+ */
+/**
  * Facts ABOUT an entity, as opposed to `related`'s facts merely connected to it.
  *
  * Unbinds the role-bound entity key and asks how much the residue looks like
@@ -218,6 +242,30 @@ export function probe(
   return rankDescending(scored, limit);
 }
 
+/**
+ * ⚠️ **BROKEN — DO NOT USE AS A CANDIDATE PROPOSER. `syl-b97`.**
+ *
+ * The description below is what this kernel was *designed* to do. Measured, it
+ * does not discriminate at all: every fact scores 0.489–0.510 — the noise floor
+ * — and the ranking is sometimes INVERTED, with a fact lacking the queried
+ * entity outscoring one that has it.
+ *
+ * **This is an inherited defect, not a porting error.** Verified digit-for-digit
+ * against the upstream Python on the same corpus. Root cause: `bundle()` is a
+ * circular mean, which discards the magnitude classic HRR unbinding needs to
+ * recover a composed vector. `related()` survives precisely because it never
+ * recovers one — it unbinds a bare atom against a single role atom.
+ *
+ * Wiring this into a ranker feeds it a uniform score for every fact and calls
+ * it evidence. That is the astrology failure the two-tier dream exists to
+ * prevent, arriving through the cheap half that was meant to be the safeguard:
+ * a filter that passes everything is worse than no filter, because it launders
+ * noise as candidates and the expensive tier cannot tell the difference.
+ *
+ * Three acceptance tests describe the correct behaviour and stay RED against
+ * `syl-b97`. Use {@link related} and {@link contradict}, which are measured
+ * working (0.30 separation, and 1.000 vs 0.403 respectively).
+ */
 /**
  * Conjunctive retrieval: facts where EVERY listed entity plays a structural
  * role. A vector-space JOIN.

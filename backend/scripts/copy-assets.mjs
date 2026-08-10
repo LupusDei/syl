@@ -18,7 +18,7 @@
  *   node scripts/copy-assets.mjs [--src <dir>] [--out <dir>]
  */
 
-import { cpSync, mkdirSync, readdirSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -80,6 +80,54 @@ export function copyAssets({ srcDir, outDir }) {
   return assets;
 }
 
+/** The extension of a path, lowercased, including the dot. `""` if none. */
+function extensionOf(name) {
+  const dot = name.lastIndexOf(".");
+  return dot <= 0 ? "" : name.slice(dot).toLowerCase();
+}
+
+/**
+ * Delete assets in `outDir` that `srcDir` no longer has.
+ *
+ * Copying without pruning leaves a renamed file behind forever, and the stale
+ * copy is what the BUILT service reads while the source tree looks correct.
+ * That is how renaming `0014_memory_retrieval.sql` produced "Two migrations
+ * claim version 14" naming a file that no longer existed: source right, build
+ * wrong, and an error pointing at nothing you can grep for (`syl-oqe`).
+ *
+ * **Only extensions that appear among the source assets are eligible.** `dist`
+ * is mostly tsc's output, which by construction has no counterpart in `src`, so
+ * a naive "delete anything not in the copied list" would empty the build. tsc
+ * emits `.js`, `.map` and `.d.ts` and never a `.sql`, so keying on the asset
+ * extensions makes its output *ineligible* rather than merely unlikely.
+ *
+ * @param {{ srcDir: string, outDir: string, copied: readonly string[] }} options
+ * @returns {string[]} the relative paths removed
+ */
+export function pruneStaleAssets({ outDir, copied }) {
+  const eligible = new Set(copied.map((rel) => extensionOf(rel)).filter((ext) => ext !== ""));
+  if (eligible.size === 0) return [];
+
+  const kept = new Set(copied);
+
+  /** @type {string[]} */
+  let present;
+  try {
+    present = assetsUnder(outDir);
+  } catch {
+    // No build output yet. Nothing to prune, and not an error.
+    return [];
+  }
+
+  const removed = present
+    .filter((rel) => eligible.has(extensionOf(rel)))
+    .filter((rel) => !kept.has(rel));
+
+  for (const rel of removed) rmSync(join(outDir, rel), { force: true });
+
+  return removed;
+}
+
 /**
  * @param {readonly string[]} argv
  * @returns {{ srcDir: string, outDir: string }}
@@ -107,6 +155,7 @@ export function parseArgs(argv) {
 function main() {
   const { srcDir, outDir } = parseArgs(process.argv.slice(2));
   const copied = copyAssets({ srcDir, outDir });
+  const removed = pruneStaleAssets({ srcDir, outDir, copied });
 
   if (copied.length === 0) {
     console.error(
@@ -136,6 +185,15 @@ function main() {
     `[syl] copied ${copied.length} asset${copied.length === 1 ? "" : "s"} into ${relative(workspaceRoot, outDir) || outDir}:`,
   );
   for (const rel of copied) console.log(`        ${rel}`);
+
+  if (removed.length > 0) {
+    // Say it out loud. A file disappearing from the build output is exactly the
+    // kind of thing that should never be silent, even when it is correct.
+    console.log(
+      `[syl] removed ${removed.length} stale asset${removed.length === 1 ? "" : "s"} no longer in ${relative(workspaceRoot, srcDir) || srcDir}:`,
+    );
+    for (const rel of removed) console.log(`        ${rel}`);
+  }
 }
 
 // Run only when executed directly, so importing this module copies nothing.

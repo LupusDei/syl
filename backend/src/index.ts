@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,6 +12,13 @@ import express, {
 
 import type { Job, PushEnvironment } from "@syl/shared";
 
+import {
+  createNightlyDreamHandler,
+  createYieldSignal,
+  describeDream,
+  ensureNightlyDreamJob,
+  type NightDreamer,
+} from "./jobs/dream-job.js";
 import { createDeliveryRuntime, describeRuntime, type DeliveryRuntime } from "./jobs/runtime.js";
 import { loadConfig, type SylConfig } from "./config.js";
 import {
@@ -46,12 +53,20 @@ import { createGoalRouter } from "./routes/goals.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
 import { createJobRouter } from "./routes/jobs.js";
 import { createLogRouter } from "./routes/logs.js";
+import { createMemoryRouter, type MemoryViews } from "./routes/memory.js";
 import { createReminderRouter } from "./routes/reminders.js";
 import { createSyncRouter } from "./routes/sync.js";
 import { createTodoRouter } from "./routes/todos.js";
 import { fileSessionStore, memorySessionStore, SylAgent } from "./harness/agent.js";
 import { runTurn, type TurnOptions, type TurnRunner } from "./harness/session.js";
 import { autoMemoryAt } from "./memory/auto-memory.js";
+import { DreamJudge } from "./memory/dream/judge.js";
+import { DreamLog } from "./memory/dream/log.js";
+import { DreamSweep } from "./memory/dream/sweep.js";
+import { MemoryGraph } from "./memory/graph.js";
+import { WorkingMemory } from "./memory/working.js";
+import { MemoryMetrics } from "./memory/metrics.js";
+import { EdgeWeights } from "./memory/weights.js";
 import { withMemoryIndex } from "./memory/index-guarantee.js";
 import { apnsCredentialsFromEnv } from "./services/apns-service.js";
 import { ApiKeyService } from "./services/api-key-service.js";
@@ -63,6 +78,7 @@ import { DeviceTokenService } from "./services/device-token-service.js";
 import { GoalService } from "./services/goal-service.js";
 import { IdempotencyStore } from "./services/idempotency.js";
 import { JobStore } from "./services/job-store.js";
+import { MemoryRuntime } from "./services/memory-runtime.js";
 import { MessageStore } from "./services/message-store.js";
 import { Outbox } from "./services/outbox.js";
 import { PresenceService } from "./services/presence.js";
@@ -217,6 +233,15 @@ export interface AppDependencies {
   readonly idempotency: IdempotencyStore;
   /** Article intake: submission, and the resumable ladder behind it. */
   readonly intake: ArticleIntake;
+  /**
+   * The memory graph, the weight law, the derived panel and the dream log.
+   *
+   * One field rather than four, because they are one surface: the admin's
+   * memory viewer reads all four and writes through two of them, and splitting
+   * them here would put four names in `createApp`'s destructure for one
+   * feature. See `routes/memory.ts`.
+   */
+  readonly memory: MemoryViews;
   /** Extra health probes. The billing check is always present. */
   readonly probes?: readonly HealthProbe[];
 }
@@ -246,6 +271,17 @@ export interface ServiceDependencies extends AppDependencies {
    * the route only ever puts things into it via `intake.submit`.
    */
   readonly intakeQueue: IntakeQueue;
+  /**
+   * The half of memory that needs `vec0` and a model: the store, the retriever,
+   * the semantic proposer — plus the supersession ledger, which needs neither.
+   *
+   * Not an HTTP concern today. It exists here because `syl-63n` was a whole
+   * epic with no call site: the tables migrated, the triggers fired, and
+   * nothing ever wrote a node. See `services/memory-runtime.ts` for why the
+   * searchable half is built lazily and this one is not simply four more lines
+   * beside `MemoryViews`.
+   */
+  readonly memoryRuntime: MemoryRuntime;
 }
 
 /** Build the Express application. */
@@ -253,7 +289,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // Destructured in full, and reached through the names below rather than
   // through `deps.` — see the note on `AppDependencies`. Removing a use here
   // without removing the field does not compile.
-  const { keys, messages, chat, devices, outbox, reminders, todos, goals, sync, jobs, idempotency, intake, probes } =
+  const { keys, messages, chat, devices, outbox, reminders, todos, goals, sync, jobs, idempotency, intake, memory, probes } =
     deps;
   const app = express();
 
@@ -299,6 +335,19 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   api.use(
     createLogRouter({
       logDirectory: config.logDirectory,
+      authenticate,
+      requireAdmin: requireScope("admin"),
+    }),
+  );
+  // The graph, and the one surface that corrects it. Admin-scoped for the same
+  // reason the log is — this is the record of what a pre-authorised program
+  // inferred, and the feedback endpoint writes into Syl's memory. Both
+  // middlewares named here rather than hidden inside the router, so the
+  // bootstrap shows what is gated and by what.
+  api.use(
+    createMemoryRouter({
+      memory,
+      idempotency,
       authenticate,
       requireAdmin: requireScope("admin"),
     }),
@@ -480,6 +529,28 @@ export function readSoul(root: string = REPO_ROOT): string | undefined {
  * in-memory database is a test, and a test that wrote session files into the
  * repo would leak state between runs.
  */
+/**
+ * The directory Syl takes her turns in.
+ *
+ * Deliberately NOT the source tree. Claude Code reads the working directory it
+ * is given — project instructions, SessionStart hooks, memories — so launching
+ * her turns from the repository handed her an engineering brief and a beads
+ * workflow on top of her own soul, and she reported herself accordingly.
+ *
+ * Derived from the database path so it follows `SYL_DB_PATH` rather than being
+ * a second thing to configure, and created if absent because a cwd that does
+ * not exist fails the spawn rather than falling back.
+ *
+ * In-memory (tests) keeps the process cwd: a temp home would leave directories
+ * behind and the tests do not spawn a real CLI anyway.
+ */
+export function sylHome(config: SylConfig): string | undefined {
+  if (config.databasePath === IN_MEMORY) return undefined;
+  const home = dirname(config.databasePath);
+  mkdirSync(home, { recursive: true });
+  return home;
+}
+
 export function sessionStoreFor(config: SylConfig): ReturnType<typeof memorySessionStore> {
   if (config.databasePath === IN_MEMORY) return memorySessionStore();
   return fileSessionStore(join(dirname(config.databasePath), "sessions"));
@@ -543,7 +614,15 @@ export function bootstrap(
   readonly deps: ServiceDependencies;
 } {
   const clock = options.clock ?? systemClock;
-  const database = openDatabase({ path: config.databasePath });
+  // `allowExtension` must be asked for at CONSTRUCTION — `node:sqlite` offers no
+  // way to turn it on later. Without it this connection can never load `vec0`,
+  // so the memory store's vector half would simply be absent on the running
+  // service while every unit test stayed green, because the tests open their own
+  // connection and do pass the flag. Silent, and invisible from the test suite:
+  // `syl-63n`. Granting it is not loading anything — `memory/store.ts` still has
+  // to call `enableLoadExtension(true)` immediately before, and re-disables it
+  // once `vec0` is in.
+  const database = openDatabase({ path: config.databasePath, allowExtension: true });
   const keys = new ApiKeyService({ db: database.handle, clock });
   const messages = new MessageStore({ db: database.handle, clock });
   const devices = new DeviceTokenService({ db: database.handle, clock });
@@ -600,8 +679,23 @@ export function bootstrap(
     }
   };
 
+  // The graph and the projection over it. Constructed before the agent because
+  // the agent's `recall` closes over the projection: what she remembers has to
+  // exist before the thing that speaks from it.
+  const memoryGraph = new MemoryGraph({ db: database.handle, clock });
+  // What she remembers about him, distilled nightly from the graph's hot region.
+  // Constructed here rather than inside SylAgent because the consolidation job
+  // regenerates it and the admin reads it — one owner, three readers.
+  const workingMemory = new WorkingMemory({ db: database.handle, graph: memoryGraph, clock });
+
   const agent = new SylAgent({
     store: sessionStoreFor(config),
+    // Read fresh on every turn, not captured here: the projection is rebuilt
+    // each night and this service outlives the night. It is composed UNDER the
+    // soul so it arrives as memory she holds rather than as a briefing she was
+    // handed — the distinction that had her answering "what is your
+    // personality?" by describing her own configuration file.
+    recall: () => workingMemory.preamble(),
     // One memory directory for every lane, and not the CLI's per-project
     // default. Sessions are partitioned so Syl's inner monologue does not
     // interleave with the Commander's conversation; memory is deliberately not,
@@ -612,7 +706,41 @@ export function bootstrap(
     // Both halves are load-bearing and neither survives alone: `onEvent` is how
     // the service observes a turn at all, and the index wrapper is what makes a
     // written memory findable again.
-    turnOptions: { ...(options.turn ?? {}), onEvent: observe },
+    // HER OWN DIRECTORY, not wherever the service happened to be launched.
+    //
+    // cwd defaulted to process.cwd(), which is this repository, and Claude Code
+    // loads what it finds there: CLAUDE.md's engineering instructions, the
+    // SessionStart hook that injects the beads workflow, and the beads
+    // memories. Asked who she was, she answered "running as Claude Code inside
+    // /Users/Reason/code/ai/syl... an engineer on this codebase" — which was
+    // not confusion, it was an accurate description of where she was standing.
+    // No soul file out-argues the room. `~/.syl` is already her home: her
+    // database, her sessions and her memory all live there.
+    turnOptions: (() => {
+      const home = sylHome(config);
+      return {
+        ...(options.turn ?? {}),
+        ...(home === undefined ? {} : { cwd: home }),
+        // NO BUILT-IN TOOLS. The Commander's call, 2026-08-10, after she twice
+        // described herself as an engineer on this codebase: everything she
+        // owns — to-dos, goals, reminders, the daily rhythm — runs through the
+        // service, so her turns need to think and speak, not act.
+        //
+        // `--tools ""`, not `--allowedTools`: the latter pre-approves names on
+        // a surface that still exists; only the former makes a turn incapable
+        // of acting. It also bounds what `bypassPermissions` can reach, which
+        // CLAUDE.md has had as the outstanding follow-up for a while.
+        //
+        // KNOWN COST, measured not assumed: Claude Code's auto-memory is
+        // written BY THE MODEL through the Write tool. With no tools she cannot
+        // write one — verified live: `--tools ""` yields `tools: []`, the model
+        // makes no tool call when told to remember something, and no file
+        // appears. So conversational memory does not accumulate while this
+        // holds. Reversing it is this one line.
+        tools: "",
+        onEvent: observe,
+      };
+    })(),
     // Wrapped, never bypassed — including when a test substitutes the runner,
     // because "was the index maintained?" is a question about the service and
     // not about which runner ran. Whether a memory can be found again is a
@@ -642,6 +770,42 @@ export function bootstrap(
   // only reason that parameter exists is so a test can drive the ladder
   // without a network, and a production caller substituting it would have
   // removed the control that stops a hostile link reaching the tailnet.
+  // The memory surface the admin reads and corrects. Every one of these is a
+  // thin object over the same handle — `MemoryMetrics` in particular is a
+  // derived view that writes nothing — so building them here costs a
+  // constructor and keeps the route free of store construction.
+  const memory: MemoryViews = {
+    graph: memoryGraph,
+    weights: new EdgeWeights({ graph: memoryGraph, clock }),
+    metrics: new MemoryMetrics({ db: database.handle, clock }),
+    dreams: new DreamLog({ db: database.handle, clock }),
+  };
+
+  // The rest of `syl-005`, which had no call site at all until `syl-63n`: the
+  // hybrid store, the retriever, the embedder and the supersession ledger.
+  //
+  // Only the ledger is built here and now. Everything else is behind
+  // `MemoryRuntime.searchable()`, and the reason is the boot path: the store
+  // needs `vec0` — a native extension `sqlite-vec` ships as a per-platform
+  // OPTIONAL dependency, so "absent" is a state `npm install` reports success
+  // for — and the retriever needs a 300M-parameter model. Neither may be
+  // allowed to decide whether this service starts. Syl holds reminder-delivery
+  // guarantees; a `/health` that waits on model weights, or a boot that fails
+  // because a machine has no `vec0` binary, has broken something considerably
+  // more important than search. `services/memory-runtime.ts` has the argument
+  // in full.
+  const memoryRuntime = new MemoryRuntime({
+    db: database.handle,
+    graph: memoryGraph,
+    clock,
+    ...(log === undefined
+      ? {}
+      : {
+          warn: (line: string, error: unknown) =>
+            log.error("memory", { message: line, error: String(error) }),
+        }),
+  });
+
   const intakeQueue = new IntakeQueue();
   const intakeStore = new IntakeStore({ db: database.handle, clock });
   const intake = new ArticleIntake({ store: intakeStore, clock, scheduler: intakeQueue });
@@ -664,6 +828,8 @@ export function bootstrap(
       jobs,
       idempotency,
       intake,
+      memory,
+      memoryRuntime,
       presence,
       intakeQueue,
       probes: [databaseProbe(database.handle)],
@@ -739,6 +905,76 @@ export interface DeliveryOverrides {
 
 export interface StartSylOptions extends BootstrapOptions {
   readonly delivery?: DeliveryOverrides;
+}
+
+/**
+ * The dreamer, assembled at the moment a night actually starts.
+ *
+ * **Built per run rather than at boot**, because a `DreamSweep` needs the
+ * semantic proposer and that needs `vec0` loaded and (on first use) a model.
+ * Doing it here means a machine that cannot load the extension gets a failed,
+ * retried, visible run — not a service that would not start. `null` is exactly
+ * that case, and `createNightlyDreamHandler` turns it into a recorded failure.
+ *
+ * Four things about this wiring are load-bearing and none of them is obvious:
+ *
+ * 1. **The yield signal is the Commander's own conversation queue.**
+ *    `DreamJudge` takes `shouldYield` and, until now, nothing drove it — so the
+ *    dream would have kept judging while he was talking to her at 03:00, on the
+ *    one rate-limit pool they share. `ConversationService` is the only path an
+ *    interactive turn takes, and the dream's own turns do not take it.
+ * 2. **No `cwd` is passed.** The judge runs on the `consolidation` lane, which
+ *    is in `MEMORYLESS_LANES`, and it already sends `autoMemoryOff()` — the
+ *    lane must not be handed a writable memory directory or the dream reads its
+ *    own reflections back as experience (QA finding C1, and constraint 7's
+ *    spirit).
+ * 3. **Every turn is `runTurn`**, which strips `ANTHROPIC_API_KEY` and asserts
+ *    `apiKeySource === "none"`. A night is many turns and every one of them
+ *    stays on subscription rails (constraint 1).
+ * 4. **A substituted turn runner reaches the dream too.** `DreamJudge` imports
+ *    the real `runTurn` when it is given none, so a caller that replaced the
+ *    runner everywhere else — every test that boots the service — would have
+ *    had exactly one path left that spawns the real CLI, and it is the one that
+ *    spawns it a hundred and eighty times a night.
+ */
+function buildDreamJudge(
+  config: SylConfig,
+  deps: ServiceDependencies,
+  clock: Clock,
+  options: StartSylOptions,
+): NightDreamer | null {
+  const searchable = deps.memoryRuntime.trySearchable();
+  if (searchable === null) return null;
+
+  const sweep = new DreamSweep({
+    graph: deps.memory.graph,
+    log: deps.memory.dreams,
+    weights: deps.memory.weights,
+    semantic: searchable.semantic,
+    clock,
+  });
+
+  const claudeBin = options.turn?.claudeBin;
+
+  return new DreamJudge({
+    sweep,
+    log: deps.memory.dreams,
+    clock,
+    sessionStore: sessionStoreFor(config),
+    // Both bounds. The Commander talking pauses it; the quiet window closing
+    // ENDS it — and that second one is what keeps a six-hour night off the
+    // concurrency-one job runner, which reminder delivery shares (`syl-ncx`).
+    shouldYield: createYieldSignal({
+      conversations: deps.chat,
+      clock,
+      window: { tz: config.quietHours.tz, quiet: config.quietHours.quiet },
+    }),
+    // Unwrapped by `withMemoryIndex`, unlike the agent's: a judgment turn runs
+    // with `--tools ""` and cannot write a memory, so there is no index to
+    // maintain and nothing for the wrapper to do.
+    ...(options.runner === undefined ? {} : { runTurn: options.runner }),
+    ...(claudeBin === undefined ? {} : { turnOptions: { claudeBin } }),
+  });
 }
 
 /** Syl, up: the store, the socket, and the loop that makes reminders arrive. */
@@ -835,6 +1071,12 @@ export async function startSyl(
   const service = await startServer(config, deps);
 
   ensureContentIngestionJob(deps.jobs, clock());
+  // The dream, on a clock at last (`syl-cbb`). One row, a `wall_clock` trigger
+  // in the Commander's own zone, and a `once_per_window` catch-up over the
+  // quiet window — so it runs in the gap and, if it is missed, waits for the
+  // next gap rather than spending turns at breakfast.
+  const dreamSchedule = { tz: config.quietHours.tz, quiet: config.quietHours.quiet };
+  const dreamJob = ensureNightlyDreamJob(deps.jobs, dreamSchedule, clock());
 
   const runtime = createDeliveryRuntime({
     jobs: deps.jobs,
@@ -845,6 +1087,14 @@ export async function startSyl(
       [
         "content_ingestion",
         createContentIngestionHandler({ intake: deps.intake, queue: deps.intakeQueue }),
+      ],
+      [
+        "nightly_consolidation",
+        createNightlyDreamHandler({
+          log: deps.memory.dreams,
+          ...dreamSchedule,
+          judge: () => buildDreamJudge(config, deps, clock, options),
+        }),
       ],
     ]),
     clock,
@@ -879,6 +1129,9 @@ export async function startSyl(
     startupLines: [
       ...startup,
       ...describeRuntime(runtime),
+      // Re-read: `ensureNightlyDreamJob` returns the row as it was found, and
+      // the runner's first tick has already run since then.
+      ...describeDream(deps.jobs.get(dreamJob.id) ?? dreamJob, dreamSchedule),
       ...describePushEnvironment(push, { pushConfigured: runtime.pushEnabled }),
       ...describePower(power),
       ...describeAdmin(admin),

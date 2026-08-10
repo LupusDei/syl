@@ -6,6 +6,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 
 import {
   LANES,
+  MEMORYLESS_LANES,
   SylAgent,
   fileSessionStore,
   memorySessionStore,
@@ -111,6 +112,149 @@ describe("SylAgent", () => {
     await new SylAgent({ runner, store }).ask("second");
 
     expect(optionsOfCall(runner, 1).resume).toBe("sess-42");
+  });
+
+  it("should give her what she remembers as part of who she is, not as a second message", async () => {
+    // She was asked "what is your personality?" and answered by describing
+    // SOUL.md and naming the agent that built her. Identity arrived as a
+    // config file and memory arrived not at all, so the ambient context — a
+    // repository — won. One system prompt, identity then memory, is what makes
+    // "you know this about him" different from "here is some data".
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      recall: () => "He is teaching his daughter piano.",
+    });
+
+    await agent.ask("morning");
+
+    const prompt = optionsOfCall(runner, 0).systemPrompt ?? "";
+    expect(prompt).toContain("You are Syl.");
+    expect(prompt).toContain("He is teaching his daughter piano.");
+    expect(prompt.indexOf("You are Syl.")).toBeLessThan(
+      prompt.indexOf("He is teaching his daughter piano."),
+    );
+  });
+
+  it("should send the soul unchanged when she remembers nothing yet", async () => {
+    // An empty projection is the ordinary state of a new install, not a fault.
+    // Appending an empty section would tell her she has a memory and that it is
+    // blank, which reads as damage; saying nothing lets SOUL.md's own line
+    // about being early do the work.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      recall: () => "",
+    });
+
+    await agent.ask("morning");
+
+    expect(optionsOfCall(runner, 0).systemPrompt).toBe("You are Syl.");
+  });
+
+  it("should ask what she remembers on every turn, so a night of consolidation lands", async () => {
+    // Read per turn rather than captured at construction: the projection is
+    // rebuilt nightly and the service outlives the night. A value read once at
+    // boot would leave her remembering the day she started, forever.
+    const runner = announcingRunner((n) => `sess-${n}`);
+    let generation = 0;
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      recall: () => `memory ${(generation += 1)}`,
+    });
+
+    await agent.ask("one");
+    await agent.ask("two");
+
+    expect(optionsOfCall(runner, 0).systemPrompt).toContain("memory 1");
+    expect(optionsOfCall(runner, 1).systemPrompt).toContain("memory 2");
+  });
+
+  it("should carry recall into a lane-scoped view", async () => {
+    // forLane builds a new agent; a field forgotten there is a lane that
+    // silently remembers nothing about him.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      recall: () => "He is teaching his daughter piano.",
+    });
+
+    await agent.forLane("agenda").ask("morning");
+
+    expect(optionsOfCall(runner, 0).systemPrompt).toContain("daughter piano");
+  });
+
+  it("should take her turns in her OWN directory, not wherever the service was launched", async () => {
+    // Asked who she was, she answered: "running as Claude Code inside
+    // /Users/Reason/code/ai/syl, the repo that builds the persistent version of
+    // me... an engineer on this codebase". She was not confused. She was
+    // accurate. The service is launched from the repo, cwd defaulted to
+    // process.cwd(), and Claude Code loads what it finds there: CLAUDE.md's
+    // engineering instructions, the SessionStart hook that injects the beads
+    // workflow, and the beads memories. A soul cannot out-argue the room she is
+    // standing in.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      turnOptions: { cwd: "/home/syl" },
+    });
+
+    await agent.ask("who are you?");
+
+    expect(optionsOfCall(runner, 0).cwd).toBe("/home/syl");
+  });
+
+  it("should carry her directory into a lane-scoped view", async () => {
+    // A lane that falls back to process.cwd() is a lane that wakes up in the
+    // workshop — and the heartbeat and agenda lanes are the ones that speak to
+    // him unprompted.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      turnOptions: { cwd: "/home/syl" },
+    });
+
+    await agent.forLane("agenda").ask("morning");
+
+    expect(optionsOfCall(runner, 0).cwd).toBe("/home/syl");
+  });
+
+  it("should take her turns with no built-in tools at all", async () => {
+    // The Commander's call, 2026-08-10: "let's try it out without the tools."
+    // She is an assistant, not an engineer — everything she owns runs through
+    // the service. `--tools ""`, not `--allowedTools`: the latter pre-approves
+    // names on a surface that still exists, the former sets what exists at all,
+    // and only the latter makes a turn incapable of acting.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      turnOptions: { tools: "" },
+    });
+
+    await agent.ask("who are you?");
+
+    expect(optionsOfCall(runner, 0).tools).toBe("");
+  });
+
+  it("should carry the empty tool surface into a lane-scoped view", async () => {
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({ runner, store: memoryStore(), turnOptions: { tools: "" } });
+
+    await agent.forLane("heartbeat").ask("anything wrong?");
+
+    expect(optionsOfCall(runner, 0).tools).toBe("");
   });
 
   it("should forward the soul as the system prompt on every turn", async () => {
@@ -284,7 +428,65 @@ describe("SylAgent", () => {
       });
     });
 
-    it("should give every lane the same memory directory", async () => {
+    it("should refuse the consolidation lane any auto-memory, so the dream cannot consolidate itself", async () => {
+      // The gap constraint 7's wording does not cover. It forbids writing the
+      // dream LOG into the graph; this is neither. Claude Code's auto-memory
+      // writes what a turn learned into MEMORY.md, and that index is loaded at
+      // the start of EVERY session — so a judgment turn on this lane would have
+      // its own speculation read back as experience by the next dream. The
+      // corpus contaminates itself with its own output, interleaved with the
+      // Commander's real memories in a markdown file with no provenance column
+      // to separate them by.
+      const runner = announcingRunner(() => "sess-1");
+      const syl = new SylAgent({
+        runner,
+        store: memoryStore(),
+        autoMemory: autoMemoryAt("/srv/syl/memory"),
+      });
+
+      await syl.forLane("consolidation").ask("consolidate the day");
+
+      expect(optionsOfCall(runner, 0).autoMemory).toEqual({ mode: "off" });
+    });
+
+    it("should refuse it even when no memory directory was configured at all", async () => {
+      // Auto-memory is ON by default in headless `-p`. So "do not pass a
+      // directory" is not the same as "do not write memory" — omitting the
+      // option lets the CLI default apply and the dream writes into
+      // ~/.claude/projects/<slug>/memory/ instead, which is outside .syl/ and
+      // not covered by its gitignore. The lane must assert OFF, not stay quiet.
+      const runner = announcingRunner(() => "sess-1");
+      const syl = new SylAgent({ runner, store: memoryStore() });
+
+      await syl.forLane("consolidation").ask("consolidate the day");
+
+      expect(optionsOfCall(runner, 0).autoMemory).toEqual({ mode: "off" });
+    });
+
+    it("should still keep the consolidation lane's transcript separate", async () => {
+      // Turning its memory off must not turn off the reason the lane exists:
+      // Syl's inner monologue still must not interleave with the Commander's
+      // conversation.
+      const runner = announcingRunner((n) => `sess-${n}`);
+      const store = memoryStore();
+      const syl = new SylAgent({ runner, store, autoMemory: autoMemoryAt("/srv/syl/memory") });
+
+      await syl.ask("hello");
+      await syl.forLane("consolidation").ask("consolidate");
+
+      expect(store.read("commander")).not.toBe(store.read("consolidation"));
+      expect(store.read("consolidation")).toBeDefined();
+    });
+
+    it("should give every lane that may remember the same memory directory", async () => {
+      // The rule this used to state was "every lane, no exceptions", and it was
+      // right about the ones it listed and wrong about the one it swept in with
+      // them. Sharing is correct wherever memory is EXPERIENCE — a fact learned
+      // in conversation must reach the morning agenda. `consolidation` is not
+      // that: its output is speculation about the corpus, so it is excluded
+      // here and asserted off in its own test above. Restated rather than
+      // relaxed, so the sharing guarantee is still pinned for the lanes it
+      // genuinely covers.
       const runner = announcingRunner((n) => `sess-${n}`);
       const syl = new SylAgent({
         runner,
@@ -295,10 +497,21 @@ describe("SylAgent", () => {
       await syl.ask("hi", LANES.commander);
       await syl.ask("tick", LANES.heartbeat);
       await syl.ask("morning", LANES.agenda);
-      await syl.ask("review", LANES.consolidation);
 
-      const directories = [0, 1, 2, 3].map((n) => optionsOfCall(runner, n).autoMemory);
+      const directories = [0, 1, 2].map((n) => optionsOfCall(runner, n).autoMemory);
       expect(new Set(directories.map((m) => JSON.stringify(m))).size).toBe(1);
+      expect(directories[0]).toEqual({ mode: "directory", directory: "/srv/syl/memory" });
+    });
+
+    it("should keep every remembering lane out of MEMORYLESS_LANES, so the split stays deliberate", async () => {
+      // Guards the list itself rather than its current contents: if someone
+      // adds a lane to MEMORYLESS_LANES, the lanes above stop sharing memory
+      // and this says so at the point of change instead of at the point of
+      // confusion.
+      expect(MEMORYLESS_LANES.has(LANES.commander)).toBe(false);
+      expect(MEMORYLESS_LANES.has(LANES.heartbeat)).toBe(false);
+      expect(MEMORYLESS_LANES.has(LANES.agenda)).toBe(false);
+      expect(MEMORYLESS_LANES.has(LANES.consolidation)).toBe(true);
     });
 
     it("should carry the memory directory into a lane-scoped view", async () => {
