@@ -155,17 +155,6 @@ export const TOOLS: readonly ToolSchema[] = [
       },
     },
   },
-  // `drop_todo` BELONGS HERE AND IS NOT HERE YET, deliberately.
-  //
-  // He needs to abandon a to-do as well as finish one — done and given-up are
-  // different things and he may want to tell them apart later. I wrote the
-  // schema, and the surface test caught that it had no handler and no route:
-  // `DELETE /todos/:id` does not exist, and `TodoService` has no abandon.
-  //
-  // Advertising it anyway would have been the exact defect we have chased all
-  // week — a verb that tells her she can do something she cannot, so she says
-  // "taken off your list" and nothing happens. `syl-3d7` carries the route,
-  // the service method and the verb together, because they are one change.
   {
     name: "remember",
     description:
@@ -210,6 +199,19 @@ export const TOOLS: readonly ToolSchema[] = [
     },
   },
   {
+    name: "drop_todo",
+    description:
+      "Take something off his list that he is not going to do. For one he HAS done use finish_todo — done and given up are different, and he may want to tell them apart later.",
+    inputSchema: {
+      type: "object",
+      required: ["id", "because"],
+      properties: {
+        id: { type: "string", description: "The to-do's id, from whats_outstanding." },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
     name: "set_goal",
     description:
       "Record something he is working toward, at the level he actually thinks about it — not a task, a direction.",
@@ -228,6 +230,26 @@ export const TOOLS: readonly ToolSchema[] = [
       required: ["text", "because"],
       properties: {
         text: { type: "string", description: "The goal, in his words." },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
+    name: "change_goal",
+    description:
+      "Reword a goal, or move it on: he has reached it, given it up, or set it aside for now. One verb because they are one change to one goal, and he will tell you which in a sentence.",
+    inputSchema: {
+      type: "object",
+      required: ["id", "because"],
+      properties: {
+        id: { type: "string", description: "The goal's id, from whats_outstanding." },
+        text: { type: "string", description: "New wording, if he has restated it." },
+        status: {
+          type: "string",
+          enum: ["active", "achieved", "abandoned", "dormant"],
+          description:
+            "achieved when he has done it. abandoned when he has decided not to. dormant when it is set aside but not given up — the difference matters to him.",
+        },
         because: BECAUSE,
       },
     },

@@ -2,7 +2,7 @@ import { Router, type Request, type RequestHandler } from "express";
 
 import type { Goal, GoalStatus } from "@syl/shared";
 
-import { GoalError, GoalService, type CreateGoalInput } from "../services/goal-service.js";
+import { GoalError, GoalService, type CreateGoalInput, type UpdateGoalInput } from "../services/goal-service.js";
 import { isId } from "../services/id.js";
 import type { IdempotencyStore } from "../services/idempotency.js";
 import { PagingError } from "../services/paging.js";
@@ -152,6 +152,38 @@ export function createGoalRouter(options: GoalRouterOptions): Router {
 
   router.get("/goals/:goalId", (request, response) => {
     sendOk(response, found(goals.get(idOf(request.params["goalId"]))));
+  });
+
+  router.patch("/goals/:goalId", (request, response) => {
+    const id = idOf(request.params["goalId"]);
+    sendIdempotent(
+      response,
+      runIdempotent(idempotency, request, () => {
+        const body = bodyOf(request);
+        // Only what was named. Absent means "leave it", never "clear it" —
+        // otherwise rewording a goal would quietly drop the date he set.
+        const patch: UpdateGoalInput = {
+          ...(body["title"] === undefined ? {} : { title: requireString(body, "title", 500) }),
+          ...(body["why"] === undefined ? {} : { why: optionalString(body, "why") ?? null }),
+          ...(body["targetDate"] === undefined
+            ? {}
+            : { targetDate: optionalString(body, "targetDate") ?? null }),
+          ...(body["cadenceDays"] === undefined
+            ? {}
+            : { cadenceDays: body["cadenceDays"] === null ? null : Number(body["cadenceDays"]) }),
+          ...(body["status"] === undefined ? {} : { status: String(body["status"]) }),
+          ...(body["statusReason"] === undefined
+            ? {}
+            : { statusReason: optionalString(body, "statusReason") ?? null }),
+        };
+
+        try {
+          return { status: 200, data: found(goals.update(id, patch)) };
+        } catch (error) {
+          asGoalFailure(error);
+        }
+      }),
+    );
   });
 
   return router;

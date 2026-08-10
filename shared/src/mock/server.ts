@@ -385,6 +385,10 @@ export class MockServer {
       return ok(page(items));
     },
     createGoal: ({ body, store }) => ok(store.createGoal(body), 201),
+    updateGoal: ({ params, body, store }) => {
+      const found = store.updateGoal(params["goalId"] ?? "", body);
+      return found === undefined ? notFound("goal") : ok(found);
+    },
     getGoal: ({ params, store }) => {
       const found = store.goal(params["goalId"] ?? "");
       return found === undefined ? notFound("goal") : ok(found);

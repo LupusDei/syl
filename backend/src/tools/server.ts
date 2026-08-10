@@ -498,6 +498,77 @@ const changeReminder: ToolHandler = async (input, context) => {
   return readBack("change_reminder", context, path, (row: Reminder) => row.updatedAt);
 };
 
+/**
+ * Take something off his list that he is not going to do.
+ *
+ * The sibling of `finish_todo`, and deliberately a different verb rather than
+ * a flag on it. **Done and given up are different facts about his life** — one
+ * is an achievement and the other is a decision — and collapsing them would
+ * make his own history unreadable to him later. The store already knew this:
+ * `dropped` has been in `TodoStatus` since the table was written.
+ *
+ * Same two guards as every verb that takes something away: read it first, and
+ * name what left the list, so a wrong id is audible in the same breath she
+ * acts on it. The row survives with a status, so the cost of being wrong is
+ * that an item stops being offered rather than that it ceases to exist.
+ */
+const dropTodo: ToolHandler = async (input, context) => {
+  const id = text(input, "id");
+  if (id === null) {
+    return missing("drop_todo", "id", "I need to know which one — ask me what is outstanding.");
+  }
+  if (text(input, "because") === null) {
+    return missing(
+      "drop_todo",
+      "because",
+      "This takes an item away without it being done, so it has to say why.",
+    );
+  }
+
+  const path = `/todos/${encodeURIComponent(id)}`;
+
+  const before = await context.client.get<Todo>(path);
+  if (!before.ok) {
+    return {
+      ok: false,
+      action: "drop_todo",
+      reason: `${before.failure.message} I looked it up before touching it, so nothing has come off your list.`,
+      retryable: before.failure.retryable,
+    };
+  }
+
+  if (before.data.status === "done") {
+    // He finished this. Quietly restyling it as abandoned would rewrite a
+    // small piece of his history, and he is the only one who can tell which it
+    // was — so this asks rather than guesses.
+    return {
+      ok: false,
+      action: "drop_todo",
+      reason:
+        `"${before.data.text}" is already marked done, not outstanding. I have changed nothing — ` +
+        "tell me if you want it recorded as abandoned instead.",
+      retryable: false,
+    };
+  }
+
+  if (before.data.status === "dropped") {
+    return {
+      ok: false,
+      action: "drop_todo",
+      reason: `"${before.data.text}" was already dropped. I have changed nothing.`,
+      retryable: false,
+    };
+  }
+
+  // A patch, not a delete: `PATCH /todos/:id` already carries a status and
+  // `TodoService.update` already validates it. No new route was needed, which
+  // I discovered only after filing a bead saying otherwise.
+  const dropped = await context.client.patch<Todo>(path, { status: "dropped" });
+  if (!dropped.ok) return refused("drop_todo", dropped.failure);
+
+  return readBack("drop_todo", context, path, (row: Todo) => row.updatedAt);
+};
+
 /** Record something he is working toward. */
 const setGoal: ToolHandler = async (input, context) => {
   const title = text(input, "text");
@@ -616,6 +687,65 @@ async function readBack<T>(
  * with `schemas.ts`, so a handler with no schema and a schema with no handler
  * are both simply absent rather than half-present.
  */
+/**
+ * Reword a goal, or move it on.
+ *
+ * One verb rather than achieve/abandon/set-aside, because they are one change
+ * to one row and three verbs would have to agree about what each leaves
+ * behind. The *distinction* still matters and lives in the enum: **achieved,
+ * abandoned and dormant are three different things that happened in his life**,
+ * and a system that collapsed them would make his own history unreadable to
+ * him a year later.
+ */
+const changeGoal: ToolHandler = async (input, context) => {
+  const id = text(input, "id");
+  if (id === null) {
+    return missing("change_goal", "id", "I need to know which goal — ask me what is outstanding.");
+  }
+  if (text(input, "because") === null) {
+    return missing("change_goal", "because", "A change to something he is working toward has to say why.");
+  }
+
+  const path = `/goals/${encodeURIComponent(id)}`;
+
+  const before = await context.client.get<Goal>(path);
+  if (!before.ok) {
+    return {
+      ok: false,
+      action: "change_goal",
+      reason: `${before.failure.message} I looked it up before touching it, so nothing has changed.`,
+      retryable: before.failure.retryable,
+    };
+  }
+
+  const patch: Record<string, unknown> = {};
+  const reworded = text(input, "text");
+  if (reworded !== null) patch["title"] = reworded;
+  const status = text(input, "status");
+  if (status !== null) patch["status"] = status;
+
+  if (Object.keys(patch).length === 0) {
+    return {
+      ok: false,
+      action: "change_goal",
+      reason:
+        `I did not catch what to change about "${before.data.title}". ` +
+        "Tell me the new wording, or whether he has reached it, given it up, or set it aside.",
+      retryable: false,
+    };
+  }
+
+  // The reason he gave travels WITH the state change, so a goal that says
+  // `abandoned` can also say why it was abandoned. That is the field he will
+  // want when he wonders what happened to something a year from now.
+  if (status !== null) patch["statusReason"] = text(input, "because");
+
+  const changed = await context.client.patch<Goal>(path, patch);
+  if (!changed.ok) return refused("change_goal", changed.failure);
+
+  return readBack("change_goal", context, path, (row: Goal) => row.updatedAt);
+};
+
 export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   // Order matches `TOOLS`, and a test asserts it. Not cosmetic: `tools/list` is
   // built from the schemas and this is what she is told she has, so a mismatch
@@ -625,7 +755,9 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   change_reminder: changeReminder,
   add_todo: addTodo,
   finish_todo: finishTodo,
+  drop_todo: dropTodo,
   set_goal: setGoal,
+  change_goal: changeGoal,
   whats_outstanding: whatsOutstanding,
 };
 
