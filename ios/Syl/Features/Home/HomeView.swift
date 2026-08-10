@@ -55,6 +55,9 @@ struct HomeView: View {
     var scrolls: Bool = true
 
     @Environment(\.colorScheme) private var systemScheme
+    /// What he *asked for*, as opposed to what he got. See ``EnvironmentValues/
+    /// sylAppearance`` — the two are different questions and this screen needs both.
+    @Environment(\.sylAppearance) private var appearance
 
     var body: some View {
         GeometryReader { geometry in
@@ -72,25 +75,58 @@ struct HomeView: View {
                     stack(viewport: geometry.size)
                 }
             }
-            // The scene is deep space, so this screen is night — in both system
-            // appearances.
-            //
-            // Not a stylistic whim. The clips are painted on a starfield, and the light
-            // palette's ink is a deep slate blue chosen to be read against pale fog. Put
-            // that ink over a starfield and it is unreadable; put the pale veil around
-            // the starfield and you get the bright-rectangle problem in reverse, a dark
-            // box floating on a light page.
-            //
-            // Forcing the appearance rather than adding a third palette means every
-            // token already defined for night — ink, veil, hairline, glass — applies
-            // unchanged, and `Image("SylHero")` resolves to the night still for free,
-            // because the asset catalogue's `luminosity` variant follows this same
-            // environment value.
-            .environment(\.colorScheme, sceneIsPresent ? .dark : systemScheme)
+            .environment(
+                \.colorScheme,
+                Self.scheme(for: appearance, sceneIsPresent: sceneIsPresent, system: systemScheme)
+            )
         }
     }
 
-    /// True when the app ships scene clips, which makes this screen a night scene.
+    /// The appearance this screen renders in.
+    ///
+    /// ## Why it forces anything at all
+    ///
+    /// The scene is deep space, so with clips bundled this screen wants to be night in
+    /// *both* system appearances. That is not a stylistic whim. The clips are painted on
+    /// a starfield, and the light palette's ink is a deep slate blue chosen to be read
+    /// against pale fog. Put that ink over a starfield and it is unreadable; put the pale
+    /// veil around the starfield and you get the bright-rectangle problem in reverse — a
+    /// dark box floating on a light page.
+    ///
+    /// Forcing the appearance rather than adding a third palette means every token
+    /// already defined for night — ink, veil, hairline, glass — applies unchanged, and
+    /// `Image("SylHero")` resolves to the night still for free, because the asset
+    /// catalogue's `luminosity` variant follows this same environment value.
+    ///
+    /// ## Why forcing it *unconditionally* was wrong
+    ///
+    /// All of the above is an argument about what to do when **nobody has said
+    /// otherwise**, and it was written when nobody could. Applied unconditionally it made
+    /// this the one screen in the app that ignores the Commander: he set iOS to Light and
+    /// got a bright conversation next to a black home — the same "one product" failure
+    /// `syl-008` spent a day fixing on the other screen.
+    ///
+    /// So the rule is now scoped to the case it was always reasoning about. Under
+    /// ``AppearanceChoice/system`` the starfield argument stands untouched. Under an
+    /// explicit Day or Night he has answered the question himself, and the scene gives
+    /// way instead: ``SceneCatalogue/shouldPlay(reduceMotion:appearance:)`` falls back to
+    /// the still, and the still resolves to the daylight painting through the same
+    /// `luminosity` variant. The starfield never ends up in a bright frame — it simply
+    /// is not the thing being drawn.
+    static func scheme(
+        for choice: AppearanceChoice,
+        sceneIsPresent: Bool,
+        system: ColorScheme
+    ) -> ColorScheme {
+        switch choice {
+        case .system: return sceneIsPresent ? .dark : system
+        case .day: return .light
+        case .night: return .dark
+        }
+    }
+
+    /// True when the app ships scene clips, which is what makes this screen want to be a
+    /// night scene in the absence of an explicit choice.
     private var sceneIsPresent: Bool { !SceneCatalogue.clips.isEmpty }
 
     private func stack(viewport: CGSize) -> some View {

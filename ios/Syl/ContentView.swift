@@ -28,10 +28,22 @@ struct ContentView: View {
     /// Crash and hang reports collected on this device. `nil` in previews and tests,
     /// which have no MetricKit delivery to subscribe to.
     var diagnostics: CrashDiagnostics? = nil
+    /// The appearance choice, live. A `Binding` with a constant default rather than the
+    /// store itself, so this view keeps its defining property — constructible from plain
+    /// values, with no object graph — while still writing through to `UserDefaults` in
+    /// the app. `RootView` hands it the real one.
+    var appearance: Binding<AppearanceChoice> = .constant(.system)
 
     var body: some View {
         NavigationStack {
             List {
+                // First, and above the server rows, because it is the only thing on this
+                // screen he came here to *change* — everything below it is the app
+                // reporting on itself. "How do I switch dark mode?" was the question that
+                // created this control, and a setting he has to scroll past three
+                // diagnostic sections to find has only half answered it.
+                AppearanceSection(choice: appearance)
+
                 Section("Server") {
                     LabeledContent("Profile", value: serverName)
                     LabeledContent("Address", value: baseURL.absoluteString)

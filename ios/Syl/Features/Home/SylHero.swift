@@ -31,6 +31,11 @@ import SylKit
 /// with roughly 481,000 left; fighting the first one with vignettes would have cost an
 /// evening and still looked wrong.
 ///
+/// **The scene clips only ever got the night painting**, which is why the appearance now
+/// decides whether they play at all. In Day the hero shows the still, and the still is
+/// the daylight painting — so the daylight case is covered by an asset that has existed
+/// since the beginning rather than by a clip nobody rendered.
+///
 /// ## The motion
 ///
 /// A still image of someone floating is a poster. Three cheap, slow transforms make her
@@ -59,6 +64,10 @@ struct SylHero: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    /// The appearance this hero is actually being painted in — already resolved by
+    /// `HomeView`, so an explicit Day arrives here as `.light` whatever iOS is set to.
+    /// It decides between the clip and the still; see the note on "two paintings" above.
+    @Environment(\.colorScheme) private var scheme
 
     /// Whether this view is actually on screen.
     ///
@@ -138,7 +147,7 @@ struct SylHero: View {
             // and masked identically, which is the whole point: swapping the media
             // must not change the composition by a pixel.
             Group {
-                if !prefersStill, SceneCatalogue.shouldPlay(reduceMotion: reduceMotion) {
+                if !prefersStill, SceneCatalogue.shouldPlay(reduceMotion: reduceMotion, appearance: scheme) {
                     SceneVideo(isPlaying: isOnScreen && scenePhase == .active)
                         .onAppear { isOnScreen = true }
                         .onDisappear { isOnScreen = false }
