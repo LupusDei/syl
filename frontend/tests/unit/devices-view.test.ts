@@ -4,7 +4,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { createElement as h } from "react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DevicesView } from "../../src/features/devices/DevicesView";
 import { API_KEY_STORAGE_KEY } from "../../src/auth/api-key-store";
@@ -13,6 +13,7 @@ import { createMemoryStorage, type StorageLike } from "../../src/storage";
 import { fixture, fixtureResponse } from "../helpers/fixtures";
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   vi.unstubAllGlobals();
 });
@@ -49,7 +50,27 @@ function fixtureRows(): Record<string, unknown>[] {
   return (fixture("http/devices.page") as { data: { items: Record<string, unknown>[] } }).data.items;
 }
 
+/**
+ * The fixture's newest `lastSeenAt`, plus two minutes.
+ *
+ * `standingOf` compares `lastSeenAt` against the REAL clock with a 24-hour
+ * staleness threshold, and `DevicesView` calls `new Date()` itself, so a test
+ * asserting "active" against a dated fixture passes only while that fixture is
+ * less than a day old. It did, and then it stopped: the fixture is 2026-08-09
+ * and the suite went red the next morning, having changed nothing (`syl-wh6`).
+ *
+ * Freezing the clock is the honest fix — these tests are about the label a
+ * standing maps to, not about the passage of time. `shouldAdvanceTime` keeps
+ * `waitFor` and the fetch stubs working, which a fully frozen clock would hang.
+ */
+const FIXTURE_NOW = new Date("2026-08-09T07:00:00.000Z");
+
 describe("DevicesView", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(FIXTURE_NOW);
+  });
+
   it("should list every registered target, active first", async () => {
     stubApi();
     renderView();

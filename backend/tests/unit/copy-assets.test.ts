@@ -85,6 +85,60 @@ describe("copy-assets", () => {
     expect(result.stdout).toContain("copied 1 asset");
   });
 
+  it("should remove an asset that is no longer in the source", () => {
+    // syl-oqe. A migration renamed in src left its old copy in dist forever,
+    // because this step copies and never prunes. The BUILT service then read
+    // both and died at startup on "Two migrations claim version 14" — naming a
+    // file the source tree no longer contains, so the error points at nothing
+    // you can find. Source correct, build broken, message misleading.
+    mkdirSync(join(srcDir, "migrations"));
+    writeFileSync(join(srcDir, "migrations", "0014_old_name.sql"), "select 1;");
+    expect(run(srcDir, outDir).status).toBe(0);
+    expect(existsSync(join(outDir, "migrations", "0014_old_name.sql"))).toBe(true);
+
+    rmSync(join(srcDir, "migrations", "0014_old_name.sql"));
+    writeFileSync(join(srcDir, "migrations", "0016_new_name.sql"), "select 1;");
+
+    const result = run(srcDir, outDir);
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(outDir, "migrations", "0016_new_name.sql"))).toBe(true);
+    expect(existsSync(join(outDir, "migrations", "0014_old_name.sql"))).toBe(false);
+  });
+
+  it("should never prune the JavaScript tsc emitted alongside the assets", () => {
+    // The dangerous half of pruning. `dist` holds tsc's output, which has no
+    // counterpart in `src` by construction — deleting "anything not in src"
+    // would empty the build. Only extensions that actually appear among the
+    // source assets are eligible, and tsc emits none of them.
+    mkdirSync(join(srcDir, "migrations"));
+    writeFileSync(join(srcDir, "migrations", "0001_baseline.sql"), "select 1;");
+    mkdirSync(join(outDir, "migrations"), { recursive: true });
+    writeFileSync(join(outDir, "index.js"), "export const x = 1;");
+    writeFileSync(join(outDir, "index.js.map"), "{}");
+    writeFileSync(join(outDir, "index.d.ts"), "export declare const x: number;");
+
+    const result = run(srcDir, outDir);
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(outDir, "index.js"))).toBe(true);
+    expect(existsSync(join(outDir, "index.js.map"))).toBe(true);
+    expect(existsSync(join(outDir, "index.d.ts"))).toBe(true);
+  });
+
+  it("should say what it removed, so a build log explains a vanished file", () => {
+    mkdirSync(join(srcDir, "migrations"));
+    writeFileSync(join(srcDir, "migrations", "0014_old_name.sql"), "select 1;");
+    run(srcDir, outDir);
+    rmSync(join(srcDir, "migrations", "0014_old_name.sql"));
+    writeFileSync(join(srcDir, "migrations", "0016_new_name.sql"), "select 1;");
+
+    const result = run(srcDir, outDir);
+
+    expect(result.stdout).toContain("0014_old_name.sql");
+    expect(result.stdout.toLowerCase()).toContain("removed");
+  });
+
   it("should leave TypeScript alone, since tsc already emits it", () => {
     writeFileSync(join(srcDir, "index.ts"), "export const x = 1;");
     writeFileSync(join(srcDir, "notes.sql"), "select 1;");

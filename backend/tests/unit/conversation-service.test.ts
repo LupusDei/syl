@@ -8,6 +8,7 @@ import {
   laneFor,
   turnFailureText,
 } from "../../src/services/conversation-service.js";
+import { fixedClock } from "../../src/services/clock.js";
 import { INTERACTIVE_CONVERSATION_ID, type SylDatabase } from "../../src/services/database.js";
 import type { MessageStore } from "../../src/services/message-store.js";
 import { testDatabase, testMessages } from "../helpers/service.js";
@@ -455,5 +456,82 @@ describe("ConversationService", () => {
       expect(published.map((message) => message.role)).toEqual(["user"]);
       expect(logged.join("\n")).toContain("not answering");
     });
+  });
+});
+
+describe("ConversationService.lastActiveAt — the dream's yield signal", () => {
+  /**
+   * `DreamJudge.shouldYield` is injected and, until `syl-cbb`, nothing drove
+   * it. This is the source: the one queue every interactive turn goes through.
+   * The dream's own turns do not — `DreamJudge` drives `runTurn` directly on
+   * the `consolidation` lane — so a dream can never read itself as him and
+   * yield to itself forever.
+   */
+  it("should be null before the Commander has said anything", () => {
+    const { service } = harness(() => Promise.resolve(result("ok")));
+
+    expect(service.lastActiveAt).toBeNull();
+    expect(service.pending).toBe(0);
+  });
+
+  it("should be stamped the moment a message is accepted, not when the reply lands", async () => {
+    const gate = deferred<TurnResult>();
+    const { service } = harness(() => gate.promise);
+
+    const before = Date.now();
+    say(service, "are you awake");
+
+    // While the turn is still in flight: he is talking, and the dream must
+    // already have been told.
+    expect(service.pending).toBe(1);
+    expect(service.lastActiveAt).not.toBeNull();
+    expect(service.lastActiveAt ?? 0).toBeGreaterThanOrEqual(before);
+
+    gate.resolve(result("I am"));
+    await service.idle();
+  });
+
+  it("should be stamped again when the turn settles, so the grace window runs from the end", async () => {
+    const gate = deferred<TurnResult>();
+    const { service } = harness(() => gate.promise);
+
+    say(service, "are you awake");
+    const atAccept = service.lastActiveAt;
+
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    gate.resolve(result("I am"));
+    await service.idle();
+
+    expect(service.pending).toBe(0);
+    expect(service.lastActiveAt ?? 0).toBeGreaterThan(atAccept ?? 0);
+  });
+
+  it("should not be moved by an assistant message arriving from somewhere else", () => {
+    const { service } = harness(() => Promise.resolve(result("ok")));
+
+    // A job's own message is published, never queued — `accept` returns early
+    // for anything that is not the Commander — so it is not him talking.
+    service.accept(
+      service.append({ clientId: null, role: "assistant", text: "the agenda for today" }),
+    );
+
+    expect(service.lastActiveAt).toBeNull();
+  });
+
+  it("should read from the clock it was given rather than the wall clock", () => {
+    const at = Date.parse("2026-08-10T08:00:00.000Z");
+    const service = new ConversationService({
+      messages,
+      agent: new SylAgent({
+        store: memorySessionStore(),
+        runner: () => Promise.resolve(result("ok")),
+      }),
+      log: record,
+      clock: fixedClock(at),
+    });
+
+    say(service, "hello");
+
+    expect(service.lastActiveAt).toBe(at);
   });
 });
