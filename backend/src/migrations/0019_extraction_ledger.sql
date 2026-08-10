@@ -1,4 +1,4 @@
--- 0018_extraction_ledger.sql — what has already been extracted, and the index
+-- 0019_extraction_ledger.sql — what has already been extracted, and the index
 -- that lets a fact be recognised rather than duplicated.
 --
 -- ## NUMBERING, FOR WHOEVER MERGES THIS

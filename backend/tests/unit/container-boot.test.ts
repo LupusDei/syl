@@ -58,6 +58,12 @@ const INTENDED_MCP: Readonly<Record<(typeof LANES)[keyof typeof LANES], string |
   heartbeat: undefined,
   agenda: undefined,
   consolidation: undefined,
+  // The extraction turn reads a conversation, and a conversation is untrusted
+  // the moment he pastes an article into it. It is a READER turn — no built-ins
+  // AND no MCP — and it must stay that way for a reason sharper than the other
+  // lanes: a reader's output is consumed once, but an extracted fact becomes
+  // preamble on every later turn. This entry must never become a path.
+  extraction: undefined,
 };
 
 describe("bootstrap — the container", () => {
