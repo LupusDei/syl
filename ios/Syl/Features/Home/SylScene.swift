@@ -33,8 +33,23 @@ enum SceneCatalogue {
     /// perpetual video on the home screen is the definition of optional. Reduce Motion
     /// is the accessibility half. Both fall back to the still, which is the same
     /// character on the same background, so nothing looks broken — it stops moving.
-    static func shouldPlay(reduceMotion: Bool) -> Bool {
-        !reduceMotion && !ProcessInfo.processInfo.isLowPowerModeEnabled && !clips.isEmpty
+    ///
+    /// **The appearance is the third reason, and it is a different kind of reason.** The
+    /// other two are about cost; this one is about the art. Every clip is painted on a
+    /// starfield, and a starfield in a daylight frame is the bright-rectangle defect that
+    /// already cost one TestFlight build, in reverse. There is no daylight *clip* and
+    /// there does not need to be one: the still already has a daylight painting, resolved
+    /// per appearance by the asset catalogue's `luminosity` variant. So Day is not a
+    /// missing asset, it is a condition — and the fallback it selects is the one the
+    /// other two reasons already select.
+    ///
+    /// Takes the *resolved* appearance rather than the ``AppearanceChoice``, because the
+    /// question is what the frame is painted in, not how it came to be painted that way.
+    static func shouldPlay(reduceMotion: Bool, appearance: ColorScheme) -> Bool {
+        appearance == .dark
+            && !reduceMotion
+            && !ProcessInfo.processInfo.isLowPowerModeEnabled
+            && !clips.isEmpty
     }
 }
 

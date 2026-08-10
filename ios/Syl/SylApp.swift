@@ -25,10 +25,29 @@ struct RootView: View {
     @ObservedObject var appDelegate: AppDelegate
     @StateObject private var profiles = ServerProfileStore()
     @StateObject private var network = NetworkMonitor()
+    @StateObject private var appearance = AppearanceStore()
 
     @Environment(\.scenePhase) private var scenePhase
 
+    /// One `preferredColorScheme`, at the root, above both the paired and unpaired
+    /// branches.
+    ///
+    /// Applied here rather than per screen for the reason the setting exists at all: an
+    /// appearance applied screen by screen is exactly how the app ended up bright in chat
+    /// and black on Home. One call at the top is a guarantee that nothing below can be
+    /// out of step, and `nil` for System leaves the window unpinned so iOS changing
+    /// appearance moves the whole app with no relaunch.
+    ///
+    /// `sylAppearance` travels alongside it because the resolved scheme cannot answer
+    /// "did he ask for this" — and the home screen has to know the difference.
     var body: some View {
+        content
+            .preferredColorScheme(appearance.choice.preferredColorScheme)
+            .environment(\.sylAppearance, appearance.choice)
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if appDelegate.isPaired {
             paired
         } else {
@@ -88,7 +107,8 @@ struct RootView: View {
                 reachability: network.reachability,
                 registration: appDelegate.registration,
                 adminAccess: appDelegate.adminConsoleAccess,
-                diagnostics: appDelegate.diagnostics
+                diagnostics: appDelegate.diagnostics,
+                appearance: $appearance.choice
             )
             .tabItem { Label("Settings", systemImage: "gearshape") }
         }
@@ -129,6 +149,9 @@ struct StatusView: View {
     let registration: AppDelegate.RegistrationState
     let adminAccess: AdminConsoleAccess
     let diagnostics: CrashDiagnostics
+    /// Straight through to the store's own `@Published` property, so choosing a
+    /// segment persists and repaints the app in the same gesture.
+    let appearance: Binding<AppearanceChoice>
 
     var body: some View {
         ContentView(
@@ -138,7 +161,8 @@ struct StatusView: View {
             notificationAuthorization: notifications.authorization,
             registration: registration,
             adminAccess: adminAccess,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            appearance: appearance
         )
     }
 }

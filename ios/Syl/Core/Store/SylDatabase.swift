@@ -185,6 +185,100 @@ struct SylDatabase: Sendable {
             }
         }
 
+        // `syl-011.1`. Three things the device could not previously hold: a goal at
+        // all, the link from a to-do to the goal it serves, and the fact that a write
+        // has been asked for but not yet answered.
+        migrator.registerMigration("v3-goals-and-the-optimistic-half") { db in
+            // Mirrors `backend/src/migrations/0009_todos_goals.sql`, whose header states
+            // the two refusals this table is built around. **There is no
+            // percent-complete column and no priority column**, and neither is an
+            // omission: self-reported percentages are fiction and they decay, and
+            // priority is a property of a moment rather than of a task. Progress is
+            // evidenced — by `todo.goalId` below — and never asserted.
+            try db.create(table: "goal") { table in
+                table.primaryKey("id", .text).collate(.nocase)
+
+                // Goals self-nest. A NULL parent is a root goal, and nothing enforces
+                // the depth because a life does not have a fixed number of levels in it.
+                //
+                // Deliberately **not** a foreign key, which is where this diverges from
+                // the server's schema on purpose. `GET /sync` pages by `updatedAt` and
+                // knows nothing about the hierarchy, so a child routinely arrives before
+                // its parent; with `PRAGMA foreign_keys = ON` that upsert would throw,
+                // `SyncEngine.apply` would file it as an unreadable change, and the goal
+                // would simply never appear. The server can afford the constraint
+                // because it writes parents first. A client cannot choose its order.
+                table.column("parentId", .text).collate(.nocase)
+
+                table.column("title", .text).notNull()
+
+                // `YYYY-MM-DD`, stored as the contract's text rather than a date, so
+                // lexicographic order IS chronological order and the read needs no
+                // conversion. The horizon — life / year / season / month — is DERIVED
+                // from this and never stored: a stored horizon and a stored date
+                // disagree the moment one of them is edited.
+                table.column("targetDate", .text)
+
+                table.column("status", .text).notNull()
+                table.column("updatedAt", .datetime).notNull()
+                table.column("payload", .blob).notNull()
+            }
+            try db.create(index: "goal_on_parentId", on: "goal", columns: ["parentId"])
+            // The list's order, materialised: target date, then title.
+            try db.create(index: "goal_on_targetDate", on: "goal", columns: ["targetDate", "title"])
+
+            try db.alter(table: "todo") { table in
+                // The link that makes a goal's progress evidenced rather than asserted.
+                // It has always been in the payload; it was never queryable.
+                table.add(column: "goalId", .text).collate(.nocase)
+
+                // The idempotency key of the capture that created this row, or NULL for
+                // a row the server sent. It is what makes an optimistic to-do
+                // retirable: the contract has no `clientId` for a to-do, so the key is
+                // the only thing tying the row he sees to the intent that will create
+                // the server's copy of it. See `LocalStore.settleOptimisticMarkers`.
+                table.add(column: "pendingKey", .text)
+            }
+            try db.create(index: "todo_on_goalId", on: "todo", columns: ["goalId"])
+            try SylDatabase.backfillTodoGoalLinks(db)
+
+            try db.alter(table: "reminder") { table in
+                // **The instant he ASKED, and never a new fire time** (`syl-011.1.5`).
+                //
+                // The server owns a deferral's new instant — constraint 4 and proposal E
+                // both say so, and a phone that is wiped, restored or replaced would
+                // otherwise take his deferrals with it. So the device stores the one
+                // fact it actually knows: that a deferral was requested, and when. The
+                // row settles the moment the server's copy of the reminder arrives,
+                // because that copy replaces this column with NULL.
+                table.add(column: "deferralRequestedAt", .datetime)
+            }
+        }
+
         return migrator
+    }
+
+    /// Copies each to-do's `goalId` out of its stored payload and into the column.
+    ///
+    /// Every row written before the column existed has the link in its JSON and nothing
+    /// in its index, so without this the first goal screen after an upgrade says nothing
+    /// has ever happened — for every goal, convincingly, and wrongly.
+    ///
+    /// A row the current decoder cannot read costs its own link and nothing else. A
+    /// migration that throws leaves the app unable to open at all, which is a far worse
+    /// answer to one bad payload than a goal that is missing one piece of evidence.
+    static func backfillTodoGoalLinks(_ db: Database) throws {
+        for row in try Row.fetchAll(db, sql: "SELECT id, payload FROM todo") {
+            guard
+                let id = row["id"] as String?,
+                let payload = row["payload"] as Data?,
+                let todo = try? SylJSON.decoder().decode(Todo.self, from: payload),
+                let goalId = todo.goalId
+            else { continue }
+            try db.execute(
+                sql: "UPDATE todo SET goalId = ? WHERE id = ?",
+                arguments: [goalId, id]
+            )
+        }
     }
 }

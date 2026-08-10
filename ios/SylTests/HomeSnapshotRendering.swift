@@ -61,15 +61,23 @@ final class HomeSnapshotRendering: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         print("SYL_SNAPSHOTS_AT \(directory.path)")
 
-        let cases: [(String, HomeSnapshot, PresenceState, ColorScheme)] = [
-            ("full-day-thinking", .preview(remaining: 5), .thinking, .light),
-            ("clear-day-idle", clear, .idle, .light),
-            ("late-alert", .preview(remaining: 2, late: true), .alert, .light),
-            ("clear-day-night", clear, .idle, .dark),
-            ("full-day-night", .preview(remaining: 5), .concerned, .dark),
+        // The fourth column is what *iOS* says; the fifth is what the Commander chose.
+        // Both are needed, and the pairs that disagree are the interesting ones: with
+        // clips bundled, System renders night whatever iOS says, and an explicit Day has
+        // to beat both. `appearance-day-*` is the render US5 exists to make correct —
+        // look at it for a starfield in a bright frame.
+        let cases: [(String, HomeSnapshot, PresenceState, ColorScheme, AppearanceChoice)] = [
+            ("full-day-thinking", .preview(remaining: 5), .thinking, .light, .system),
+            ("clear-day-idle", clear, .idle, .light, .system),
+            ("late-alert", .preview(remaining: 2, late: true), .alert, .light, .system),
+            ("clear-day-night", clear, .idle, .dark, .system),
+            ("full-day-night", .preview(remaining: 5), .concerned, .dark, .system),
+            ("appearance-day", .preview(remaining: 5), .thinking, .dark, .day),
+            ("appearance-day-clear", clear, .idle, .light, .day),
+            ("appearance-night", .preview(remaining: 5), .thinking, .light, .night),
         ]
 
-        for (name, snapshot, presence, scheme) in cases {
+        for (name, snapshot, presence, scheme, appearance) in cases {
             let view = HomeView(
                 snapshot: snapshot,
                 presence: presence,
@@ -79,6 +87,7 @@ final class HomeSnapshotRendering: XCTestCase {
             )
             .frame(width: 393, height: 852)   // iPhone 17 logical size
             .environment(\.colorScheme, scheme)
+            .environment(\.sylAppearance, appearance)
 
             let renderer = ImageRenderer(content: view)
             renderer.scale = 2

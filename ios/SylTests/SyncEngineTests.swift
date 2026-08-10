@@ -419,6 +419,185 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(try store.syncState().cursor, "cursor-from-last-time")
     }
 
+    // MARK: - Goals (`syl-011.1.2`)
+
+    func testShouldStoreAGoalThatArrivesOnASyncPage() async throws {
+        // It used to be dropped on the floor, with a comment saying the phone had no use
+        // for it. That was true until the app grew a goal surface; a screen built on the
+        // old rule would have to hit the network to show anything.
+        let response = SyncResponse(
+            cursor: "cursor-2",
+            hasMore: false,
+            changes: [
+                upsertChange(type: .goal, id: "syl:goal:0198f2c3-0001-7000-8000-00000000d001")
+            ],
+            serverTime: instant("2026-08-09T07:00:05.000Z")
+        )
+
+        let report = await makeEngine(pull: { _ in response }).synchronise()
+
+        XCTAssertEqual(report.changesApplied, 1)
+        XCTAssertEqual(try store.goals().map(\.title), ["Run a marathon"])
+    }
+
+    func testShouldRemoveAGoalOnADeleteChange() async throws {
+        let arrival = SyncResponse(
+            cursor: "cursor-2",
+            hasMore: false,
+            changes: [
+                upsertChange(type: .goal, id: "syl:goal:0198f2c3-0001-7000-8000-00000000d001")
+            ],
+            serverTime: instant("2026-08-09T07:00:05.000Z")
+        )
+        _ = await makeEngine(pull: { _ in arrival }).synchronise()
+        XCTAssertEqual(try store.goals().count, 1, "the precondition this test needs")
+
+        let response = SyncResponse(
+            cursor: "cursor-3",
+            hasMore: false,
+            changes: [
+                SyncChange(
+                    type: .goal,
+                    op: .delete,
+                    id: "syl:goal:0198f2c3-0001-7000-8000-00000000d001",
+                    at: instant("2026-08-09T06:30:00.000Z"),
+                    resource: nil
+                )
+            ],
+            serverTime: instant("2026-08-09T07:00:05.000Z")
+        )
+
+        _ = await makeEngine(pull: { _ in response }).synchronise()
+
+        XCTAssertTrue(try store.goals().isEmpty)
+    }
+
+    func testShouldStillSkipTheResourcesThePhoneGenuinelyHasNoUseFor() async throws {
+        // Goals moved out of the skipped list; deliveries, devices, jobs and runs stay
+        // in it for the original reason.
+        for type in [SyncResourceType.device, .delivery, .job, .run] {
+            XCTAssertNil(LocalStore.tableName(for: type), "\(type.rawValue) is not stored")
+        }
+        XCTAssertEqual(LocalStore.tableName(for: .goal), "goal")
+    }
+
+    // MARK: - An intent applies once, driven through the real outbox (`syl-011.1.6`)
+
+    func testShouldPushACompletionOnceAndLeaveNothingToReplay() async throws {
+        try store.upsert([todo(id: "syl:todo:0198f2c2-0001-7000-8000-00000000c001")])
+        try store.completeTodo(
+            id: "syl:todo:0198f2c2-0001-7000-8000-00000000c001",
+            idempotencyKey: "key-complete-1",
+            now: instant("2026-08-09T07:00:00.000Z")
+        )
+        let recorder = Recorder()
+        let engine = makeEngine(
+            push: { record in
+                await recorder.record("\(record.kind.rawValue):\(record.idempotencyKey)")
+                return .done
+            }
+        )
+
+        _ = await engine.synchronise()
+        _ = await engine.synchronise()
+
+        let sent = await recorder.values
+        XCTAssertEqual(sent, ["completeTodo:key-complete-1"], "the second run has nothing to send")
+        XCTAssertEqual(try outbox.count(), 0)
+    }
+
+    func testShouldCarryTheSameKeyThroughEveryRetryOfACompletion() async throws {
+        // A key regenerated per attempt is the same as having no key at all.
+        try store.upsert([todo(id: "syl:todo:0198f2c2-0001-7000-8000-00000000c001")])
+        try store.completeTodo(
+            id: "syl:todo:0198f2c2-0001-7000-8000-00000000c001",
+            idempotencyKey: "key-complete-1",
+            now: instant("2026-08-09T07:00:00.000Z")
+        )
+        let recorder = Recorder()
+        let engine = makeEngine(
+            push: { record in
+                await recorder.record(record.idempotencyKey)
+                throw APIError.transport(code: .timedOut, description: "")
+            }
+        )
+
+        _ = await engine.synchronise()
+        _ = await engine.synchronise()
+
+        let keys = await recorder.values
+        XCTAssertEqual(keys, ["key-complete-1", "key-complete-1"])
+    }
+
+    func testShouldLeaveOneTodoAfterACaptureHasBeenPushedAndPulledBack() async throws {
+        // The push creates it; the pull in the same pass brings back the server's copy
+        // under the server's id. Two rows would mean he sees the same to-do twice,
+        // permanently — and there is no `clientId` on a to-do to reconcile them with.
+        _ = try store.createTodo(
+            text: "Book the dentist",
+            idempotencyKey: "key-capture-1",
+            now: instant("2026-08-09T07:00:00.000Z"),
+            id: "syl:todo:0198f2c2-0aaa-7000-8000-00000000caaa"
+        )
+        let serversCopy = SyncResponse(
+            cursor: "cursor-2",
+            hasMore: false,
+            changes: [
+                upsertChange(type: .todo, id: "syl:todo:0198f2c2-0001-7000-8000-00000000c001")
+            ],
+            serverTime: instant("2026-08-09T07:00:05.000Z")
+        )
+
+        _ = await makeEngine(pull: { _ in serversCopy }).synchronise()
+
+        XCTAssertEqual(
+            try store.openTodos().map(\.id),
+            ["syl:todo:0198f2c2-0001-7000-8000-00000000c001"]
+        )
+    }
+
+    func testShouldKeepACapturedTodoWhenThePullNeverLanded() async throws {
+        // The push may have created it on the server, but this device has not been told
+        // so. Retiring the row here would take his capture off the screen with nothing
+        // to put in its place — the silent drop, in a new costume.
+        _ = try store.createTodo(
+            text: "Book the dentist",
+            idempotencyKey: "key-capture-1",
+            now: instant("2026-08-09T07:00:00.000Z"),
+            id: "syl:todo:0198f2c2-0aaa-7000-8000-00000000caaa"
+        )
+
+        _ = await makeEngine(
+            pull: { _ in throw APIError.transport(code: .cannotConnectToHost, description: "") }
+        ).synchronise()
+
+        XCTAssertEqual(try store.openTodos().count, 1)
+    }
+
+    func testShouldClearADeferralAskOnceTheServerHasRefusedIt() async throws {
+        // `DEFERRAL_NOT_LATER` is permanent, so the intent is abandoned and no new copy
+        // of the reminder is ever coming. The row must stop saying a deferral is pending.
+        try store.upsert([reminder(id: "syl:reminder:0198f2c1-0001-7d21-9f00-1a2b3c4d5e01")])
+        try store.snoozeReminder(
+            id: "syl:reminder:0198f2c1-0001-7d21-9f00-1a2b3c4d5e01",
+            minutes: 15,
+            idempotencyKey: "key-snooze-1",
+            now: instant("2026-08-09T07:00:00.000Z")
+        )
+
+        let report = await makeEngine(
+            push: { _ in
+                throw APIError.api(
+                    ApiError(code: .deferralNotLater, message: "not later", retryable: false),
+                    status: 422
+                )
+            }
+        ).synchronise()
+
+        XCTAssertEqual(report.abandoned, 1)
+        XCTAssertTrue(try store.deferralRequests().isEmpty)
+    }
+
     // MARK: - Order
 
     func testShouldPushBeforeItPullsSoTheServerReturnsHisOwnWritesAsAuthoritative() async throws {
@@ -561,6 +740,21 @@ final class SyncEngineTests: XCTestCase {
                 "updatedAt": .string("2026-08-09T06:59:48.400Z"),
                 "completedAt": .null,
             ])
+        case .goal:
+            resource = .object([
+                "id": .string(id),
+                "parentId": .null,
+                "title": .string("Run a marathon"),
+                "why": .string("Because I said I would."),
+                "targetDate": .string("2027-04-18"),
+                "metricKey": .null,
+                "targetValue": .null,
+                "cadenceDays": .number(7),
+                "status": .string("active"),
+                "statusReason": .null,
+                "createdAt": .string("2026-08-09T06:59:48.500Z"),
+                "updatedAt": .string("2026-08-09T06:59:48.500Z"),
+            ])
         default:
             resource = .null
         }
@@ -580,6 +774,18 @@ final class SyncEngineTests: XCTestCase {
             id: id, text: "Call the pharmacy about the refill", goalId: nil, dueAt: nil,
             pinned: false, status: .open, source: .commander, delegatedJobId: nil,
             createdAt: base, updatedAt: base, completedAt: nil
+        )
+    }
+
+    private func reminder(id: SylID) -> Reminder {
+        let base = instant("2026-08-09T07:00:00.000Z")
+        return Reminder(
+            id: id, kind: .commitment, text: "Call the pharmacy.", todoId: nil, eventId: nil,
+            wallTime: "16:00", tz: "America/Chicago", rrule: nil,
+            scheduledFor: base.addingTimeInterval(3600),
+            nextFireAt: base.addingTimeInterval(3600),
+            urgent: false, late: false, deferredFrom: nil, supersedesPrevious: false,
+            deliveryState: .scheduled, createdAt: base, updatedAt: base, completedAt: nil
         )
     }
 

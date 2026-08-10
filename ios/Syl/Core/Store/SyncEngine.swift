@@ -73,6 +73,21 @@ actor SyncEngine {
         var report = SyncReport()
         await pushOutbox(into: &report)
         await pullChanges(into: &report)
+
+        // Optimistic markers live exactly as long as the intent behind them, and this is
+        // where that becomes true. It runs **only after a page actually landed**: a push
+        // that succeeded followed by a pull that did not means the server has his
+        // captured to-do and this device has not been told about it yet, and settling
+        // there would take the row off his screen before its replacement arrived. It
+        // waits for the next run instead, which is what the outbox does with everything
+        // else it cannot yet resolve.
+        if report.pagesPulled > 0 {
+            do {
+                try store.settleOptimisticMarkers()
+            } catch {
+                report.failures.append("could not settle optimistic rows: \(error)")
+            }
+        }
         return report
     }
 
@@ -219,9 +234,22 @@ actor SyncEngine {
         case .todo:
             guard let value = try change.decodeResource(as: Todo.self) else { return false }
             try store.upsert([value])
-        case .goal, .device, .delivery, .job, .run:
+        case .goal:
+            guard let value = try change.decodeResource(as: Goal.self) else { return false }
+            try store.upsert([value])
+        case .device, .delivery, .job, .run:
             // Not stored on the device. The admin surface reads these live and the
             // phone has no use for them; skipping is correct, not a gap.
+            //
+            // **`.goal` was in this list until `syl-011.1.2`, and the comment above
+            // covered it.** That was true when it was written — there was no goal
+            // surface in the app for a stored goal to serve — and it stopped being true
+            // the moment the epic decided he must be able to open a goal and know
+            // whether it is moving, instantly, from disk, with the server unreachable. A
+            // goal screen built on top of the old rule would have to hit the network to
+            // show anything, which breaks local-first on its first frame. So goals are
+            // stored now and upserted above; this list is the four resources that are
+            // still somebody else's business, and it keeps the original reason.
             return false
         }
         return true
