@@ -246,6 +246,91 @@ final class ModelCodingTests: XCTestCase {
         )
     }
 
+    // MARK: - Attachments
+
+    /// `[]` and absent are different, and only absent is legal.
+    ///
+    /// The contract admits `attachmentIds` as optional but forbids it present-and-empty:
+    /// an empty array is a client that meant to omit the field and is worth saying so
+    /// about. That is exactly the kind of mistake that round-trips perfectly on the
+    /// device and comes back `VALIDATION_FAILED` from the server, on the one write path
+    /// that retries by design — so the normalisation lives in the initialiser rather
+    /// than in whichever call site remembers.
+    func testShouldOmitAttachmentIdsRatherThanSendAnEmptyArray() throws {
+        let request = SendMessageRequest(
+            clientId: "c8f41d02-6b1e-4a77-9f30-2ab5c9d10e44",
+            text: "Nothing attached.",
+            conversationId: SylIDs.interactiveConversation,
+            attachmentIds: []
+        )
+
+        XCTAssertNil(request.attachmentIds, "an empty array normalises to absent")
+        XCTAssertNil(
+            try encodeToObject(request)["attachmentIds"],
+            "and the key does not appear on the wire at all"
+        )
+    }
+
+    func testShouldCarryAttachmentIdsWhenThereActuallyAreSome() throws {
+        let ids: [SylID] = ["syl:attachment:019feb2f-e654-7000-ac0e-3f825d6a318c"]
+        let request = SendMessageRequest(
+            clientId: "c8f41d02-6b1e-4a77-9f30-2ab5c9d10e44",
+            text: "Here is the shelf, after.",
+            conversationId: SylIDs.interactiveConversation,
+            attachmentIds: ids
+        )
+
+        XCTAssertEqual(try encodeToObject(request)["attachmentIds"] as? [String], ids)
+    }
+
+    /// `durationMs` is null on an image and the key is still written.
+    ///
+    /// Nullable-and-present rather than optional, for the same reason as everything else
+    /// in this contract: "this image has no duration" and "this server does not report
+    /// durations" look identical when a field is merely absent.
+    func testShouldWriteANullDurationForAnImageRatherThanDropTheKey() throws {
+        let object = try encodeToObject(
+            Attachment(
+                id: "syl:attachment:019feb2f-e654-7000-ac0e-3f825d6a318c",
+                kind: .image,
+                mimeType: "image/png",
+                bytes: 144_559,
+                width: 1600,
+                height: 1200,
+                durationMs: nil,
+                sha256: String(repeating: "a", count: 64),
+                createdAt: try Instant.parse("2026-08-10T10:20:12.757Z"),
+                hasThumbnail: true
+            )
+        )
+
+        XCTAssertTrue(object.keys.contains("durationMs"))
+        XCTAssertTrue(object["durationMs"] is NSNull)
+    }
+
+    /// The layout hint that stops a bubble jumping when its bytes arrive, kept inside
+    /// the range a bubble can actually reserve.
+    func testShouldClampAnAbsurdAspectRatioRatherThanHandTheLayoutANaN() {
+        XCTAssertEqual(attachment(width: 1600, height: 1200).aspectRatio, 4.0 / 3.0, accuracy: 0.0001)
+        XCTAssertEqual(attachment(width: 10_000, height: 100).aspectRatio, 5)
+        XCTAssertEqual(attachment(width: 100, height: 10_000).aspectRatio, 0.2)
+    }
+
+    private func attachment(width: Int, height: Int) -> Attachment {
+        Attachment(
+            id: "syl:attachment:019feb2f-e654-7000-ac0e-3f825d6a318c",
+            kind: .image,
+            mimeType: "image/png",
+            bytes: 1,
+            width: width,
+            height: height,
+            durationMs: nil,
+            sha256: String(repeating: "a", count: 64),
+            createdAt: Date(timeIntervalSince1970: 0),
+            hasThumbnail: false
+        )
+    }
+
     // MARK: - Helpers
 
     private func encodeToObject(_ value: some Encodable) throws -> [String: Any] {

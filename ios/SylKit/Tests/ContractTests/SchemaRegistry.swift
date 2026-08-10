@@ -68,6 +68,9 @@ enum SchemaRegistry {
         "MessagePage": handler(MessagePage.self),
         "SendMessageRequest": handler(SendMessageRequest.self),
         "DeliveryConfirmation": handler(DeliveryConfirmation.self),
+        // Attachments
+        "Attachment": handler(Attachment.self),
+        "CreateAttachmentRequest": handler(CreateAttachmentRequest.self),
         // Reminders
         "Reminder": handler(Reminder.self),
         "ReminderPage": handler(ReminderPage.self),

@@ -53,11 +53,21 @@ struct ChatTurn: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: isFromCommander ? .trailing : .leading)
-        // One element per turn, announcing its speaker. Previously a turn was several
-        // unlabelled elements and a stray number, so VoiceOver read the transcript as
-        // undifferentiated text with no sense of who was talking.
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel)
+        // A container of elements rather than one merged element — and the change is
+        // `syl-008.6`'s, so the reason is worth stating.
+        //
+        // A turn *used* to be `.combine`d whole, which was right when a turn was only
+        // words: it read as one sentence announcing its speaker, instead of several
+        // unlabelled fragments and a stray number. But `.combine` flattens its
+        // descendants into a single non-actionable element, so the moment a turn can
+        // contain a picture, combining it makes the picture an unreachable noun in the
+        // middle of a sentence — and does the same to the "Try again" control.
+        //
+        // So the *prose* is still one element per message, still labelled with the
+        // speaker and the time (see ``MessageBody``), and an attachment sits beside it
+        // as its own focusable thing that says what it is. The transcript still reads as
+        // a conversation; the things in it can now be reached.
+        .accessibilityElement(children: .contain)
         .contextMenu {
             Button {
                 // The RAW text, not the rendered text. Once markdown renders, copying
@@ -85,8 +95,15 @@ struct ChatTurn: View {
             lightRail
 
             VStack(alignment: .leading, spacing: SylTheme.Metric.step) {
-                ForEach(group.messages) { message in
-                    MessageBody(blocks: blocks[message.id] ?? [.paragraph(message.text)])
+                ForEach(Array(group.messages.enumerated()), id: \.element.id) { index, message in
+                    MessageBody(
+                        blocks: blocks[message.id] ?? [.paragraph(message.text)],
+                        attachments: message.attachments,
+                        // Only the first message in the turn carries the "Syl said,
+                        // 9:14" preamble. Repeating it on every message would read the
+                        // speaker's name once per paragraph.
+                        label: index == 0 ? accessibilityLabel(for: message) : message.text
+                    )
                 }
 
                 if showsTime {
@@ -129,8 +146,15 @@ struct ChatTurn: View {
     private var commanderTurn: some View {
         VStack(alignment: .trailing, spacing: SylTheme.Metric.snug) {
             VStack(alignment: .leading, spacing: SylTheme.Metric.snug) {
-                ForEach(group.messages) { message in
-                    MessageBody(blocks: blocks[message.id] ?? [.paragraph(message.text)])
+                ForEach(Array(group.messages.enumerated()), id: \.element.id) { index, message in
+                    MessageBody(
+                        blocks: blocks[message.id] ?? [.paragraph(message.text)],
+                        // Inside the glass, not beside it. His turn is an object, and a
+                        // picture he sent is part of that object rather than a thing
+                        // floating next to it.
+                        attachments: message.attachments,
+                        label: index == 0 ? accessibilityLabel(for: message) : message.text
+                    )
                 }
             }
             .padding(.horizontal, SylTheme.Metric.step)
@@ -227,29 +251,49 @@ struct ChatTurn: View {
 
     // MARK: - Accessibility
 
-    /// The whole turn as one sentence: who spoke, what they said, and when.
+    /// The turn's opening, as one sentence: who spoke, when, and what they said.
     ///
     /// The time is folded in rather than left as its own element, because a stray number
-    /// read after a paragraph is a puzzle.
-    private var accessibilityLabel: String {
+    /// read after a paragraph is a puzzle. Only the *first* message in a turn gets it —
+    /// see the call site.
+    private func accessibilityLabel(for message: Message) -> String {
         let speaker = isFromCommander ? "You said" : "Syl said"
         let time = group.startedAt.formatted(date: .omitted, time: .shortened)
         let state = group.isPending ? ", sending" : ""
-        return "\(speaker), \(time)\(state). \(group.text)"
+        return "\(speaker), \(time)\(state). \(message.text)"
     }
 }
 
-/// The words themselves, as she wrote them.
+/// One message: the words as she wrote them, and anything they carried.
 ///
 /// The blocks arrive already parsed — `ChatSnapshotLoader` does that off the main actor,
 /// per message and cached by id. This view never touches the parser.
+///
+/// The prose is one combined VoiceOver element and the attachments are siblings; see the
+/// note on ``ChatTurn/body``. Empty text renders nothing at all rather than an empty
+/// paragraph's worth of leading, because a message that is only a picture is a real and
+/// ordinary thing.
 private struct MessageBody: View {
     let blocks: [MarkdownBlock]
+    var attachments: [Attachment] = []
+    var label: String = ""
+
+    private var hasProse: Bool {
+        !blocks.isEmpty && !(blocks.count == 1 && blocks == [.paragraph("")])
+    }
 
     var body: some View {
-        MarkdownView(blocks: blocks)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: SylTheme.Metric.snug) {
+            if hasProse {
+                MarkdownView(blocks: blocks)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(label)
+            }
+
+            AttachmentStrip(attachments: attachments)
+        }
     }
 }
 

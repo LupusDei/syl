@@ -70,6 +70,76 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertTrue(try store.messages(conversationId: "syl:conversation:unknown").isEmpty)
     }
 
+    /// The upgrade case, and the reason `Message.attachments` decodes tolerantly.
+    ///
+    /// **This test is the reason, and it exists because a comment cannot fail a build.**
+    ///
+    /// `MessageRecord` stores the encoded `Message` as a payload blob, so the contract
+    /// decoder reads this app's own disk and not only the wire. Every row written before
+    /// `attachments` existed has no such key. `attachments` is *required* in the
+    /// contract — the service always sends it — so tightening the decode to match looks
+    /// like an obvious tidy-up, and it passes every other test in the suite, because
+    /// every fixture already carries the key.
+    ///
+    /// What it actually does is this: `messages()` maps a whole window in one go, so a
+    /// single row that throws takes the entire array with it, `refresh()` reports
+    /// "Could not read the conversation from this device", and on upgrade day the
+    /// Commander opens chat to find his whole history gone. Losing one bubble would be
+    /// a degradation; losing the transcript is not.
+    ///
+    /// The row is written as raw SQL rather than through `upsert` on purpose — `upsert`
+    /// encodes with today's encoder, which would put the key back and test nothing.
+    func testShouldStillReadAConversationWrittenBeforeAttachmentsExisted() throws {
+        let id: SylID = "syl:message:0198f2c0-0001-7000-8000-00000000b001"
+        // The exact shape the encoder produced before this field was added. Written out
+        // rather than derived, so a change to today's encoder cannot quietly rewrite
+        // history and make this pass for the wrong reason.
+        let legacyPayload = """
+            {"id":"\(id)",\
+            "conversationId":"\(SylIDs.interactiveConversation)",\
+            "clientId":null,"role":"assistant","text":"Done.",\
+            "createdAt":"2026-08-09T07:00:03.114Z","seq":1}
+            """
+        let hex = Data(legacyPayload.utf8).map { String(format: "%02x", $0) }.joined()
+
+        try database.queue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO message
+                        (id, conversationId, seq, createdAt, clientId, pending, payload)
+                    VALUES
+                        ('\(id)', '\(SylIDs.interactiveConversation)', 1,
+                         '2026-08-09 07:00:03.114', NULL, 0, X'\(hex)')
+                    """
+            )
+        }
+
+        let messages = try store.messages(conversationId: SylIDs.interactiveConversation)
+
+        XCTAssertEqual(messages.count, 1, "an old row must not take the transcript with it")
+        XCTAssertEqual(messages.first?.text, "Done.")
+        XCTAssertEqual(
+            messages.first?.attachments,
+            [],
+            "a missing key reads as no attachments, which is what it meant when it was written"
+        )
+    }
+
+    /// The other half of the same asymmetry: what goes back out always carries the key.
+    ///
+    /// Without this, "tolerant" could quietly become "optional in both directions", and
+    /// the app would start sending the server the very shape the contract forbids.
+    func testShouldWriteTheAttachmentsKeyBackEvenWhenThereAreNone() throws {
+        let encoded = try SylJSON.encoder().encode(
+            message(id: "syl:message:0198f2c0-0001-7000-8000-00000000b001", seq: 1)
+        )
+
+        XCTAssertTrue(
+            String(decoding: encoded, as: UTF8.self).contains("\"attachments\":[]"),
+            "a client must never make the server guess between 'none' and 'not sent'"
+        )
+    }
+
     func testShouldTrackTheHighestConversationSequenceItHolds() throws {
         try store.upsert([
             message(id: "syl:message:0198f2c0-0001-7000-8000-00000000b001", seq: 1),
