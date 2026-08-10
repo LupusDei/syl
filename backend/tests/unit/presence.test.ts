@@ -194,6 +194,25 @@ describe("PresenceService", () => {
     expect(emitted.map((frame) => frame.state)).toEqual(["idle", "thinking"]);
   });
 
+  it("should resolve rather than stick when the last socket dies mid-turn", () => {
+    // `syl-8l7`, the invariant behind all three seams: presence must never
+    // assert something that has stopped being true. A phone that goes into a
+    // tunnel while Syl is thinking takes the connection with it — and the turn
+    // is still running, so `thinking` is still the honest answer — but when
+    // that turn ends there is nobody left to be present for, and she has to
+    // arrive at `absent` on her own rather than waiting for a client that will
+    // reconnect into a state machine already claiming she is busy.
+    service.setAttached(true);
+    service.turnStarted();
+    expect(service.current.state).toBe("thinking");
+
+    service.setAttached(false);
+    expect(service.current.state).toBe("thinking");
+
+    service.turnEnded();
+    expect(service.current.state).toBe("absent");
+  });
+
   it("should not emit again for a fact that changes nothing", () => {
     service.setAttached(true);
     emitted.length = 0;

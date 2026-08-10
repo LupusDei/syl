@@ -168,6 +168,22 @@ export interface AttachmentSink {
   setAttached(attached: boolean): void;
 }
 
+/**
+ * The half of {@link PresenceService} the delivery path is allowed to reach.
+ *
+ * Narrow for the same reason {@link AttachmentSink} is: the reminder-delivery
+ * job knows exactly one thing about the character — that something it sent
+ * was worth breaking through Focus for — and this is the only thing it can
+ * say. It is also the reason the delivery path can hold a character at all
+ * without acquiring the ability to decide what she is doing, which matters
+ * more here than anywhere else: that job carries the never-drop guarantee and
+ * must not gain a second responsibility.
+ */
+export interface AlertSink {
+  /** A time-sensitive delivery went out. */
+  alerted(): void;
+}
+
 /** State and amplitude, before `since` is attached. */
 export interface DerivedPresence {
   readonly state: PresenceState;
@@ -249,7 +265,7 @@ export interface PresenceServiceOptions {
  * Every mutator recomputes and emits only if something a client would notice
  * has changed, so a busy turn does not produce a frame per event.
  */
-export class PresenceService implements AttachmentSink {
+export class PresenceService implements AttachmentSink, AlertSink {
   readonly #clock: Clock;
   #emit: PresenceSink | null;
   readonly #window: PresenceWindow;

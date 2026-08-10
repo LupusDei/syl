@@ -261,6 +261,154 @@ describe("createReminderDeliveryHandler", () => {
   });
 });
 
+describe("the alert seam", () => {
+  /**
+   * `syl-8l7`. `PresenceService.alerted` existed, was tested, and had no caller
+   * anywhere in `backend/src` — so `alert`, the one presence state that is
+   * about the Commander being interrupted, could never occur on a running
+   * service.
+   *
+   * The rationing rule is the whole design and it is asserted here rather than
+   * assumed: the character says `alert` **only** when a notification Apple
+   * actually took carried `time-sensitive`. If a message was not worth breaking
+   * through Focus, it is not worth breaking through the screen either — and a
+   * row that was held, refused or merely written to the outbox interrupted
+   * nobody.
+   */
+  let db: SylDatabase;
+  let now: number;
+  let reminders: ReminderService;
+  let outbox: Outbox;
+  let devices: DeviceTokenService;
+  let jobs: JobStore;
+  let alerts: number;
+
+  beforeEach(() => {
+    db = testDatabase();
+    now = NOW;
+    alerts = 0;
+    const clock = (): number => now;
+    reminders = new ReminderService({ db: db.handle, clock });
+    outbox = new Outbox({ db: db.handle, clock });
+    devices = new DeviceTokenService({ db: db.handle, clock });
+    jobs = new JobStore({ db: db.handle, clock });
+    devices.register({
+      token: TOKEN,
+      environment: "production",
+      platform: "ios",
+      name: "iPhone",
+      appVersion: "1",
+      osVersion: "26.1",
+    });
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  /** One pass, with a character listening unless `presence` is overridden. */
+  async function run(
+    apns: ApnsSender | null,
+    presence: { alerted(): void } | undefined = {
+      alerted: () => {
+        alerts += 1;
+      },
+    },
+  ): Promise<void> {
+    const job = defineReminderDeliveryJob(jobs, new Date(now).toISOString());
+    const runRow = jobs.startRun(job, job.nextRunAt ?? "", now);
+    const handler = createReminderDeliveryHandler({
+      reminders,
+      outbox,
+      devices,
+      apns,
+      warn: () => undefined,
+      ...(presence === undefined ? {} : { presence }),
+    });
+    await handler({ job, run: runRow, triggerInstant: job.nextRunAt ?? "", late: false, now });
+  }
+
+  /** A commitment: `payloadFor` marks it `time-sensitive`. */
+  function commitment(): void {
+    reminders.create({ text: "Call the pharmacy.", wallTime: "16:00", tz: CHICAGO, date: "2026-08-09" });
+    now = Date.UTC(2026, 7, 9, 21, 0);
+  }
+
+  /** A rhythm message that is not urgent: ordinary, `active`. */
+  function rhythm(): void {
+    reminders.create({
+      text: "Evening review.",
+      kind: "rhythm",
+      wallTime: "16:00",
+      tz: CHICAGO,
+      date: "2026-08-09",
+    });
+    now = Date.UTC(2026, 7, 9, 21, 0);
+  }
+
+  it("should tell presence when Apple took a time-sensitive notification", async () => {
+    commitment();
+    await run(scriptedApns());
+    expect(alerts).toBe(1);
+  });
+
+  it("should say nothing to presence when the notification was not time-sensitive", async () => {
+    // The ration. `alert` is coupled to the interruption level so that the
+    // character cannot become something every reminder does.
+    rhythm();
+    await run(scriptedApns());
+    expect(alerts).toBe(0);
+  });
+
+  it("should say nothing to presence when nothing was accepted", async () => {
+    // A machine that cannot send interrupted nobody. Presence must not claim
+    // an interruption that only ever reached the outbox.
+    commitment();
+    await run(null);
+    expect(alerts).toBe(0);
+    expect(outbox.list().items[0]?.state).toBe("pending");
+  });
+
+  it("should say nothing to presence on a pass with nothing due", async () => {
+    await run(scriptedApns());
+    expect(alerts).toBe(0);
+  });
+
+  it("should announce one interruption for a pass that accepted several", async () => {
+    // Two reminders that come due together are one moment of being
+    // interrupted, not two. The window is 8s either way, so a second call
+    // would only mean a second identical frame.
+    reminders.create({ text: "Pharmacy.", wallTime: "16:00", tz: CHICAGO, date: "2026-08-09" });
+    reminders.create({ text: "Dentist.", wallTime: "16:00", tz: CHICAGO, date: "2026-08-09" });
+    now = Date.UTC(2026, 7, 9, 21, 0);
+
+    await run(scriptedApns());
+    expect(alerts).toBe(1);
+  });
+
+  it("should deliver normally with no character wired at all", async () => {
+    // Presence is optional here on purpose: a delivery runtime with no socket
+    // is still a delivery runtime, and the never-drop guarantee may not depend
+    // on anything as decorative as a character.
+    commitment();
+    await run(scriptedApns(), undefined);
+    expect(outbox.list().items[0]?.state).toBe("delivered");
+  });
+
+  it("should deliver the reminder even when telling presence throws", async () => {
+    // The guarantee outranks the character. A throw out of the handler is what
+    // opens the job's circuit breaker, so a broken sink here would end every
+    // FUTURE reminder as well as this one.
+    commitment();
+    await run(scriptedApns(), {
+      alerted: () => {
+        throw new Error("the socket went away mid-frame");
+      },
+    });
+    expect(outbox.list().items[0]?.state).toBe("delivered");
+  });
+});
+
 describe("delivery across a run of failures", () => {
   let db: SylDatabase;
   let now: number;

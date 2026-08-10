@@ -841,6 +841,11 @@ export async function startSyl(
     reminders: deps.reminders,
     outbox: deps.outbox,
     devices: deps.devices,
+    // The third presence seam, and the last one made here (`syl-8l7`). The
+    // socket says whether anyone is watching, the conversation service says
+    // whether a turn is open, and the delivery loop is the only thing that
+    // knows a notification actually broke through to him.
+    presence: deps.presence,
     handlers: new Map([
       [
         "content_ingestion",

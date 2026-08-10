@@ -5,6 +5,7 @@ import type { DeviceTokenService } from "../services/device-token-service.js";
 import type { JobHandler, JobResult } from "../services/job-runner.js";
 import type { JobStore } from "../services/job-store.js";
 import type { Outbox } from "../services/outbox.js";
+import type { AlertSink } from "../services/presence.js";
 import type { ReminderService } from "../services/reminder-service.js";
 import { deliverDueReminders } from "./deliver-reminders.js";
 import { pushDueDeliveries, type ApnsSender } from "./push-outbox.js";
@@ -58,6 +59,16 @@ export interface ReminderDeliveryDeps {
   /** `null` when APNs is not configured. The outbox holds rows regardless. */
   readonly apns: ApnsSender | null;
   /**
+   * Syl's character, told when something actually broke through.
+   *
+   * Optional: a delivery runtime with no socket in front of it is still a
+   * delivery runtime, and the never-drop guarantee may not come to depend on
+   * anything as decorative as a character. See {@link brokeThrough} for what
+   * "actually" means here, and `services/presence.ts` for why `alert` is
+   * rationed rather than emitted per notification.
+   */
+  readonly presence?: AlertSink;
+  /**
    * Where the one line about a machine that cannot send goes.
    *
    * Injected so a test can read it, and defaulted to stderr because the
@@ -93,6 +104,20 @@ export function createReminderDeliveryHandler(deps: ReminderDeliveryDeps): JobHa
       { outbox: deps.outbox, devices: deps.devices, apns: deps.apns },
       context.now,
     );
+
+    // `syl-8l7`. The one thing in the delivery path the character hears about,
+    // and the third of presence's three seams.
+    //
+    // Wrapped, because the guarantee outranks the character in both
+    // directions: a throw out of this handler is what opens the job's circuit
+    // breaker, so a sink that fails here would end every FUTURE reminder on
+    // top of this one. A silent character is a degraded Syl; a stopped
+    // delivery loop is a broken promise.
+    try {
+      if (brokeThrough(deps.outbox, pushed.accepted)) deps.presence?.alerted();
+    } catch (error) {
+      warn(`[syl] the delivery could not be announced to presence: ${String(error)}`);
+    }
 
     const held = pushed.blocked.length;
     const waiting = pushed.failed.length;
@@ -140,6 +165,32 @@ export function createReminderDeliveryHandler(deps: ReminderDeliveryDeps): JobHa
       nextRunAt: nextWakeFor(deps, context.now),
     };
   };
+}
+
+/**
+ * Did this pass actually interrupt him?
+ *
+ * Two conditions, and both are load-bearing.
+ *
+ * **Apple took it.** A row that was written, held, deferred or refused
+ * interrupted nobody, and a character that flared for one would be asserting
+ * something that never happened — the derived-state rule, applied to the one
+ * fact this file owns.
+ *
+ * **It was `time-sensitive`.** That is the interruption level that breaks
+ * through Focus and the Scheduled Summary, and coupling `alert` to it is what
+ * rations the state: if a notification was not worth interrupting his evening
+ * for, it is not worth interrupting his screen for either. A rhythm message
+ * and an overnight digest are both deliberately `active`, so neither moves
+ * her.
+ *
+ * One announcement per pass, not one per row: several reminders coming due
+ * together are one moment of being interrupted.
+ */
+function brokeThrough(outbox: Outbox, accepted: readonly string[]): boolean {
+  return accepted.some(
+    (id) => outbox.get(id)?.payload.interruptionLevel === "time-sensitive",
+  );
 }
 
 /** What to say about rows nothing could be attempted for. */
