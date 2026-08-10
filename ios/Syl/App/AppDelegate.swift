@@ -56,6 +56,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     /// status screen and say so rather than refuse to launch.
     private(set) var store: LocalStore?
     private(set) var chat: ChatViewModel?
+    /// The home screen's model. Holds its own `PresenceTimeline` rather than reading
+    /// chat's, because chat keeps the raw frame state and never decays it.
+    private(set) var home: HomeViewModel?
     private var syncEngine: SyncEngine?
     /// Answers for anything push accepted but never showed. See `syl-u9e`.
     private var deliveryReconciler: DeliveryReconciler?
@@ -141,18 +144,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
             flush: { await engine.synchronise() }
         )
 
+        let home = HomeViewModel(store: store)
+
         self.store = store
         self.syncEngine = engine
         self.deliveryReconciler = reconciler
         self.socket = socket
         self.socketBaseURL = backend.baseURL
         self.chat = chat
+        self.home = home
 
         // Notification actions write to the outbox rather than calling the network, so
         // a snooze tapped while the tailnet is down survives.
         notifications.attach(outbox: outbox) { await engine.synchronise() }
 
-        startSocket(socket, feeding: chat, store: store)
+        startSocket(socket, feeding: chat, home: home, store: store)
         Task { await self.reconcile() }
     }
 
@@ -172,6 +178,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     private func startSocket(
         _ socket: WebSocketClient,
         feeding chat: ChatViewModel,
+        home: HomeViewModel,
         store: LocalStore
     ) {
         socketPump?.cancel()
@@ -185,6 +192,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
 
             for await event in events {
                 await chat.apply(event)
+                home.apply(event)
 
                 if case .needsHTTPSync = event {
                     // The gap is older than the replay buffer. The socket cannot fill
@@ -334,7 +342,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     }
 
     private func openSocket() {
-        guard let store, let chat, socket == nil else { return }
+        guard let store, let chat, let home, socket == nil else { return }
         let socket = WebSocketClient(
             configuration: ServerConfiguration(baseURL: backend.baseURL),
             tokenProvider: TokenStoreProvider(store: tokens),
@@ -346,7 +354,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         )
         self.socket = socket
         self.socketBaseURL = backend.baseURL
-        startSocket(socket, feeding: chat, store: store)
+        startSocket(socket, feeding: chat, home: home, store: store)
     }
 
     func application(
