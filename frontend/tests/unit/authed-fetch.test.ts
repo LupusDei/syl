@@ -111,7 +111,12 @@ describe("createAuthedFetch", () => {
     expect(response.status).toBe(401);
   });
 
-  it("should notify onUnauthorized on 403 as well as 401", async () => {
+  it("should NOT notify onUnauthorized on 403, because the key is not the problem", async () => {
+    // This used to sign out on 403 alongside 401, which was right while every
+    // route accepted every key. `GET /logs` needs `admin` scope, so 403 now
+    // means *this key works and is not for this view* — and dropping a
+    // perfectly good credential over it sends the operator back to the gate to
+    // paste the same key in again.
     const onUnauthorized = vi.fn();
     const request = createAuthedFetch({
       baseUrl: "/api",
@@ -120,9 +125,11 @@ describe("createAuthedFetch", () => {
       onUnauthorized,
     });
 
-    await request("/jobs");
+    const response = await request("/logs");
 
-    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+    // And the caller still sees it, so a view can explain the scope.
+    expect(response.status).toBe(403);
   });
 
   it("should not notify onUnauthorized for a successful response", async () => {

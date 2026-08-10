@@ -95,6 +95,14 @@ export interface LiveService {
   /** A bearer token obtained over HTTP, by pairing exactly as a device does. */
   readonly token: string;
   /**
+   * A token with `admin` scope, minted the way the console mints one.
+   *
+   * Deliberately **not** obtained over HTTP, because no route mints one — that
+   * is the entire security argument for the scope. A test that could pair its
+   * way to an admin key would be asserting the opposite of the property.
+   */
+  readonly adminToken: string;
+  /**
    * A fresh pairing code, issued the way `npm run pair` issues one.
    *
    * Each call supersedes the last, which is the service's own invariant rather
@@ -150,6 +158,8 @@ export interface LiveRequest extends RequestInit {
   readonly idempotencyKey?: string;
   /** Send no `Authorization` header at all. */
   readonly anonymous?: boolean;
+  /** Present this token instead of the paired device's. */
+  readonly token?: string;
 }
 
 /** Where a live service's pushes should go, and when it should look. */
@@ -323,14 +333,16 @@ export async function startLiveService(
   const baseUrl = `${origin}${API_BASE_PATH}`;
 
   let token = "";
+  let adminToken: string | null = null;
 
   const api = async (path: string, init: LiveRequest = {}): Promise<Response> => {
-    const { idempotencyKey, anonymous, headers, ...rest } = init;
+    const { idempotencyKey, anonymous, token: override, headers, ...rest } = init;
+    const presented = override ?? token;
     return fetch(`${baseUrl}${path}`, {
       ...rest,
       headers: {
         "content-type": "application/json",
-        ...(anonymous === true || token === "" ? {} : { authorization: `Bearer ${token}` }),
+        ...(anonymous === true || presented === "" ? {} : { authorization: `Bearer ${presented}` }),
         // A UUID rather than a counter. The counter restarted at zero for every
         // `startLiveService`, so a test that restarts the service against the
         // same database — which is the whole of US5 — re-sent `live-1` with a
@@ -370,6 +382,16 @@ export async function startLiveService(
     wsUrl: `ws://127.0.0.1:${String(port)}${WS_PATH}`,
     get token() {
       return token;
+    },
+    // Minted through the service's own store, exactly as `npm run pair
+    // -- --admin` does. There is no HTTP path to this, on purpose.
+    //
+    // Lazy, and memoised: minting eagerly would put an extra row in `api_keys`
+    // for every live-service test in the suite, including the ones that count
+    // them.
+    get adminToken() {
+      adminToken ??= deps.keys.mint("Web admin (console)", { scope: "admin" }).token;
+      return adminToken;
     },
     config,
     deps,

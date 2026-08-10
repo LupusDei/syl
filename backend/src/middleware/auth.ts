@@ -3,7 +3,12 @@ import type { NextFunction, Request, RequestHandler, Response } from "express";
 import type { Principal } from "@syl/shared";
 
 import { ApiFailure } from "../routes/envelope.js";
-import type { ApiKeyRecord, ApiKeyService, RejectionReason } from "../services/api-key-service.js";
+import type {
+  ApiKeyRecord,
+  ApiKeyService,
+  KeyScope,
+  RejectionReason,
+} from "../services/api-key-service.js";
 
 /**
  * `Authorization: Bearer <token>` on everything except the two operations that
@@ -102,6 +107,77 @@ export function requireBearerToken(options: AuthMiddlewareOptions): RequestHandl
     }
 
     request.auth = { principal: result.principal, key: result.key };
+    next();
+  };
+}
+
+/**
+ * The refusal a correctly-authenticated caller gets for asking too much.
+ *
+ * **Deliberately distinguishable from `unauthorized()`**, which is the opposite
+ * of the rule one paragraph up, so the reasoning has to be explicit. The
+ * indistinguishability rule exists so that a caller cannot use the API as an
+ * oracle for *guessing tokens*. This refusal is only ever reached by a caller
+ * whose token was accepted — they already hold a working credential, so there
+ * is nothing left to guess. What they learn is that this surface exists and
+ * their key is not for it, and the alternative is a phone told "re-pair this
+ * device" for a route no phone will ever be allowed to reach, which is a
+ * support call rather than a security property.
+ */
+export function forbidden(scope: KeyScope): ApiFailure {
+  return new ApiFailure(
+    "FORBIDDEN",
+    `This endpoint needs a key with ${scope} scope. Paired devices do not get one — ` +
+      `mint it at the machine's own console with \`npm run pair -- --admin\`.`,
+  );
+}
+
+export interface ScopeMiddlewareOptions {
+  /**
+   * Where a refusal is recorded.
+   *
+   * Separate from the auth log line for the same reason the failure is
+   * separate: a device reaching for the admin surface is not a broken token,
+   * it is either a mis-built client or somebody trying.
+   */
+  readonly onRefused?: (scope: KeyScope, path: string) => void;
+}
+
+/**
+ * Require a scope, on top of a valid token.
+ *
+ * Mounted **after** {@link requireBearerToken} on the routes that need it, so
+ * an anonymous caller still gets the indistinguishable 401 and never learns
+ * that a scope exists. Throwing when `request.auth` is absent is the same
+ * decision as {@link requireAuth}: a scope check in front of no authentication
+ * check is a hole that reads like a guard.
+ */
+export function requireScope(
+  scope: KeyScope,
+  options: ScopeMiddlewareOptions = {},
+): RequestHandler {
+  const onRefused =
+    options.onRefused ??
+    ((refused: KeyScope, path: string): void => {
+      console.warn(`[syl] refused a request to ${path}: key is not ${refused} scope`);
+    });
+
+  return function authorise(request: Request, _response: Response, next: NextFunction): void {
+    const auth = request.auth;
+    if (auth === undefined) {
+      next(
+        new Error(
+          "requireScope is mounted without requireBearerToken in front of it. " +
+            "Refusing to serve a request whose token was never checked.",
+        ),
+      );
+      return;
+    }
+    if (auth.key.scope !== scope) {
+      onRefused(scope, request.path);
+      next(forbidden(scope));
+      return;
+    }
     next();
   };
 }

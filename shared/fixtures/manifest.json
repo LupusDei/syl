@@ -8,6 +8,12 @@
       "summary": "A deferral must always return a strictly later instant. This is the guarantee refusing to be broken."
     },
     {
+      "file": "errors/forbidden.json",
+      "schema": "ErrorEnvelope",
+      "envelope": "raw",
+      "summary": "A valid token that is not for this surface. The only place Syl tells a caller apart from an unauthenticated one, and it is safe because they already hold a working credential."
+    },
+    {
       "file": "errors/idempotency_key_required.json",
       "schema": "ErrorEnvelope",
       "envelope": "raw",

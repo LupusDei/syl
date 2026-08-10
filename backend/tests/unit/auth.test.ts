@@ -4,7 +4,9 @@ import type { ApiError, Principal, TokenGrant } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp } from "../../src/index.js";
-import { bearerToken } from "../../src/middleware/auth.js";
+import { bearerToken, forbidden, requireScope } from "../../src/middleware/auth.js";
+import { ApiFailure } from "../../src/routes/envelope.js";
+import type { AuthenticatedContext } from "../../src/middleware/auth.js";
 import { THE_COMMANDER, type ApiKeyService } from "../../src/services/api-key-service.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import { startTestApp, type RunningApp } from "../helpers/http.js";
@@ -449,5 +451,102 @@ describe("bearerToken", () => {
 
   it("should reject a header carrying two values", () => {
     expect(bearerToken("Bearer abc def")).toBeNull();
+  });
+});
+
+/**
+ * The scope gate, exercised as a middleware rather than over HTTP.
+ *
+ * `tests/unit/logs.test.ts` covers what a real caller sees on the one route
+ * that uses it. What is here is the middleware's own contract, including the
+ * case no route can produce: being mounted with nothing in front of it.
+ */
+describe("requireScope", () => {
+  /** A request carrying the auth context `requireBearerToken` would have set. */
+  function requestWith(scope: "device" | "admin" | undefined): Parameters<
+    ReturnType<typeof requireScope>
+  >[0] {
+    const auth: AuthenticatedContext | undefined =
+      scope === undefined
+        ? undefined
+        : {
+            principal: THE_COMMANDER,
+            key: {
+              id: "syl:apikey:0198f100-0000-7000-8000-0000000000ff",
+              deviceName: "A device",
+              tokenSuffix: "abcd",
+              scope,
+              createdAt: "2026-08-09T07:00:00.000Z",
+              expiresAt: null,
+              lastUsedAt: null,
+              revokedAt: null,
+              revokedReason: null,
+            },
+          };
+    // Safe: `requireScope` reads `auth` and `path` and nothing else.
+    return { ...(auth === undefined ? {} : { auth }), path: "/logs" } as Parameters<
+      ReturnType<typeof requireScope>
+    >[0];
+  }
+
+  /** Run the middleware and return whatever it handed `next`. */
+  function run(scope: "device" | "admin" | undefined): unknown {
+    let passed: unknown = "not called";
+    const refusals: string[] = [];
+    requireScope("admin", { onRefused: (wanted) => refusals.push(wanted) })(
+      requestWith(scope),
+      {} as never,
+      ((error?: unknown) => {
+        passed = error;
+      }) as never,
+    );
+    return passed;
+  }
+
+  it("should pass a request whose key holds the scope", () => {
+    expect(run("admin")).toBeUndefined();
+  });
+
+  it("should refuse a key with a different scope, as a contract failure", () => {
+    const refusal = run("device");
+
+    expect(refusal).toBeInstanceOf(ApiFailure);
+    expect((refusal as ApiFailure).code).toBe("FORBIDDEN");
+    expect((refusal as ApiFailure).status).toBe(403);
+  });
+
+  it("should refuse loudly when it is mounted with no authentication in front of it", () => {
+    // A scope check reading `undefined !== "admin"` would answer 403 here,
+    // which reads like a working guard and is in fact an unauthenticated
+    // request that was never checked at all.
+    const refusal = run(undefined);
+
+    expect(refusal).toBeInstanceOf(Error);
+    expect(refusal).not.toBeInstanceOf(ApiFailure);
+    expect((refusal as Error).message).toContain("requireBearerToken");
+  });
+
+  it("should record the refusal where an operator can see it", () => {
+    const refusals: string[] = [];
+    requireScope("admin", { onRefused: (scope, path) => refusals.push(`${scope} ${path}`) })(
+      requestWith("device"),
+      {} as never,
+      (() => undefined) as never,
+    );
+
+    expect(refusals).toEqual(["admin /logs"]);
+  });
+});
+
+describe("forbidden", () => {
+  it("should name the command that produces the key it is asking for", () => {
+    // The one refusal a legitimate operator meets. "Forbidden" on its own is a
+    // support call; this is a next step.
+    expect(forbidden("admin").message).toContain("npm run pair -- --admin");
+    expect(forbidden("admin").code).toBe("FORBIDDEN");
+  });
+
+  it("should not be retryable — a scope does not change on a second try", () => {
+    expect(forbidden("admin").toApiError().retryable).toBe(false);
   });
 });

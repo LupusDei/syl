@@ -34,6 +34,14 @@ export const NAV_ITEMS: readonly NavItem[] = [
     status: "ready",
   },
   {
+    path: "/logs",
+    label: "Logs",
+    summary:
+      "Every tool she has called, and every turn she has taken. The admin-scoped view of what she actually did.",
+    bead: "syl-dep1.3",
+    status: "ready",
+  },
+  {
     path: "/delivery",
     label: "Delivery outbox",
     summary: "What was sent, what was retried, and what is still unconfirmed.",

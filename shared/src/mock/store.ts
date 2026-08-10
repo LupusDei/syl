@@ -7,6 +7,8 @@ import type {
   Goal,
   HealthStatus,
   Job,
+  LogEntry,
+  LogLevel,
   Message,
   Principal,
   Reminder,
@@ -87,6 +89,7 @@ export class MockStore {
   deliveries: Delivery[];
   jobs: Job[];
   runs: Run[];
+  logs: LogEntry[];
   readonly principal: Principal;
   private changes: SyncLogEntry[] = [];
 
@@ -100,6 +103,7 @@ export class MockStore {
     this.deliveries = clone(data<Page<Delivery>>("http/deliveries.page").items) as Delivery[];
     this.jobs = clone(data<Page<Job>>("http/jobs.page").items) as Job[];
     this.runs = clone(data<Page<Run>>("http/runs.page").items) as Run[];
+    this.logs = seedLogs();
     this.principal = clone(data<Principal>("http/auth.whoami"));
   }
 
@@ -115,6 +119,7 @@ export class MockStore {
     this.deliveries = fresh.deliveries;
     this.jobs = fresh.jobs;
     this.runs = fresh.runs;
+    this.logs = fresh.logs;
     this.changes = [];
   }
 
@@ -591,4 +596,93 @@ function decodeCursor(cursor: string | undefined): number {
 /** Wrap a list as a single page. The mock does not paginate list endpoints. */
 export function page<T>(items: readonly T[]): Page<T> {
   return { items, nextCursor: null, hasMore: false };
+}
+
+// -------------------------------------------------------------------- logs ---
+
+/**
+ * The mock's log, generated rather than loaded from a fixture.
+ *
+ * Every other collection here is seeded from `shared/fixtures/`, and this one
+ * deliberately is not. The manifest is decoded by **both** suites — the Swift
+ * `ContractTests` require a SylKit model for every schema it names — so adding
+ * `logs.page.json` would oblige the iOS app to model a surface it is
+ * specifically forbidden to call. `GET /logs` is admin scope only; the phone
+ * only ever holds a device-scoped token. Generating here keeps the fixture set
+ * describing the phone's contract and nothing else.
+ *
+ * The shape of the sequence is the point: a start, then a turn that begins,
+ * calls three tools and finishes. `turn.tool` is what the admin's view leads
+ * with, so a mock that produced none of them would let a client be built that
+ * renders that column wrong and never finds out.
+ */
+export function seedLogs(): LogEntry[] {
+  const pid = 4242;
+  const base = Date.parse("2026-08-10T13:04:00.000Z");
+  const at = (offsetMs: number): string => new Date(base + offsetMs).toISOString();
+
+  const entry = (
+    offsetMs: number,
+    level: LogLevel,
+    event: string,
+    fields: Readonly<Record<string, unknown>>,
+  ): LogEntry => ({ ts: at(offsetMs), level, event, pid, fields });
+
+  return [
+    entry(0, "info", "service.start", {
+      version: "0.1.0",
+      port: 8888,
+      credentialSource: "none",
+      subscriptionRails: true,
+    }),
+    entry(1_000, "info", "chat", { message: "accepted a message on the commander lane" }),
+    entry(1_200, "info", "turn.start", { sessionId: "0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f" }),
+    entry(2_400, "info", "turn.tool", { tool: "Read" }),
+    entry(3_100, "info", "turn.tool", { tool: "Bash" }),
+    entry(4_800, "info", "turn.tool", { tool: "mcp__adjutant__send_message" }),
+    entry(9_600, "info", "turn.done", { turns: 4, costUsd: 0.0512, isError: false }),
+    entry(60_000, "warn", "job.late", { kind: "reminder_delivery", latenessMs: 41_000 }),
+    entry(120_000, "error", "turn.api_error", { message: "upstream connection reset" }),
+  ].reverse();
+}
+
+/** What a caller may narrow the log by. Mirrors the query string on `GET /logs`. */
+export interface LogFilter {
+  readonly event?: string | undefined;
+  readonly level?: string | undefined;
+  readonly since?: string | undefined;
+  readonly until?: string | undefined;
+}
+
+const LOG_LEVEL_RANK: Readonly<Record<LogLevel, number>> = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+};
+
+/**
+ * Filter the log the way the real service does.
+ *
+ * `event` is a **prefix** match, not equality — `turn` is every turn event and
+ * `turn.tool` is only the tool calls. A mock that matched exactly would let a
+ * client ship a filter that silently returns nothing against the real service.
+ */
+export function filterLogs(entries: readonly LogEntry[], filter: LogFilter): LogEntry[] {
+  const floor =
+    filter.level === undefined ? 0 : (LOG_LEVEL_RANK[filter.level as LogLevel] ?? 0);
+  return entries.filter((item) => {
+    if (LOG_LEVEL_RANK[item.level] < floor) return false;
+    if (filter.event !== undefined && filter.event !== "" && !item.event.startsWith(filter.event)) {
+      return false;
+    }
+    if (filter.since !== undefined && filter.since !== "" && item.ts < filter.since) return false;
+    if (filter.until !== undefined && filter.until !== "" && item.ts > filter.until) return false;
+    return true;
+  });
+}
+
+/** Whether a string names a level the contract knows. */
+export function isLogLevel(value: string): value is LogLevel {
+  return Object.hasOwn(LOG_LEVEL_RANK, value);
 }

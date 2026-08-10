@@ -24,7 +24,7 @@ import { ADMIN_BASE_PATH, createAdminRouter } from "./routes/admin.js";
 import { describeAdmin, inspectAdminBundle } from "./ops/admin-bundle.js";
 import { ArticleIntake } from "./connections/intake.js";
 import { IntakeStore } from "./connections/intake-store.js";
-import { requireBearerToken } from "./middleware/auth.js";
+import { requireBearerToken, requireScope } from "./middleware/auth.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createConversationRouter } from "./routes/conversations.js";
 import { createDeliveryRouter } from "./routes/deliveries.js";
@@ -44,6 +44,7 @@ import { tailnetCertProbe } from "./ops/tailnet-cert.js";
 import { createGoalRouter } from "./routes/goals.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
 import { createJobRouter } from "./routes/jobs.js";
+import { createLogRouter } from "./routes/logs.js";
 import { createReminderRouter } from "./routes/reminders.js";
 import { createSyncRouter } from "./routes/sync.js";
 import { createTodoRouter } from "./routes/todos.js";
@@ -264,6 +265,17 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // Read-only, so no idempotency ledger: there is nothing here to run twice.
   api.use(createSyncRouter({ sync, authenticate }));
   api.use(createJobRouter({ jobs, authenticate }));
+  // The one route in the contract that a paired phone may not call. Both
+  // middlewares are named here rather than hidden inside the router, so the
+  // service's own bootstrap shows that the log is gated and by what. See
+  // `routes/logs.ts` for why this surface is different from every other read.
+  api.use(
+    createLogRouter({
+      logDirectory: config.logDirectory,
+      authenticate,
+      requireAdmin: requireScope("admin"),
+    }),
+  );
   api.use(createIntakeRouter({ intake, idempotency, authenticate }));
 
   app.use(API_BASE_PATH, api);

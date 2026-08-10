@@ -105,7 +105,11 @@ describe("fixture coverage of the contract", () => {
     // Codes a client can actually receive must all have a fixture; the ones
     // exercised only by a write path it cannot reach yet are listed here so
     // the gap is a decision rather than an oversight.
-    expect(missing).toEqual(["FORBIDDEN", "CONFLICT", "RRULE_UNSUPPORTED", "UNKNOWN_JOB_KIND", "DEVICE_TOKEN_INVALID"]);
+    //
+    // `FORBIDDEN` came off this list when `GET /logs` landed: it is now a
+    // refusal a real client receives — the admin, holding a device-scoped key —
+    // rather than a code nothing emits.
+    expect(missing).toEqual(["CONFLICT", "RRULE_UNSUPPORTED", "UNKNOWN_JOB_KIND", "DEVICE_TOKEN_INVALID"]);
   });
 
   it("should never let a presence fixture carry a seq", () => {

@@ -127,6 +127,7 @@ tags:
   - name: devices
   - name: delivery
   - name: jobs
+  - name: logs
   - name: sync
 
 paths:
@@ -981,6 +982,92 @@ paths:
                     required: [data]
                     properties:
                       data: { $ref: "#/components/schemas/Run" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- logs ---
+  /logs:
+    get:
+      tags: [logs]
+      operationId: listLogs
+      summary: What Syl actually did. Admin scope only.
+      description: |
+        The service's own structured log, filtered and paged. Backs the admin's
+        "Logs" view, whose first question is "every tool she has called today"
+        — the `turn.tool` events.
+
+        ## This is the one operation a paired device may not call
+
+        Every other read in this contract is *the Commander's data*, and a
+        paired phone is supposed to have it. This one is not: it is the record
+        of what a pre-authorised program did on his machine — every turn, every
+        tool, every failure. A shoulder-surfed pairing code must not become a
+        transcript of the machine's activity.
+
+        So the bearer token needs `admin` scope, and **no endpoint mints one**.
+        An admin key is created at the machine's own console
+        (`npm run pair -- --admin`), which needs write access to the service's
+        database — already full compromise. `POST /auth/pair` always mints
+        `device`.
+
+        A token that is valid but device-scoped gets `403 FORBIDDEN`. A caller
+        with no token at all gets the ordinary, indistinguishable `401`: the
+        scope is never disclosed to someone who has not authenticated.
+
+        ## Ordering and paging
+
+        Newest first, always — a log view answers "what just happened" far more
+        often than "what happened first". Paging is the usual opaque cursor, and
+        it counts from the newest record, so page 2 stays meaningful while new
+        records arrive.
+
+        ## Time range
+
+        `since` and `until` are both **inclusive**, and both are ordinary
+        instants. Note that `until` on its own is a perfectly good query — "what
+        was happening before the crash" — and is not the same as paging back
+        from now.
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: event
+          in: query
+          required: false
+          description: |
+            Match events whose name **starts with** this. Names are dotted and
+            stable (`turn.tool`, `turn.done`, `job.run`), so a prefix is a
+            family: `turn` is every turn event and `turn.tool` is only the tool
+            calls.
+          schema: { type: string }
+          examples:
+            everyToolCall: { value: "turn.tool" }
+            everythingAboutTurns: { value: "turn" }
+        - name: level
+          in: query
+          required: false
+          description: Records at or above this severity. Omit for everything.
+          schema: { $ref: "#/components/schemas/LogLevel" }
+        - name: since
+          in: query
+          required: false
+          description: Only records at or after this instant. Inclusive.
+          schema: { $ref: "#/components/schemas/Instant" }
+        - name: until
+          in: query
+          required: false
+          description: Only records at or before this instant. Inclusive.
+          schema: { $ref: "#/components/schemas/Instant" }
+      responses:
+        "200":
+          description: A page of log records, newest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/LogPage" }
         default: { $ref: "#/components/responses/Error" }
 
   # ---------------------------------------------------------------- sync ---
@@ -2198,6 +2285,62 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/Run" }
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+
+    # ------------------------------------------------------------ logs ---
+    LogLevel:
+      type: string
+      description: Severity, ordered. `warn` and above is what an operator looks for.
+      enum: [debug, info, warn, error]
+
+    LogEntry:
+      type: object
+      required: [ts, level, event, pid, fields]
+      description: |
+        One line of `syl.log`, as it was written.
+
+        `event` is a dotted, stable name rather than prose, because a search is
+        built on it and prose is not. The ones worth knowing:
+
+        | Event | What it means |
+        |---|---|
+        | `service.start` | The process came up. Carries the whole configuration. |
+        | `turn.start` | A turn began, with its Claude Code session id. |
+        | `turn.tool` | **She called a tool.** The record of what she actually did. |
+        | `turn.done` | A turn ended, with its turn count and cost. |
+        | `turn.api_error` | The CLI reported an API failure mid-turn. |
+        | `chat` | The conversation service said something about a message. |
+
+        `fields` is deliberately **unmodelled**. A log line's fields are
+        whatever the call site passed, and pinning them in the contract would
+        mean a spec change every time somebody adds one — which is the fastest
+        way to train people to stop adding them. Clients render it generically.
+      properties:
+        ts: { $ref: "#/components/schemas/Instant" }
+        level: { $ref: "#/components/schemas/LogLevel" }
+        event:
+          type: string
+          description: A dotted, stable name. Filter on a prefix of it.
+          examples: ["turn.tool"]
+        pid:
+          type: integer
+          description: |
+            Which process wrote the line. Under launchd's `KeepAlive` a restart
+            is invisible in the timestamps and obvious in this number.
+        fields:
+          type: object
+          additionalProperties: true
+          description: The record's remaining fields, verbatim. Never `null`; may be empty.
+
+    LogPage:
+      type: object
+      required: [items, nextCursor, hasMore]
+      description: Newest first, unlike every other page in this contract.
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/LogEntry" }
         nextCursor: { type: [string, "null"] }
         hasMore: { type: boolean }
 
