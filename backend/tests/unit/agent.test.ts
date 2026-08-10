@@ -6,6 +6,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 
 import {
   LANES,
+  MEMORYLESS_LANES,
   SylAgent,
   fileSessionStore,
   memorySessionStore,
@@ -284,7 +285,65 @@ describe("SylAgent", () => {
       });
     });
 
-    it("should give every lane the same memory directory", async () => {
+    it("should refuse the consolidation lane any auto-memory, so the dream cannot consolidate itself", async () => {
+      // The gap constraint 7's wording does not cover. It forbids writing the
+      // dream LOG into the graph; this is neither. Claude Code's auto-memory
+      // writes what a turn learned into MEMORY.md, and that index is loaded at
+      // the start of EVERY session — so a judgment turn on this lane would have
+      // its own speculation read back as experience by the next dream. The
+      // corpus contaminates itself with its own output, interleaved with the
+      // Commander's real memories in a markdown file with no provenance column
+      // to separate them by.
+      const runner = announcingRunner(() => "sess-1");
+      const syl = new SylAgent({
+        runner,
+        store: memoryStore(),
+        autoMemory: autoMemoryAt("/srv/syl/memory"),
+      });
+
+      await syl.forLane("consolidation").ask("consolidate the day");
+
+      expect(optionsOfCall(runner, 0).autoMemory).toEqual({ mode: "off" });
+    });
+
+    it("should refuse it even when no memory directory was configured at all", async () => {
+      // Auto-memory is ON by default in headless `-p`. So "do not pass a
+      // directory" is not the same as "do not write memory" — omitting the
+      // option lets the CLI default apply and the dream writes into
+      // ~/.claude/projects/<slug>/memory/ instead, which is outside .syl/ and
+      // not covered by its gitignore. The lane must assert OFF, not stay quiet.
+      const runner = announcingRunner(() => "sess-1");
+      const syl = new SylAgent({ runner, store: memoryStore() });
+
+      await syl.forLane("consolidation").ask("consolidate the day");
+
+      expect(optionsOfCall(runner, 0).autoMemory).toEqual({ mode: "off" });
+    });
+
+    it("should still keep the consolidation lane's transcript separate", async () => {
+      // Turning its memory off must not turn off the reason the lane exists:
+      // Syl's inner monologue still must not interleave with the Commander's
+      // conversation.
+      const runner = announcingRunner((n) => `sess-${n}`);
+      const store = memoryStore();
+      const syl = new SylAgent({ runner, store, autoMemory: autoMemoryAt("/srv/syl/memory") });
+
+      await syl.ask("hello");
+      await syl.forLane("consolidation").ask("consolidate");
+
+      expect(store.read("commander")).not.toBe(store.read("consolidation"));
+      expect(store.read("consolidation")).toBeDefined();
+    });
+
+    it("should give every lane that may remember the same memory directory", async () => {
+      // The rule this used to state was "every lane, no exceptions", and it was
+      // right about the ones it listed and wrong about the one it swept in with
+      // them. Sharing is correct wherever memory is EXPERIENCE — a fact learned
+      // in conversation must reach the morning agenda. `consolidation` is not
+      // that: its output is speculation about the corpus, so it is excluded
+      // here and asserted off in its own test above. Restated rather than
+      // relaxed, so the sharing guarantee is still pinned for the lanes it
+      // genuinely covers.
       const runner = announcingRunner((n) => `sess-${n}`);
       const syl = new SylAgent({
         runner,
@@ -295,10 +354,21 @@ describe("SylAgent", () => {
       await syl.ask("hi", LANES.commander);
       await syl.ask("tick", LANES.heartbeat);
       await syl.ask("morning", LANES.agenda);
-      await syl.ask("review", LANES.consolidation);
 
-      const directories = [0, 1, 2, 3].map((n) => optionsOfCall(runner, n).autoMemory);
+      const directories = [0, 1, 2].map((n) => optionsOfCall(runner, n).autoMemory);
       expect(new Set(directories.map((m) => JSON.stringify(m))).size).toBe(1);
+      expect(directories[0]).toEqual({ mode: "directory", directory: "/srv/syl/memory" });
+    });
+
+    it("should keep every remembering lane out of MEMORYLESS_LANES, so the split stays deliberate", async () => {
+      // Guards the list itself rather than its current contents: if someone
+      // adds a lane to MEMORYLESS_LANES, the lanes above stop sharing memory
+      // and this says so at the point of change instead of at the point of
+      // confusion.
+      expect(MEMORYLESS_LANES.has(LANES.commander)).toBe(false);
+      expect(MEMORYLESS_LANES.has(LANES.heartbeat)).toBe(false);
+      expect(MEMORYLESS_LANES.has(LANES.agenda)).toBe(false);
+      expect(MEMORYLESS_LANES.has(LANES.consolidation)).toBe(true);
     });
 
     it("should carry the memory directory into a lane-scoped view", async () => {
