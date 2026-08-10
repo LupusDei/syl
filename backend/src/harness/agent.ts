@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { AutoMemory } from "../memory/auto-memory.js";
+import { autoMemoryOff, type AutoMemory } from "../memory/auto-memory.js";
 
 import { runTurn, type TurnOptions, type TurnResult, type TurnRunner } from "./session.js";
 
@@ -27,6 +27,35 @@ export const LANES = {
   /** The nightly review and memory consolidation pass. */
   consolidation: "consolidation",
 } as const;
+
+/**
+ * Lanes that must never write into Claude Code's auto-memory.
+ *
+ * `consolidation` is the dream. Its entire output is speculation ABOUT the
+ * corpus, and Claude Code's auto-memory writes what a turn learned into
+ * `MEMORY.md` — an index loaded at the start of every session, including the
+ * next dream. Left on, the dream reads its own previous reflections back as
+ * though they were experience, and the corpus contaminates itself with its own
+ * output. That is what `CLAUDE.md` constraint 7 is about; the constraint's
+ * wording forbids writing the dream LOG into the graph, and this is neither the
+ * log nor the graph, which is exactly why it went unguarded (QA finding C1).
+ *
+ * The sharing argument in `memory/auto-memory.ts` is right for every other
+ * lane — a fact learned in conversation should reach the morning agenda. It is
+ * backwards for this one.
+ *
+ * **`autoMemoryOff()` rather than simply omitting the option**: auto-memory is
+ * ON BY DEFAULT in headless `-p`, so passing nothing lets the CLI write into
+ * `~/.claude/projects/<slug>/memory/` instead — outside `.syl/` and not covered
+ * by its gitignore. Silence is not refusal here; the lane has to say off.
+ */
+export const MEMORYLESS_LANES: ReadonlySet<string> = new Set<string>([LANES.consolidation]);
+
+/** The auto-memory a lane may use — off for {@link MEMORYLESS_LANES}. */
+function autoMemoryForLane(lane: Lane, configured: AutoMemory | undefined): AutoMemory | undefined {
+  if (MEMORYLESS_LANES.has(lane)) return autoMemoryOff();
+  return configured;
+}
 
 export type Lane = string;
 
@@ -105,16 +134,32 @@ export interface SylAgentOptions {
   readonly store?: SessionStore;
   /** Standing orders, appended to the system prompt on every turn. */
   readonly soul?: string;
+  /**
+   * What she currently remembers about the Commander.
+   *
+   * A function, read fresh on EVERY turn, because the projection is rebuilt by
+   * the nightly consolidation and this service outlives the night. A string
+   * captured at construction would leave her remembering the day she booted,
+   * forever.
+   *
+   * Composed into the system prompt beneath {@link soul} rather than sent as a
+   * separate message, and the order is the whole point: identity first, then
+   * what she knows. Handed over as a detached block it reads as data she was
+   * given; handed over underneath who she is, it reads as memory she holds.
+   * That distinction is why she once answered "what is your personality?" by
+   * describing her own configuration file.
+   */
+  readonly recall?: () => string;
   /** Lane used by `ask` when none is named. Defaults to `LANES.commander`. */
   readonly lane?: Lane;
   /**
    * Claude Code's auto-memory, for every turn this agent takes.
    *
-   * Deliberately **not** per lane, and it is the same value for a lane view
-   * made by `forLane`. Lanes keep transcripts apart; memory is the one thing
-   * that must not be kept apart, or the morning agenda knows nothing the
-   * Commander said last night. The reasoning is written out in
-   * `memory/auto-memory.ts`.
+   * Shared across lanes on purpose — lanes keep transcripts apart, and memory
+   * is the one thing that must not be, or the morning agenda knows nothing the
+   * Commander said last night. The reasoning is in `memory/auto-memory.ts`.
+   *
+   * **With exactly one exception: {@link MEMORYLESS_LANES}.** See there.
    */
   readonly autoMemory?: AutoMemory;
   /** Extra options forwarded to every turn. */
@@ -139,6 +184,7 @@ export class SylAgent {
   readonly #runner: TurnRunner;
   readonly #store: SessionStore;
   readonly #soul: string | undefined;
+  readonly #recall: (() => string) | undefined;
   readonly #autoMemory: AutoMemory | undefined;
   readonly #turnOptions: TurnOptions;
   readonly #lane: Lane;
@@ -146,10 +192,36 @@ export class SylAgent {
   constructor(options: SylAgentOptions = {}) {
     this.#runner = options.runner ?? runTurn;
     this.#soul = options.soul;
+    this.#recall = options.recall;
     this.#autoMemory = options.autoMemory;
     this.#turnOptions = options.turnOptions ?? {};
     this.#store = options.store ?? memorySessionStore();
     this.#lane = assertLane(options.lane ?? LANES.commander);
+  }
+
+  /**
+   * Who she is, then what she remembers — as one prompt.
+   *
+   * Memory is appended UNDER the soul because `SOUL.md` ends by telling her how
+   * to read what follows: as her own memory rather than as a briefing, and that
+   * an empty one means she is early rather than broken. Sent as a separate
+   * block it would be a data dump she narrates consulting; sent here it is
+   * something she knows.
+   *
+   * An empty recall appends NOTHING — not an empty section. A heading over
+   * blankness tells her she has a memory and that it is empty, which reads as
+   * damage; saying nothing lets the soul's own line about being early stand.
+   */
+  #systemPrompt(): string | undefined {
+    const soul = this.#soul;
+    const remembered = this.#recall?.().trim() ?? "";
+
+    if (soul === undefined || soul === "") {
+      return remembered === "" ? undefined : remembered;
+    }
+    if (remembered === "") return soul;
+
+    return `${soul}\n\n---\n\n${remembered}`;
   }
 
   /** The lane this agent talks in when `ask` is called without one. */
@@ -179,6 +251,7 @@ export class SylAgent {
       lane: assertLane(lane),
       turnOptions: this.#turnOptions,
       ...(this.#soul !== undefined ? { soul: this.#soul } : {}),
+      ...(this.#recall !== undefined ? { recall: this.#recall } : {}),
       // Shared across lanes on purpose: a lane view is a different transcript,
       // not a different assistant.
       ...(this.#autoMemory !== undefined ? { autoMemory: this.#autoMemory } : {}),
@@ -265,8 +338,14 @@ export class SylAgent {
       ...this.#turnOptions,
       // After the spread, not before: if the agent was told where its memory
       // lives, an incidental `turnOptions` must not be able to move it.
-      ...(this.#autoMemory !== undefined ? { autoMemory: this.#autoMemory } : {}),
-      ...(this.#soul ? { systemPrompt: this.#soul } : {}),
+      ...((): { autoMemory?: AutoMemory } => {
+        const forLane = autoMemoryForLane(lane, this.#autoMemory);
+        return forLane === undefined ? {} : { autoMemory: forLane };
+      })(),
+      ...((): { systemPrompt?: string } => {
+        const prompt = this.#systemPrompt();
+        return prompt === undefined ? {} : { systemPrompt: prompt };
+      })(),
       ...(resume ? { resume } : {}),
       onSessionId: (sessionId) => {
         this.#store.write(lane, sessionId);

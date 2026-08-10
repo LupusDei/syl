@@ -30,13 +30,23 @@ without asking.
 5. **Store IANA timezones (`America/Chicago`), never fixed UTC offsets.** An
    offset is a property of an instant, not of a place, and a fixed one drifts an
    hour at every DST boundary.
-6. **Never delete an inferred edge. Demote it.** Confidence decays toward zero
-   asymptotically and never arrives — a dormant edge stays addressable, so if it
-   ever becomes relevant it can be promoted straight back to high confidence.
-   Commander's call, 2026-08-09, overruling the prune recommendation in proposal
-   `62329e61` §4 exactly where that proposal invited him to. This is the same
-   instinct as constraint 4: the system does not get to silently discard things.
-   **Nodes are superseded, edges are demoted, nothing is destroyed.**
+6. **The SYSTEM never deletes an inferred edge. It demotes it.** Confidence
+   decays toward zero asymptotically and never arrives — a dormant edge stays
+   addressable, so if it ever becomes relevant it can be promoted straight back
+   to high confidence. Commander's call, 2026-08-09, overruling the prune
+   recommendation in proposal `62329e61` §4 exactly where that proposal invited
+   him to. Same instinct as constraint 4: **the system does not get to silently
+   discard things.** Nodes are superseded, edges are demoted, decay destroys
+   nothing.
+   **The Commander's explicit order is the one exception** (his ruling,
+   2026-08-10). When he says delete this memory, the memory and its edges are
+   *removed*, not demoted and not suppressed. Read the rule for what it defends:
+   it protects him from a system that quietly forgets, never from his own
+   authority over his own data. A "forget this" that leaves the thing on disk is
+   not honouring the constraint, it is disobeying him — and the residue is
+   real, because an inference's reasoning text can quote what it reasoned over.
+   Automatic paths (decay, sweeps, cleanup, the dream) get no such exception and
+   must remain incapable of deletion.
 7. **Every dream session is logged permanently, and the log is not memory.**
    Observability is a first principle of the memory build, not a later phase —
    a memory system that cannot be inspected cannot be tuned. The dream log is
