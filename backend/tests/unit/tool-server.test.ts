@@ -1023,3 +1023,140 @@ describe("cancel_reminder — the verb that stops something firing", () => {
   });
 });
 
+/**
+ * `drop_todo` — abandoning is not finishing.
+ *
+ * Two facts about his life that a single verb would have flattened: one is an
+ * achievement, the other is a decision, and he may want to tell them apart in
+ * six months. The store already knew — `dropped` has been in `TodoStatus`
+ * since the table was written — and only the vocabulary was missing.
+ */
+describe("drop_todo — the verb that gives up", () => {
+  it("should mark it dropped and name what left the list", async () => {
+    const api = todoApi();
+
+    const { envelope } = await call(contextFor(api), "drop_todo", {
+      id: THE_TODO,
+      because: "He said he is not going to do it.",
+    });
+
+    expect(envelope).toMatchObject({ ok: true, action: "drop_todo" });
+    const patch = api.calls.find((made) => made.method === "PATCH")?.body ?? {};
+    expect(patch["status"]).toBe("dropped");
+    if (envelope.ok) expect((envelope.subject as { text: string }).text).toBe("Buy flour");
+  });
+
+  it("should refuse to restyle something he actually finished", async () => {
+    // Rewriting a completed item as abandoned edits his history, and he is the
+    // only one who can say which it was.
+    const api = todoApi(storedTodo({ status: "done", completedAt: new Date(NOW).toISOString() }));
+
+    const { envelope } = await call(contextFor(api), "drop_todo", {
+      id: THE_TODO,
+      because: "He said to drop it.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    expect(api.calls.some((made) => made.method === "PATCH")).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("already marked done");
+  });
+
+  it("should look it up before it writes, so a wrong id drops nothing", async () => {
+    const api = fakeApi({
+      [TODO_PATH]: () => failure(404, "NOT_FOUND", "There is no such to-do.", false),
+    });
+
+    const { isError } = await call(contextFor(api), "drop_todo", {
+      id: THE_TODO,
+      because: "He said to drop it.",
+    });
+
+    expect(isError).toBe(true);
+    expect(api.calls.some((made) => made.method === "PATCH")).toBe(false);
+  });
+});
+
+/**
+ * `change_goal` — the three ways a goal ends, kept apart.
+ *
+ * One verb, because achieving, abandoning and setting aside are one change to
+ * one row and three verbs would have to agree about what each leaves behind.
+ * The DISTINCTION survives in the enum, which is the half that matters to him:
+ * "I did it", "I decided not to" and "not now" are three different things that
+ * happened in his life, and a system that flattened them would make his own
+ * history unreadable a year later.
+ */
+describe("change_goal — the verb that ends one", () => {
+  function goalApi(initial = storedGoal()): FakeApi {
+    let row = initial;
+    return fakeApi({
+      [GOAL_PATH]: (made) => {
+        if (made.method === "PATCH") row = { ...row, ...made.body };
+        return ok(row);
+      },
+    });
+  }
+
+  it("should carry his reason into the goal's own record of why it ended", async () => {
+    const api = goalApi();
+
+    const { envelope } = await call(contextFor(api), "change_goal", {
+      id: THE_GOAL,
+      status: "abandoned",
+      because: "He decided the video series matters more.",
+    });
+
+    expect(envelope).toMatchObject({ ok: true, action: "change_goal" });
+    const patch = api.calls.find((made) => made.method === "PATCH")?.body ?? {};
+    expect(patch["status"]).toBe("abandoned");
+    // The `because` becomes the goal's `statusReason`, so a year from now the
+    // row can say why it ended and not only that it did.
+    expect(patch["statusReason"]).toBe("He decided the video series matters more.");
+  });
+
+  it("should reword without touching the state, and change state without rewording", async () => {
+    const api = goalApi();
+
+    await call(contextFor(api), "change_goal", {
+      id: THE_GOAL,
+      text: "Cook for the family three nights a week",
+      because: "He restated it.",
+    });
+
+    const patch = api.calls.find((made) => made.method === "PATCH")?.body ?? {};
+    expect(patch["title"]).toBe("Cook for the family three nights a week");
+    expect(patch["status"]).toBeUndefined();
+    // No state change, so no reason attached to one.
+    expect(patch["statusReason"]).toBeUndefined();
+  });
+
+  it("should refuse a change that changes nothing rather than report success", async () => {
+    const api = goalApi();
+
+    const { envelope } = await call(contextFor(api), "change_goal", {
+      id: THE_GOAL,
+      because: "He said to change it.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    expect(api.calls.some((made) => made.method === "PATCH")).toBe(false);
+  });
+
+  it("should look it up before it writes", async () => {
+    const api = fakeApi({
+      [GOAL_PATH]: () => failure(404, "NOT_FOUND", "There is no such goal.", false),
+    });
+
+    const { isError } = await call(contextFor(api), "change_goal", {
+      id: THE_GOAL,
+      status: "achieved",
+      because: "He said he did it.",
+    });
+
+    expect(isError).toBe(true);
+    expect(api.calls.some((made) => made.method === "PATCH")).toBe(false);
+  });
+});
+
+
+

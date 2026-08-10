@@ -448,6 +448,18 @@ export class MockStore {
     return updated;
   }
 
+  updateGoal(id: string, patch: Record<string, unknown>): Goal | undefined {
+    const existing = this.goal(id);
+    if (existing === undefined) return undefined;
+    const updated: Goal = { ...existing, updatedAt: nowIso() };
+    for (const key of ["title", "why", "targetDate", "cadenceDays", "status", "statusReason"] as const) {
+      if (patch[key] !== undefined) (updated as Record<string, unknown>)[key] = patch[key];
+    }
+    this.goals = this.goals.map((g) => (g.id === id ? updated : g));
+    this.record("goal", "upsert", id, updated.updatedAt);
+    return updated;
+  }
+
   completeTodo(id: string): Todo | undefined {
     const at = nowIso();
     const existing = this.todo(id);

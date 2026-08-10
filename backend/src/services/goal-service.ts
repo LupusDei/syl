@@ -70,6 +70,21 @@ export interface CreateGoalInput {
   readonly status?: string;
 }
 
+/**
+ * What {@link GoalService.update} may move.
+ *
+ * `parentId` is deliberately absent: re-parenting a goal restructures the tree
+ * and has its own cycle question, which this patch has no way to answer.
+ */
+export interface UpdateGoalInput {
+  readonly title?: string;
+  readonly why?: string | null;
+  readonly targetDate?: string | null;
+  readonly cadenceDays?: number | null;
+  readonly status?: string;
+  readonly statusReason?: string | null;
+}
+
 /** What {@link GoalService.list} may narrow by. */
 export interface GoalFilter extends PageOptions {
   readonly status?: GoalStatus;
@@ -191,6 +206,78 @@ export class GoalService {
     const created = this.get(id);
     if (created === null) throw new Error("goal vanished during create");
     return created;
+  }
+
+  /**
+   * Reword a goal, or move it between states.
+   *
+   * The write a goal had no way to express: he could set one and never change
+   * his mind about it. Achieving, abandoning and reactivating all live here
+   * rather than in three endpoints, because they are the same operation on the
+   * same row and separate ones would have to agree about what each leaves
+   * behind — which is the kind of agreement that lasts until someone edits one
+   * of them.
+   *
+   * **Only the named fields move.** A patch that took the whole goal back would
+   * silently overwrite whatever the caller did not include, which is the
+   * failure where rewording a goal quietly clears the date he was working to.
+   *
+   * `statusReason` follows the status the way `completedAt` follows a to-do's:
+   * it is cleared when the status changes and no reason is given, because a
+   * row that says `abandoned` carrying the reason it was once `dormant` is a
+   * row two readers will disagree about.
+   */
+  update(id: string, patch: UpdateGoalInput): Goal | null {
+    const current = this.get(id);
+    if (current === null) return null;
+
+    const title = patch.title === undefined ? current.title : patch.title.trim();
+    if (title === "") throw new GoalError("bad_title", "A goal must have a title.");
+    if (title.length > MAX_TITLE) {
+      throw new GoalError("bad_title", `A goal title is at most ${String(MAX_TITLE)} characters.`);
+    }
+
+    const whyRaw = patch.why === undefined ? current.why : patch.why;
+    const why = whyRaw === null ? null : whyRaw.trim();
+    if (why !== null && why.length > MAX_WHY) {
+      throw new GoalError("bad_why", `why is at most ${String(MAX_WHY)} characters.`);
+    }
+
+    const status =
+      patch.status === undefined
+        ? current.status
+        : STATUSES.find((candidate) => candidate === patch.status);
+    if (status === undefined) {
+      throw new GoalError("bad_status", `status must be one of ${STATUSES.join(", ")}.`);
+    }
+
+    const cadenceDays = patch.cadenceDays === undefined ? current.cadenceDays : patch.cadenceDays;
+    if (cadenceDays !== null && (!Number.isInteger(cadenceDays) || cadenceDays < 1)) {
+      throw new GoalError("bad_cadence", "cadenceDays must be a whole number of at least 1.");
+    }
+
+    const targetDate =
+      patch.targetDate === undefined ? current.targetDate : normaliseTargetDate(patch.targetDate);
+
+    const statusReason =
+      patch.statusReason !== undefined
+        ? patch.statusReason
+        : status === current.status
+          ? current.statusReason
+          : null;
+
+    const at = instant(this.#clock());
+
+    this.#db
+      .prepare(
+        `UPDATE goals
+            SET title = ?, why = ?, target_date = ?, cadence_days = ?,
+                status = ?, status_reason = ?, updated_at = ?
+          WHERE id = ?`,
+      )
+      .run(title, why === "" ? null : why, targetDate, cadenceDays, status, statusReason, at, id);
+
+    return this.get(id);
   }
 
   /** One goal by id, or `null`. */

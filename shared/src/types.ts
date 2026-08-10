@@ -434,6 +434,15 @@ export type CreateGoalRequest = {
   readonly cadenceDays?: number | null;
 };
 
+export type UpdateGoalRequest = {
+  readonly title?: string;
+  readonly why?: string | null;
+  readonly targetDate?: string | null;
+  readonly cadenceDays?: number | null;
+  readonly status?: GoalStatus;
+  readonly statusReason?: string | null;
+};
+
 /**
  * Carried per token. TestFlight and App Store builds always produce
  * `production` tokens; Xcode-installed builds always produce `sandbox`.

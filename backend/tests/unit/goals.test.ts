@@ -205,19 +205,60 @@ describe("GET /api/v1/goals/{goalId}", () => {
   });
 });
 
-describe("the operations the contract does not publish", () => {
-  it("should not answer a goal update, because the contract declares none", async () => {
-    // The mirror of `syl-c1m`. Serving an endpoint the spec does not describe
-    // is the same divergence in the other direction, and it is just as
-    // invisible to a client — so the absence is asserted rather than assumed.
+describe("updating a goal, which the contract now publishes", () => {
+  it("should reword one without disturbing what he did not mention", async () => {
+    // RESTATED. This asserted that PATCH did NOT exist, "because the contract
+    // declares none" — the mirror of `syl-c1m`, and a good guard: serving an
+    // endpoint the spec does not describe is a divergence invisible to every
+    // client.
+    //
+    // The Commander asked for the other half ("totally manage all data in her
+    // realm"), so the CONTRACT moved first and the route followed. The guard
+    // is kept pointed the same way — the route and the spec must agree — and
+    // only the direction of agreement changed. Deleting it would have thrown
+    // away the reason the route did not exist for so long.
     const created = await create();
+
     const response = await api(`/goals/${encodeURIComponent(created.id)}`, {
       method: "PATCH",
       body: JSON.stringify({ title: "Renamed" }),
     });
     const body = (await response.json()) as Envelope<Goal>;
 
-    expect(response.status).toBe(404);
-    expect(body.error?.message).toBe("No route on this service matches that request.");
+    expect(response.status).toBe(200);
+    expect(body.data?.title).toBe("Renamed");
+    // Untouched by a patch that did not name them.
+    expect(body.data?.why).toBe(created.why);
+    expect(body.data?.targetDate).toBe(created.targetDate);
+    expect(body.data?.status).toBe(created.status);
+  });
+
+  it("should carry the reason with the state change", async () => {
+    // A goal that says `abandoned` and cannot say why is the field he will
+    // want a year later and not have.
+    const created = await create();
+
+    const response = await api(`/goals/${encodeURIComponent(created.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "abandoned", statusReason: "He decided against it." }),
+    });
+    const body = (await response.json()) as Envelope<Goal>;
+
+    expect(body.data?.status).toBe("abandoned");
+    expect(body.data?.statusReason).toBe("He decided against it.");
+  });
+
+  it("should refuse a status the vocabulary does not have", async () => {
+    // 400 like every other validation failure on this router, not a
+    // hand-picked 422 — a route that answers differently from its neighbours
+    // for the same class of mistake is a route clients special-case.
+    const created = await create();
+
+    const response = await api(`/goals/${encodeURIComponent(created.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "finished-ish" }),
+    });
+
+    expect(response.status).toBe(400);
   });
 });
