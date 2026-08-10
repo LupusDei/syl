@@ -9,7 +9,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { INTERACTIVE_CONVERSATION_ID } from "../../src/services/database.js";
 import { PROTOCOL_VERSION } from "../../src/services/ws-server.js";
-import { flagValue } from "../helpers/fake-claude.js";
+import {
+  flagValue,
+  type FakeClaude,
+  type FakeClaudeInvocation,
+} from "../helpers/fake-claude.js";
 import { replyingRunner } from "../helpers/service.js";
 import {
   answeringClaude,
@@ -44,6 +48,23 @@ import { TestClient } from "../helpers/ws.js";
  */
 
 const CHICAGO_MORNING = Date.UTC(2026, 7, 10, 12, 0, 0, 0);
+
+/**
+ * The spawns that are HIS CONVERSATION, in order — not every spawn.
+ *
+ * A turn of his own conversation runs pre-authorised, because there is nobody
+ * to approve a prompt in a headless turn. A sealed reader — extraction, an
+ * article — runs with `manual` and no MCP config precisely so it cannot act.
+ * That difference is a security boundary, which makes it the honest thing to
+ * filter on: any test that means "his turns" can say so, and one that
+ * accidentally matched a reader turn would be asserting against a turn that is
+ * not allowed to do anything.
+ */
+function hisTurns(syl: { readonly claude: FakeClaude | null }): FakeClaudeInvocation[] {
+  return (syl.claude?.invocations() ?? []).filter(
+    (spawn) => flagValue(spawn.argv, "--permission-mode") === "bypassPermissions",
+  );
+}
 
 describe("US2 — he can talk to her", () => {
   let syl: LiveService;
@@ -456,7 +477,9 @@ describe("US2 — he can talk to her", () => {
       // captured from Claude Code 2.1.226.
       expect(first.reply.message.text).toBe(LIVE_REPLY_TEXT);
 
-      const opening = syl.claude?.invocation();
+      // THE FIRST TURN OF HIS CONVERSATION by name, not "whatever is in the
+      // slot" — `syl-ah4`.
+      const opening = hisTurns(syl)[0];
       expect(opening).toBeDefined();
       // Non-negotiable constraint 3, on the service path rather than only in
       // the harness's own unit tests: a set `ANTHROPIC_API_KEY` outranks the
@@ -475,7 +498,22 @@ describe("US2 — he can talk to her", () => {
       // Continuity is `--resume <sessionId>` against the id stored for this
       // lane, and it is also why turns must not overlap: two subprocesses
       // resuming one id interleave two halves of one transcript.
-      const resuming = syl.claude?.invocation()?.argv ?? [];
+      // THE SECOND TURN OF HIS CONVERSATION, named rather than assumed to be
+      // the newest spawn.
+      //
+      // This is the line that failed intermittently for weeks and passed 15/15
+      // in isolation, and the cause was never timing. Every spawn wrote to one
+      // record file, and an EXTRACTION READER TURN fires between his two
+      // messages — sealed, never resumed, so it carries no `--resume` at all.
+      // Whenever that reader was the last thing to write, this assertion read
+      // it and failed, and the failure was indistinguishable from continuity
+      // being broken. One record per spawn plus a filter for his own lane
+      // makes it say what it always meant.
+      // Exactly two turns of HIS CONVERSATION. There are three spawns: an
+      // extraction reader fires between them, which is the whole reason this
+      // assertion has to name what it wants.
+      expect(hisTurns(syl).length, "the second turn never spawned").toBe(2);
+      const resuming = hisTurns(syl)[1]?.argv ?? [];
       expect(flagValue(resuming, "--resume")).toBeDefined();
       expect(resuming).not.toContain("--session-id");
 

@@ -190,10 +190,24 @@ export function installShutdownHandlers(options: ShutdownOptions): ShutdownHandl
    */
   const ignore = (): void => {
     for (const [signal, listener] of [...listeners]) {
-      source.removeListener(signal, listener);
+      // COVER BEFORE UNCOVERING. The order is the whole point.
+      //
+      // This removed first and added second, which left the signal with NO
+      // listener for the width of two statements — and a `SIGTERM` delivered
+      // in that window takes Node's default action: death by signal, exit code
+      // null, halfway through writing `shutdown.complete`. launchd re-sends
+      // `SIGTERM` to a job it is stopping, so hitting the window is a normal
+      // event rather than an exotic one.
+      //
+      // It is the residual behind "expected null to be +0" in
+      // `service-lifecycle`, which was hunted twice before and both times the
+      // fix moved the window rather than closing it. "Only under load" was
+      // always just load widening two instructions into something a signal
+      // could land inside.
       const swallow = (): void => undefined;
-      listeners.set(signal, swallow);
       source.on(signal, swallow);
+      source.removeListener(signal, listener);
+      listeners.set(signal, swallow);
     }
   };
 

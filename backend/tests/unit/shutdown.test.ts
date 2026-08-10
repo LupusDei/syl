@@ -345,4 +345,63 @@ describe("installShutdownHandlers", () => {
     for (const signal of SHUTDOWN_SIGNALS) expect(source.listenerCount(signal)).toBe(0);
     expect(handle.stopping).toBe(false);
   });
+
+  it("should never leave a signal uncovered, not even between two statements", async () => {
+    // The residual race behind "expected null to be +0" in
+    // `service-lifecycle`, intermittent for weeks and hunted twice before.
+    //
+    // `ignore()` swaps the real listener for a no-op so a repeat SIGTERM does
+    // nothing instead of killing the process mid-write. It did that by
+    // REMOVING first and adding second, which leaves a window — two statements
+    // wide — in which the signal has NO listener and therefore takes Node's
+    // default action: death by signal, exit code null, halfway through writing
+    // `shutdown.complete`.
+    //
+    // launchd re-sends SIGTERM to a job it is stopping, so hitting that window
+    // is a normal event rather than an exotic one, and "only under load" just
+    // means load widens it.
+    //
+    // Asserted as an INVARIANT over the call sequence rather than by trying to
+    // land a real signal inside a two-instruction gap: coverage must never
+    // drop to zero at any point. A test that raced the race would itself be
+    // flaky, which is the thing being fixed.
+    const events: { readonly kind: "on" | "off"; readonly signal: string }[] = [];
+    const listeners = new Map<string, Set<() => void>>();
+    // A real registry, so "covered" means what the OS means by it: is there a
+    // listener attached to this signal at this instant.
+    const source = {
+      on(signal: string, listener: () => void): unknown {
+        events.push({ kind: "on", signal });
+        (listeners.get(signal) ?? listeners.set(signal, new Set()).get(signal))?.add(listener);
+        return undefined;
+      },
+      removeListener(signal: string, listener: () => void): unknown {
+        events.push({ kind: "off", signal });
+        listeners.get(signal)?.delete(listener);
+        return undefined;
+      },
+    };
+
+    installShutdownHandlers({
+      close: async () => undefined,
+      signals: ["SIGTERM"],
+      source,
+      exit: () => undefined,
+    });
+
+    // Drive a real shutdown: `ignore()` only runs on the teardown path, so an
+    // install-and-dispose test never reaches the window at all.
+    const fire = [...(listeners.get("SIGTERM") ?? [])][0];
+    expect(fire, "nothing was listening for SIGTERM").toBeDefined();
+    fire?.();
+    await vi.waitFor(() => {
+      expect(events.filter((event) => event.kind === "off").length).toBeGreaterThan(0);
+    });
+
+    let covered = 0;
+    for (const event of events) {
+      covered += event.kind === "on" ? 1 : -1;
+      expect(covered, `SIGTERM was uncovered after ${event.kind}`).toBeGreaterThanOrEqual(1);
+    }
+  });
 });

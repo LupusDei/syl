@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,6 +89,14 @@ export interface FakeClaudeInvocation {
   /** The child's own pid, so a test can check the kill actually landed. */
   readonly pid: number;
   /**
+   * When this process started, captured before it did anything else.
+   *
+   * Ordering comes from here rather than from mtime, because the fake records
+   * once immediately AND again at EOF — so mtime says when a spawn finished,
+   * which for overlapping turns is a different order than when they began.
+   */
+  readonly startedAt: number;
+  /**
    * Whether the child saw an API key. Non-negotiable constraint 3: a set key
    * outranks the claude.ai login and silently reroutes billing (adj-t64m9).
    */
@@ -149,8 +157,18 @@ export interface FakeClaudeConfig {
 export interface FakeClaude {
   /** Path to pass as `claudeBin`. */
   readonly bin: string;
-  /** How the fake was invoked, or undefined if it was never spawned. */
-  invocation(): FakeClaudeInvocation | undefined;
+  /**
+   * How the fake was invoked. Without an index, the LATEST spawn.
+   *
+   * Pass an index when a test spawns more than once and cares which — `0` is
+   * the opening turn, `1` the one that should resume it. Reading "the
+   * invocation" twice around a second turn is what made `us2` flaky: the
+   * assertion could not distinguish reading the wrong spawn from a genuinely
+   * missing `--resume`, so it failed intermittently and passed in isolation.
+   */
+  invocation(index?: number): FakeClaudeInvocation | undefined;
+  /** Every spawn so far, oldest first. */
+  invocations(): FakeClaudeInvocation[];
   /** Remove the temp directory. Safe to call twice. */
   cleanup(): void;
 }
@@ -161,15 +179,33 @@ export interface FakeClaude {
  * resolve from a temp directory.
  */
 const SCRIPT = `#!/usr/bin/env node
-import { writeFileSync } from "node:fs";
-import { sep } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join, sep } from "node:path";
 
 const config = __CONFIG__;
-const recordPath = __RECORD__;
+const recordDir = __RECORD__;
 const argv = process.argv.slice(2);
 
+// ONE FILE PER SPAWN, not one slot overwritten by each. \`syl-ah4\`.
+//
+// Every invocation used to write the same path, so a test that spawned twice
+// could only ever read "whatever is in the slot now" — and could not tell a
+// wrong-spawn read from a genuinely missing flag. That is precisely how the
+// us2 resume assertion failed intermittently for weeks while passing in
+// isolation.
+//
+// \`startedAt\` is captured BEFORE anything else and is what the helper sorts
+// on, so order comes from when each process began rather than from filesystem
+// mtime or a directory count that two spawns could read the same value of.
+const startedAt = Date.now();
+const recordPath = join(
+  recordDir,
+  \`\${String(startedAt)}-\${String(process.pid)}.json\`,
+);
+
 let stdin = "";
-const record = () =>
+const record = () => {
+  mkdirSync(recordDir, { recursive: true });
   writeFileSync(
     recordPath,
     JSON.stringify({
@@ -177,10 +213,12 @@ const record = () =>
       stdin,
       cwd: process.cwd(),
       pid: process.pid,
+      startedAt,
       sawApiKey: process.env.ANTHROPIC_API_KEY !== undefined,
       sawAuthToken: process.env.ANTHROPIC_AUTH_TOKEN !== undefined,
     }),
   );
+};
 
 // Record immediately as well as on EOF: a hanging fake never reaches EOF, and
 // its argv is exactly what the timeout tests need to assert on.
@@ -285,25 +323,49 @@ if (config.ignoreStdin) {
 export function makeFakeClaude(config: FakeClaudeConfig = {}): FakeClaude {
   const dir = mkdtempSync(join(tmpdir(), "syl-fake-claude-"));
   const bin = join(dir, "claude.mjs");
-  const recordPath = join(dir, "invocation.json");
+  const recordDir = join(dir, "invocations");
 
   const body = SCRIPT.replace("__CONFIG__", JSON.stringify(config)).replace(
     "__RECORD__",
-    JSON.stringify(recordPath),
+    JSON.stringify(recordDir),
   );
 
   writeFileSync(bin, body, "utf8");
   chmodSync(bin, 0o755);
 
+  /** Every spawn so far, oldest first. */
+  function invocations(): FakeClaudeInvocation[] {
+    let names: string[];
+    try {
+      names = readdirSync(recordDir);
+    } catch {
+      return [];
+    }
+
+    const found: FakeClaudeInvocation[] = [];
+    for (const name of names) {
+      try {
+        // Shape is produced by the script above, in this same file.
+        found.push(JSON.parse(readFileSync(join(recordDir, name), "utf8")) as FakeClaudeInvocation);
+      } catch {
+        // A record caught mid-write is not a spawn that did not happen. Skip it
+        // rather than failing the read: the alternative is a test that goes red
+        // because of when it looked, which is the defect this replaced.
+      }
+    }
+    // By when each PROCESS started, not by filename or mtime — the fake records
+    // once immediately and again at EOF, so mtime is when it finished.
+    return found.sort((a, b) => a.startedAt - b.startedAt);
+  }
+
   return {
     bin,
-    invocation(): FakeClaudeInvocation | undefined {
-      try {
-        // Shape is produced by the script above, a few lines up in this file.
-        return JSON.parse(readFileSync(recordPath, "utf8")) as FakeClaudeInvocation;
-      } catch {
-        return undefined;
-      }
+    invocations,
+    invocation(index?: number): FakeClaudeInvocation | undefined {
+      const all = invocations();
+      // No argument keeps the old meaning — THE LATEST — because most callers
+      // spawn once and asking for "the invocation" is exactly right there.
+      return index === undefined ? all[all.length - 1] : all[index];
     },
     cleanup(): void {
       rmSync(dir, { recursive: true, force: true });
