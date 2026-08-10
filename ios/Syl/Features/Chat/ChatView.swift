@@ -152,7 +152,7 @@ struct ChatView: View {
                 .onAppear { Task { await model.loadEarlier() } }
             }
 
-            ForEach(rows) { row in
+            ForEach(model.snapshot.rows) { row in
                 switch row {
                 case .day(let day):
                     DayDivider(day: day)
@@ -227,10 +227,6 @@ struct ChatView: View {
             }
             .animation(reduceMotion ? nil : SylTheme.Motion.settle, value: hasUnseenTurn)
         }
-    }
-
-    private var rows: [TranscriptRow] {
-        TranscriptRhythm.rows(for: model.snapshot.groups)
     }
 
     private func scrollToFoot(_ proxy: ScrollViewProxy) {

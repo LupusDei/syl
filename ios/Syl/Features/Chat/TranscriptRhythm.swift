@@ -7,7 +7,7 @@ import SylKit
 /// The view renders this list rather than deciding as it goes. Interleaving "is this a
 /// new day" logic into a `ForEach` body is how a transcript ends up printing two
 /// dividers for one midnight, or none at all across a month.
-enum TranscriptRow: Identifiable, Equatable {
+enum TranscriptRow: Identifiable, Equatable, Sendable {
     /// A day boundary. The associated value is the *start* of that day, so the label is
     /// derived rather than carried.
     case day(Date)

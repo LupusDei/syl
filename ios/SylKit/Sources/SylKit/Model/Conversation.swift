@@ -82,6 +82,13 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
     /// Monotonic **per conversation**. Not the WebSocket frame sequence — see
     /// `WsDeliveryConfirmation`, which carries both and keeps them apart by name.
     public let seq: Int
+    /// In the order they were attached. **Always present, empty when there are none.**
+    ///
+    /// A client must never have to tell "no attachments" apart from "this server does
+    /// not send the field", because those two look identical and mean opposite things
+    /// the day a field goes missing. So this is a plain array rather than an optional
+    /// one, and ``encode(to:)`` always writes it.
+    public let attachments: [Attachment]
 
     public init(
         id: SylID,
@@ -90,7 +97,8 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         role: MessageRole,
         text: String,
         createdAt: Date,
-        seq: Int
+        seq: Int,
+        attachments: [Attachment] = []
     ) {
         self.id = id
         self.conversationId = conversationId
@@ -99,10 +107,11 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         self.text = text
         self.createdAt = createdAt
         self.seq = seq
+        self.attachments = attachments
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, conversationId, clientId, role, text, createdAt, seq
+        case id, conversationId, clientId, role, text, createdAt, seq, attachments
     }
 
     public init(from decoder: Decoder) throws {
@@ -114,6 +123,20 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         text = try container.decode(String.self, forKey: .text)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         seq = try container.decode(Int.self, forKey: .seq)
+        // Tolerant on the way IN, strict on the way OUT, and the asymmetry is
+        // deliberate rather than a hedge.
+        //
+        // The contract makes `attachments` required and the service always sends it, so
+        // for a wire response the two spellings never differ. But this same decoder
+        // reads the app's **own local rows** — `MessageRecord` stores the encoded
+        // `Message` as a payload blob — and every message written to disk before this
+        // field existed has no `attachments` key at all. A strict decode would throw on
+        // each of them, and because the store maps a whole window at once, the symptom
+        // is not one missing bubble: it is the entire transcript disappearing on
+        // upgrade, which is a far worse failure than the field-drift this rule guards
+        // against. Encoding always emits the key, so a row is repaired the first time
+        // it is written back and the round-trip fixture comparison stays exact.
+        attachments = try container.decodeIfPresent([Attachment].self, forKey: .attachments) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -125,6 +148,7 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         try container.encode(text, forKey: .text)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(seq, forKey: .seq)
+        try container.encode(attachments, forKey: .attachments)
     }
 }
 
@@ -138,15 +162,35 @@ public struct SendMessageRequest: Codable, Equatable, Sendable {
     public let text: String
     /// Optional in the contract; must equal the path parameter when present.
     public let conversationId: SylID?
+    /// Ids from `POST /attachments`, in the order they should render.
+    ///
+    /// Every one must exist and must not already belong to another message; either
+    /// failure is `VALIDATION_FAILED` rather than a message that silently loses its
+    /// picture.
+    ///
+    /// **Nil and `[]` are different, and only nil is legal.** The contract says the
+    /// field may be omitted but may not be present-and-empty, because an empty array is
+    /// a client that meant to omit the field and is worth saying so about. The
+    /// initialiser normalises an empty array to nil rather than making every call site
+    /// remember, and ``encode(to:)`` omits the key entirely when there is nothing to
+    /// attach — so a text-only send is byte-identical to what it was before this field
+    /// existed.
+    public let attachmentIds: [SylID]?
 
-    public init(clientId: String, text: String, conversationId: SylID?) {
+    public init(
+        clientId: String,
+        text: String,
+        conversationId: SylID?,
+        attachmentIds: [SylID]? = nil
+    ) {
         self.clientId = clientId
         self.text = text
         self.conversationId = conversationId
+        self.attachmentIds = (attachmentIds?.isEmpty ?? true) ? nil : attachmentIds
     }
 
     private enum CodingKeys: String, CodingKey {
-        case clientId, text, conversationId
+        case clientId, text, conversationId, attachmentIds
     }
 
     public init(from decoder: Decoder) throws {
@@ -154,6 +198,7 @@ public struct SendMessageRequest: Codable, Equatable, Sendable {
         clientId = try container.decode(String.self, forKey: .clientId)
         text = try container.decode(String.self, forKey: .text)
         conversationId = try container.decodeIfPresent(SylID.self, forKey: .conversationId)
+        attachmentIds = try container.decodeIfPresent([SylID].self, forKey: .attachmentIds)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -161,6 +206,7 @@ public struct SendMessageRequest: Codable, Equatable, Sendable {
         try container.encode(clientId, forKey: .clientId)
         try container.encode(text, forKey: .text)
         try container.encodeRequiredNullable(conversationId, forKey: .conversationId)
+        try container.encodeIfPresent(attachmentIds, forKey: .attachmentIds)
     }
 }
 

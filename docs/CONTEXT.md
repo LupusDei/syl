@@ -700,6 +700,34 @@ to read the query and ask which end the window came from.
 **The general lesson: any query with a `LIMIT` needs a test where the limit
 actually bites.** A bounded read tested only with unbounded data is untested.
 
+### A contract change and the Swift client are not separable, and no single command tells you
+
+`syl-008`'s plan says Phase 5 — the attachments contract, migration, store and
+routes — "ships alone, no UI change". **It does not.**
+
+The contract manifest is checked by `ios/SylKit/Tests/ContractTests`, which
+asserts that every schema the manifest names is claimed by a SylKit type and
+that every fixture decodes *and re-encodes*. Adding `Attachment` and
+`CreateAttachmentRequest` to the contract without regenerating the Swift client
+turns that suite red immediately — which is the anti-divergence guard doing
+precisely its job.
+
+The trap is that **no single command covers both halves**:
+
+- `npm run verify` runs typecheck plus the Node workspaces. It does not touch Swift.
+- `xcodebuild test -scheme Syl` runs the **app target**. It does not run SylKit's
+  host tests — a scheme's TestAction silently skips a local package's test
+  target, which `ios/scripts/test.sh` already documents.
+- `swift test --package-path ios/SylKit` is the only thing that runs them.
+
+So a contract change can show green on the gate *and* green on the app suite
+while the Swift client no longer matches the wire. Run `ios/scripts/test.sh`,
+which covers all three, or run the `swift test` leg explicitly.
+
+**If a captured fixture will not round-trip, the type is wrong, not the
+fixture.** Those fixtures are real captured output; that is the whole reason
+they are captured rather than authored.
+
 ### `npm run build` does not prune `dist/`, and a renamed migration is fatal
 
 Two agents working in parallel both took migration version 15. The collision was
