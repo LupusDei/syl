@@ -124,7 +124,7 @@ export function newMemoryEdgeId(generate: () => string = uuidv7): string {
 }
 
 /**
- * Mint a supersession-ledger assertion id (`0015_supersession_ledger.sql`).
+ * Mint a supersession-ledger assertion id (`0016_supersession_ledger.sql`).
  *
  * Its own namespace rather than reusing `memory_node`, for the same reason the
  * node kind is not in the node id: an assertion is a CLAIM WITH A VALIDITY

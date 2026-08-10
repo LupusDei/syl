@@ -167,7 +167,7 @@ describe("0012_memory_core — the tables exist and are STRICT", () => {
     // Containment, not equality. This file is about the SHAPE of 0012's two
     // tables, and an exact list also asserted that no LATER migration may add a
     // `memory_*` table — a claim it was not making on purpose and cannot
-    // support. `0015_supersession_ledger.sql` adds `memory_assertions`, and the
+    // support. `0016_supersession_ledger.sql` adds `memory_assertions`, and the
     // retrieval work adds more; each arrival would fail this line in a file its
     // author had no other business in, which is the same rot the migration-count
     // literal in `schema-completeness.test.ts` was already changed to avoid.

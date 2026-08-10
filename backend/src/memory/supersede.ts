@@ -8,7 +8,7 @@ import { newMemoryAssertionId } from "./schema.js";
  * The supersession ledger: facts are never deleted, they are RETIRED with a
  * validity interval. `syl-005.3.3`.
  *
- * `0015_supersession_ledger.sql` carries the full argument. This module is the
+ * `0016_supersession_ledger.sql` carries the full argument. This module is the
  * API that argument implies, and three of its properties are load-bearing.
  *
  *

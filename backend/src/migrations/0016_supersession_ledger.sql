@@ -1,4 +1,4 @@
--- 0015_supersession_ledger.sql — facts are never deleted; they are RETIRED with
+-- 0016_supersession_ledger.sql — facts are never deleted; they are RETIRED with
 -- a validity interval. `syl-005.3.3`.
 --
 -- The counterpart to `0012_memory_core.sql`. That file made constraint 6 true

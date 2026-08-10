@@ -35,7 +35,7 @@ export type IdType =
   // shape must never address two different stores.
   | "memory_node"
   | "memory_edge"
-  // The supersession ledger (`0015_supersession_ledger.sql`). A row is a CLAIM
+  // The supersession ledger (`0016_supersession_ledger.sql`). A row is a CLAIM
   // with a validity interval, not a node: facts are never deleted, they are
   // retired, and the closed rows are what answers "what did I believe in
   // March?".
