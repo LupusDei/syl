@@ -700,6 +700,51 @@ to read the query and ask which end the window came from.
 **The general lesson: any query with a `LIMIT` needs a test where the limit
 actually bites.** A bounded read tested only with unbounded data is untested.
 
+### The named one: **consistency is not correspondence**
+
+This project's worst defects are all one shape, and it is worth naming once rather
+than rediscovering per costume. **The system is internally consistent and quietly
+wrong.** Every part agrees with every other part; nothing agrees with reality; so
+every check passes and nothing appears to be broken.
+
+Six instances so far, and the list is the argument:
+
+| The system said | Reality was |
+|---|---|
+| `/health` reports the running commit — asking git | The process was three hours older than the tree it asked |
+| A test named for correct behaviour, green for weeks | Syl could not reply to anyone |
+| `dist/` builds fine | It held a migration `src/` had renamed, and the service refused to boot |
+| `npm run verify` green | The Swift client no longer matched the wire |
+| The TestFlight workflow green | Four builds shipped and none were installable |
+| A pure ordering function and an `ORDER BY`, each correct | Under a `LIMIT` they select **different rows**, so to-dos never appear |
+
+The generalisation, which is the useful part:
+
+> **A consistency check compares the system to itself and cannot catch this class by
+> construction. Only a correspondence check — comparing the system to something
+> outside it — can.**
+
+Every defence that has actually worked here is a correspondence check: the build
+*stamp* against the commit; the test *name* against the story; the *fixture* captured
+from real output rather than authored from our own types; the pure function against
+the database **under the same limit**; the built `Info.plist` rather than the project
+file; the resolved colour against the ground it sits on.
+
+And the corollary, which the squads added and which is what makes it actionable:
+
+> **A correspondence check must be mutation-tested, or it may be a consistency check
+> wearing a correspondence check's clothes.**
+
+Two independent near-misses in one day prove it. A "no device-computed instant"
+assertion read the payload model and could not see the write to the indexed column
+beside it — it could not have failed for the reason it was named for. A goal-read
+ordering parity trio would have been the same shape of nothing on a fixture with no
+ties. **Neither weakness was visible by reading the test.** Both were settled by one
+deliberate regression, one run, one revert.
+
+So: break it on purpose, watch it go red, put it back. If you cannot make it fail,
+you have not written the check you think you wrote.
+
 ### A green TestFlight workflow did not mean a build he could install
 
 `ITSAppUsesNonExemptEncryption` was never set on the app. So every upload landed

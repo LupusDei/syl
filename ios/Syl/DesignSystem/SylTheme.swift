@@ -44,7 +44,20 @@ extension SylTheme {
         static var ink: Color { dynamic(light: 0x2E3D57, dark: 0xE6EDF8) }
 
         /// Body text and supporting detail.
-        static var inkSoft: Color { dynamic(light: 0x5A6A82, dark: 0xA9B7CC) }
+        ///
+        /// The light value was `0x5A6A82` and measured **3.7:1** against `veilDeep` —
+        /// under the 4.5:1 floor for ordinary text. Deepened to clear it.
+        ///
+        /// It mattered more than one token usually would. After `inkFaint` was found
+        /// dissolving into the veil's blooms, `inkSoft` became *the* answer for small
+        /// text on bare veil, and `syl-011` put it on four new surfaces on that advice.
+        /// The failure was only reachable at the **dark end of the light gradient**,
+        /// which is why looking at renders never caught it: a bloom lightens the ground
+        /// and makes the contrast better, so every eye-check landed on the easy case.
+        ///
+        /// Found by `SylThemeContrastTests` within a minute of it existing, and by
+        /// nothing else in a day of building against this token.
+        static var inkSoft: Color { dynamic(light: 0x4A5A72, dark: 0xA9B7CC) }
 
         /// Labels, timestamps, the things present but not asking to be read.
         static var inkFaint: Color { dynamic(light: 0x8D9AAF, dark: 0x6C7A90) }
@@ -71,9 +84,29 @@ extension SylTheme {
         /// Hairlines: the spine, card edges, the ring around an unfilled marker.
         static var hairline: Color { dynamic(light: 0x5A6A82, dark: 0xA9B7CC).opacity(0.22) }
 
-        /// The one warm note in the palette, for `alert` only. Scarcity is the point:
-        /// if warmth appears anywhere else it stops meaning "this needs you now".
-        static var warmth: Color { dynamic(light: 0xE8B98A, dark: 0xF0C79C) }
+        /// The one warm note in the palette. Scarcity is the point: if warmth appears
+        /// everywhere it stops meaning "this needs you now".
+        ///
+        /// ## The light value is pigment, not emission — and it was not, until now
+        ///
+        /// This carried `0xE8B98A` in the light appearance: essentially the same pale
+        /// peach as the night value, which is exactly the mistake ``luminance`` above
+        /// documents at length and was explicitly fixed for. Against a near-black ground
+        /// a pale warm tint reads as a glow; against the pale veil it reads as almost
+        /// nothing, because there is nothing for it to add to.
+        ///
+        /// It went unnoticed for a simple reason: warmth had only ever been used **on
+        /// glass** — a `NoteCard`, a badge capsule — where the fill supplies its own
+        /// ground and a pale tone survives. The moment `syl-011` put it on bare veil as
+        /// small text, two squads independently reported it as the weakest thing on the
+        /// screen. Home being forced to night until `syl-011.6` is why nobody met it
+        /// sooner.
+        ///
+        /// So the light appearance is now a deep amber with real chroma, chosen to clear
+        /// 4.5:1 against the **darkest** part of the light veil (`veilDeep`), not merely
+        /// against its lightest. `SylThemeContrastTests` asserts that, because a palette
+        /// rule stated only in prose is a rule the next token will also miss.
+        static var warmth: Color { dynamic(light: 0x8A4A0F, dark: 0xF0C79C) }
 
         /// `concerned` desaturates toward this rather than toward grey — a spren
         /// dimming, not a UI greying out.
