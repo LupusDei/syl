@@ -142,12 +142,27 @@ function queryPlan(sql: string, ...parameters: readonly string[]): string {
 }
 
 describe("0012_memory_core — the tables exist and are STRICT", () => {
-  it("should create memory_nodes and memory_edges", () => {
-    const names = db
+  it("should create memory_nodes and memory_edges, and nothing else", () => {
+    // Applied to version 12 ONLY, on its own database. The `memory_` namespace
+    // is shared — 0014 adds an FTS5 index, a feedback ledger and a reindex
+    // queue — so asking the fully-migrated database what is in it stopped
+    // being a question about 0012 the moment a second migration touched the
+    // namespace. Scoping the setup keeps the assertion exact rather than
+    // loosening it to `arrayContaining`, which would no longer notice 0012
+    // growing a table nobody meant to add.
+    const scoped = new DatabaseSync(IN_MEMORY);
+    applyPragmas(scoped, { busyTimeoutMs: 100, requireWal: false });
+    applyMigrations(
+      scoped,
+      readMigrations(MIGRATIONS_DIR).filter((migration) => migration.version <= 12),
+    );
+
+    const names = scoped
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'memory_%'")
       .all()
       .map((row) => (row as { name: string }).name)
       .sort();
+    scoped.close();
 
     expect(names).toEqual(["memory_edges", "memory_nodes"]);
   });
