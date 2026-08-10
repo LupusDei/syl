@@ -22,6 +22,7 @@ import { GoalService } from "../../src/services/goal-service.js";
 import type { Entropy } from "../../src/services/id.js";
 import { IdempotencyStore } from "../../src/services/idempotency.js";
 import { JobStore } from "../../src/services/job-store.js";
+import { MemoryRuntime } from "../../src/services/memory-runtime.js";
 import { MessageStore } from "../../src/services/message-store.js";
 import { Outbox } from "../../src/services/outbox.js";
 import { PresenceService } from "../../src/services/presence.js";
@@ -244,6 +245,7 @@ export function testDeps(db: SylDatabase): {
   readonly memory: MemoryViews;
   readonly presence: PresenceService;
   readonly intakeQueue: IntakeQueue;
+  readonly memoryRuntime: MemoryRuntime;
 } {
   const clock = fixedClock(TEST_NOW);
   const intakeQueue = new IntakeQueue();
@@ -256,6 +258,7 @@ export function testDeps(db: SylDatabase): {
   const todos = new TodoService({ db: db.handle, clock });
   const goals = new GoalService({ db: db.handle, clock });
   const jobs = new JobStore({ db: db.handle, clock });
+  const memory = testMemory(db, clock);
   return {
     keys: testKeys(db),
     messages,
@@ -284,11 +287,17 @@ export function testDeps(db: SylDatabase): {
       clock,
       scheduler: intakeQueue,
     }),
-    memory: testMemory(db, clock),
+    memory,
     // No sink. `startServer` attaches one; a test that wants to watch frames
     // hands its own to `PresenceService` directly.
     presence: new PresenceService({ clock }),
     intakeQueue,
+    // Constructed for real, and it costs nothing: `MemoryRuntime` builds only
+    // the ledger eagerly, and the searchable half — `vec0` and, eventually, a
+    // model — is not touched until something asks. That is the same property
+    // the service depends on at boot, so a test getting the real object here
+    // is a test exercising the real seam.
+    memoryRuntime: new MemoryRuntime({ db: db.handle, graph: memory.graph, clock }),
   };
 }
 

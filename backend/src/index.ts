@@ -12,6 +12,13 @@ import express, {
 
 import type { Job, PushEnvironment } from "@syl/shared";
 
+import {
+  createNightlyDreamHandler,
+  createYieldSignal,
+  describeDream,
+  ensureNightlyDreamJob,
+  type NightDreamer,
+} from "./jobs/dream-job.js";
 import { createDeliveryRuntime, describeRuntime, type DeliveryRuntime } from "./jobs/runtime.js";
 import { loadConfig, type SylConfig } from "./config.js";
 import {
@@ -53,7 +60,9 @@ import { createTodoRouter } from "./routes/todos.js";
 import { fileSessionStore, memorySessionStore, SylAgent } from "./harness/agent.js";
 import { runTurn, type TurnOptions, type TurnRunner } from "./harness/session.js";
 import { autoMemoryAt } from "./memory/auto-memory.js";
+import { DreamJudge } from "./memory/dream/judge.js";
 import { DreamLog } from "./memory/dream/log.js";
+import { DreamSweep } from "./memory/dream/sweep.js";
 import { MemoryGraph } from "./memory/graph.js";
 import { MemoryMetrics } from "./memory/metrics.js";
 import { EdgeWeights } from "./memory/weights.js";
@@ -68,6 +77,7 @@ import { DeviceTokenService } from "./services/device-token-service.js";
 import { GoalService } from "./services/goal-service.js";
 import { IdempotencyStore } from "./services/idempotency.js";
 import { JobStore } from "./services/job-store.js";
+import { MemoryRuntime } from "./services/memory-runtime.js";
 import { MessageStore } from "./services/message-store.js";
 import { Outbox } from "./services/outbox.js";
 import { PresenceService } from "./services/presence.js";
@@ -260,6 +270,17 @@ export interface ServiceDependencies extends AppDependencies {
    * the route only ever puts things into it via `intake.submit`.
    */
   readonly intakeQueue: IntakeQueue;
+  /**
+   * The half of memory that needs `vec0` and a model: the store, the retriever,
+   * the semantic proposer — plus the supersession ledger, which needs neither.
+   *
+   * Not an HTTP concern today. It exists here because `syl-63n` was a whole
+   * epic with no call site: the tables migrated, the triggers fired, and
+   * nothing ever wrote a node. See `services/memory-runtime.ts` for why the
+   * searchable half is built lazily and this one is not simply four more lines
+   * beside `MemoryViews`.
+   */
+  readonly memoryRuntime: MemoryRuntime;
 }
 
 /** Build the Express application. */
@@ -689,6 +710,31 @@ export function bootstrap(
     dreams: new DreamLog({ db: database.handle, clock }),
   };
 
+  // The rest of `syl-005`, which had no call site at all until `syl-63n`: the
+  // hybrid store, the retriever, the embedder and the supersession ledger.
+  //
+  // Only the ledger is built here and now. Everything else is behind
+  // `MemoryRuntime.searchable()`, and the reason is the boot path: the store
+  // needs `vec0` — a native extension `sqlite-vec` ships as a per-platform
+  // OPTIONAL dependency, so "absent" is a state `npm install` reports success
+  // for — and the retriever needs a 300M-parameter model. Neither may be
+  // allowed to decide whether this service starts. Syl holds reminder-delivery
+  // guarantees; a `/health` that waits on model weights, or a boot that fails
+  // because a machine has no `vec0` binary, has broken something considerably
+  // more important than search. `services/memory-runtime.ts` has the argument
+  // in full.
+  const memoryRuntime = new MemoryRuntime({
+    db: database.handle,
+    graph: memoryGraph,
+    clock,
+    ...(log === undefined
+      ? {}
+      : {
+          warn: (line: string, error: unknown) =>
+            log.error("memory", { message: line, error: String(error) }),
+        }),
+  });
+
   const intakeQueue = new IntakeQueue();
   const intakeStore = new IntakeStore({ db: database.handle, clock });
   const intake = new ArticleIntake({ store: intakeStore, clock, scheduler: intakeQueue });
@@ -712,6 +758,7 @@ export function bootstrap(
       idempotency,
       intake,
       memory,
+      memoryRuntime,
       presence,
       intakeQueue,
       probes: [databaseProbe(database.handle)],
@@ -787,6 +834,76 @@ export interface DeliveryOverrides {
 
 export interface StartSylOptions extends BootstrapOptions {
   readonly delivery?: DeliveryOverrides;
+}
+
+/**
+ * The dreamer, assembled at the moment a night actually starts.
+ *
+ * **Built per run rather than at boot**, because a `DreamSweep` needs the
+ * semantic proposer and that needs `vec0` loaded and (on first use) a model.
+ * Doing it here means a machine that cannot load the extension gets a failed,
+ * retried, visible run — not a service that would not start. `null` is exactly
+ * that case, and `createNightlyDreamHandler` turns it into a recorded failure.
+ *
+ * Four things about this wiring are load-bearing and none of them is obvious:
+ *
+ * 1. **The yield signal is the Commander's own conversation queue.**
+ *    `DreamJudge` takes `shouldYield` and, until now, nothing drove it — so the
+ *    dream would have kept judging while he was talking to her at 03:00, on the
+ *    one rate-limit pool they share. `ConversationService` is the only path an
+ *    interactive turn takes, and the dream's own turns do not take it.
+ * 2. **No `cwd` is passed.** The judge runs on the `consolidation` lane, which
+ *    is in `MEMORYLESS_LANES`, and it already sends `autoMemoryOff()` — the
+ *    lane must not be handed a writable memory directory or the dream reads its
+ *    own reflections back as experience (QA finding C1, and constraint 7's
+ *    spirit).
+ * 3. **Every turn is `runTurn`**, which strips `ANTHROPIC_API_KEY` and asserts
+ *    `apiKeySource === "none"`. A night is many turns and every one of them
+ *    stays on subscription rails (constraint 1).
+ * 4. **A substituted turn runner reaches the dream too.** `DreamJudge` imports
+ *    the real `runTurn` when it is given none, so a caller that replaced the
+ *    runner everywhere else — every test that boots the service — would have
+ *    had exactly one path left that spawns the real CLI, and it is the one that
+ *    spawns it a hundred and eighty times a night.
+ */
+function buildDreamJudge(
+  config: SylConfig,
+  deps: ServiceDependencies,
+  clock: Clock,
+  options: StartSylOptions,
+): NightDreamer | null {
+  const searchable = deps.memoryRuntime.trySearchable();
+  if (searchable === null) return null;
+
+  const sweep = new DreamSweep({
+    graph: deps.memory.graph,
+    log: deps.memory.dreams,
+    weights: deps.memory.weights,
+    semantic: searchable.semantic,
+    clock,
+  });
+
+  const claudeBin = options.turn?.claudeBin;
+
+  return new DreamJudge({
+    sweep,
+    log: deps.memory.dreams,
+    clock,
+    sessionStore: sessionStoreFor(config),
+    // Both bounds. The Commander talking pauses it; the quiet window closing
+    // ENDS it — and that second one is what keeps a six-hour night off the
+    // concurrency-one job runner, which reminder delivery shares (`syl-ncx`).
+    shouldYield: createYieldSignal({
+      conversations: deps.chat,
+      clock,
+      window: { tz: config.quietHours.tz, quiet: config.quietHours.quiet },
+    }),
+    // Unwrapped by `withMemoryIndex`, unlike the agent's: a judgment turn runs
+    // with `--tools ""` and cannot write a memory, so there is no index to
+    // maintain and nothing for the wrapper to do.
+    ...(options.runner === undefined ? {} : { runTurn: options.runner }),
+    ...(claudeBin === undefined ? {} : { turnOptions: { claudeBin } }),
+  });
 }
 
 /** Syl, up: the store, the socket, and the loop that makes reminders arrive. */
@@ -883,6 +1000,12 @@ export async function startSyl(
   const service = await startServer(config, deps);
 
   ensureContentIngestionJob(deps.jobs, clock());
+  // The dream, on a clock at last (`syl-cbb`). One row, a `wall_clock` trigger
+  // in the Commander's own zone, and a `once_per_window` catch-up over the
+  // quiet window — so it runs in the gap and, if it is missed, waits for the
+  // next gap rather than spending turns at breakfast.
+  const dreamSchedule = { tz: config.quietHours.tz, quiet: config.quietHours.quiet };
+  const dreamJob = ensureNightlyDreamJob(deps.jobs, dreamSchedule, clock());
 
   const runtime = createDeliveryRuntime({
     jobs: deps.jobs,
@@ -893,6 +1016,14 @@ export async function startSyl(
       [
         "content_ingestion",
         createContentIngestionHandler({ intake: deps.intake, queue: deps.intakeQueue }),
+      ],
+      [
+        "nightly_consolidation",
+        createNightlyDreamHandler({
+          log: deps.memory.dreams,
+          ...dreamSchedule,
+          judge: () => buildDreamJudge(config, deps, clock, options),
+        }),
       ],
     ]),
     clock,
@@ -927,6 +1058,9 @@ export async function startSyl(
     startupLines: [
       ...startup,
       ...describeRuntime(runtime),
+      // Re-read: `ensureNightlyDreamJob` returns the row as it was found, and
+      // the runner's first tick has already run since then.
+      ...describeDream(deps.jobs.get(dreamJob.id) ?? dreamJob, dreamSchedule),
       ...describePushEnvironment(push, { pushConfigured: runtime.pushEnabled }),
       ...describePower(power),
       ...describeAdmin(admin),

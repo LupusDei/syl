@@ -51,11 +51,6 @@
       "test": "deploy \u2014 a rollback after a migration should restore the schema the restored build expects",
       "bead": "syl-dep1.7",
       "why": "A health-gated rollback restores the CODE and leaves the SCHEMA forward. Migrations run on the way up and there is no down path, so after a failed deploy the restored build runs against a database it has never seen. Additive migrations usually survive that and a destructive one does not, and nothing today tells the two apart. The deploy reports the migrations involved and reports schemaRestored: false rather than pretending \u2014 but 'the code is back' and 'the system is back' are different claims, and only the first is true. Fixing it needs either down-migrations or a snapshot of the SQLite file taken before the deploy."
-    },
-    {
-      "test": "the memory epic, as wired into the running service should be constructed somewhere in the service, not only in its own tests",
-      "bead": "syl-63n",
-      "why": "Every module of syl-005 \u2014 schema, graph, weights, supersede, store, retrieve, embed, holographic, metrics, dream/log \u2014 has a green unit suite and ZERO call sites outside backend/src/memory/. Nothing in bootstrap constructs a MemoryGraph, MemoryStore, Retriever, SupersessionLedger, EdgeWeights, DreamLog or MemoryMetrics, so the tables migrate, the triggers fire, and Syl never writes a memory. This is the syl-vls shape a third time: the missing thing is a line in bootstrap, which is exactly what no test of a component can see \u2014 which is why it gets a wiring test rather than another unit test."
     }
   ]
 }
