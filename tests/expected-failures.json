@@ -61,6 +61,16 @@
       "test": "what the nightly sweep must record should see the edges the reflection engine actually wrote into the graph",
       "bead": "syl-005.4.2",
       "why": "Same root cause, on the other side of the log. An inferred edge is written into the graph and no dream_edge_reasoning row records why or on which night, so survival rate, cost per kept edge and the astrology rate are all blind to it and the invariant alarm stays `unproven` forever. syl-005.4.2 must record a reasoning row for every disposition it takes — created, reactivated, suppressed AND rejected. Keeping the rejections is what makes the astrology rate readable rather than merely countable."
+    },
+    {
+      "test": "the memory epic, as wired into the running service should be constructed somewhere in the service, not only in its own tests",
+      "bead": "syl-63n",
+      "why": "Every module of syl-005 — schema, graph, weights, supersede, store, retrieve, embed, holographic, metrics, dream/log — has a green unit suite and ZERO call sites outside backend/src/memory/. Nothing in bootstrap constructs a MemoryGraph, MemoryStore, Retriever, SupersessionLedger, EdgeWeights, DreamLog or MemoryMetrics, so the tables migrate, the triggers fire, and Syl never writes a memory. This is the syl-vls shape a third time: the missing thing is a line in bootstrap, which is exactly what no test of a component can see — which is why it gets a wiring test rather than another unit test."
+    },
+    {
+      "test": "the memory epic, as wired into the running service should open the service database with extension loading allowed, or vec0 can never be loaded into it",
+      "bead": "syl-63n",
+      "why": "index.ts calls openDatabase({ path: config.databasePath }) with no allowExtension. node:sqlite can only be granted extension loading at CONSTRUCTION and offers no way to turn it on afterwards, so the service connection can never load vec0 however the store is wired in later — vector search would simply be absent on the running service while every unit test stayed green, because the tests open their own connection and do pass the flag. Half of hybrid retrieval, missing, with nothing failing to say so."
     }
   ]
 }
