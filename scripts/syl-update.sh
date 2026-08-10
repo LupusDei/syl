@@ -57,7 +57,32 @@ node_major() {
 
 resolve_node() {
   local candidates=() candidate major
-  [ -n "${SYL_NODE_BIN:-}" ] && candidates+=("$SYL_NODE_BIN")
+
+  # An explicit override is an INSTRUCTION, not a hint.
+  #
+  # SYL_NODE_BIN used to be merely the first candidate, so pointing it at an
+  # unusable node fell through to whatever else the machine happened to have.
+  # An operator who sets it wrong then runs a DIFFERENT interpreter than the one
+  # they named, silently — the same "override that does not override" shape as
+  # SYL_TAILSCALE_BIN, fixed earlier the same day.
+  #
+  # It also made its own test meaningless in a way that only showed up in CI.
+  # The test points SYL_NODE_BIN at a fake reporting v18 and expects a refusal.
+  # On the developer's Mac that passed — but only because /usr/local/bin/node
+  # there is a BROKEN brew node that fails its version probe. On a GitHub runner
+  # that path holds a working Node 22, so the fallback found it and the refusal
+  # never happened. A test passing for an unrelated broken reason is the same
+  # defect this project has produced all week.
+  if [ -n "${SYL_NODE_BIN:-}" ]; then
+    major="$(node_major "$SYL_NODE_BIN")" || return 1
+    [ -n "$major" ] || return 1
+    if [ "$major" -ge 22 ] 2>/dev/null; then
+      printf '%s' "$SYL_NODE_BIN"
+      return 0
+    fi
+    return 1
+  fi
+
   candidates+=(/opt/homebrew/bin/node /usr/local/bin/node)
   if [ -d "${HOME:-/nonexistent}/.nvm/versions/node" ]; then
     while IFS= read -r dir; do
