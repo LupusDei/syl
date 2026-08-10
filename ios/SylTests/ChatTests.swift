@@ -389,22 +389,146 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertTrue(model.snapshot.groups.isEmpty)
     }
 
+    // MARK: - Presence decay (syl-008.4.1 / T020)
+    //
+    // Chat used to store `frame.state` raw and never decay it. That is worse here than
+    // on home: this is the screen where "she is thinking" is a claim about a turn the
+    // Commander is actively waiting on, so a frozen state does not merely look wrong,
+    // it tells him the machine is still working when it stopped minutes ago.
+
+    @MainActor
+    func testShouldDecayPresenceToIdleOnceTheTTLLapses() async throws {
+        let clock = MutableClock(instant("2026-08-09T07:00:00.000Z"))
+        let model = makeModel(now: { clock.now })
+
+        await model.apply(
+            .presence(
+                WsPresence(state: .thinking, intensity: 0.55, since: clock.now, ttlMs: 100)
+            )
+        )
+        XCTAssertEqual(model.presence, .thinking)
+        XCTAssertEqual(model.intensity, 0.55, accuracy: 0.0001)
+
+        // Past the TTL by a wide margin, so the assertion is about the ladder rather
+        // than about hitting a boundary exactly.
+        clock.advance(by: 1)
+        try await Task.sleep(for: .milliseconds(400))
+
+        XCTAssertEqual(model.presence, .idle)
+        XCTAssertEqual(model.intensity, 0, "an amplitude outliving its state is the same lie as the state")
+    }
+
+    @MainActor
+    func testShouldForgetPresenceWhenTheSocketDrops() async {
+        let model = makeModel()
+
+        await model.apply(
+            .presence(
+                WsPresence(
+                    state: .thinking,
+                    intensity: 0.55,
+                    since: instant("2026-08-09T06:59:48.300Z"),
+                    ttlMs: 15_000
+                )
+            )
+        )
+        XCTAssertEqual(model.presence, .thinking)
+
+        await model.apply(.connectionState(.offline))
+
+        // Not stale — false. Replaying "thinking" across a disconnection asserts
+        // something about now that stopped being true when the socket died.
+        XCTAssertEqual(model.presence, .absent)
+        XCTAssertEqual(model.intensity, 0)
+    }
+
+    @MainActor
+    func testShouldForgetPresenceWhenTheDeviceNeedsPairingAgain() async {
+        let model = makeModel()
+
+        await model.apply(
+            .presence(
+                WsPresence(
+                    state: .speaking,
+                    intensity: 0.9,
+                    since: instant("2026-08-09T06:59:48.300Z"),
+                    ttlMs: 15_000
+                )
+            )
+        )
+        XCTAssertEqual(model.presence, .speaking)
+
+        await model.apply(.connectionState(.unauthenticated))
+
+        XCTAssertEqual(model.presence, .absent)
+        XCTAssertEqual(model.notice, "This device needs to be paired again.")
+    }
+
+    @MainActor
+    func testShouldKeepRenderingPresenceAcrossAReconnectAttempt() async {
+        // The edge on the other side: `reconnecting` is not a drop. Clearing on every
+        // non-connected state would make her flicker out during an ordinary handoff.
+        let model = makeModel()
+
+        await model.apply(
+            .presence(
+                WsPresence(
+                    state: .thinking,
+                    intensity: 0.55,
+                    since: instant("2026-08-09T06:59:48.300Z"),
+                    ttlMs: 15_000
+                )
+            )
+        )
+
+        await model.apply(.connectionState(.reconnecting(attempt: 1)))
+
+        XCTAssertEqual(model.presence, .thinking)
+    }
+
     // MARK: - Harness
 
     @MainActor
     private func makeModel(
         sendOverSocket: @escaping @Sendable (String, String, String) async throws -> Void = { _, _, _ in },
         flush: @escaping @Sendable () async -> Void = {},
-        makeClientId: @escaping @Sendable () -> String = { UUID().uuidString }
+        makeClientId: @escaping @Sendable () -> String = { UUID().uuidString },
+        now: @escaping @Sendable () -> Date = { try! Instant.parse("2026-08-09T06:59:48.220Z") }
     ) -> ChatViewModel {
         ChatViewModel(
             store: store,
             sendOverSocket: sendOverSocket,
             flush: flush,
-            now: { try! Instant.parse("2026-08-09T06:59:48.220Z") },
+            now: now,
             makeClientId: makeClientId,
             makeIdempotencyKey: { UUID().uuidString }
         )
+    }
+
+    /// A clock the test moves by hand.
+    ///
+    /// Presence decay is a function of elapsed time, and a test that waits for real
+    /// seconds to pass is both slow and flaky. Advancing the clock lets the assertion
+    /// be about the ladder rather than about a stopwatch. Lock-guarded because the
+    /// view model's `now` is `@Sendable` and may be read off the main actor by the
+    /// armed decay task.
+    final class MutableClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var instant: Date
+
+        init(_ instant: Date) { self.instant = instant }
+
+        var now: Date {
+            lock.lock()
+            defer { lock.unlock() }
+            return instant
+        }
+
+        func advance(by interval: TimeInterval) {
+            lock.lock()
+            defer { lock.unlock() }
+            instant = instant.addingTimeInterval(interval)
+        }
     }
 
     actor Flag {

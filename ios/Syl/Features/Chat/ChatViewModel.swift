@@ -10,7 +10,21 @@ import SylKit
 final class ChatViewModel: ObservableObject {
     @Published private(set) var snapshot = ChatSnapshot()
     @Published private(set) var connection: SocketConnectionState = .idle
+
+    /// The decayed view of presence. **Not** the last frame's raw state.
+    ///
+    /// This screen used to store `frame.state` directly, which meant a dropped socket
+    /// left Syl asserting `thinking` forever — the exact failure `PresenceTimeline`
+    /// exists to prevent, and worse here than on home, because this is the screen where
+    /// "she is thinking" is a claim about a turn the Commander is actually waiting on.
+    /// A character frozen mid-thought is worse than no character at all: it actively
+    /// misrepresents what the system is doing. The failure mode has to be quiet, not
+    /// stuck.
     @Published private(set) var presence: PresenceState = .absent
+
+    /// How strongly to render that presence, already clamped. Zero once the state has
+    /// expired — an amplitude outliving its state is the same lie as the state itself.
+    @Published private(set) var intensity: Double = 0
     /// Non-nil when something is stuck and the Commander should know. Offline is a
     /// state to design, not an error to report — but a message that cannot be sent is
     /// worth saying out loud.
@@ -25,6 +39,13 @@ final class ChatViewModel: ObservableObject {
     private let now: @Sendable () -> Date
     private let makeClientId: @Sendable () -> String
     private let makeIdempotencyKey: @Sendable () -> String
+
+    /// The presence ladder. Frames go in, a decayed state comes out.
+    private var timeline = PresenceTimeline()
+
+    /// One armed timer for the next moment the rendered state changes, rather than a
+    /// poll. Cancelled and re-armed on every frame.
+    private var decay: Task<Void, Never>?
 
     init(
         store: LocalStore,
@@ -128,6 +149,16 @@ final class ChatViewModel: ObservableObject {
             if state == .unauthenticated {
                 notice = "This device needs to be paired again."
             }
+            // A presence state that survived a disconnection would be asserting
+            // something about *now* that stopped being true the moment the socket died.
+            // Replaying "thinking" from four minutes ago is not stale data, it is a lie.
+            switch state {
+            case .offline, .unauthenticated, .idle:
+                timeline.clear()
+                refreshPresence()
+            default:
+                break
+            }
             return false
 
         case .message(let message):
@@ -153,7 +184,8 @@ final class ChatViewModel: ObservableObject {
             return reconciled
 
         case .presence(let frame):
-            presence = frame.state
+            timeline.record(frame, at: now())
+            refreshPresence()
             return false
 
         case .needsHTTPSync:
@@ -168,6 +200,37 @@ final class ChatViewModel: ObservableObject {
             // which is still true and still the more important thing to say.
             if fatal { notice = error.message }
             return false
+        }
+    }
+
+    // MARK: - Presence
+
+    /// Recompute what to render, and arm the next transition.
+    private func refreshPresence() {
+        let instant = now()
+        presence = timeline.state(at: instant)
+        intensity = timeline.intensity(at: instant)
+        armDecay(from: instant)
+    }
+
+    /// Arm a single timer for the next moment the rendered state changes.
+    ///
+    /// `PresenceTimeline` exposes `nextTransition()` precisely "so a view can schedule
+    /// one timer instead of polling". There are two boundaries on the ladder — the TTL
+    /// expiring into `idle`, and the further grace expiring into `absent` — so this
+    /// takes whichever is next and re-arms itself when it fires.
+    private func armDecay(from instant: Date) {
+        decay?.cancel()
+
+        guard let ttlExpiry = timeline.nextTransition() else { return }
+        let boundaries = [ttlExpiry, ttlExpiry.addingTimeInterval(PresenceTimeline.idleGrace)]
+        guard let next = boundaries.first(where: { $0 > instant }) else { return }
+
+        let delay = next.timeIntervalSince(instant)
+        decay = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(delay, 0.05)))
+            guard !Task.isCancelled else { return }
+            self?.refreshPresence()
         }
     }
 
