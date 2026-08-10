@@ -217,23 +217,84 @@ describe("bootstrap — the container", () => {
 });
 
 describe("describeContainer", () => {
+  const HOME = "/Users/Reason/.syl";
+  /** What `toolConfigPath` resolves to, as a value this file states for itself. */
+  const HANDS = toolConfigPath(HOME);
+
   it("should name the directory her turns run in", () => {
     // The line that did not exist. Where she thinks was inferable from a
     // launchd plist and written down nowhere, so the first person to notice she
     // was living in the repo was the Commander, from her own answer.
-    expect(describeContainer("/Users/Reason/.syl").join("\n")).toContain("/Users/Reason/.syl");
+    expect(describeContainer(HOME, undefined).join("\n")).toContain(HOME);
   });
 
   it("should be exactly one line", () => {
     // Once per boot. A container that announces itself twice is noise, and
     // noise at startup is what nobody reads.
-    expect(describeContainer("/Users/Reason/.syl")).toHaveLength(1);
+    expect(describeContainer(HOME, undefined)).toHaveLength(1);
+    expect(describeContainer(HOME, HANDS)).toHaveLength(1);
   });
 
   it("should warn, and name the launch directory, when there is no home", () => {
-    const [line] = describeContainer(undefined);
+    const [line] = describeContainer(undefined, undefined);
 
     expect(line).toContain("WARNING");
     expect(line).toContain(process.cwd());
+  });
+
+  it("should say something DIFFERENT about her hands when she has been given some", () => {
+    // The assertion that makes the notice a function of the configuration
+    // rather than a second statement of it, and the only shape of test that
+    // could have caught `syl-009.9`.
+    //
+    // The line used to end "no MCP" as a constant. `syl-009.3` handed the
+    // commander lane a declaration and the constant did not move, so on the
+    // morning the config was written the boot printed, in the same second, that
+    // she had no MCP. A test naming today's string would have gone green
+    // through exactly that — which is why this one names no string at all and
+    // asserts only that the two configurations cannot print the same line.
+    expect(describeContainer(HOME, HANDS)[0]).not.toBe(describeContainer(HOME, undefined)[0]);
+  });
+
+  it("should claim no MCP only when no declaration was resolved", () => {
+    // The claim itself, in both directions. "no MCP" is a security property and
+    // it must be printed when, and only when, it is true.
+    expect(describeContainer(HOME, undefined)[0]).toContain("no MCP");
+    expect(describeContainer(HOME, HANDS)[0]).not.toContain("no MCP");
+  });
+
+  it("should name the declaration she was actually given", () => {
+    // The path, because the next question after "she has MCP" is "from where",
+    // and the whole argument in `tools/config.ts` is that the answer is under
+    // her home rather than in a checked-out branch. A notice that says "some
+    // MCP" answers nothing.
+    expect(describeContainer(HOME, HANDS)[0]).toContain(HANDS);
+  });
+
+  it("should say the surface is one lane and not the whole service", () => {
+    // "no MCP" and "MCP on one lane of five" are different security postures,
+    // and so are "MCP on one lane" and "MCP". Somebody debugging why she did
+    // something reads this line to decide whether she could have; a notice that
+    // reported the service as tooled would send them looking in the wrong
+    // place just as surely as one that reported it as untooled.
+    const [line] = describeContainer(HOME, HANDS);
+
+    expect(line).toContain(LANES.commander);
+    expect(line).toMatch(/lane/i);
+  });
+
+  it("should be derived from the declaration the commander lane is actually given", async () => {
+    // The loop closed. The tests above prove the notice tracks its argument;
+    // this proves the argument is the same value the turn carries, so there is
+    // no third place for the two to disagree.
+    const { dir, databasePath } = home();
+    const { runner, seen } = recordingRunner();
+    const built = bootstrap(testConfig({ databasePath }), { runner });
+    closers.push(() => built.database.close());
+
+    await built.agent.forLane(LANES.commander).ask("who are you?");
+
+    expect(built.hands).toBe(seen[0]?.mcpConfig);
+    expect(describeContainer(dir, built.hands)[0]).toContain(toolConfigPath(dir));
   });
 });

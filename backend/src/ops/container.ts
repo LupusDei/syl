@@ -291,7 +291,8 @@ function isUnder(home: string, candidate: string): boolean {
 }
 
 /**
- * The one startup line that says where Syl actually thinks.
+ * The one startup line that says where Syl actually thinks, and what she can
+ * reach from there.
  *
  * Nothing in the logs said this. That is why it took two screenshots from the
  * Commander — her telling him, in her own words, that she was an engineer in
@@ -299,18 +300,63 @@ function isUnder(home: string, candidate: string): boolean {
  * running in. It was inferable from `process.cwd()` and a launchd plist; it was
  * written down nowhere.
  *
- * `undefined` is the in-memory configuration, where there is no home and turns
- * inherit whatever directory the process was started in. That is fine for a
- * test and is exactly the original bug in production, so it says so.
+ * `undefined` for `home` is the in-memory configuration, where there is no home
+ * and turns inherit whatever directory the process was started in. That is fine
+ * for a test and is exactly the original bug in production, so it says so.
+ *
+ * ## Why the tool surface is an ARGUMENT and not a sentence — `syl-009.9`
+ *
+ * Because it was a sentence, and the sentence went false. This line ended with
+ * the constant `no MCP` from the day it was written. `syl-009.3` then handed the
+ * commander lane a declaration under her home, and the constant did not move —
+ * so the boot that first wrote `~/.syl/tools/hands.json` printed, in the same
+ * second and a few lines away, that she had no MCP.
+ *
+ * That is worse than a stale comment for one reason: this is the **only** place
+ * her tool surface is stated at boot, and it is stated as a security property.
+ * Somebody debugging why she did something reads it to decide whether she
+ * *could* have, and a line saying "no MCP" closes the question with the wrong
+ * answer. `no MCP` and `MCP on one lane of five` are different postures.
+ *
+ * The fix is the general rule this project already holds (`docs/CONTEXT.md` §8):
+ * **when two things must agree, make one of them a function of the other.** The
+ * notice is now computed from `hands` — the very value `bootstrap` resolved and
+ * handed to the commander lane's `TurnOptions.mcpConfig` — so there is no second
+ * statement to keep in step. Staleness unrepresentable beats staleness unlikely.
+ *
+ * `hands` is a REQUIRED parameter for the same reason. An optional one could be
+ * quietly omitted at the call site and would print "no MCP" again, which is the
+ * bug wearing a signature change as a hat.
+ *
+ * The claim that it is ONE lane is the one thing here that is still prose, since
+ * this module does not know what a lane is. `INTENDED_MCP` in
+ * `tests/unit/container-boot.test.ts` is what holds it true: every lane but
+ * `commander` is asserted to reach no MCP surface at all, and adding a lane does
+ * not compile until somebody states its entry.
+ *
+ * @param home Where her turns run, or `undefined` when nothing is configured.
+ * @param hands The MCP declaration the commander lane was actually given, or
+ *   `undefined` when no lane was given one.
  */
-export function describeContainer(home: string | undefined): readonly string[] {
+export function describeContainer(
+  home: string | undefined,
+  hands: string | undefined,
+): readonly string[] {
   if (home === undefined) {
     return [
       `[syl] WARNING: no home directory is configured, so turns run in ${process.cwd()} — ` +
         `Claude Code reads the directory it is given, whatever happens to be in it.`,
     ];
   }
-  return [`[syl] turns run in ${home} — no built-in tools, no MCP, no ambient hooks or plugins`];
+
+  if (hands === undefined) {
+    return [`[syl] turns run in ${home} — no built-in tools, no MCP, no ambient hooks or plugins`];
+  }
+
+  return [
+    `[syl] turns run in ${home} — no built-in tools, no ambient hooks or plugins; ` +
+      `MCP from ${hands}, on the commander lane ONLY and no other`,
+  ];
 }
 
 /**
