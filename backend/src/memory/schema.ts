@@ -100,6 +100,7 @@ export type MemoryEdgeSpecies = (typeof MEMORY_EDGE_SPECIES)[number];
  */
 export const MEMORY_NODE_ID_PREFIX = "syl:memory_node:";
 export const MEMORY_EDGE_ID_PREFIX = "syl:memory_edge:";
+export const MEMORY_ASSERTION_ID_PREFIX = "syl:memory_assertion:";
 
 /** The canonical UUID text form, either hex case, as the shared `Id` allows. */
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -120,6 +121,23 @@ export function newMemoryNodeId(generate: () => string = uuidv7): string {
 /** Mint an edge id. See `newMemoryNodeId` for why this delegates. */
 export function newMemoryEdgeId(generate: () => string = uuidv7): string {
   return newId("memory_edge", generate);
+}
+
+/**
+ * Mint a supersession-ledger assertion id (`0015_supersession_ledger.sql`).
+ *
+ * Its own namespace rather than reusing `memory_node`, for the same reason the
+ * node kind is not in the node id: an assertion is a CLAIM WITH A VALIDITY
+ * INTERVAL, not a thing the graph knows about, and one id shape must never
+ * address two different stores.
+ */
+export function newMemoryAssertionId(generate: () => string = uuidv7): string {
+  return newId("memory_assertion", generate);
+}
+
+/** Whether a string addresses a ledger assertion. */
+export function isMemoryAssertionId(value: string): boolean {
+  return hasNamespace(value, MEMORY_ASSERTION_ID_PREFIX);
 }
 
 /** Whether a string addresses a memory node. */
