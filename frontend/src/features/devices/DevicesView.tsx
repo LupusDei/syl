@@ -44,7 +44,12 @@ import {
  * as the seeded `strftime('now')` in migration 0001. The fixture is shared with
  * the Swift contract tests, so the seam belongs here rather than in the data.
  */
-export function DevicesView({ now: pinnedNow }: { now?: Date } = {}): ReactElement {
+export interface DevicesViewProps {
+  /** Pinned instant. Omitted, the real clock is used. */
+  readonly now?: Date;
+}
+
+export function DevicesView({ now: pinnedNow }: DevicesViewProps): ReactElement {
   const client = useAdminClient();
 
   const load = useCallback<Loader<DevicePage>>(
