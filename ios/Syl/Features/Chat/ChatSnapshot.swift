@@ -17,6 +17,15 @@ struct ChatSnapshot: Equatable, Sendable {
     /// an unclosed fence in one message would swallow the next one whole.
     var blocks: [SylID: [MarkdownBlock]] = [:]
 
+    /// Whether older messages exist beyond the window.
+    ///
+    /// Exact, not a guess. The loader asks for one row more than it intends to show and
+    /// throws it away; if that row came back, there is more history. "Did the window
+    /// fill" would have been cheaper and wrong exactly when the history is a whole
+    /// multiple of the window — offering a way back to nothing, which is precisely the
+    /// kind of small lie this app spends its comments refusing to tell.
+    var mayHaveEarlier: Bool = false
+
     func blocks(for message: Message) -> [MarkdownBlock] {
         blocks[message.id] ?? [.paragraph(message.text)]
     }
@@ -88,14 +97,20 @@ struct ChatSnapshotLoader: Sendable {
     var markdown = MarkdownCache()
 
     func load() throws -> ChatSnapshot {
-        let messages = try store.messages(conversationId: conversationId, limit: limit)
+        // One more than we intend to show. Its existence is the exact answer to "is
+        // there older history", and it is discarded immediately.
+        let window = try store.messages(conversationId: conversationId, limit: limit + 1)
+        let mayHaveEarlier = window.count > limit
+        let messages = mayHaveEarlier ? Array(window.dropFirst()) : window
+
         let pendingIds = Set(try store.pendingMessages().map(\.id))
 
         return ChatSnapshot(
             groups: MessageGrouping.group(messages, pendingIds: pendingIds),
             pendingCount: messages.filter { pendingIds.contains($0.id) }.count,
             highestSeq: messages.map(\.seq).max() ?? 0,
-            blocks: markdown.blocks(for: messages)
+            blocks: markdown.blocks(for: messages),
+            mayHaveEarlier: mayHaveEarlier
         )
     }
 }

@@ -67,6 +67,29 @@ struct EmptyConversation: View {
     }
 }
 
+/// The head of the transcript, when there is more behind it.
+///
+/// `ChatSnapshotLoader` was hard-capped at 200 messages with no way to reach anything
+/// older, so a conversation that had run for a month had no beginning. This is the way
+/// back.
+struct EarlierMessages: View {
+    let isLoading: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(isLoading ? "Loading earlier…" : "Earlier messages")
+                .sylLabelStyle()
+                .foregroundStyle(SylTheme.Colour.inkSoft)
+                .frame(maxWidth: .infinity)
+                .frame(height: SylTheme.Metric.minimumTouchTarget)
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoading)
+        .accessibilityLabel("Load earlier messages")
+    }
+}
+
 /// "Syl replied" — the pill that appears when something arrives while he is reading
 /// history.
 ///

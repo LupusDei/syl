@@ -105,6 +105,16 @@ struct ChatView: View {
                 EmptyConversation()
             }
 
+            if model.snapshot.mayHaveEarlier {
+                // Automatic on reaching the top, with a visible control as the fallback
+                // — an `onAppear` that misfires would otherwise leave no way back at
+                // all, which is the state this replaces.
+                EarlierMessages(isLoading: model.isLoadingEarlier) {
+                    Task { await model.loadEarlier() }
+                }
+                .onAppear { Task { await model.loadEarlier() } }
+            }
+
             ForEach(rows) { row in
                 switch row {
                 case .day(let day):
