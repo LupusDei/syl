@@ -493,6 +493,18 @@ final class MarkdownParserTests: XCTestCase {
         )
     }
 
+    // MARK: - Crossing the actor boundary
+
+    func testShouldCarryBlocksOutOfADetachedTask() async {
+        // The whole reason `MarkdownBlock` is `Sendable`: parsing happens on the detached
+        // task inside `ChatSnapshotLoader.load()` and the finished blocks are consumed on
+        // the main actor. Under Swift 6 this stops compiling the day that conformance is
+        // lost, which is the earliest anyone could be told.
+        let blocks = await Task.detached { MarkdownParser.parse("# Title\n\n- one") }.value
+
+        XCTAssertEqual(blocks, [.heading(level: 1, text: "Title"), .unorderedList(["one"])])
+    }
+
     // MARK: - Helpers
 
     /// Parses off the main thread and fails the test rather than hanging it. A parser
