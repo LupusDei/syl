@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -529,6 +529,28 @@ export function readSoul(root: string = REPO_ROOT): string | undefined {
  * in-memory database is a test, and a test that wrote session files into the
  * repo would leak state between runs.
  */
+/**
+ * The directory Syl takes her turns in.
+ *
+ * Deliberately NOT the source tree. Claude Code reads the working directory it
+ * is given — project instructions, SessionStart hooks, memories — so launching
+ * her turns from the repository handed her an engineering brief and a beads
+ * workflow on top of her own soul, and she reported herself accordingly.
+ *
+ * Derived from the database path so it follows `SYL_DB_PATH` rather than being
+ * a second thing to configure, and created if absent because a cwd that does
+ * not exist fails the spawn rather than falling back.
+ *
+ * In-memory (tests) keeps the process cwd: a temp home would leave directories
+ * behind and the tests do not spawn a real CLI anyway.
+ */
+export function sylHome(config: SylConfig): string | undefined {
+  if (config.databasePath === IN_MEMORY) return undefined;
+  const home = dirname(config.databasePath);
+  mkdirSync(home, { recursive: true });
+  return home;
+}
+
 export function sessionStoreFor(config: SylConfig): ReturnType<typeof memorySessionStore> {
   if (config.databasePath === IN_MEMORY) return memorySessionStore();
   return fileSessionStore(join(dirname(config.databasePath), "sessions"));
@@ -684,7 +706,24 @@ export function bootstrap(
     // Both halves are load-bearing and neither survives alone: `onEvent` is how
     // the service observes a turn at all, and the index wrapper is what makes a
     // written memory findable again.
-    turnOptions: { ...(options.turn ?? {}), onEvent: observe },
+    // HER OWN DIRECTORY, not wherever the service happened to be launched.
+    //
+    // cwd defaulted to process.cwd(), which is this repository, and Claude Code
+    // loads what it finds there: CLAUDE.md's engineering instructions, the
+    // SessionStart hook that injects the beads workflow, and the beads
+    // memories. Asked who she was, she answered "running as Claude Code inside
+    // /Users/Reason/code/ai/syl... an engineer on this codebase" — which was
+    // not confusion, it was an accurate description of where she was standing.
+    // No soul file out-argues the room. `~/.syl` is already her home: her
+    // database, her sessions and her memory all live there.
+    turnOptions: (() => {
+      const home = sylHome(config);
+      return {
+        ...(options.turn ?? {}),
+        ...(home === undefined ? {} : { cwd: home }),
+        onEvent: observe,
+      };
+    })(),
     // Wrapped, never bypassed — including when a test substitutes the runner,
     // because "was the index maintained?" is a question about the service and
     // not about which runner ran. Whether a memory can be found again is a

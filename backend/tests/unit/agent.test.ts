@@ -192,6 +192,44 @@ describe("SylAgent", () => {
     expect(optionsOfCall(runner, 0).systemPrompt).toContain("daughter piano");
   });
 
+  it("should take her turns in her OWN directory, not wherever the service was launched", async () => {
+    // Asked who she was, she answered: "running as Claude Code inside
+    // /Users/Reason/code/ai/syl, the repo that builds the persistent version of
+    // me... an engineer on this codebase". She was not confused. She was
+    // accurate. The service is launched from the repo, cwd defaulted to
+    // process.cwd(), and Claude Code loads what it finds there: CLAUDE.md's
+    // engineering instructions, the SessionStart hook that injects the beads
+    // workflow, and the beads memories. A soul cannot out-argue the room she is
+    // standing in.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      turnOptions: { cwd: "/home/syl" },
+    });
+
+    await agent.ask("who are you?");
+
+    expect(optionsOfCall(runner, 0).cwd).toBe("/home/syl");
+  });
+
+  it("should carry her directory into a lane-scoped view", async () => {
+    // A lane that falls back to process.cwd() is a lane that wakes up in the
+    // workshop — and the heartbeat and agenda lanes are the ones that speak to
+    // him unprompted.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      turnOptions: { cwd: "/home/syl" },
+    });
+
+    await agent.forLane("agenda").ask("morning");
+
+    expect(optionsOfCall(runner, 0).cwd).toBe("/home/syl");
+  });
+
   it("should forward the soul as the system prompt on every turn", async () => {
     const runner = vi.fn<TurnRunner>(async () => fakeResult("s"));
     const agent = new SylAgent({ runner, store: memoryStore(), soul: "be helpful" });
