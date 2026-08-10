@@ -1,3 +1,5 @@
+import { cpus } from "node:os";
+
 import type { UserConfig } from "vitest/config";
 
 /**
@@ -56,7 +58,21 @@ export const sharedTestConfig = {
     // `maxWorkers` alone throws "minThreads and maxThreads must not conflict",
     // so both are set.
     minWorkers: 1,
-    maxWorkers: 3,
+    // THREE WAS MEASURED ON A 20-CORE DEV MACHINE AND CI HAS TWO. `syl-g4u`.
+    //
+    // The cap fixed the pathological local case and CI went on failing on a
+    // different test every run — service-lifecycle's SIGKILL, then us2's
+    // resume, then verify-script — each passing in isolation. The number was
+    // right for where it was measured and was never true anywhere else:
+    // `ubuntu-latest` is a 2-4 vCPU runner, so three workers is oversubscribed
+    // BEFORE the heavy files fork a real node each on top.
+    //
+    // Same shape as every other defect this week: a measurement taken in one
+    // context, hard-coded, and applied in another where it means something
+    // different. The fix is to state the INTENT — leave the machine a core to
+    // breathe with, and never take more than three — and let the number follow
+    // from the machine it is actually running on.
+    maxWorkers: Math.max(1, Math.min(3, cpus().length - 1)),
     /**
      * THE SPAWN-HEAVY FILES RUN ONE AT A TIME. `syl-6yl`.
      *
