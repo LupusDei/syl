@@ -188,6 +188,21 @@ to add is about *additional* surfaces and blocks nothing.
   Ports around here: Adjutant 4200/4201, contract mock 4210, Syl admin dev 4211,
   and **Syl's service on 8888**, deliberately outside the 42xx block rather than
   merely free within it.
+- **Migration numbers: the LOWEST free number goes to whoever is CERTAIN to need
+  one.** `readMigrations` enforces a contiguous sequence and hard-fails on a gap,
+  so a file numbered above a missing one takes down every test that opens a
+  database — for a reason its author did not cause. A missing *highest* number is
+  not a gap. Assign the low number to a maybe and you have staked the suite on
+  work that may never happen. Got this backwards three times in one day
+  (`syl-acr`); each time an agent caught it, and each time the guard reported a
+  duplicate version loudly with both filenames rather than silently skipping a
+  migration. That guard is why these stay ten-minute problems.
+- **Before claiming an id or a number in a shared namespace — a bead root, a
+  spec directory, a migration — fetch and look at ORIGIN, not at your branch.**
+  Five collisions in one day all had this single cause: creating from a stale
+  local view into a namespace someone else was actively extending. A colliding
+  create can also wire itself into another epic's dependency graph, which is
+  invisible unless you look for the edges rather than the rows.
 - The shell has `noclobber` set — a plain `>` fails if the file exists. Use `>|`.
 - `--verbose` is mandatory alongside `--output-format stream-json` in `-p` mode.
 - Headless sessions are pre-authorised (`--permission-mode bypassPermissions`)
