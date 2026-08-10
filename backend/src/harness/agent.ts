@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { autoMemoryOff, type AutoMemory } from "../memory/auto-memory.js";
 
 import { runTurn, type TurnOptions, type TurnResult, type TurnRunner } from "./session.js";
+import { capabilityFromToolsOption } from "./capability.js";
 import { composeTurnContext, type Contributor } from "./turn-context.js";
 
 /**
@@ -261,6 +262,24 @@ export class SylAgent {
       contributors: [
         ...(this.#soul ? [{ id: "soul", kind: "identity", text: this.#soul } as const] : []),
         ...(this.#recall ? [{ id: "working-memory", kind: "memory", text: this.#recall() } as const] : []),
+        // Derived from `#turnOptions.tools` — THE SAME VALUE THE CLI IS
+        // INVOKED WITH, deliberately, rather than a list maintained beside it.
+        //
+        // `SOUL.md` told her she owns his to-dos and his reminders before any
+        // verb for them existed, so she answered a request for a reminder like
+        // an assistant who had set one, and wrote nothing. That is the
+        // fabricated `ls` at opposite polarity: capability asserted before it
+        // arrived rather than assumed after it left, and both fail as PROSE,
+        // where no assertion can see them.
+        //
+        // A hand-written "she cannot act yet" would be stale the day the tools
+        // land — the fourth instance of the bug it was written to fix. Reading
+        // the real option makes staleness UNREPRESENTABLE in both directions:
+        // there is no second list, so there is nothing to keep in step.
+        ...(() => {
+          const text = capabilityFromToolsOption(this.#turnOptions.tools);
+          return text === undefined ? [] : [{ id: "capability", kind: "capability", text } as const];
+        })(),
         ...extra,
       ],
     }).systemPrompt;

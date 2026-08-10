@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { NO_HANDS_YET } from "../../src/harness/capability.js";
 import { WORKING_MEMORY_MAX_BYTES } from "../../src/memory/working.js";
 
 import {
@@ -464,6 +465,11 @@ describe("the budget over the contributors that actually exist", () => {
       assertContextBudget([
         { id: "soul", kind: "identity", maxBytes: soulBytes },
         { id: "working-memory", kind: "memory", maxBytes: WORKING_MEMORY_MAX_BYTES },
+        // The third contributor SHIPS TODAY and was missing from this list.
+        // `NO_HANDS_YET` occupies the capability slot until the tools track
+        // fills it, so a budget that omitted it was measuring a turn that is
+        // not the one being sent.
+        { id: "capability", kind: "capability", maxBytes: Buffer.byteLength(NO_HANDS_YET, "utf8") },
       ]),
     ).not.toThrow();
   });
@@ -471,7 +477,14 @@ describe("the budget over the contributors that actually exist", () => {
   it("should still leave room for the tools track that has not landed yet", () => {
     // syl-009 adds tool schemas as a capability contributor. If the headroom
     // has already gone, that is worth knowing before it is written rather than
-    // after.
+    // after — and it earned that already: a paragraph added to SOUL.md took
+    // this from 4,400 to 3,745 and this test failed in the same run that wrote
+    // it, before the number reached anyone as a promise.
+    //
+    // Deliberately measured WITHOUT the capability contributor, because the
+    // tools track does not add to that slot, it REPLACES what is in it:
+    // `NO_HANDS_YET` exists only while there is nothing to describe. So this is
+    // the true budget for the schemas.
     const headroom = DEFAULT_CONTEXT_BUDGET_BYTES - soulBytes - WORKING_MEMORY_MAX_BYTES;
 
     expect(headroom).toBeGreaterThan(4_000);
