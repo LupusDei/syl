@@ -147,8 +147,21 @@ export const WORKING_MEMORY_NOTE =
   "is overwritten. Search deep memory when you need something specific. -->";
 
 /** What is said when the hot region is empty. Never an empty projection. */
+/**
+ * What she is handed when there is nothing to hand her.
+ *
+ * It used to say "Everything Syl knows is in deep memory", which is written for
+ * a cold hot region over a POPULATED graph and is false when the graph is
+ * empty — it tells her she knows things she does not, and she reads it as
+ * memory she simply has not surfaced yet. Same shape as the fabricated `ls`,
+ * one layer up: a claim outrunning its evidence, this time made by the memory
+ * system about itself.
+ *
+ * States the fact and stops. What she should DO about knowing nothing is a
+ * question about her character, and `SOUL.md` is where her character lives.
+ */
 export const WORKING_MEMORY_EMPTY =
-  "_Nothing in the hot region of the graph yet. Everything Syl knows is in deep memory._";
+  "_You do not know anything about him yet — nothing about him has been written down._";
 
 /**
  * Section order, and the order candidates of equal salience are considered in.
@@ -292,8 +305,22 @@ function rank(a: WorkingMemoryCandidate, b: WorkingMemoryCandidate): number {
 function render(admitted: readonly WorkingMemoryCandidate[], remaining: number): string {
   const lines: string[] = [WORKING_MEMORY_TITLE, "", WORKING_MEMORY_NOTE, ""];
 
-  if (admitted.length === 0 && remaining === 0) {
-    lines.push(WORKING_MEMORY_EMPTY);
+  // A SOURCE IS A HANDLE, NOT A FACT, and a projection holding nothing but
+  // handles is empty however many rows it has.
+  //
+  // The live graph on 2026-08-10 held exactly one node: a `source` labelled
+  // "Conversation with the Commander" with a null body, a container for facts
+  // that were never written. This rendered as a `## Sources` section, so the
+  // document she read every turn asserted that she HAD memory. She had none —
+  // and across nineteen messages she never once asked him anything about his
+  // life, which is entirely reasonable behaviour for someone who believes she
+  // already has a source.
+  const knowledge = admitted.filter((candidate) => candidate.kind !== "source");
+
+  if (knowledge.length === 0 && remaining === 0) {
+    // Nothing is admitted at all in this case: an unearned handle is worse than
+    // no handle, because it is read as content.
+    return `${[WORKING_MEMORY_TITLE, "", WORKING_MEMORY_NOTE, "", WORKING_MEMORY_EMPTY].join("\n")}\n`;
   }
 
   for (const section of WORKING_MEMORY_SECTIONS) {
