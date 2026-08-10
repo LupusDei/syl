@@ -59,8 +59,15 @@ import { createMemoryRouter, type MemoryViews } from "./routes/memory.js";
 import { createReminderRouter } from "./routes/reminders.js";
 import { createSyncRouter } from "./routes/sync.js";
 import { createTodoRouter } from "./routes/todos.js";
-import { fileSessionStore, memorySessionStore, SylAgent } from "./harness/agent.js";
+import { fileSessionStore, LANES, memorySessionStore, SylAgent, type Lane } from "./harness/agent.js";
 import { runTurn, type TurnOptions, type TurnRunner } from "./harness/session.js";
+import {
+  mcpToolName,
+  toolConfigPath,
+  writeToolConfig,
+  writeTurnMessage,
+} from "./tools/config.js";
+import { advertisedToolNames } from "./tools/server.js";
 import { autoMemoryOff } from "./memory/auto-memory.js";
 import { DreamJudge } from "./memory/dream/judge.js";
 import { DreamLog } from "./memory/dream/log.js";
@@ -267,6 +274,18 @@ export interface AppDependencies {
   readonly attachments: AttachmentStore;
   /** Extra health probes. The billing check is always present. */
   readonly probes?: readonly HealthProbe[];
+  /**
+   * The clock every store in this app was built on. Omit for the real one.
+   *
+   * It reaches exactly one route, and that route is the reason it is here:
+   * `GET /health` reports `now`, and `now` was `systemClock` no matter what the
+   * rest of the service was running on. A frozen store beside a live health
+   * endpoint is two clocks in one process, and `syl-009` made that visible
+   * rather than merely untidy — the tool server has no clock of its own and
+   * asks Syl what time it is, so "the service's now" became a load-bearing
+   * answer instead of a line on a status page.
+   */
+  readonly clock?: Clock;
 }
 
 /**
@@ -328,6 +347,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     memory,
     attachments,
     probes,
+    clock,
   } = deps;
   const app = express();
 
@@ -359,6 +379,12 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     createHealthRouter({
       config,
       ...(probes === undefined ? {} : { probes }),
+      // The service's own clock, so `now` is the instant the stores are
+      // stamping rows with rather than whatever the wall says. Her tool server
+      // is a separate process and reads its clock from here — see
+      // `tools/server.ts` — so a second clock in this process is a reminder
+      // scheduled against a different "now" than the one it will fire on.
+      ...(clock === undefined ? {} : { clock }),
       build: SELF_BUILD,
       turnsInFlight: () => chat.pending,
     }),
@@ -427,6 +453,25 @@ export interface RunningService {
   readonly sockets: SylSocketServer;
   /** Stop both, and stop the character's timer. */
   close(): Promise<void>;
+}
+
+/**
+ * The port a listener actually got.
+ *
+ * Asked of the socket rather than read from the configuration, because the
+ * configuration says `0` for every test — "give me whatever is free" — and the
+ * answer is the kernel's. Her hands are declared against this number, so
+ * reading the wrong one is a tool server that connects to nothing.
+ */
+function portOf(service: RunningService): number {
+  const address = service.server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error(
+      "The service is listening on something that is not a TCP port, so Syl's own API has no " +
+        "address to be reached at and her tools cannot be declared.",
+    );
+  }
+  return address.port;
 }
 
 /**
@@ -716,6 +761,14 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // would fail every test in the suite for a container that does not exist. The
   // live service always has a real path.
   const home = sylHome(config);
+  // Where her hands are declared, decided here and nowhere else. Under her
+  // home, absolute, derived from configuration — see `tools/config.ts`, and
+  // `ops/container.ts` for the boot that refuses anything else.
+  //
+  // `undefined` for an in-memory store, which means a test: there is no home
+  // to put it in, so no lane is given hands and every existing suite keeps the
+  // surface it had. The live service always has a real path.
+  const handsPath = home === undefined ? undefined : toolConfigPath(home);
   if (home !== undefined) {
     // The MCP config is checked alongside the directory because it is the one
     // door that is deliberately going to be opened. `--tools ""` empties the
@@ -724,8 +777,15 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     // file declaring it must live under her home rather than in this source
     // tree. A capability read from a checked-out branch is a capability that
     // changes when somebody switches branches.
+    //
+    // The path checked is the path the commander lane is actually given —
+    // `options.turn` may override it, and an override that pointed into the
+    // repository has to be refused for the same reason ours would be.
     assertContainer(home, {
-      ...(options.turn?.mcpConfig === undefined ? {} : { mcpConfig: options.turn.mcpConfig }),
+      ...(() => {
+        const declared = options.turn?.mcpConfig ?? handsPath;
+        return declared === undefined ? {} : { mcpConfig: declared };
+      })(),
     });
   }
   const clock = options.clock ?? systemClock;
@@ -795,7 +855,13 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   const observe = (event: Parameters<NonNullable<TurnOptions["onEvent"]>>[0]): void => {
     options.turn?.onEvent?.(event);
     if (log === undefined) return;
-    if (event.kind === "tool_use") log.info("turn.tool", { tool: event.name });
+    // THE ARGUMENTS, not only the name (`syl-009.5.1`). "She called remind_me"
+    // is not a record of what she did on his machine — what she did is *the
+    // arguments*: what the reminder says, when it fires, whether it claimed
+    // urgency, and the reason she attached. Without them the log can tell him
+    // that something happened and never what, which is the same shape of
+    // uselessness as a service that logged nothing between startup and failure.
+    if (event.kind === "tool_use") log.info("turn.tool", { tool: event.name, arguments: event.input });
     else if (event.kind === "init") log.info("turn.start", { sessionId: event.sessionId });
     else if (event.kind === "api_error") log.error("turn.api_error", { message: event.message });
     else if (event.kind === "result") {
@@ -815,6 +881,40 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // Constructed here rather than inside SylAgent because the consolidation job
   // regenerates it and the admin reads it — one owner, three readers.
   const workingMemory = new WorkingMemory({ db: database.handle, graph: memoryGraph, clock });
+
+  // Pulled out of the caller's overrides rather than spread with the rest,
+  // because it is the ONE option that must not reach every lane. A test that
+  // supplies one is asking for the commander lane to have hands; it is not
+  // asking for the dream to have them, and a plain spread cannot tell those
+  // apart. See `tests/integration/mcp-config-wiring.test.ts`.
+  const { mcpConfig: overriddenHands, ...turnOverrides } = options.turn ?? {};
+  const commanderHands = overriddenHands ?? handsPath;
+
+  /** The declaration a lane is given by name, or nothing at all. */
+  const handsFor = (lane: Lane): string | undefined =>
+    lane === LANES.commander ? commanderHands : undefined;
+
+  /**
+   * Write down what he said, for the one check that cannot be made without it.
+   *
+   * `harness/urgency.ts` decides whether a reminder may pierce quiet hours by
+   * comparing the phrase she quoted to what he actually wrote. The tool server
+   * is a different process and is deliberately unable to read the conversation
+   * — `AGENT_SURFACE` excludes `/conversations` exactly so she cannot author
+   * messages as him — so his words have to travel to it, and this is the only
+   * seam that has both the message and the knowledge that this turn has hands.
+   *
+   * Only for a turn carrying a declaration, so no lane without hands leaves a
+   * trace of his messages on disk for a reader that does not exist.
+   */
+  const recordHisWords =
+    (runner: TurnRunner): TurnRunner =>
+    async (prompt, turnOptions) => {
+      if (home !== undefined && turnOptions.mcpConfig !== undefined) {
+        writeTurnMessage(home, prompt);
+      }
+      return runner(prompt, turnOptions);
+    };
 
   const agent = new SylAgent({
     store: sessionStoreFor(config),
@@ -861,10 +961,30 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     // not confusion, it was an accurate description of where she was standing.
     // No soul file out-argues the room. `~/.syl` is already her home: her
     // database, her sessions and her memory all live there.
-    turnOptions: (() => {
+    //
+    // A FUNCTION OF THE LANE, because the tool surface is (`syl-009.3.3`). See
+    // `handsFor` below: the commander lane is handed a declaration and the
+    // other three are handed nothing, and one shared options object could not
+    // say that.
+    turnOptions: (lane: Lane): TurnOptions => {
+      const hands = handsFor(lane);
       return {
-        ...(options.turn ?? {}),
+        ...turnOverrides,
         ...(home === undefined ? {} : { cwd: home }),
+        // HER HANDS, ON HIS OWN LANE AND NO OTHER.
+        //
+        // The dream must not be able to write a reminder while judging what
+        // matters; the heartbeat and the agenda read rather than act; and the
+        // extraction turn is a sealed reader that never comes near this object
+        // at all. Those are not three separate decisions — they are one, and
+        // this is where it is made.
+        //
+        // `strictMcpConfig` is redundant beside a config (`runTurn` adds
+        // `--strict-mcp-config` whenever one is set) and is stated anyway: it
+        // is what makes "she was handed the reminder verbs" mean "she was
+        // handed the reminder verbs AND NOTHING ELSE", and the last time it
+        // was left implicit she answered the Commander through Adjutant.
+        ...(hands === undefined ? {} : { mcpConfig: hands, strictMcpConfig: true }),
         // NO BUILT-IN TOOLS. The Commander's call, 2026-08-10, after she twice
         // described herself as an engineer on this codebase: everything she
         // owns — to-dos, goals, reminders, the daily rhythm — runs through the
@@ -893,13 +1013,19 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
         settingSources: "",
         onEvent: observe,
       };
-    })(),
+    },
+    // What she is TOLD she can do, derived from what she was actually handed.
+    // `--tools ""` empties the built-ins only, so without this the lane holding
+    // `remind_me` would be told it has no way to act — `NO_HANDS_YET` becoming
+    // the exact lie it was written to prevent.
+    hands: (lane: Lane) =>
+      handsFor(lane) === undefined ? [] : advertisedToolNames().map(mcpToolName),
     // Wrapped, never bypassed — including when a test substitutes the runner,
     // because "was the index maintained?" is a question about the service and
     // not about which runner ran. Whether a memory can be found again is a
     // guarantee this service holds; leaving it to the model lost the
     // Commander's canary on a haiku turn (`syl-03d`).
-    runner: withMemoryIndex(options.runner ?? runTurn),
+    runner: withMemoryIndex(recordHisWords(options.runner ?? runTurn)),
   });
   // How conversation becomes graph.
   //
@@ -1038,6 +1164,9 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       attachments,
       presence,
       intakeQueue,
+      // The same clock every store above was built on — not a second one. See
+      // the field on `AppDependencies` for what a second one costs.
+      clock,
       probes: [databaseProbe(database.handle)],
     },
   };
@@ -1284,6 +1413,31 @@ export async function startSyl(
   }
 
   const service = await startServer(config, deps);
+
+  // HER HANDS, DECLARED — and this is the earliest moment it can be done.
+  //
+  // The declaration has to carry two things nothing knew a moment ago: the
+  // PORT, which is the kernel's answer and is `0` in the configuration of every
+  // test, and her CREDENTIAL, which `agent-key.ts` mints fresh on every boot
+  // because the previous plaintext died with the previous process. So the file
+  // is written after the listener exists and before anything can take a turn —
+  // `bootstrap` decided the path, this decides the contents, and the commander
+  // lane was handed the path rather than the file.
+  //
+  // `127.0.0.1` rather than `config.host`: she talks to loopback whatever the
+  // service binds. Her credential must never leave the machine it was minted
+  // on, not even to the tailnet, which is not a boundary between his own
+  // devices. `tools/client.ts` refuses a non-loopback base at construction;
+  // this is the same rule where the value is chosen.
+  const handsHome = sylHome(config);
+  if (handsHome !== undefined) {
+    writeToolConfig({
+      home: handsHome,
+      baseUrl: `http://127.0.0.1:${String(portOf(service))}${API_BASE_PATH}`,
+      token: agentKey.token,
+      tz: config.quietHours.tz,
+    });
+  }
 
   ensureContentIngestionJob(deps.jobs, clock());
   // The dream, on a clock at last (`syl-cbb`). One row, a `wall_clock` trigger

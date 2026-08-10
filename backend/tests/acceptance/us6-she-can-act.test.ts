@@ -1,6 +1,3 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { readFileSync } from "node:fs";
-
 import type { Reminder } from "@syl/shared";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -10,6 +7,12 @@ import type { TurnResult, TurnRunner } from "../../src/harness/session.js";
 import { fixedClock } from "../../src/services/clock.js";
 import { INTERACTIVE_CONVERSATION_ID } from "../../src/services/database.js";
 import { expectData, startLiveService, type LiveService } from "../helpers/live-service.js";
+import {
+  McpServerProcess,
+  serversDeclaredIn,
+  type McpToolDescription,
+  type McpToolResult,
+} from "../helpers/mcp-client.js";
 
 /**
  * **US6 — she can act.**
@@ -52,7 +55,7 @@ import { expectData, startLiveService, type LiveService } from "../helpers/live-
  * turn runner here is a stand-in that does the one thing a model does and
  * nothing else — it looks at the tools it was given and calls one. It is
  * deliberately stupid: all it knows is the phrase the Commander used ("in five
- * minutes"), the errand, and his configured zone. If `create_reminder`'s schema
+ * minutes"), the errand, his configured zone, and why. If the verb's schema
  * demands something that cannot be produced from those, this test fails and
  * names the field — which is `T006`'s "JSON schemas the model can actually
  * satisfy" as an executable requirement rather than an aspiration.
@@ -74,112 +77,18 @@ const FIVE_MINUTES_LATER = new Date(HE_ASKS + 5 * 60_000).toISOString();
 const THE_ERRAND = "Take the bread out of the oven.";
 const WHAT_HE_SAID = `Remind me in five minutes to ${THE_ERRAND.toLowerCase()}`;
 
-/** The tool `T006` names. Its name is a contract, not a guess. */
-const CREATE_REMINDER = "create_reminder";
-
-/** How long the MCP handshake gets before this test says so itself. */
-const MCP_TIMEOUT_MS = 10_000;
-
-// --------------------------------------------------------------------------
-// A very small MCP client. Enough to be a client, and no more.
-// --------------------------------------------------------------------------
-
-interface JsonRpcResponse {
-  readonly id?: number;
-  readonly result?: unknown;
-  readonly error?: { readonly message?: string };
-}
-
-interface McpToolDescription {
-  readonly name: string;
-  readonly inputSchema?: {
-    readonly properties?: Record<string, unknown>;
-    readonly required?: readonly string[];
-  };
-}
-
-/** One MCP server, spoken to over stdio the way Claude Code speaks to it. */
-class McpServerProcess {
-  readonly #child: ChildProcessWithoutNullStreams;
-  readonly #pending = new Map<number, (response: JsonRpcResponse) => void>();
-  #buffer = "";
-  #nextId = 1;
-  #stderr = "";
-
-  private constructor(child: ChildProcessWithoutNullStreams) {
-    this.#child = child;
-    this.#child.stdout.setEncoding("utf8");
-    this.#child.stderr.setEncoding("utf8");
-    this.#child.stderr.on("data", (chunk: string) => {
-      this.#stderr += chunk;
-    });
-    this.#child.stdout.on("data", (chunk: string) => {
-      this.#buffer += chunk;
-      let newline = this.#buffer.indexOf("\n");
-      while (newline >= 0) {
-        const line = this.#buffer.slice(0, newline).trim();
-        this.#buffer = this.#buffer.slice(newline + 1);
-        newline = this.#buffer.indexOf("\n");
-        if (line === "") continue;
-        let message: JsonRpcResponse;
-        try {
-          message = JSON.parse(line) as JsonRpcResponse;
-        } catch {
-          continue; // a server logging to stdout is not our business here
-        }
-        if (message.id === undefined) continue;
-        this.#pending.get(message.id)?.(message);
-        this.#pending.delete(message.id);
-      }
-    });
-  }
-
-  static start(
-    command: string,
-    args: readonly string[],
-    env: Readonly<Record<string, string>>,
-  ): McpServerProcess {
-    const child = spawn(command, [...args], {
-      env: { ...process.env, ...env },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    return new McpServerProcess(child);
-  }
-
-  async request(method: string, params: unknown): Promise<unknown> {
-    const id = this.#nextId++;
-    const settled = new Promise<JsonRpcResponse>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(
-          new Error(
-            `the MCP server did not answer ${method} within ${String(MCP_TIMEOUT_MS)}ms. ` +
-              `stderr: ${this.#stderr.trim()}`,
-          ),
-        );
-      }, MCP_TIMEOUT_MS);
-      timer.unref();
-      this.#pending.set(id, (response) => {
-        clearTimeout(timer);
-        resolve(response);
-      });
-    });
-
-    this.#child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
-    const response = await settled;
-    if (response.error !== undefined) {
-      throw new Error(`the MCP server refused ${method}: ${response.error.message ?? "no reason"}`);
-    }
-    return response.result;
-  }
-
-  notify(method: string, params: unknown): void {
-    this.#child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
-  }
-
-  stop(): void {
-    this.#child.kill();
-  }
-}
+/**
+ * The verb that makes a reminder.
+ *
+ * `T006` and this file both wrote `create_reminder` before the surface existed.
+ * It shipped as **`remind_me`**, and the rename is not cosmetic: `schemas.ts`
+ * argues that a model infers what it is FOR from its verbs, so every name there
+ * says what she does for him rather than what it does to a store. The name is
+ * still a contract — it is simply the one the surface actually declares, and
+ * this test reads the rest of the shape off that surface rather than assuming
+ * it, which is why nothing else here had to move.
+ */
+const REMIND_ME = "remind_me";
 
 // --------------------------------------------------------------------------
 // What a model knows, and nothing else.
@@ -193,6 +102,33 @@ const HUMAN_TIME_KEYS = ["when", "whenText", "whenPhrase", "humanTime", "natural
 const ZONE_KEYS = ["tz", "timezone", "timeZone", "zone"];
 /** Fields that take an already-resolved instant, if the tool will not take the phrase. */
 const RESOLVED_TIME_KEYS = ["wallTime", "date"];
+/** Fields that take why this exists, in his terms. */
+const REASON_KEYS = ["because", "why", "reason"];
+
+/**
+ * "In five minutes", as a model that had read the schema would express it.
+ *
+ * The one place this stand-in does something a model does. `schemas.ts` asks
+ * for a *structured interpretation* alongside his own words — `said` is carried
+ * separately so the vagueness veto in `tools/time.ts` runs on his phrase and
+ * not on the interpretation — and reading "five" as `5` is exactly the reading
+ * the model is there to do. Everything downstream of this object is real: the
+ * validation, the zone arithmetic, and the refusal to guess.
+ *
+ * It is emitted only when the tool asks for an object. If a tool wanted the
+ * bare phrase, `HUMAN_TIME_KEYS` still supplies that instead.
+ */
+const FIVE_MINUTES_AS_A_MODEL_WOULD_SAY_IT = {
+  said: "in five minutes",
+  kind: "relative",
+  minutes: 5,
+};
+
+/** Whether a schema property wants an object rather than a string. */
+function wantsAnObject(tool: McpToolDescription, property: string): boolean {
+  const shape = tool.inputSchema?.properties?.[property];
+  return typeof shape === "object" && shape !== null && (shape as { type?: string }).type === "object";
+}
 
 /** `{ date, wallTime }` for an instant, as the wall clock in `zone` reads it. */
 function wallTimeIn(zone: string, instant: number): { date: string; wallTime: string } {
@@ -213,12 +149,19 @@ function wallTimeIn(zone: string, instant: number): { date: string; wallTime: st
 }
 
 /**
- * Arguments for `create_reminder`, assembled from the tool's own schema.
+ * Arguments for the reminder verb, assembled from the tool's own schema.
  *
  * Read from the schema rather than hard-coded because the schema is `syl-009`'s
  * to design and this test must not pre-empt its field names. What this test
  * *does* insist on is that every required field can be answered from what a
- * model actually has: the errand, the phrase, and his zone.
+ * model actually has: the errand, the phrase, his zone, and why he wants it.
+ *
+ * `because` is in that list because the surface made every write carry one —
+ * "Dave's birthday is Thursday, you mentioned him in March" is a gift and "I
+ * made you a reminder" is not — and a reason is something a model has in
+ * abundance. It is the field the test's own error message invited: *either the
+ * tool should not require it, or this test's vocabulary should learn the field
+ * name.* It learned the field name.
  */
 function argumentsAModelCouldProduce(
   tool: McpToolDescription,
@@ -231,8 +174,17 @@ function argumentsAModelCouldProduce(
 
   const known = new Map<string, unknown>([
     ...ERRAND_KEYS.map((key) => [key, THE_ERRAND] as const),
-    ...HUMAN_TIME_KEYS.map((key) => [key, "in five minutes"] as const),
+    ...HUMAN_TIME_KEYS.map(
+      (key) =>
+        [
+          key,
+          // The phrase where a string is wanted, the interpretation where an
+          // object is. Both carry his own words; only one of them counts "five".
+          wantsAnObject(tool, key) ? FIVE_MINUTES_AS_A_MODEL_WOULD_SAY_IT : "in five minutes",
+        ] as const,
+    ),
     ...ZONE_KEYS.map((key) => [key, zone] as const),
+    ...REASON_KEYS.map((key) => [key, "He asked me to, just now."] as const),
     ["wallTime", resolved.wallTime] as const,
     ["date", resolved.date] as const,
     ["kind", "commitment"] as const,
@@ -259,13 +211,14 @@ function argumentsAModelCouldProduce(
       ERRAND_KEYS.includes(property) ||
       HUMAN_TIME_KEYS.includes(property) ||
       ZONE_KEYS.includes(property) ||
+      REASON_KEYS.includes(property) ||
       RESOLVED_TIME_KEYS.includes(property);
     if (worthSending) args[property] = value;
   }
 
   if (unanswerable.length > 0) {
     throw new Error(
-      `${CREATE_REMINDER} requires ${unanswerable.join(", ")}, and nothing in ` +
+      `${REMIND_ME} requires ${unanswerable.join(", ")}, and nothing in ` +
         `"remind me in five minutes" supplies it. A schema a model cannot satisfy from ` +
         `what the Commander said is a tool she cannot use (T006). Either the tool should ` +
         `not require it, or this test's vocabulary should learn the field name.`,
@@ -286,15 +239,9 @@ interface Hands {
   failure: string | null;
 }
 
-/** Spawn every server the config names, and call `create_reminder` on the one that has it. */
+/** Spawn every server the config names, and call the reminder verb on the one that has it. */
 async function useHerTools(configPath: string, hands: Hands): Promise<string> {
-  const config = JSON.parse(readFileSync(configPath, "utf8")) as {
-    mcpServers?: Record<
-      string,
-      { command: string; args?: readonly string[]; env?: Record<string, string> }
-    >;
-  };
-  const servers = Object.entries(config.mcpServers ?? {});
+  const servers = serversDeclaredIn(configPath);
   if (servers.length === 0) {
     throw new Error(`the MCP config at ${configPath} names no servers, so she was given no tools.`);
   }
@@ -303,12 +250,7 @@ async function useHerTools(configPath: string, hands: Hands): Promise<string> {
   for (const [name, server] of servers) {
     const process_ = McpServerProcess.start(server.command, server.args ?? [], server.env ?? {});
     try {
-      await process_.request("initialize", {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "syl-us6-acceptance", version: "0" },
-      });
-      process_.notify("notifications/initialized", {});
+      await process_.handshake("syl-us6-acceptance");
 
       const listed = (await process_.request("tools/list", {})) as {
         tools?: readonly McpToolDescription[];
@@ -317,19 +259,19 @@ async function useHerTools(configPath: string, hands: Hands): Promise<string> {
       advertised.push(...tools.map((tool) => `${name}:${tool.name}`));
       hands.advertised = [...advertised];
 
-      const create = tools.find((tool) => tool.name === CREATE_REMINDER);
+      const create = tools.find((tool) => tool.name === REMIND_ME);
       if (create === undefined) continue;
 
       const args = argumentsAModelCouldProduce(create, HIS_ZONE, HE_ASKS + 5 * 60_000);
-      hands.called = { name: CREATE_REMINDER, args };
+      hands.called = { name: REMIND_ME, args };
       const called = (await process_.request("tools/call", {
-        name: CREATE_REMINDER,
+        name: REMIND_ME,
         arguments: args,
-      })) as { isError?: boolean; content?: readonly { text?: string }[] };
+      })) as McpToolResult;
 
       const said = (called.content ?? []).map((block) => block.text ?? "").join("\n");
       if (called.isError === true) {
-        throw new Error(`${CREATE_REMINDER} failed: ${said}`);
+        throw new Error(`${REMIND_ME} failed: ${said}`);
       }
       return said;
     } finally {
@@ -338,7 +280,7 @@ async function useHerTools(configPath: string, hands: Hands): Promise<string> {
   }
 
   throw new Error(
-    `no server in ${configPath} offers ${CREATE_REMINDER}. Advertised: ` +
+    `no server in ${configPath} offers ${REMIND_ME}. Advertised: ` +
       `${advertised.length === 0 ? "nothing" : advertised.join(", ")}.`,
   );
 }
@@ -374,7 +316,7 @@ function aModelThatUsesHerTools(hands: Hands): TurnRunner {
         kind: "tool_use",
         sessionId,
         raw: {},
-        name: CREATE_REMINDER,
+        name: REMIND_ME,
         input: hands.called?.args ?? {},
       });
       text = `Done — ${said}`;
@@ -397,7 +339,7 @@ function aModelThatUsesHerTools(hands: Hands): TurnRunner {
         model: "stand-in",
         apiKeySource: "none",
         mcpServers: [],
-        tools: [CREATE_REMINDER],
+        tools: [REMIND_ME],
         capabilities: [],
         autoMemoryPath: undefined,
       },
@@ -440,10 +382,10 @@ describe("US6 — she can act", () => {
 
     // Asserted first so a failure says what went wrong rather than only that
     // the store is empty. Every one of these is correct behaviour: the
-    // commander lane gets the tools (US4), and `create_reminder` is among them.
+    // commander lane gets the tools (US4), and the reminder verb is among them.
     expect(hands.failure, `she could not act: ${hands.failure ?? ""}`).toBeNull();
     expect(hands.mcpConfig).not.toBeNull();
-    expect(hands.advertised.join(", ")).toContain(CREATE_REMINDER);
+    expect(hands.advertised.join(", ")).toContain(REMIND_ME);
 
     // And the thing that actually matters. Confirmed FROM THE STORE, over the
     // same API his phone reads — not from her intention, and not from what she
