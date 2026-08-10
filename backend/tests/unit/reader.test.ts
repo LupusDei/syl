@@ -9,7 +9,11 @@ import {
   readStructured,
   runReaderTurn,
 } from "../../src/harness/reader.js";
-import { MEMORY_FENCE, PRECEDENCE_CLAUSES } from "../../src/harness/turn-context.js";
+import {
+  MEMORY_FENCE,
+  MEMORY_FENCE_END,
+  PRECEDENCE_SECTION,
+} from "../../src/harness/turn-context.js";
 import {
   flagValue,
   loadFixture,
@@ -325,10 +329,11 @@ describe("runReaderTurn", () => {
       await runReaderTurn({ instruction: "Summarise.", untrusted: ARTICLE }, { claudeBin: f.bin });
 
       const prompt = flagValue(invocationOf(f).argv, "--append-system-prompt") ?? "";
-      for (const clause of Object.values(PRECEDENCE_CLAUSES)) {
-        expect(prompt).not.toContain(clause);
-      }
       expect(prompt).not.toContain(MEMORY_FENCE);
+      expect(prompt).not.toContain(MEMORY_FENCE_END);
+      // Nor her precedence ladder — a reader turn that carried it would be a
+      // reader turn that had been handed her soul.
+      expect(prompt).not.toContain(PRECEDENCE_SECTION);
     });
 
     it("should ignore a caller trying to hand it a soul, a recall or a contributor", async () => {
