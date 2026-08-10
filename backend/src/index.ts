@@ -64,6 +64,7 @@ import { DreamJudge } from "./memory/dream/judge.js";
 import { DreamLog } from "./memory/dream/log.js";
 import { DreamSweep } from "./memory/dream/sweep.js";
 import { MemoryGraph } from "./memory/graph.js";
+import { WorkingMemory } from "./memory/working.js";
 import { MemoryMetrics } from "./memory/metrics.js";
 import { EdgeWeights } from "./memory/weights.js";
 import { withMemoryIndex } from "./memory/index-guarantee.js";
@@ -656,8 +657,23 @@ export function bootstrap(
     }
   };
 
+  // The graph and the projection over it. Constructed before the agent because
+  // the agent's `recall` closes over the projection: what she remembers has to
+  // exist before the thing that speaks from it.
+  const memoryGraph = new MemoryGraph({ db: database.handle, clock });
+  // What she remembers about him, distilled nightly from the graph's hot region.
+  // Constructed here rather than inside SylAgent because the consolidation job
+  // regenerates it and the admin reads it — one owner, three readers.
+  const workingMemory = new WorkingMemory({ db: database.handle, graph: memoryGraph, clock });
+
   const agent = new SylAgent({
     store: sessionStoreFor(config),
+    // Read fresh on every turn, not captured here: the projection is rebuilt
+    // each night and this service outlives the night. It is composed UNDER the
+    // soul so it arrives as memory she holds rather than as a briefing she was
+    // handed — the distinction that had her answering "what is your
+    // personality?" by describing her own configuration file.
+    recall: () => workingMemory.preamble(),
     // One memory directory for every lane, and not the CLI's per-project
     // default. Sessions are partitioned so Syl's inner monologue does not
     // interleave with the Commander's conversation; memory is deliberately not,
@@ -702,7 +718,6 @@ export function bootstrap(
   // thin object over the same handle — `MemoryMetrics` in particular is a
   // derived view that writes nothing — so building them here costs a
   // constructor and keeps the route free of store construction.
-  const memoryGraph = new MemoryGraph({ db: database.handle, clock });
   const memory: MemoryViews = {
     graph: memoryGraph,
     weights: new EdgeWeights({ graph: memoryGraph, clock }),

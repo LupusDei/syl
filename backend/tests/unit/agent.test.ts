@@ -114,6 +114,84 @@ describe("SylAgent", () => {
     expect(optionsOfCall(runner, 1).resume).toBe("sess-42");
   });
 
+  it("should give her what she remembers as part of who she is, not as a second message", async () => {
+    // She was asked "what is your personality?" and answered by describing
+    // SOUL.md and naming the agent that built her. Identity arrived as a
+    // config file and memory arrived not at all, so the ambient context — a
+    // repository — won. One system prompt, identity then memory, is what makes
+    // "you know this about him" different from "here is some data".
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      recall: () => "He is teaching his daughter piano.",
+    });
+
+    await agent.ask("morning");
+
+    const prompt = optionsOfCall(runner, 0).systemPrompt ?? "";
+    expect(prompt).toContain("You are Syl.");
+    expect(prompt).toContain("He is teaching his daughter piano.");
+    expect(prompt.indexOf("You are Syl.")).toBeLessThan(
+      prompt.indexOf("He is teaching his daughter piano."),
+    );
+  });
+
+  it("should send the soul unchanged when she remembers nothing yet", async () => {
+    // An empty projection is the ordinary state of a new install, not a fault.
+    // Appending an empty section would tell her she has a memory and that it is
+    // blank, which reads as damage; saying nothing lets SOUL.md's own line
+    // about being early do the work.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      recall: () => "",
+    });
+
+    await agent.ask("morning");
+
+    expect(optionsOfCall(runner, 0).systemPrompt).toBe("You are Syl.");
+  });
+
+  it("should ask what she remembers on every turn, so a night of consolidation lands", async () => {
+    // Read per turn rather than captured at construction: the projection is
+    // rebuilt nightly and the service outlives the night. A value read once at
+    // boot would leave her remembering the day she started, forever.
+    const runner = announcingRunner((n) => `sess-${n}`);
+    let generation = 0;
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      recall: () => `memory ${(generation += 1)}`,
+    });
+
+    await agent.ask("one");
+    await agent.ask("two");
+
+    expect(optionsOfCall(runner, 0).systemPrompt).toContain("memory 1");
+    expect(optionsOfCall(runner, 1).systemPrompt).toContain("memory 2");
+  });
+
+  it("should carry recall into a lane-scoped view", async () => {
+    // forLane builds a new agent; a field forgotten there is a lane that
+    // silently remembers nothing about him.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      recall: () => "He is teaching his daughter piano.",
+    });
+
+    await agent.forLane("agenda").ask("morning");
+
+    expect(optionsOfCall(runner, 0).systemPrompt).toContain("daughter piano");
+  });
+
   it("should forward the soul as the system prompt on every turn", async () => {
     const runner = vi.fn<TurnRunner>(async () => fakeResult("s"));
     const agent = new SylAgent({ runner, store: memoryStore(), soul: "be helpful" });

@@ -134,6 +134,22 @@ export interface SylAgentOptions {
   readonly store?: SessionStore;
   /** Standing orders, appended to the system prompt on every turn. */
   readonly soul?: string;
+  /**
+   * What she currently remembers about the Commander.
+   *
+   * A function, read fresh on EVERY turn, because the projection is rebuilt by
+   * the nightly consolidation and this service outlives the night. A string
+   * captured at construction would leave her remembering the day she booted,
+   * forever.
+   *
+   * Composed into the system prompt beneath {@link soul} rather than sent as a
+   * separate message, and the order is the whole point: identity first, then
+   * what she knows. Handed over as a detached block it reads as data she was
+   * given; handed over underneath who she is, it reads as memory she holds.
+   * That distinction is why she once answered "what is your personality?" by
+   * describing her own configuration file.
+   */
+  readonly recall?: () => string;
   /** Lane used by `ask` when none is named. Defaults to `LANES.commander`. */
   readonly lane?: Lane;
   /**
@@ -168,6 +184,7 @@ export class SylAgent {
   readonly #runner: TurnRunner;
   readonly #store: SessionStore;
   readonly #soul: string | undefined;
+  readonly #recall: (() => string) | undefined;
   readonly #autoMemory: AutoMemory | undefined;
   readonly #turnOptions: TurnOptions;
   readonly #lane: Lane;
@@ -175,10 +192,36 @@ export class SylAgent {
   constructor(options: SylAgentOptions = {}) {
     this.#runner = options.runner ?? runTurn;
     this.#soul = options.soul;
+    this.#recall = options.recall;
     this.#autoMemory = options.autoMemory;
     this.#turnOptions = options.turnOptions ?? {};
     this.#store = options.store ?? memorySessionStore();
     this.#lane = assertLane(options.lane ?? LANES.commander);
+  }
+
+  /**
+   * Who she is, then what she remembers — as one prompt.
+   *
+   * Memory is appended UNDER the soul because `SOUL.md` ends by telling her how
+   * to read what follows: as her own memory rather than as a briefing, and that
+   * an empty one means she is early rather than broken. Sent as a separate
+   * block it would be a data dump she narrates consulting; sent here it is
+   * something she knows.
+   *
+   * An empty recall appends NOTHING — not an empty section. A heading over
+   * blankness tells her she has a memory and that it is empty, which reads as
+   * damage; saying nothing lets the soul's own line about being early stand.
+   */
+  #systemPrompt(): string | undefined {
+    const soul = this.#soul;
+    const remembered = this.#recall?.().trim() ?? "";
+
+    if (soul === undefined || soul === "") {
+      return remembered === "" ? undefined : remembered;
+    }
+    if (remembered === "") return soul;
+
+    return `${soul}\n\n---\n\n${remembered}`;
   }
 
   /** The lane this agent talks in when `ask` is called without one. */
@@ -208,6 +251,7 @@ export class SylAgent {
       lane: assertLane(lane),
       turnOptions: this.#turnOptions,
       ...(this.#soul !== undefined ? { soul: this.#soul } : {}),
+      ...(this.#recall !== undefined ? { recall: this.#recall } : {}),
       // Shared across lanes on purpose: a lane view is a different transcript,
       // not a different assistant.
       ...(this.#autoMemory !== undefined ? { autoMemory: this.#autoMemory } : {}),
@@ -298,7 +342,10 @@ export class SylAgent {
         const forLane = autoMemoryForLane(lane, this.#autoMemory);
         return forLane === undefined ? {} : { autoMemory: forLane };
       })(),
-      ...(this.#soul ? { systemPrompt: this.#soul } : {}),
+      ...((): { systemPrompt?: string } => {
+        const prompt = this.#systemPrompt();
+        return prompt === undefined ? {} : { systemPrompt: prompt };
+      })(),
       ...(resume ? { resume } : {}),
       onSessionId: (sessionId) => {
         this.#store.write(lane, sessionId);
