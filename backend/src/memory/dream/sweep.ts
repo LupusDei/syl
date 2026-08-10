@@ -426,6 +426,16 @@ export class DreamSweep {
   }
 
   /**
+   * The store this sweep writes through.
+   *
+   * Exposed so Tier 2 can resolve a candidate's endpoints for the prompt
+   * without being handed a second graph that might not be the same one.
+   */
+  get graph(): MemoryGraph {
+    return this.#graph;
+  }
+
+  /**
    * The whole of Tier 1: cross the floor, then propose.
    *
    * Demotion goes first so the candidate scan reads a hot partition that has
