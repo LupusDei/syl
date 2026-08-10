@@ -326,16 +326,381 @@ struct LocalStore: Sendable {
         }
     }
 
+    /// Open to-dos: pinned first, then the soonest deadline, then the most recently
+    /// touched.
+    ///
+    /// **`dueAt IS NULL` sorts last, and leaving that out was a real bug.** SQLite
+    /// orders NULLs first by default, which put every undated to-do above the one due in
+    /// an hour — exactly backwards for this question, and precisely what the server's
+    /// `todos_agenda_idx` says in its own comment. It was invisible in the suite because
+    /// the only ordering test had two undated rows.
     func openTodos(limit: Int = 100) throws -> [Todo] {
         try database.queue.read { db in
             try TodoRecord
+                .order(literal: "pinned DESC, dueAt IS NULL, dueAt, updatedAt DESC")
                 .filter(Column("status") == TodoStatus.open.rawValue)
-                // Pinned first — the one durable bit of "this one matters".
-                .order(Column("pinned").desc, Column("dueAt"), Column("updatedAt").desc)
                 .limit(limit)
                 .fetchAll(db)
                 .map { try $0.model() }
         }
+    }
+
+    // MARK: - Goals
+
+    func upsert(_ goals: [Goal]) throws {
+        guard !goals.isEmpty else { return }
+        try database.queue.write { db in
+            for goal in goals {
+                try GoalRecord(goal).save(db)
+            }
+        }
+    }
+
+    /// Every goal, in the order a list of goals reads in: soonest target date, then
+    /// title.
+    ///
+    /// Two deliberate choices. **Nothing is filtered out** — `abandoned` is a
+    /// first-class, non-shameful outcome and `dormant` is a real state rather than a
+    /// soft delete, so a read that hid either would be the accumulated-guilt design
+    /// proposal B exists to prevent. And **a goal with no target date sorts last**,
+    /// because SQLite's default puts NULLs first and a goal with no date is not more
+    /// urgent than one due this month.
+    func goals(limit: Int = 200) throws -> [Goal] {
+        try database.queue.read { db in
+            try GoalRecord
+                .order(literal: "targetDate IS NULL, targetDate, title COLLATE NOCASE")
+                .limit(limit)
+                .fetchAll(db)
+                .map { try $0.model() }
+        }
+    }
+
+    func goal(id: SylID) throws -> Goal? {
+        try database.queue.read { db in
+            try GoalRecord.fetchOne(db, key: id)?.model()
+        }
+    }
+
+    /// The to-dos linked to a goal — **every one of them, closed included**.
+    ///
+    /// This is the read a goal's progress is evidenced from, and most evidence is
+    /// finished work. Returning only what is still open would show an active goal as
+    /// though nothing had ever moved on it.
+    func todos(goalId: SylID, limit: Int = 200) throws -> [Todo] {
+        try database.queue.read { db in
+            try TodoRecord
+                .order(literal: "pinned DESC, dueAt IS NULL, dueAt, updatedAt DESC")
+                .filter(Column("goalId") == goalId)
+                .limit(limit)
+                .fetchAll(db)
+                .map { try $0.model() }
+        }
+    }
+
+    // MARK: - Optimistic writes
+
+    /// Marks a to-do done and queues the intent, in one transaction.
+    ///
+    /// The same rule `enqueueSend` states for a message applies to every one of these:
+    /// **the two halves are the same fact.** A to-do that renders done with no outbox
+    /// row is a lie — finished here, open everywhere else, and invisible because it
+    /// looks finished. An outbox row with no local change is a tap that did nothing.
+    ///
+    /// The row is read before it is written, and an already-finished to-do is
+    /// **refused** rather than completed a second time (`docs/CONTEXT.md` §7). The
+    /// server's `complete` is idempotent and would answer happily, reporting an act
+    /// nobody performed. The refusal names the to-do in his own words, because him
+    /// hearing the wrong title is the only place a wrong id is still catchable.
+    @discardableResult
+    func completeTodo(id: SylID, idempotencyKey: String, now: Date) throws -> Todo {
+        try database.queue.write { db in
+            guard let record = try TodoRecord.fetchOne(db, key: id) else {
+                throw LocalStoreError.noSuchTodo(id: id)
+            }
+            let stored = try record.model()
+            guard stored.status != .done else {
+                throw LocalStoreError.todoAlreadyFinished(text: stored.text)
+            }
+            // A capture the server has never heard of has only a locally minted id, and
+            // `POST /todos/{id}/complete` against it can only ever be `NOT_FOUND` —
+            // permanent, so the intent is abandoned, and the sweep then replaces the row
+            // with the server's copy, which is still open. The completion would revert
+            // itself with nothing said. Refusing is the same act as refusing an
+            // already-finished one: say so, name it, and do not report work nobody did.
+            guard record.pendingKey == nil else {
+                throw LocalStoreError.todoHasNotReachedSylYet(text: stored.text)
+            }
+
+            let completed = Todo(
+                id: stored.id,
+                text: stored.text,
+                goalId: stored.goalId,
+                dueAt: stored.dueAt,
+                pinned: stored.pinned,
+                status: .done,
+                source: stored.source,
+                delegatedJobId: stored.delegatedJobId,
+                createdAt: stored.createdAt,
+                updatedAt: now,
+                completedAt: now
+            )
+            try TodoRecord(completed).save(db)
+
+            try Self.enqueueIntent(
+                db,
+                OutboxRecord(
+                    idempotencyKey: idempotencyKey,
+                    kind: .completeTodo,
+                    targetId: stored.id,
+                    createdAt: now
+                )
+            )
+            return completed
+        }
+    }
+
+    /// Completes a reminder and queues the intent, in one transaction.
+    ///
+    /// Refuses one that is already completed, and names it — the same rule as a to-do,
+    /// for the same reason.
+    @discardableResult
+    func completeReminder(id: SylID, idempotencyKey: String, now: Date) throws -> Reminder {
+        try database.queue.write { db in
+            guard let record = try ReminderRecord.fetchOne(db, key: id) else {
+                throw LocalStoreError.noSuchReminder(id: id)
+            }
+            let stored = try record.model()
+            guard stored.deliveryState != .completed else {
+                throw LocalStoreError.reminderAlreadyFinished(text: stored.text)
+            }
+
+            let completed = Self.reminder(stored, deliveryState: .completed, at: now)
+            try ReminderRecord(completed).save(db)
+
+            try Self.enqueueIntent(
+                db,
+                OutboxRecord(
+                    idempotencyKey: idempotencyKey,
+                    kind: .completeReminder,
+                    targetId: stored.id,
+                    createdAt: now
+                )
+            )
+            return completed
+        }
+    }
+
+    /// Asks the server to defer a reminder. **It does not move it.**
+    ///
+    /// This is the one place in the app where the optimistic render is deliberately
+    /// weaker than it could be, and getting it wrong invents a time that does not exist.
+    /// Constraint 4 and proposal E agree that the server owns a deferral's new instant:
+    /// a phone that is wiped, restored or replaced would take device-local deferrals
+    /// with it, and a deferral that vanishes is the one outcome this project forbids.
+    ///
+    /// So nothing here computes an instant, and the signature makes that structural
+    /// rather than a rule to remember — it takes **minutes**, a duration, and there is
+    /// no way to hand it a time. `nextFireAt` is left exactly as the server last stated
+    /// it; what changes is `deferralRequestedAt`, which records only that he asked and
+    /// when. The row settles the moment the server's copy of the reminder arrives,
+    /// because writing that copy clears the column in the same statement.
+    func snoozeReminder(id: SylID, minutes: Int, idempotencyKey: String, now: Date) throws {
+        try database.queue.write { db in
+            guard let record = try ReminderRecord.fetchOne(db, key: id) else {
+                throw LocalStoreError.noSuchReminder(id: id)
+            }
+            // Deferring something already finished is the same refusal as completing it
+            // twice, wearing a different verb.
+            let stored = try record.model()
+            guard stored.deliveryState != .completed else {
+                throw LocalStoreError.reminderAlreadyFinished(text: stored.text)
+            }
+            try db.execute(
+                sql: "UPDATE reminder SET deferralRequestedAt = ? WHERE id = ?",
+                arguments: [now, id]
+            )
+            try Self.enqueueIntent(
+                db,
+                OutboxRecord(
+                    idempotencyKey: idempotencyKey,
+                    kind: .snoozeReminder,
+                    targetId: id,
+                    // A duration, which is what the notification action already sends.
+                    // `SnoozeReminderRequest.until` exists and this must never use it.
+                    payload: try SylJSON.encoder().encode(SnoozeReminderRequest.minutes(minutes)),
+                    createdAt: now
+                )
+            )
+        }
+    }
+
+    /// Writes a captured to-do and queues the intent, in one transaction.
+    ///
+    /// Text and a timestamp, and **every other column null**. No due date, no goal, no
+    /// pin: every field a human must fill in is a tax collected at the moment of lowest
+    /// motivation, and they die at capture rather than at review. It lands as `open`
+    /// rather than `proposed`, because an explicit ask is never provisional.
+    ///
+    /// The id is minted here because the contract gives a to-do no `clientId` — there is
+    /// nothing for the server to echo back. `pendingKey` is what ties this row to the
+    /// intent that will create the server's copy; see `settleOptimisticMarkers`.
+    @discardableResult
+    func createTodo(
+        text: String,
+        idempotencyKey: String,
+        now: Date,
+        id: SylID = LocalStore.mintTodoID()
+    ) throws -> Todo {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw LocalStoreError.emptyCapture }
+
+        let captured = Todo(
+            id: id,
+            text: trimmed,
+            goalId: nil,
+            dueAt: nil,
+            pinned: false,
+            status: .open,
+            source: .commander,
+            delegatedJobId: nil,
+            createdAt: now,
+            updatedAt: now,
+            completedAt: nil
+        )
+
+        try database.queue.write { db in
+            try TodoRecord(captured, pendingKey: idempotencyKey).save(db)
+            try Self.enqueueIntent(
+                db,
+                OutboxRecord(
+                    idempotencyKey: idempotencyKey,
+                    kind: .createTodo,
+                    payload: try SylJSON.encoder().encode(CreateTodoRequest(text: trimmed)),
+                    createdAt: now
+                )
+            )
+        }
+        return captured
+    }
+
+    /// An id in the shape the service mints them. Local, and only ever temporary.
+    static func mintTodoID() -> SylID {
+        "syl:todo:\(UUID().uuidString.lowercased())"
+    }
+
+    /// Reminders with a deferral asked for and not yet answered, and when he asked.
+    ///
+    /// Handed to a snapshot loader whole and sliced there, rather than queried per row —
+    /// `syl-008` shipped a quadratic comparison into a transcript by doing the opposite.
+    /// Keys are canonical, because the contract permits either hex case for an id.
+    func deferralRequests() throws -> [SylID: Date] {
+        try database.queue.read { db in
+            var asked: [SylID: Date] = [:]
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT id, deferralRequestedAt FROM reminder
+                    WHERE deferralRequestedAt IS NOT NULL
+                    """
+            )
+            for row in rows {
+                guard
+                    let id = row["id"] as String?,
+                    let at = row["deferralRequestedAt"] as Date?
+                else { continue }
+                asked[SylIDs.canonical(id)] = at
+            }
+            return asked
+        }
+    }
+
+    /// Retires the optimistic markers whose intent has left the queue.
+    ///
+    /// **An optimistic marker is a claim that lives exactly as long as the intent behind
+    /// it**, and this is the one rule that settles both of them — whether the intent
+    /// succeeded or was refused outright, the queue is the thing that knows it is over.
+    ///
+    ///   * A captured to-do is removed once its `createTodo` intent is gone, because the
+    ///     server's copy of it arrived in the same pass under the server's id. Left
+    ///     alone it would be a permanent duplicate.
+    ///   * A deferral's ask is cleared once its `snoozeReminder` intent is gone. The
+    ///     usual settlement is the server's copy of the reminder replacing the row; this
+    ///     is what catches the other ending, a `DEFERRAL_NOT_LATER` the server refused,
+    ///     where no new copy is ever coming and the row would otherwise say "asked"
+    ///     forever.
+    ///
+    /// Call it **only after a pull has actually landed** — see `SyncEngine`. Run against
+    /// a push that succeeded and a pull that did not, it would take a to-do off his
+    /// screen before its replacement had arrived.
+    func settleOptimisticMarkers() throws {
+        try database.queue.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE reminder SET deferralRequestedAt = NULL
+                     WHERE deferralRequestedAt IS NOT NULL
+                       AND NOT EXISTS (
+                             SELECT 1 FROM outbox
+                              WHERE outbox.kind = ? AND outbox.targetId = reminder.id
+                           )
+                    """,
+                arguments: [OutboxRecord.Kind.snoozeReminder.rawValue]
+            )
+            // `NOT EXISTS` rather than `NOT IN`, deliberately: `NOT IN` over a set
+            // containing a NULL is NULL rather than true, so a single null key in the
+            // queue would silently stop retiring anything at all.
+            try db.execute(
+                sql: """
+                    DELETE FROM todo
+                     WHERE pendingKey IS NOT NULL
+                       AND NOT EXISTS (
+                             SELECT 1 FROM outbox WHERE outbox.idempotencyKey = todo.pendingKey
+                           )
+                    """
+            )
+        }
+    }
+
+    /// Adds an intent unless this key is already queued.
+    ///
+    /// The unique index makes a repeat a no-op at the schema level; catching it here
+    /// keeps a double tap from failing the whole transaction and rolling back the change
+    /// he can already see.
+    private static func enqueueIntent(_ db: Database, _ record: OutboxRecord) throws {
+        guard
+            try OutboxRecord
+                .filter(Column("idempotencyKey") == record.idempotencyKey)
+                .fetchCount(db) == 0
+        else { return }
+        var row = record
+        try row.insert(db)
+    }
+
+    /// A reminder with its delivery state moved and nothing else invented.
+    private static func reminder(
+        _ stored: Reminder,
+        deliveryState: ReminderDeliveryState,
+        at now: Date
+    ) -> Reminder {
+        Reminder(
+            id: stored.id,
+            kind: stored.kind,
+            text: stored.text,
+            todoId: stored.todoId,
+            eventId: stored.eventId,
+            wallTime: stored.wallTime,
+            tz: stored.tz,
+            rrule: stored.rrule,
+            scheduledFor: stored.scheduledFor,
+            nextFireAt: stored.nextFireAt,
+            urgent: stored.urgent,
+            late: stored.late,
+            deferredFrom: stored.deferredFrom,
+            supersedesPrevious: stored.supersedesPrevious,
+            deliveryState: deliveryState,
+            createdAt: stored.createdAt,
+            updatedAt: now,
+            completedAt: deliveryState == .completed ? now : stored.completedAt
+        )
     }
 
     // MARK: - Deletes
@@ -350,13 +715,17 @@ struct LocalStore: Sendable {
     /// Only the types the device stores. A change for a resource the app does not keep
     /// locally — a job, a run — is skipped rather than treated as an error: the admin
     /// surface reads those live, and the phone has no use for them.
+    ///
+    /// `.goal` was in that skipped list until `syl-011.1.2`. See `SyncEngine.upsert` for
+    /// what changed and why.
     static func tableName(for type: SyncResourceType) -> String? {
         switch type {
         case .conversation: return "conversation"
         case .message: return "message"
         case .reminder: return "reminder"
         case .todo: return "todo"
-        case .goal, .device, .delivery, .job, .run: return nil
+        case .goal: return "goal"
+        case .device, .delivery, .job, .run: return nil
         }
     }
 
@@ -401,4 +770,46 @@ struct LocalStore: Sendable {
             )
         }
     }
+}
+
+/// Why a write was refused before it was written.
+///
+/// **Every case that can name the thing does**, and that is the load-bearing part rather
+/// than a nicety. `docs/CONTEXT.md` §7: a completion that answers "done" gives him
+/// nothing to contradict, and hearing the wrong title is the only place a wrong id is
+/// still catchable. The messages are `LocalizedError` too, so a view that shows
+/// `localizedDescription` — the lazy path, and therefore the one that will be taken —
+/// names it as well.
+enum LocalStoreError: Error, Equatable, LocalizedError, CustomStringConvertible {
+    /// Read the row before writing: a stale id costs a read, never an item.
+    case noSuchTodo(id: SylID)
+    case noSuchReminder(id: SylID)
+    /// The store's complete is idempotent and would answer happily, reporting an act
+    /// nobody performed.
+    case todoAlreadyFinished(text: String)
+    case reminderAlreadyFinished(text: String)
+    /// Captured on this device and not yet acknowledged by the server, so the only id it
+    /// has is one the server has never seen. `syl-011.1.8` is the proper fix.
+    case todoHasNotReachedSylYet(text: String)
+    /// A capture with nothing in it writes nothing at all.
+    case emptyCapture
+
+    var description: String {
+        switch self {
+        case .noSuchTodo(let id):
+            return "there is no to-do \(id) on this device"
+        case .noSuchReminder(let id):
+            return "there is no reminder \(id) on this device"
+        case .todoAlreadyFinished(let text):
+            return "\u{201C}\(text)\u{201D} is already finished"
+        case .reminderAlreadyFinished(let text):
+            return "\u{201C}\(text)\u{201D} is already finished"
+        case .todoHasNotReachedSylYet(let text):
+            return "\u{201C}\(text)\u{201D} has not reached Syl yet"
+        case .emptyCapture:
+            return "there was nothing to write down"
+        }
+    }
+
+    var errorDescription: String? { description }
 }

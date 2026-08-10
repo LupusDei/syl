@@ -188,6 +188,32 @@ final class LocalStoreTests: XCTestCase {
         )
     }
 
+    /// A regression. `openTodos` ordered on `dueAt` alone, and SQLite puts NULLs first —
+    /// so every undated to-do sorted above the one due in an hour, which is exactly
+    /// backwards for this question. The server's `todos_agenda_idx` says so in its own
+    /// comment; the client had the same rule and not the same ordering.
+    ///
+    /// It was invisible because the only ordering test here had two undated rows.
+    func testShouldSortAnUndatedTodoAfterEveryDatedOne() throws {
+        try store.upsert([
+            todo(id: "syl:todo:0198f2c2-0001-7000-8000-00000000c001", pinned: false, dueAt: nil),
+            todo(
+                id: "syl:todo:0198f2c2-0002-7000-8000-00000000c002",
+                pinned: false,
+                dueAt: instant("2026-08-09T08:00:00.000Z")
+            ),
+        ])
+
+        XCTAssertEqual(
+            try store.openTodos().map(\.id),
+            [
+                "syl:todo:0198f2c2-0002-7000-8000-00000000c002",
+                "syl:todo:0198f2c2-0001-7000-8000-00000000c001",
+            ],
+            "a to-do with no deadline is not more urgent than one due today"
+        )
+    }
+
     // MARK: - Optimistic send
 
     func testShouldRenderTheBubbleAndQueueTheIntentInOneStep() throws {
@@ -407,13 +433,13 @@ final class LocalStoreTests: XCTestCase {
         )
     }
 
-    private func todo(id: SylID, pinned: Bool) -> Todo {
+    private func todo(id: SylID, pinned: Bool, dueAt: Date? = nil) -> Todo {
         let base = instant("2026-08-09T06:59:48.300Z")
         return Todo(
             id: id,
             text: "Call the pharmacy about the refill",
             goalId: nil,
-            dueAt: nil,
+            dueAt: dueAt,
             pinned: pinned,
             status: .open,
             source: .commander,
