@@ -94,6 +94,24 @@ export interface ContributorBudget {
  * {@link DEFAULT_PRECEDENCE} is the one line to change when he does.
  */
 export type PrecedencePolicy =
+  /**
+   * The ladder is stated in `SOUL.md` itself, so this module emits nothing.
+   *
+   * **The default, and the reason is duplication rather than disagreement.**
+   * After the #Syl channel settled precedence, the full six-rung ladder went
+   * into `SOUL.md` — in her own voice, because she has to be able to say why
+   * she did what she did, and a rule she cannot articulate is one she cannot be
+   * corrected on. It is broader than any clause here: it also ranks the STORE
+   * above memory, and anything she READ SOMEWHERE below everything, which
+   * matters the moment she starts researching.
+   *
+   * Emitting a clause as well would state the same rule twice in two voices,
+   * and two statements of one rule drift — she would end up with two answers to
+   * the same question and no way to tell which was current. So the policy still
+   * lives here, typed and one line from changing, and the prose lives in one
+   * place.
+   */
+  | "stated-in-identity"
   /** Rules hold, defaults yield. The shape proposed in the design exchange. */
   | "rules-outrank-memory"
   /** `SOUL.md` wins outright; memory never amends it. */
@@ -109,7 +127,7 @@ export type PrecedencePolicy =
  *
  * **Change this one constant when the Commander rules.** Nothing else.
  */
-export const DEFAULT_PRECEDENCE: PrecedencePolicy = "rules-outrank-memory";
+export const DEFAULT_PRECEDENCE: PrecedencePolicy = "stated-in-identity";
 
 /**
  * What each policy actually says to her.
@@ -124,6 +142,8 @@ export const DEFAULT_PRECEDENCE: PrecedencePolicy = "rules-outrank-memory";
  * a paragraph about how to weigh her memories tells her she has some.
  */
 export const PRECEDENCE_CLAUSES: Readonly<Record<PrecedencePolicy, string>> = {
+  // Empty on purpose: `SOUL.md` carries the ladder. See the policy's own doc.
+  "stated-in-identity": "",
   "rules-outrank-memory": [
     "On a conflict between a standing order above and something you remember: a",
     "standing order that is a RULE holds, and nothing you have learned amends it —",
@@ -308,7 +328,11 @@ export function composeTurnContext(options: ComposeTurnContextOptions): TurnCont
   const hasIdentity = ordered.some((c) => c.kind === "identity");
   const hasMemory = ordered.some((c) => c.kind === "memory");
   // The clause names "a standing order above", so it needs both parties present.
-  const clause = hasIdentity && hasMemory ? PRECEDENCE_CLAUSES[precedence] : undefined;
+  // An empty clause emits nothing at all rather than a blank section: the
+  // `stated-in-identity` default carries no text, and a stray separator would
+  // read to her as a section that failed to load.
+  const clauseText = hasIdentity && hasMemory ? PRECEDENCE_CLAUSES[precedence] : "";
+  const clause = clauseText === "" ? undefined : clauseText;
 
   const parts: string[] = [];
   for (const [index, contributor] of ordered.entries()) {

@@ -325,8 +325,14 @@ describe("runReaderTurn", () => {
       await runReaderTurn({ instruction: "Summarise.", untrusted: ARTICLE }, { claudeBin: f.bin });
 
       const prompt = flagValue(invocationOf(f).argv, "--append-system-prompt") ?? "";
-      for (const clause of Object.values(PRECEDENCE_CLAUSES)) {
-        expect(prompt).not.toContain(clause);
+      for (const [policy, clause] of Object.entries(PRECEDENCE_CLAUSES)) {
+        // Skip the empty one. `stated-in-identity` carries no text (SOUL.md
+        // holds the ladder), and every string contains "" — so asserting on it
+        // would fail against ANY prompt and tell us nothing about the reader.
+        // A vacuous needle is worse than a missing assertion: it fails loudly
+        // for a reason unrelated to the property being defended.
+        if (clause === "") continue;
+        expect(prompt, `precedence clause for ${policy}`).not.toContain(clause);
       }
       expect(prompt).not.toContain(MEMORY_FENCE);
     });

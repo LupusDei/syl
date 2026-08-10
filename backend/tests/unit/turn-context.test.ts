@@ -111,7 +111,13 @@ describe("composeTurnContext", () => {
     });
 
     it("should close the fence before the precedence clause too", () => {
-      const context = composeTurnContext({ contributors: [identity("SOUL"), memory("MEM")] });
+      const context = composeTurnContext({
+        // Names a policy that HAS a clause: the default is now
+        // `stated-in-identity`, which emits none, so this would have nothing to
+        // place the fence before.
+        contributors: [identity("SOUL"), memory("MEM")],
+        precedence: "rules-outrank-memory",
+      });
 
       const afterMemory = context.systemPrompt.slice(context.systemPrompt.indexOf("MEM") + 3);
       expect(afterMemory.indexOf("---")).toBeGreaterThanOrEqual(0);
@@ -188,10 +194,41 @@ describe("composeTurnContext", () => {
   });
 
   describe("precedence — the seam awaiting the Commander's ruling", () => {
-    it("should default to rules outranking memory while defaults do not", () => {
-      expect(DEFAULT_PRECEDENCE).toBe("rules-outrank-memory");
+    it("should default to saying nothing, because SOUL.md carries the ladder", () => {
+      // Changed after the #Syl channel settled precedence: the full six-rung
+      // ladder went into SOUL.md in her own voice, and it is broader than any
+      // clause here — it also ranks the STORE above memory and anything she
+      // READ SOMEWHERE below everything. Emitting a clause as well would state
+      // one rule twice in two voices, and two statements of one rule drift.
+      // The policy still lives here, typed and one line from changing.
+      expect(DEFAULT_PRECEDENCE).toBe("stated-in-identity");
 
-      const context = composeTurnContext({ contributors: [identity("I am Syl"), memory("he prefers terse")] });
+      const context = composeTurnContext({
+        contributors: [identity("I am Syl"), memory("he prefers terse")],
+      });
+
+      expect(context.precedence).toBe("stated-in-identity");
+      expect(PRECEDENCE_CLAUSES["stated-in-identity"]).toBe("");
+    });
+
+    it("should emit no empty section when the policy carries no text", () => {
+      // An empty clause must vanish, not leave a separator behind: a stray
+      // fence reads to her as a section that failed to load.
+      const context = composeTurnContext({
+        contributors: [identity("I am Syl"), memory("he prefers terse")],
+      });
+
+      expect(context.systemPrompt.trimEnd().endsWith("he prefers terse")).toBe(true);
+      expect(context.systemPrompt).not.toMatch(/---\s*$/);
+    });
+
+    it("should still emit a clause when a policy that has one is chosen", () => {
+      // The seam is intact: if the Commander later wants the rule stated in the
+      // prompt as well as in her identity, it is one argument.
+      const context = composeTurnContext({
+        contributors: [identity("I am Syl"), memory("he prefers terse")],
+        precedence: "rules-outrank-memory",
+      });
 
       expect(context.systemPrompt).toContain(PRECEDENCE_CLAUSES["rules-outrank-memory"]);
       expect(context.precedence).toBe("rules-outrank-memory");
@@ -217,6 +254,14 @@ describe("composeTurnContext", () => {
       // The point of the seam. When the Commander rules, someone changes
       // DEFAULT_PRECEDENCE and nothing else.
       for (const [policy, clause] of Object.entries(PRECEDENCE_CLAUSES)) {
+        if (policy === "stated-in-identity") {
+          // Deliberately empty — SOUL.md carries the ladder, and stating one
+          // rule twice in two voices is how the two drift apart. The entry must
+          // still EXIST so the Record stays total: a new policy cannot be added
+          // without someone deciding what it says.
+          expect(clause).toBe("");
+          continue;
+        }
         expect(clause.trim(), `clause for ${policy}`).not.toBe("");
       }
       expect(Object.keys(PRECEDENCE_CLAUSES)).toContain("identity-outranks-memory");
@@ -236,6 +281,7 @@ describe("composeTurnContext", () => {
     it("should place the clause last, since it is a statement about the sections above it", () => {
       const context = composeTurnContext({
         contributors: [identity("IDENTITY"), memory("MEMORY"), capability("TOOLS")],
+        precedence: "rules-outrank-memory",
       });
 
       expect(context.systemPrompt.endsWith(PRECEDENCE_CLAUSES["rules-outrank-memory"])).toBe(true);
@@ -245,7 +291,10 @@ describe("composeTurnContext", () => {
     });
 
     it("should count the clause against the budget, because it is text she has to read", () => {
-      const withBoth = composeTurnContext({ contributors: [identity("a"), memory("b")] });
+      const withBoth = composeTurnContext({
+        contributors: [identity("a"), memory("b")],
+        precedence: "rules-outrank-memory",
+      });
 
       expect(withBoth.bytes).toBe(Buffer.byteLength(withBoth.systemPrompt, "utf8"));
       expect(withBoth.bytes).toBeGreaterThan(
