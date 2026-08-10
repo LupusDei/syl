@@ -642,3 +642,134 @@ code,
   color: var(--syl-text-muted);
   font-size: var(--syl-text-size-small);
 }
+
+/* ------------------------------------------------------------- narrow */
+
+/*
+ * The admin was built desktop-first and had ZERO media queries in 644 lines,
+ * which is how it arrived on his phone as a 208px sidebar beside a column of
+ * text wrapping at four words, with the Refresh button and half the legend
+ * off the right edge.
+ *
+ * Three rules hold everything below:
+ *
+ *   1. The MENU COSTS VERTICAL SPACE, NOT HORIZONTAL. A sidebar takes half of
+ *      a 390px screen forever; a scrolling tab strip takes 44px once. No
+ *      hamburger — that trades a tap and a piece of state for space we get
+ *      back anyway, and a menu you cannot see is a menu you forget is there.
+ *
+ *   2. THE PAGE NEVER SCROLLS SIDEWAYS. Anything genuinely wide — the graph,
+ *      a table, a code block — scrolls inside its own box. A body that scrolls
+ *      horizontally makes every vertical swipe feel broken.
+ *
+ *   3. FIXED COLUMN WIDTHS COLLAPSE TO STACKS. `minmax(9rem, …)` and `3rem 1fr
+ *      8rem` are reasonable on a laptop and are wider than the whole viewport
+ *      here. This is where the cut-off text in his screenshot came from.
+ */
+@media (max-width: 48rem) {
+  .shell__header {
+    flex-wrap: wrap;
+    gap: var(--syl-space-2);
+    padding: var(--syl-space-2) var(--syl-space-3);
+  }
+
+  /* Which backend we are pointed at is a desktop diagnostic. On a phone it is
+   * a line of monospace URL competing with the controls he came to use. */
+  .shell__target {
+    display: none;
+  }
+
+  .shell__spacer {
+    flex: 1;
+  }
+
+  .shell__body {
+    flex-direction: column;
+  }
+
+  /* The menu, as a strip. Sticky so it survives a long page without costing a
+   * scroll back to the top. */
+  .nav {
+    flex: 0 0 auto;
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 1;
+    padding: var(--syl-space-2);
+    border-right: none;
+    border-block-end: var(--syl-border-width) solid var(--syl-border);
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* Momentum without a visible bar eating 6px of a short strip. */
+    scrollbar-width: none;
+  }
+
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav__list {
+    flex-direction: row;
+    gap: var(--syl-space-1, 4px);
+    inline-size: max-content;
+  }
+
+  .nav__link {
+    white-space: nowrap;
+    padding: var(--syl-space-2) var(--syl-space-3);
+  }
+
+  /* The content is the point. It gets the width. */
+  .shell__main {
+    padding: var(--syl-space-3);
+  }
+
+  .view {
+    max-width: none;
+  }
+
+  /* Wide by nature — each scrolls in its own box rather than dragging the
+   * page sideways with it. */
+  .panel,
+  .view table,
+  .view pre {
+    max-inline-size: 100%;
+    overflow-x: auto;
+  }
+
+  /* Fixed columns become stacks. A label above its value reads fine and fits;
+   * a label beside its value does neither. */
+  .legend__item,
+  .histogram__bar {
+    grid-template-columns: 1fr;
+    gap: var(--syl-space-1, 4px);
+  }
+
+  /* Long ids and hashes must wrap rather than push the layout open. */
+  .mono,
+  code {
+    overflow-wrap: anywhere;
+  }
+
+  /*
+   * THE GRAPH PANS RATHER THAN SHRINKS, and it is the one thing on this page
+   * that must not obey rule 2 by fitting.
+   *
+   * `inline-size: 100%` scaled it to a 350px column, where the node labels —
+   * "Head of engineering at Slink", "his daughter" — became grey smears a few
+   * pixels tall. A picture of his memory that cannot be read is not a smaller
+   * version of the feature, it is the absence of it, and this is the view he
+   * asked for specifically so he could judge whether the inferred engine is
+   * any good.
+   *
+   * So the box scrolls and the drawing keeps a legible width. Panning a
+   * diagram is an ordinary thing to do with a finger; squinting is not.
+   */
+  .graph {
+    overflow-x: auto;
+    padding: var(--syl-space-2);
+  }
+
+  .graph__svg {
+    min-inline-size: 34rem;
+  }
+}
