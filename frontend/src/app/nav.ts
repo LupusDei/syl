@@ -42,6 +42,14 @@ export const NAV_ITEMS: readonly NavItem[] = [
     status: "ready",
   },
   {
+    path: "/memory",
+    label: "Memory",
+    summary:
+      "The graph, the two species of edge with their weights and their reasoning, what last night's dream produced — and the buttons that correct it.",
+    bead: "syl-005.6.1",
+    status: "ready",
+  },
+  {
     path: "/delivery",
     label: "Delivery outbox",
     summary: "What was sent, what was retried, and what is still unconfirmed.",

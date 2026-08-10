@@ -53,8 +53,21 @@ const UNIMPLEMENTED: readonly string[] = [];
  * against an illusion — but it is still a contract that does not describe the
  * service, and it is listed here so it is visible on every run rather than
  * only in a bead.
+ *
+ * The three memory routes join it for the same reason and with the same debt
+ * (`syl-q9n`): the graph landed the same day the admin's viewer did, so
+ * `routes/memory.ts` serves the store's own shape inside the standard envelope
+ * while the spec catches up. Note which one of them is a **write** — a surface
+ * that mutates Syl's memory and is not in the contract is the more urgent half
+ * of that debt, because a second client would have to guess at the body.
  */
-const UNDECLARED: readonly string[] = ["GET /intake/{sourceId}", "POST /intake"];
+const UNDECLARED: readonly string[] = [
+  "GET /intake/{sourceId}",
+  "POST /intake",
+  "GET /memory/graph",
+  "GET /memory/metrics",
+  "POST /memory/edges/{edgeId}/feedback",
+];
 
 /** Path parameters that are syntactically valid but name nothing. */
 const ABSENT_IDS: Readonly<Record<string, string>> = {

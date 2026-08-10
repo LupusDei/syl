@@ -498,3 +498,147 @@ code,
   color: var(--syl-text-muted);
   font-size: var(--syl-text-size-small);
 }
+
+/* ---------------------------------------------------------------- memory ---
+ *
+ * The memory viewer. Nothing here declares a colour: every value is an existing
+ * `--syl-*` token, because `tokens.test.ts` fails on a variable nobody
+ * references and on a reference nothing declares, in both directions.
+ *
+ * The two species of edge are distinguished by stroke SHAPE in the SVG itself
+ * (`GraphCanvas`), not by anything in this file — a distinction that lives in a
+ * stylesheet is a distinction that disappears from a screenshot.
+ */
+
+.graph {
+  margin: var(--syl-space-4) 0;
+  padding: var(--syl-space-3);
+  background: var(--syl-bg-panel);
+  border: var(--syl-border-width) solid var(--syl-border);
+  border-radius: var(--syl-radius);
+}
+
+.graph__svg {
+  inline-size: 100%;
+  block-size: auto;
+  display: block;
+}
+
+.graph__edge {
+  cursor: pointer;
+}
+
+.legend {
+  display: grid;
+  gap: var(--syl-space-2);
+  margin: var(--syl-space-3) 0 0;
+  padding-block-start: var(--syl-space-3);
+  border-block-start: var(--syl-border-width) solid var(--syl-border);
+  font-size: var(--syl-text-size-small);
+}
+
+.legend__item {
+  display: grid;
+  grid-template-columns: minmax(9rem, max-content) 1fr;
+  gap: var(--syl-space-3);
+  align-items: baseline;
+}
+
+.legend dt {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-2);
+  font-weight: 600;
+  color: var(--syl-text-primary);
+}
+
+.legend dd {
+  margin: 0;
+  color: var(--syl-text-secondary);
+}
+
+.species {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--syl-space-2);
+  color: var(--syl-text-secondary);
+}
+
+.verdict {
+  display: inline-flex;
+  gap: var(--syl-space-2);
+}
+
+.panel {
+  margin-block-start: var(--syl-space-5);
+  padding-block-start: var(--syl-space-4);
+  border-block-start: var(--syl-border-width) solid var(--syl-border);
+}
+
+.panel__title {
+  margin: 0 0 var(--syl-space-2);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.panel__subtitle {
+  margin: var(--syl-space-4) 0 var(--syl-space-2);
+  font-size: var(--syl-text-size);
+  font-weight: 600;
+  color: var(--syl-text-secondary);
+}
+
+.night {
+  margin-block-end: var(--syl-space-4);
+  padding: var(--syl-space-3);
+  background: var(--syl-bg-inset);
+  border-radius: var(--syl-radius);
+}
+
+.night__head {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-3);
+}
+
+.night__counts {
+  margin: var(--syl-space-2) 0 0;
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+}
+
+/* A rate that is NOT a rate. Muted and italic so it can never be mistaken for a
+ * measured zero — which is the entire reason `metrics.ts` returns null. */
+.rate--undefined {
+  color: var(--syl-text-muted);
+  font-style: italic;
+}
+
+.histogram {
+  display: grid;
+  gap: var(--syl-space-1);
+  margin: var(--syl-space-2) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.histogram__bar {
+  display: grid;
+  grid-template-columns: 3rem 1fr 8rem;
+  gap: var(--syl-space-2);
+  align-items: center;
+}
+
+.histogram__fill {
+  display: block;
+  block-size: 0.75rem;
+  min-inline-size: 1px;
+  background: var(--syl-accent-soft);
+  border-inline-start: 2px solid var(--syl-accent);
+}
+
+.histogram__label,
+.histogram__count {
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+}
