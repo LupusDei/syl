@@ -42,7 +42,15 @@ struct HomeScreen: View {
     /// measurement `OneScreenTall` exists to get right — the same defect the sheet above
     /// is avoiding. Two squads reached that conclusion independently, from opposite
     /// directions; the stack is kept for the goals drill-down and the list stays a sheet.
-    @State private var path: [HomeView.Destination] = []
+    /// **`NavigationPath`, not `[HomeView.Destination]`, and the difference is a bug the
+    /// Commander hit.** A homogeneous typed path can only ever hold the one type it is
+    /// declared with, so every `NavigationLink(value: GoalRoute(…))` inside the goals
+    /// screens was inert — SwiftUI had nowhere to put the value, and tapping a goal did
+    /// nothing at all. The list rendered perfectly, which is what made it look finished.
+    ///
+    /// A type-erased path carries both the orb's destination and the routes the screens
+    /// beyond it push. Nothing else about the composition was wrong.
+    @State private var path = NavigationPath()
 
     var body: some View {
         NavigationStack(path: $path) {

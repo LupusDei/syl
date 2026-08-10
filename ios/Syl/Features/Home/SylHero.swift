@@ -235,6 +235,18 @@ struct SylOrb: View {
     /// of the time — a badge on every orb is a dashboard, which is what we already threw
     /// out once.
     var detail: String?
+
+    /// Whether this orb leads anywhere yet.
+    ///
+    /// **An orb that looks exactly like the two beside it and does nothing when tapped is
+    /// worse than one that is visibly not ready.** Memory belongs to `syl-010` and is not
+    /// built; the Commander tapped it, and reasonably concluded the app was broken.
+    ///
+    /// So an unready orb dims, loses its press response, refuses the touch outright — a
+    /// dead tap is the thing being fixed, not the thing to keep — and says so to
+    /// VoiceOver rather than announcing a door that is a wall.
+    var isReady: Bool = true
+
     var action: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -321,11 +333,16 @@ struct SylOrb: View {
                     }
                 }
             }
-            .scaleEffect(pressed && !reduceMotion ? 0.94 : 1)
+            .scaleEffect(pressed && isReady && !reduceMotion ? 0.94 : 1)
             .animation(SylTheme.Motion.responsive, value: pressed)
             .contentShape(Rectangle())
+            // Enough to read as "not yet", not so much that it reads as broken. The
+            // composition keeps its third door; it simply is not open.
+            .opacity(isReady ? 1 : 0.4)
         }
         .buttonStyle(.plain)
+        .disabled(!isReady)
+        .allowsHitTesting(isReady)
         // The press state has to come from a gesture rather than a ButtonStyle
         // configuration because the label is built here; a simultaneous zero-distance
         // drag gives press-and-release without eating the tap.
@@ -335,5 +352,6 @@ struct SylOrb: View {
                 .onEnded { _ in pressed = false }
         )
         .accessibilityLabel(detail.map { "\(title), \($0)" } ?? title)
+        .accessibilityHint(isReady ? "" : "Not here yet")
     }
 }

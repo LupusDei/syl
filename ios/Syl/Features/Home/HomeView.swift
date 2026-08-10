@@ -73,6 +73,11 @@ struct HomeView: View {
     var scrolls: Bool = true
 
     @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Bumped by the Today orb. A counter rather than a flag, so two taps in a row scroll
+    /// twice instead of the second being swallowed as "no change".
+    @State private var scrollToDay = 0
     /// What he *asked for*, as opposed to what he got. See ``EnvironmentValues/
     /// sylAppearance`` — the two are different questions and this screen needs both.
     @Environment(\.sylAppearance) private var appearance
@@ -85,8 +90,18 @@ struct HomeView: View {
                     .ignoresSafeArea()
 
                 if scrolls {
-                    ScrollView {
-                        stack(viewport: geometry.size)
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            stack(viewport: geometry.size)
+                        }
+                        // The Today orb's whole job. The day is already on this screen,
+                        // one fold below her — so the honest action is to take him to it,
+                        // not to push a second copy onto a stack.
+                        .onChange(of: scrollToDay) { _, _ in
+                            withAnimation(reduceMotion ? nil : SylTheme.Motion.settle) {
+                                proxy.scrollTo(Self.dayAnchor, anchor: .top)
+                            }
+                        }
                     }
                     .scrollIndicators(.hidden)
                 } else {
@@ -150,9 +165,12 @@ struct HomeView: View {
     private func stack(viewport: CGSize) -> some View {
         VStack(spacing: 0) {
             hero(viewport: viewport)
-            day
+            day.id(Self.dayAnchor)
         }
     }
+
+    /// Where the Today orb goes.
+    private static let dayAnchor = "home-day"
 
     // MARK: - The hero
 
@@ -240,7 +258,11 @@ struct HomeView: View {
     private var orbs: some View {
         HStack(alignment: .top, spacing: SylTheme.Metric.chapter) {
             SylOrb(title: "Goals", symbol: "sparkle") { onOpen(.goals) }
-            SylOrb(title: "Memory", symbol: "cloud") { onOpen(.memory) }
+            // Memory is `syl-010` and is not built. An orb identical to the two beside it
+            // that does nothing when tapped is worse than one visibly not ready — he
+            // tapped it and reasonably concluded the app was broken. `isReady: false`
+            // dims it, drops the press response, refuses the touch, and says so aloud.
+            SylOrb(title: "Memory", symbol: "cloud", isReady: false) {}
             SylOrb(
                 title: "Today",
                 symbol: "sun.horizon",
@@ -248,7 +270,7 @@ struct HomeView: View {
                 // the system — it is the count of things still waiting on him, and it is
                 // absent entirely when there are none.
                 detail: snapshot.isClear ? nil : "\(snapshot.remaining) left"
-            ) { onOpen(.today) }
+            ) { scrollToDay &+= 1 }
         }
     }
 
