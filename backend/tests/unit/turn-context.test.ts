@@ -97,6 +97,24 @@ describe("composeTurnContext", () => {
       expect(context.systemPrompt).toMatch(/SOUL\n\n---\n\nMEM/);
     });
 
+    it("should have SOUL.md point FORWARD at the fence, since that is the side memory is on", () => {
+      // `syl-010.4.4`. The sentence read "everything ABOVE the line `---` below",
+      // which points back at the soul and tells her that her own standing orders
+      // are what she knows about the Commander. One word, and it inverts the
+      // meaning of the whole section — while still reading perfectly.
+      //
+      // This is also what makes CONTRIBUTOR_ORDER's identity-before-memory
+      // correct: that ordering is only right because this section refers
+      // forward. Asserted here rather than left to a reading, because the
+      // wrong version was in the file for a day and nobody noticed by eye.
+      const soul = readFileSync(new URL("../../../SOUL.md", import.meta.url), "utf8");
+      const pointer = soul.split("\n").find((line) => line.includes(`\`${MEMORY_FENCE}\` fence`));
+
+      expect(pointer).toBeDefined();
+      expect(pointer).toMatch(/\bafter\b|\bbelow\b/i);
+      expect(pointer).not.toMatch(/\babove\b/i);
+    });
+
     it("should close the fence before anything that is not memory", () => {
       // The failure this module exists for, made concrete: SOUL.md tells her
       // everything past the marker is what she knows about the Commander, so a
