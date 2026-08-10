@@ -21,7 +21,7 @@ struct MarkdownView: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 MarkdownBlockView(block: block)
-                    .padding(.top, index == 0 ? 0 : spaceBefore(block))
+                    .padding(.top, index == 0 ? 0 : spaceBefore(block, after: blocks[index - 1]))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -32,14 +32,29 @@ struct MarkdownView: View {
     /// A heading needs room above it to read as the start of something; a paragraph
     /// following a paragraph needs only a line's worth. Uniform spacing is what makes a
     /// rendered document read as a list of fragments.
-    private func spaceBefore(_ block: MarkdownBlock) -> CGFloat {
+    ///
+    /// The `previous` block matters in exactly one case, and R1 created it: a bulleted
+    /// list with an ordered sub-list is two adjacent blocks, because the flat block model
+    /// cannot nest one case inside another. A full paragraph gap between them would undo
+    /// the nesting the indent just established — the sub-list would read as a separate
+    /// list that happens to sit further right. Adjacent lists get a row's worth instead.
+    private func spaceBefore(_ block: MarkdownBlock, after previous: MarkdownBlock) -> CGFloat {
         switch block {
         case .heading(let level, _):
             return level <= 2 ? SylTheme.Metric.loose : SylTheme.Metric.step
         case .horizontalRule:
             return SylTheme.Metric.gutter
+        case .unorderedList, .orderedList, .taskList:
+            return isList(previous) ? SylTheme.Metric.tight : SylTheme.Metric.step
         default:
             return SylTheme.Metric.step
+        }
+    }
+
+    private func isList(_ block: MarkdownBlock) -> Bool {
+        switch block {
+        case .unorderedList, .orderedList, .taskList: return true
+        default: return false
         }
     }
 }
@@ -68,29 +83,27 @@ private struct MarkdownBlockView: View {
         case .unorderedList(let items):
             VStack(alignment: .leading, spacing: SylTheme.Metric.tight) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    ListRow(marker: "•", markerFont: SylTheme.Typeface.Prose.body, text: item)
+                    ListRow(
+                        depth: item.depth,
+                        marker: bullet(forDepth: item.depth),
+                        markerFont: SylTheme.Typeface.Prose.body,
+                        spokenMarker: nil,
+                        text: item.text
+                    )
                 }
             }
 
         case .orderedList(let start, let items):
-            VStack(alignment: .leading, spacing: SylTheme.Metric.tight) {
-                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                    ListRow(
-                        // `start + index`, not `index + 1`. A list that begins at 3.
-                        // begins at 3.
-                        marker: "\(start + index).",
-                        markerFont: SylTheme.Typeface.Prose.marker,
-                        text: item
-                    )
-                }
-            }
+            OrderedListView(start: start, items: items)
 
         case .taskList(let items):
             VStack(alignment: .leading, spacing: SylTheme.Metric.tight) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     ListRow(
+                        depth: item.depth,
                         marker: item.checked ? "☑" : "☐",
                         markerFont: SylTheme.Typeface.Prose.body,
+                        spokenMarker: item.checked ? "Done" : "Not done",
                         text: item.text
                     )
                 }
@@ -134,15 +147,70 @@ private struct MarkdownBlockView: View {
     private func inline(_ source: String) -> Text {
         Text(MarkdownInline.render(source))
     }
+
+    /// The bullet for a nesting level.
+    ///
+    /// The glyph changes with depth so a sub-point is legible as a sub-point even when
+    /// the indentation is not doing the work — which is most of the time at the largest
+    /// Dynamic Type sizes, where twenty points of indent is a fraction of a line.
+    ///
+    /// There is one shape per level up to ``MarkdownParser/maximumListDepth``, which is
+    /// where the parser clamps, so the wrap never happens on parsed input. It is there so
+    /// a hand-built block cannot index off the end of the array.
+    private func bullet(forDepth depth: Int) -> String {
+        let shapes = ["•", "◦", "–", "▪", "‣"]
+        let index = max(0, depth) % shapes.count
+        return shapes[index]
+    }
+}
+
+/// An ordered list, numbered by structure.
+///
+/// A view of its own rather than a case body, because the numbers have to be worked out
+/// for the whole list before the first row is drawn — a sub-list restarts at `1.` and the
+/// parent resumes where it left off, neither of which `start + index` can express.
+private struct OrderedListView: View {
+    let start: Int
+    let items: [MarkdownBlock.ListItem]
+
+    var body: some View {
+        let numbers = MarkdownBlock.orderedNumbers(start: start, items: items)
+        VStack(alignment: .leading, spacing: SylTheme.Metric.tight) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                let marker = "\(index < numbers.count ? numbers[index] : index + 1)."
+                ListRow(
+                    depth: item.depth,
+                    marker: marker,
+                    markerFont: SylTheme.Typeface.Prose.marker,
+                    spokenMarker: marker,
+                    text: item.text
+                )
+            }
+        }
+    }
 }
 
 /// A list row with a hanging indent.
 ///
 /// The marker sits in its own column so wrapped lines align with the text rather than
 /// with the bullet. Without it, a two-line item reads as two items.
+///
+/// ## Nesting has to survive VoiceOver
+///
+/// Indentation is invisible to a screen reader and the bullet shapes are read
+/// inconsistently — `◦` may come out as "white bullet", or as nothing at all. So the
+/// glyph is hidden from accessibility entirely and depth is stated in words instead: the
+/// row is a single element whose label opens with "Level 2" and carries the marker's
+/// *meaning* — the ordinal, or whether a task is done — rather than its shape. Without
+/// this, a nested plan is read aloud as a flat one, which is the same defect R1 was
+/// about, on the one surface nobody screenshots.
 private struct ListRow: View {
+    let depth: Int
     let marker: String
     let markerFont: Font
+    /// What the marker *means*, for a screen reader. `nil` for a plain bullet, which
+    /// carries no information worth saying out loud.
+    let spokenMarker: String?
     let text: String
 
     var body: some View {
@@ -154,13 +222,24 @@ private struct ListRow: View {
                 // is straight. `@ScaledMetric` so it grows with Dynamic Type instead of
                 // clipping `10.` at the largest sizes.
                 .frame(minWidth: markerColumn, alignment: .leading)
+                .accessibilityHidden(true)
 
             Text(MarkdownInline.render(text))
                 .font(SylTheme.Typeface.Prose.body)
                 .lineSpacing(SylTheme.Metric.proseLineSpacing)
                 .foregroundStyle(SylTheme.Colour.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(Text(spokenLabel))
         }
+        .padding(.leading, CGFloat(max(0, depth)) * SylTheme.Metric.gutter)
+    }
+
+    private var spokenLabel: String {
+        var parts: [String] = []
+        if depth > 0 { parts.append("Level \(depth + 1)") }
+        if let spokenMarker, !spokenMarker.isEmpty { parts.append(spokenMarker) }
+        parts.append(String(MarkdownInline.render(text).characters))
+        return parts.joined(separator: ", ")
     }
 
     @ScaledMetric(relativeTo: .body) private var markerColumn: CGFloat = 22
