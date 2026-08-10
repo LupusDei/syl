@@ -95,7 +95,8 @@ function turnResult(sessionId = "s-1"): TurnResult {
   return {
     sessionId,
     text: "ok",
-    result: "ok",
+    // No tool call in a double, so the two are the same string.
+    spoken: "ok",
     costUsd: 0,
     numTurns: 1,
     init: { kind: "init", sessionId, tools: [], apiKeySource: "none" },

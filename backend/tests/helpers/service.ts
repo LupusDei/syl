@@ -186,7 +186,8 @@ export const silentRunner: TurnRunner = (_prompt, options) => {
   return Promise.resolve({
     sessionId,
     text: "",
-    result: "",
+    // No tool call in a double, so the two are the same string.
+    spoken: "",
     costUsd: 0,
     numTurns: 1,
     init: {
@@ -223,7 +224,8 @@ export function replyingRunner(text: string, options: { readonly delayMs?: numbe
     return {
       sessionId,
       text,
-      result: text,
+      // No tool call in a double, so the two are the same string.
+      spoken: text,
       costUsd: 0,
       numTurns: 1,
       init: {

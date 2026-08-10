@@ -330,7 +330,8 @@ function aModelThatUsesHerTools(hands: Hands): TurnRunner {
     return {
       sessionId,
       text,
-      result: text,
+      // No tool call in a double, so the two are the same string.
+      spoken: text,
       costUsd: 0,
       numTurns: 1,
       init: {

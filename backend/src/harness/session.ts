@@ -187,28 +187,19 @@ export function newSessionId(): string {
 export interface TurnResult {
   /** Session id to feed back as `resume` on the next turn. */
   readonly sessionId: string;
-  /**
-   * Everything she SAID this turn, in order, joined.
+  /** The assistant's **final** text for this turn, exactly as the CLI reported it.
    *
-   * What a person reads. The CLI's own `result` is the last thing said, so a
-   * reply delivered as several assistant messages arrived clipped to its final
-   * paragraph — see `assembleReply`.
-   */
+   * This is what a structured turn wants — `runReaderTurn` parses it as JSON, and the
+   * narration a model may emit before its answer would break that parse. See `spoken`
+   * for the other question. */
   readonly text: string;
-  /**
-   * The CLI's own `result` field, unjoined — the LAST thing said.
+  /** Everything the assistant **said** this turn, in order.
    *
-   * For a turn whose output is parsed rather than read. A structured reader is
-   * asked for JSON and may say "OK" before producing it, and `text` would then
-   * be `"OK\n\n{…}"` — not JSON, discarded, and the extraction lost with it.
-   * That is not hypothetical: it took memory formation out on `main` between
-   * `f2b574a` and this line.
-   *
-   * The distinction is real and permanent: a conversation wants everything she
-   * said, a parser wants the one thing she produced. Assembling was right for
-   * the first and silently wrong for the second.
-   */
-  readonly result: string;
+   * Differs from `text` only when a turn used a tool: the CLI's `result` carries just
+   * the prose after the last tool call, so a reply where Syl thought, acted, and then
+   * spoke arrives with the thinking removed. Chat wants this one; anything parsing a
+   * structured answer wants `text`. */
+  readonly spoken: string;
   /** Reported cost. On subscription rails this is an estimate, not a charge. */
   readonly costUsd: number;
   readonly numTurns: number;
@@ -363,8 +354,8 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
 
   return {
     sessionId: init.sessionId,
-    text: assembleReply(events, result.result),
-    result: result.result,
+    text: result.result,
+    spoken: assembleReply(events, result.result),
     costUsd: result.costUsd,
     numTurns: result.numTurns,
     init,

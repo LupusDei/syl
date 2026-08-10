@@ -690,12 +690,10 @@ export class DreamJudge {
         const result = await this.#spawn(buildJudgePrompt(items), fresh ? null : claudeSessionId, (id) => {
           spawnedSessionId = id;
         });
-        // `result`, not `text`. The judge's reply is PARSED, and `text` joins
-        // every assistant message she emitted — so anything said before the
-        // JSON is prepended to it and the whole night's verdicts are discarded
-        // as unparseable. Same distinction as `readStructured`: a parser wants
-        // the one thing produced, a reader of prose wants everything said.
-        const verdicts = parseVerdicts(result.result, items.length);
+        // `result.text` — the CLI's own final answer — never `spoken`, which
+        // joins every assistant message and would prepend any narration to the
+        // JSON, discarding a whole night's verdicts as unparseable.
+        const verdicts = parseVerdicts(result.text, items.length);
         const applied = this.#applyAll(input.sessionId, turn.turnIndex, items, verdicts, tally);
 
         cursor += batch.length;

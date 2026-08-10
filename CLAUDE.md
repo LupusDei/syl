@@ -143,6 +143,19 @@ keeping them testable without spawning a process is worth the seam.
   it is per-worktree, it is named, and nobody else can take it. If you do pop
   something that is not yours, re-push it with `-u` and the same paths rather
   than deleting it.
+- **Run the gate in your own worktree, never in the main checkout — and if you
+  must work there, `git add` explicit paths.** The stash is repo-global; so is
+  the working tree, and it bites the same way. `npm run verify` reads the tree as
+  it finds it, so another agent's half-finished edit becomes *your* red run,
+  naming *their* subsystem. That happened on 2026-08-10: nine failures appeared
+  in the sealed reader path — including the injection-containment tests — from
+  one uncommitted line changing what `runTurn` returns. Nothing was broken and it
+  was nearly reported as a security regression.
+  The commit half is worse because it is silent. A `git add -A` in a shared
+  checkout sweeps up whatever anyone else has in flight and publishes it under
+  your name, in a commit whose message describes something else entirely. Stage
+  the paths you touched, by name, every time. `-A` and `.` are how you steal work
+  without noticing.
 
 ## Commands
 
