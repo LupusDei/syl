@@ -103,19 +103,34 @@ struct SylHero: View {
 
     var body: some View {
         GeometryReader { geometry in
-            if reduceMotion {
-                figure(in: geometry.size, drift: 0, roll: 0, breath: 1)
-            } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-                    let t = timeline.date.timeIntervalSinceReferenceDate
-                    figure(
-                        in: geometry.size,
-                        drift: sin(t / 9 * .pi * 2) * 9,
-                        roll: sin(t / 13 * .pi * 2) * 0.7,
-                        breath: 1 + 0.008 * sin(t / 7 * .pi * 2)
-                    )
+            Group {
+                if reduceMotion {
+                    figure(in: geometry.size, drift: 0, roll: 0, breath: 1)
+                } else {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                        let t = timeline.date.timeIntervalSinceReferenceDate
+                        figure(
+                            in: geometry.size,
+                            drift: sin(t / 9 * .pi * 2) * 9,
+                            roll: sin(t / 13 * .pi * 2) * 0.7,
+                            breath: 1 + 0.008 * sin(t / 7 * .pi * 2)
+                        )
+                    }
                 }
             }
+            // **`GeometryReader` places its content top-LEADING, not centred**, and that
+            // became visible the moment the art started filling rather than fitting.
+            //
+            // Fitting made the picture exactly as wide as the reader, so alignment never
+            // mattered and nobody had to know. Filling makes it WIDER — and every point
+            // of that overflow then hung off the right-hand edge, so the whole figure sat
+            // pushed to the right of the screen. The Commander spotted it immediately;
+            // it is not the art, which is centred in every clip.
+            //
+            // Framing to the reader's own size re-centres it, and clipping keeps the
+            // overflow from painting under the day below.
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
         }
         .accessibilityElement()
         .accessibilityLabel("Syl")
