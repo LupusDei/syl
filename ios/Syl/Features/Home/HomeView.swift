@@ -1,163 +1,203 @@
 import SwiftUI
 import SylKit
 
-/// The home screen: the day's spine, with Syl's presence as the weather around it.
+/// The home screen: Syl, and then the day beneath her.
 ///
-/// ## The balance struck between the five concepts
+/// ## The shape, and what it costs
 ///
-/// The concepts disagree about what a home screen *is*, and the disagreement is the
-/// interesting part.
+/// The first version led with the day and kept Syl to a band. The Commander's verdict
+/// was that it was not as beautiful as the concept, and that verdict is correct — an app
+/// opened dozens of times a day earns the right to be looked at, and a column of text
+/// does not earn that on its own.
 ///
-/// - The **mind map** answers with a dashboard of counts — "12 connected", "5 in
-///   motion". Those are the same class of thing proposal B threw out when it rejected
-///   percent-complete and priority ladders: numbers that look like progress and are
-///   not. Worse, they make a quiet day read as a failure, which is exactly backwards.
-/// - The **constellation** answers with a launcher wearing a graph. Six taps and no
-///   information — and the memory graph belongs in the admin, where it can be studied,
-///   not on a phone at 06:00.
-/// - The **two hero screens** answer with Syl herself, which is gorgeous and makes her
-///   wallpaper — the precise failure proposal F names when it says "wallpaper that
-///   moves is worse than wallpaper". But they carry the best single idea in the set:
-///   a line under her name saying what she is doing.
-/// - The **timeline** is the only one that answers "what do I need to do", which is
-///   what `SOUL.md` says the first thing on any surface must answer.
+/// So she leads. The trade is real and worth stating rather than pretending away:
+/// proposal F warns that a character always on screen becomes wallpaper, and "wallpaper
+/// that moves is worse than wallpaper". Three things hold that off, and none of them is
+/// a behavioural instruction:
 ///
-/// So: the timeline's spine is the content, the hero screens' presence line is the
-/// voice, and the amount of screen Syl occupies is decided by ``HomeSnapshot/prominence(remaining:)``.
+/// 1. **The hero is one screen, not the whole screen.** The day is directly beneath it
+///    and a single scroll reaches it. `SOUL.md` still gets its answer to "what do I need
+///    to do" — it is one thumb-flick away rather than first.
+/// 2. **Presence is expressed as light, not as existence.** The art is always there; the
+///    aura, the ribbon and the line under her name are not. At `absent` she is unlit and
+///    still — which is the restraint rule surviving intact in a layout that never hides
+///    her.
+/// 3. **The scroll pays for itself.** The hero collapses as the day rises, so the moment
+///    you go looking for work the decoration gets out of the way instead of being
+///    scrolled past every time.
 ///
-/// ## Presence scales inversely with load
+/// ## The three orbs are doors, not statistics
 ///
-/// A full day pushes her to a band at the top and gives the spine the screen. As the
-/// day empties she expands into the space it leaves, and on a clear day she has all of
-/// it. This is how the master plan's "a quiet day is a success" stops being a sentence
-/// in a document and becomes something you can see.
+/// The concept labels them Goals / Memory / Today. They stay verbs-in-disguise: each
+/// opens something. What they explicitly do not do is carry counts. The mind-map concept
+/// did carry counts and it was rejected for it — "4 active", "12 connected" is the
+/// dashboard failure mode, and it makes a quiet day look like an empty one.
 struct HomeView: View {
-    /// Prepared off the main actor. See `HomeSnapshotLoader`.
     var snapshot: HomeSnapshot
-    /// Already decayed by `PresenceTimeline` — never a raw frame state.
     var presence: PresenceState
     var presenceIntensity: Double
     var now: Date
     var onSelect: (DayMoment) -> Void = { _ in }
+    var onOpen: (Destination) -> Void = { _ in }
+
+    /// Where an orb goes. Only `today` is wired; the other two are the next screens.
+    enum Destination: Equatable, Sendable {
+        case goals
+        case memory
+        case today
+    }
 
     /// Set false only for offscreen rendering.
     ///
     /// `ImageRenderer` lays out nothing inside a `ScrollView` — an offscreen host never
     /// gives the scroll view a content size, so it renders an empty page. Found by
     /// looking at the first render, which came back as backdrop and no content at all.
-    /// The alternative was to render a hand-assembled copy of this layout, which would
-    /// then drift from the real one and quietly stop being evidence of anything.
     var scrolls: Bool = true
 
     var body: some View {
-        ZStack {
-            SylTheme.Veil()
-            MoteField(count: 34, presence: 0.35 + 0.65 * snapshot.prominence)
-                .ignoresSafeArea()
+        GeometryReader { geometry in
+            ZStack {
+                SylTheme.Veil()
+                MoteField(count: 40, presence: 1)
+                    .ignoresSafeArea()
 
-            if scrolls {
-                ScrollView {
-                    stack
-                }
-                .scrollIndicators(.hidden)
-            } else {
-                VStack(spacing: 0) {
-                    stack
-                    Spacer(minLength: 0)
+                if scrolls {
+                    ScrollView {
+                        stack(viewport: geometry.size)
+                    }
+                    .scrollIndicators(.hidden)
+                } else {
+                    stack(viewport: geometry.size)
                 }
             }
         }
-        .animation(SylTheme.Motion.drift, value: snapshot.prominence)
     }
 
-    private var stack: some View {
-        VStack(alignment: .leading, spacing: SylTheme.Metric.loose) {
-            header
-            presenceBand
-            body(for: snapshot)
+    private func stack(viewport: CGSize) -> some View {
+        VStack(spacing: 0) {
+            hero(viewport: viewport)
+            day
         }
-        .padding(.horizontal, SylTheme.Metric.gutter)
-        .padding(.top, SylTheme.Metric.step)
-        .padding(.bottom, SylTheme.Metric.chapter)
     }
 
-    // MARK: - Header
+    // MARK: - The hero
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: SylTheme.Metric.tight) {
-            Text(now, format: .dateTime.weekday(.wide).day().month(.wide))
-                .sylLabelStyle()
-                .foregroundStyle(SylTheme.Colour.inkFaint)
+    /// Sized to the viewport so the first screen is exactly her, and the day begins
+    /// precisely at the fold — close enough to hint that something is below, far enough
+    /// that nothing competes with her.
+    private func hero(viewport: CGSize) -> some View {
+        VStack(spacing: 0) {
+            // The ribbon lives *inside* the hero, drifting across her, rather than in a
+            // band of its own.
+            //
+            // As a separate strip under her name it rendered as a near-flat hairline
+            // spanning the full width — which reads as a divider rule, not as a
+            // character. Laid over her it becomes what the concept art actually shows:
+            // a current of light passing through her. It is also the only thing on this
+            // screen that can say "thinking", because a still image cannot.
+            ZStack {
+                SylHero(presence: presence, intensity: presenceIntensity)
 
-            Text(snapshot.greeting)
-                .font(SylTheme.Typeface.display)
+                // The ribbon appears only while she is *doing* something.
+                //
+                // Drawn continuously it was a coloured line lying across her — a
+                // scratch, not light, and it competed with the art every second of
+                // every day. Restricting it to the active states fixes the look and is
+                // the better rule anyway: the art says who she is, the ribbon says what
+                // she is doing, and most of the time she is not doing anything, which
+                // is exactly the state this whole product is designed to make restful.
+                if HomeSnapshot.isActive(presence) {
+                    SylRibbon(state: presence, intensity: presenceIntensity)
+                        .frame(height: viewport.height * 0.20)
+                        .offset(y: viewport.height * 0.16)
+                        .opacity(0.75)
+                        .blendMode(.plusLighter)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+            .frame(height: max(viewport.height * 0.62, 340))
+            .animation(SylTheme.Motion.breathe, value: presence)
+
+            // Her name, in the one piece of real display type in the app. The glow
+            // stands in for the light behind her, so the type belongs to the same scene
+            // rather than sitting on top of it.
+            Text("Syl")
+                .font(.system(size: 54, design: .serif))
                 .foregroundStyle(SylTheme.Colour.ink)
+                .shadow(color: SylTheme.Colour.luminanceCore.opacity(0.9), radius: 14)
+                .padding(.top, -SylTheme.Metric.step)
 
-            // The presence line. Reserves its own height so that a state change does
-            // not reflow the whole screen underneath it — text appearing and
-            // disappearing is fine, the day jumping half an inch is not.
-            Text(HomeSnapshot.phrase(for: presence) ?? " ")
-                .font(SylTheme.Typeface.subtitle)
+            // The presence line. Letterspaced, as in the concept — it is a caption to
+            // her, not a heading of its own.
+            Text(HomeSnapshot.phrase(for: presence) ?? snapshot.greeting)
+                .font(.system(.subheadline, design: .serif))
+                .tracking(2.2)
                 .foregroundStyle(SylTheme.Colour.inkSoft)
+                .multilineTextAlignment(.center)
                 .contentTransition(.opacity)
                 .animation(SylTheme.Motion.breathe, value: presence)
+                .padding(.top, SylTheme.Metric.tight)
+                .padding(.horizontal, SylTheme.Metric.gutter)
+
+            Spacer(minLength: SylTheme.Metric.step)
+
+            orbs
+                .padding(.bottom, SylTheme.Metric.chapter)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
+        .frame(height: viewport.height)
     }
 
-    // MARK: - Presence
-
-    /// The band Syl occupies. Height is the whole mechanic.
-    private var presenceBand: some View {
-        SylRibbon(state: presence, intensity: presenceIntensity)
-            .frame(height: bandHeight)
-            .frame(maxWidth: .infinity)
-            .accessibilityElement()
-            .accessibilityLabel("Syl")
-            .accessibilityValue(HomeSnapshot.phrase(for: presence) ?? "Not present")
-    }
-
-    /// 96pt when the day is full, 300pt when it is clear.
-    ///
-    /// The floor is not zero even on the busiest day. She never disappears because the
-    /// Commander is busy — being busy is not a reason to be abandoned, and a character
-    /// that vanishes under load is one that is never there when it matters.
-    private var bandHeight: CGFloat {
-        96 + 204 * snapshot.prominence
+    private var orbs: some View {
+        HStack(alignment: .top, spacing: SylTheme.Metric.chapter) {
+            SylOrb(title: "Goals", symbol: "sparkle") { onOpen(.goals) }
+            SylOrb(title: "Memory", symbol: "cloud") { onOpen(.memory) }
+            SylOrb(
+                title: "Today",
+                symbol: "sun.horizon",
+                // The one place a number is allowed, because it is not a statistic about
+                // the system — it is the count of things still waiting on him, and it is
+                // absent entirely when there are none.
+                detail: snapshot.isClear ? nil : "\(snapshot.remaining) left"
+            ) { onOpen(.today) }
+        }
     }
 
     // MARK: - The day
 
-    @ViewBuilder
-    private func body(for snapshot: HomeSnapshot) -> some View {
-        if snapshot.moments.isEmpty {
-            clearDay
-        } else {
-            VStack(alignment: .leading, spacing: SylTheme.Metric.gutter) {
-                if let note = snapshot.note {
-                    NoteCard(note: note)
-                }
-
-                VStack(alignment: .leading, spacing: SylTheme.Metric.step) {
-                    Text(snapshot.isClear ? "Today" : "\(snapshot.remaining) left today")
+    private var day: some View {
+        VStack(alignment: .leading, spacing: SylTheme.Metric.gutter) {
+            HStack(spacing: SylTheme.Metric.snug) {
+                Text(now, format: .dateTime.weekday(.wide).day().month(.wide))
+                    .sylLabelStyle()
+                    .foregroundStyle(SylTheme.Colour.inkFaint)
+                Spacer()
+                if !snapshot.isClear {
+                    Text("\(snapshot.remaining) left")
                         .sylLabelStyle()
                         .foregroundStyle(SylTheme.Colour.inkFaint)
                         .contentTransition(.numericText())
                         .animation(SylTheme.Motion.settle, value: snapshot.remaining)
-
-                    DaySpine(moments: snapshot.moments, now: now, onSelect: onSelect)
                 }
             }
+
+            if let note = snapshot.note {
+                NoteCard(note: note)
+            }
+
+            if snapshot.moments.isEmpty {
+                clearDay
+            } else {
+                DaySpine(moments: snapshot.moments, now: now, onSelect: onSelect)
+            }
         }
+        .padding(.horizontal, SylTheme.Metric.gutter)
+        .padding(.top, SylTheme.Metric.gutter)
+        .padding(.bottom, SylTheme.Metric.chapter)
     }
 
-    /// Nothing left. **The best state the screen has, and composed as one.**
-    ///
-    /// No grey glyph, no "You're all caught up!", no empty-list illustration apologising
-    /// for the absence of content. The day is clear, Syl has the whole screen, and the
-    /// only text is one quiet line. If the Commander opens the app on a clear evening
-    /// and finds it beautiful, the product has made its own argument.
+    /// Nothing left. Still the best state the screen has — she simply has the screen
+    /// above it now rather than expanding into this space.
     private var clearDay: some View {
         VStack(alignment: .leading, spacing: SylTheme.Metric.snug) {
             Text("The day is clear")
@@ -169,7 +209,6 @@ struct HomeView: View {
                 .foregroundStyle(SylTheme.Colour.inkSoft)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, SylTheme.Metric.snug)
         .transition(.opacity.combined(with: .scale(scale: 0.98)))
         .accessibilityElement(children: .combine)
     }
@@ -212,32 +251,15 @@ private struct NoteCard: View {
 
 // MARK: - Previews
 
-#Preview("A full day") {
-    HomeView(
-        snapshot: .preview(remaining: 5),
-        presence: .thinking,
-        presenceIntensity: 0.7,
-        now: .now
-    )
+#Preview("Hero") {
+    HomeView(snapshot: .preview(remaining: 4), presence: .thinking, presenceIntensity: 0.7, now: .now)
 }
 
-#Preview("A clear day") {
+#Preview("Clear") {
     HomeView(
-        snapshot: HomeSnapshot(
-            moments: [], remaining: 0, note: nil,
-            prominence: 1, greeting: "Good evening"
-        ),
+        snapshot: HomeSnapshot(moments: [], remaining: 0, note: nil, prominence: 1, greeting: "Good evening"),
         presence: .idle,
         presenceIntensity: 0.4,
-        now: .now
-    )
-}
-
-#Preview("Late, and she says so") {
-    HomeView(
-        snapshot: .preview(remaining: 2, late: true),
-        presence: .alert,
-        presenceIntensity: 1,
         now: .now
     )
 }
@@ -276,13 +298,14 @@ extension HomeSnapshot {
         // Derived, never asserted. An earlier version took `remaining` as a parameter
         // and rendered "2 left today" above four unfinished rows — preview data that
         // contradicts itself is worse than none, because it gets screenshotted.
-        let outstanding = moments.filter { $0.standing != .done }.count
+        let shown = Array(moments.prefix(max(remaining + 1, 2)))
+        let outstanding = shown.filter { $0.standing != .done }.count
 
         return HomeSnapshot(
-            moments: Array(moments.prefix(max(remaining + 1, 2))),
-            remaining: min(remaining, outstanding),
+            moments: shown,
+            remaining: outstanding,
             note: late ? DayNote(tone: .late, text: "Clarity focus — this was due earlier. I was late.") : nil,
-            prominence: HomeSnapshot.prominence(remaining: remaining),
+            prominence: HomeSnapshot.prominence(remaining: outstanding),
             greeting: "Good morning"
         )
     }

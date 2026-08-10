@@ -15,7 +15,7 @@ import { defaultLogDirectory } from "../logging.js";
  * them.
  *
  * Usage:
- *   npm run launchd                       print all three plists
+ *   npm run launchd                       print all four plists
  *   npm run launchd -- --install          write them, then print the commands
  *   npm run launchd -- --out <dir>        write them somewhere else
  *   npm run launchd -- --host <fqdn>      the tailnet hostname for the cert job

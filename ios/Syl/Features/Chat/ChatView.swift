@@ -32,6 +32,13 @@ struct ChatView: View {
         .task { await model.refresh() }
     }
 
+    /// The transcript, which is also the keyboard's dismiss target.
+    ///
+    /// Two mechanisms rather than one, because they cover different intentions: a drag
+    /// means "I want to read what is above", a tap means "I am done typing". Shipping
+    /// only the scroll dismissal leaves someone who taps a message stuck behind the
+    /// keyboard with no obvious way out, and there is no Done button on a chat composer
+    /// to fall back to.
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -47,6 +54,21 @@ struct ChatView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
+            // Drag the transcript, lose the keyboard. `.interactively` rather than
+            // `.immediately` so the keyboard tracks the finger and can be pulled back
+            // by reversing — the gesture is reversible, which `.immediately` is not.
+            .scrollDismissesKeyboard(.interactively)
+            // Tap anywhere in the transcript to dismiss.
+            //
+            // A plain `.onTapGesture` on the ScrollView would swallow taps on the
+            // messages themselves, and it competes with the scroll gesture. A
+            // simultaneous, zero-distance drag recogniser dismisses without consuming
+            // anything: text stays selectable and scrolling is unaffected.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0).onEnded { _ in
+                    composerFocused = false
+                }
+            )
             .onChange(of: model.snapshot.groups.last?.id) { _, id in
                 guard let id else { return }
                 withAnimation(.easeOut(duration: 0.2)) {

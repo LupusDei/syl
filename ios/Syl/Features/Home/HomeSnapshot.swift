@@ -134,6 +134,19 @@ extension HomeSnapshot {
         }
     }
 
+    /// Whether Syl is *doing* something, as opposed to merely being present.
+    ///
+    /// The home screen uses this to decide whether the ribbon is drawn at all. `idle` is
+    /// deliberately not active: she is there, she is lit, and she is not working — which
+    /// is the majority of the time and should look like rest rather than like a process
+    /// running.
+    static func isActive(_ state: PresenceState) -> Bool {
+        switch state {
+        case .listening, .thinking, .speaking, .alert, .delighted, .manifest: return true
+        case .absent, .idle, .concerned: return false
+        }
+    }
+
     /// Builds the spine from what is on disk.
     ///
     /// Sorting puts undated items last rather than first: an undated to-do has no place

@@ -14,6 +14,9 @@ import {
   launchdPath,
   sylLaunchdJobs,
   toPlistXml,
+  UPDATE_INTERVAL_SECONDS,
+  UPDATE_LABEL,
+  updateJob,
   WATCHDOG_LABEL,
   watchdogJob,
   type LaunchdPaths,
@@ -255,10 +258,63 @@ describe.skipIf(!onMacOS)("the certificate job", () => {
   });
 });
 
+/**
+ * The auto-deploy job.
+ *
+ * The one plist here whose job it is to REPLACE Syl's running code, so its two
+ * unusual properties are the ones worth pinning: it never runs at load, and it
+ * runs out of the way of the turn she may be answering.
+ */
+describe.skipIf(!onMacOS)("the update job", () => {
+  it("should be a plist plutil accepts", () => {
+    expect(() => roundTrip(updateJob(paths).plist)).not.toThrow();
+  });
+
+  it("should NOT run at load — installing supervision must not itself restart her", () => {
+    const plist = roundTrip(updateJob(paths).plist);
+    expect(plist["RunAtLoad"]).toBe(false);
+    expect(plist["StartInterval"]).toBe(UPDATE_INTERVAL_SECONDS);
+  });
+
+  it("should run out of the way of whatever Syl is doing", () => {
+    // It runs the entire test suite and a full TypeScript build. Nothing is
+    // waiting on it, and it must not compete with a turn the Commander is.
+    const plist = roundTrip(updateJob(paths).plist);
+    expect(plist["ProcessType"]).toBe("Background");
+    expect(plist["Nice"]).toBe(5);
+    expect(plist["LowPriorityIO"]).toBe(true);
+  });
+
+  it("should run the update script, not the service", () => {
+    const plist = roundTrip(updateJob(paths).plist);
+    expect(plist["ProgramArguments"]).toEqual(["/Users/commander/code/syl/scripts/syl-update.sh"]);
+  });
+
+  it("should carry the quiet window through, so it is the same one reminders defer past", () => {
+    // Two different answers to "is he asleep" would be worse than none.
+    const environment = roundTrip(updateJob(paths).plist)["EnvironmentVariables"] as Record<string, string>;
+    expect(environment["SYL_TZ"]).toBe("America/Chicago");
+    expect(environment["SYL_CORE_LABEL"]).toBe(CORE_LABEL);
+    expect(environment["SYL_PORT"]).toBe("8899");
+  });
+
+  it("should not carry the APNs credentials, which it has no use for", () => {
+    // The core plist contains an Apple signing key and is 0600 for that reason.
+    // Nothing else should widen where that key exists.
+    const environment = roundTrip(updateJob(paths).plist)["EnvironmentVariables"] as Record<string, string>;
+    expect(environment["SYL_APNS_BUNDLE_ID"]).toBeUndefined();
+  });
+});
+
 describe.skipIf(!onMacOS)("sylLaunchdJobs", () => {
-  it("should produce all three, each named after its label", () => {
+  it("should produce all four, each named after its label", () => {
     const jobs = sylLaunchdJobs(paths);
-    expect(jobs.map((job) => job.label)).toEqual([CORE_LABEL, WATCHDOG_LABEL, CERT_LABEL]);
+    expect(jobs.map((job) => job.label)).toEqual([
+      CORE_LABEL,
+      WATCHDOG_LABEL,
+      CERT_LABEL,
+      UPDATE_LABEL,
+    ]);
     for (const job of jobs) expect(job.filename).toBe(`${job.label}.plist`);
   });
 

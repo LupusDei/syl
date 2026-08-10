@@ -1,0 +1,274 @@
+import SwiftUI
+import SylKit
+
+/// Syl herself, floating in the veil.
+///
+/// ## What changed, and why the ribbon did not lose
+///
+/// The first home screen led with the day and kept Syl to a thin band. The Commander's
+/// answer was that it was not as beautiful as the concept, and he is right — an app you
+/// open forty times a day earns the right to be looked at, and a spine of text does not
+/// do that on its own.
+///
+/// So the figure leads. This is not a reversal of proposal F's "a ribbon of light, not a
+/// face" — F budgets exactly this as **`manifest`, shipped as pre-rendered art in the
+/// bundle**, and is emphatic only that the *live, per-frame* character must not be a
+/// photoreal head driven by a metered avatar service. That still holds: the art below is
+/// a still, costing nothing per interaction, and the ribbon still carries every state
+/// change. She is the portrait; the ribbon is the pulse.
+///
+/// ## Two paintings, not one painting on two backgrounds
+///
+/// `SylHero` resolves to a *different generated image* per appearance, through the
+/// asset catalogue's `luminosity` variant. That is not a nicety — it is the only clean
+/// fix for a real defect. The art carries its own background, so the pale daylight
+/// version rendered on the night veil as a **bright rectangle floating in the dark**,
+/// corners and all. No amount of edge masking removes that: masking a light box on a
+/// dark ground just turns it into a light oval.
+///
+/// So the night appearance gets a version painted on a dark starfield, and each one
+/// meets its own veil. Generating a second image costs eight credits against a grant
+/// with roughly 481,000 left; fighting the first one with vignettes would have cost an
+/// evening and still looked wrong.
+///
+/// ## The motion
+///
+/// A still image of someone floating is a poster. Three cheap, slow transforms make her
+/// weightless instead:
+///
+/// - **Buoyancy** — a vertical drift on a 9-second cycle.
+/// - **Roll** — a sub-degree rotation on 13 seconds, coprime with the drift so the pair
+///   never resynchronise into a visible loop.
+/// - **Breath** — a scale swell under 1%, on 7 seconds.
+///
+/// None is individually perceptible. Together they read as suspended in air. The one
+/// thing deliberately *not* done is a fast or large movement: she is drifting, not
+/// bobbing, and the difference is entirely in the amplitude.
+struct SylHero: View {
+    /// Drives the aura's intensity so the art participates in presence rather than
+    /// sitting on top of it, indifferent.
+    var presence: PresenceState
+    var intensity: Double
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        GeometryReader { geometry in
+            if reduceMotion {
+                figure(in: geometry.size, drift: 0, roll: 0, breath: 1)
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                    let t = timeline.date.timeIntervalSinceReferenceDate
+                    figure(
+                        in: geometry.size,
+                        drift: sin(t / 9 * .pi * 2) * 9,
+                        roll: sin(t / 13 * .pi * 2) * 0.7,
+                        breath: 1 + 0.008 * sin(t / 7 * .pi * 2)
+                    )
+                }
+            }
+        }
+        .accessibilityElement()
+        .accessibilityLabel("Syl")
+        .accessibilityValue(HomeSnapshot.phrase(for: presence) ?? "Not present")
+    }
+
+    private func figure(in size: CGSize, drift: Double, roll: Double, breath: Double) -> some View {
+        ZStack {
+            // The aura behind her. Brightens with presence, so `alert` genuinely lights
+            // her up and `absent` leaves only the art.
+            RadialGradient(
+                colors: [
+                    SylTheme.Colour.luminanceCore.opacity(0.55 * auraStrength),
+                    SylTheme.Colour.luminance.opacity(0.20 * auraStrength),
+                    .clear,
+                ],
+                center: .center,
+                startRadius: 0,
+                endRadius: size.width * 0.62
+            )
+            .blendMode(.plusLighter)
+
+            Image("SylHero")
+                .resizable()
+                // `.fit`, not `.fill`. Filling a 0.85-ratio frame with a 0.71-ratio
+                // portrait crops top and bottom, and what it crops first is her head —
+                // the render came back decapitated. Fitting leaves margins instead, and
+                // the margins cost nothing because the art's own background is the same
+                // pale veil it sits on.
+                .aspectRatio(contentMode: .fit)
+                .frame(width: size.width, height: size.height)
+                // Melts her into the veil instead of ending at a rectangle.
+                //
+                // This was a single radial with `endRadius: width * 0.78`, and it did
+                // nothing: on a frame roughly as tall as it is wide, the bottom edge
+                // sits about 0.64 of the way along that radius — still fully opaque —
+                // so the image ended in a hard horizontal seam across the screen. Two
+                // axis-aligned gradients are both more predictable and easier to tune
+                // than one radius that has to be right in every direction at once.
+                //
+                // The vertical stops are deliberately asymmetric: a short fade at the
+                // top where she meets the status bar, and a long one at the bottom so
+                // her dress dissolves into the veil rather than being cut off at the
+                // ankles.
+                .mask {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0.00),
+                            .init(color: .white, location: 0.10),
+                            .init(color: .white, location: 0.56),
+                            .init(color: .white.opacity(0.55), location: 0.82),
+                            .init(color: .clear, location: 1.00),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+                .mask {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0.00),
+                            .init(color: .white, location: 0.14),
+                            .init(color: .white, location: 0.86),
+                            .init(color: .clear, location: 1.00),
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                }
+                .scaleEffect(breath)
+                .rotationEffect(.degrees(roll))
+                .offset(y: drift)
+        }
+    }
+
+    /// How hard the aura is driven, per state.
+    ///
+    /// `absent` is zero — she is not present, so nothing about her is lit, and only the
+    /// art remains. That keeps the restraint rule intact even though the figure is now
+    /// always on screen: presence is expressed by *light*, not by whether she exists.
+    private var auraStrength: Double {
+        switch presence {
+        case .absent: return 0
+        case .idle: return 0.35 + 0.15 * intensity
+        case .concerned: return 0.30
+        case .alert, .delighted, .manifest: return 0.9 + 0.1 * intensity
+        default: return 0.6 + 0.3 * intensity
+        }
+    }
+}
+
+/// One of the three doors under her.
+///
+/// A glass orb, not a button with an icon in it. The difference is the specular arc
+/// across the top-left and the fact that the fill is a material rather than a colour —
+/// both are what stop it reading as a circular `Button` with a tint.
+struct SylOrb: View {
+    let title: String
+    let symbol: String
+    /// Shown under the label when there is something to say. Nil for most of them, most
+    /// of the time — a badge on every orb is a dashboard, which is what we already threw
+    /// out once.
+    var detail: String?
+    var action: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pressed = false
+
+    private let diameter: CGFloat = 82
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: SylTheme.Metric.snug) {
+                ZStack {
+                    // A glass sphere, not a translucent disc.
+                    //
+                    // The first version was `.ultraThinMaterial` plus a rim, and against
+                    // a pale veil it rendered as a plain white circle — the material had
+                    // nothing darker behind it to frost, so it contributed nothing. What
+                    // actually reads as glass here is the *shading across the sphere*: a
+                    // diagonal wash that is lighter than the background at the top-left
+                    // and darker at the bottom-right, so the eye infers a curved surface
+                    // lit from where the veil's light already comes from.
+                    Circle()
+                        .fill(.ultraThinMaterial)
+                        .overlay {
+                            Circle().fill(
+                                LinearGradient(
+                                    colors: [
+                                        SylTheme.Colour.luminanceCore.opacity(0.75),
+                                        SylTheme.Colour.card.opacity(0.30),
+                                        SylTheme.Colour.luminance.opacity(0.28),
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                        }
+                        .overlay {
+                            // The specular highlight: a small bright arc near the top
+                            // left, which is the single detail that most says "sphere".
+                            Circle()
+                                .trim(from: 0.56, to: 0.80)
+                                .stroke(
+                                    SylTheme.Colour.luminanceCore.opacity(0.95),
+                                    style: StrokeStyle(lineWidth: 2.4, lineCap: .round)
+                                )
+                                .blur(radius: 1.4)
+                                .padding(7)
+                        }
+                        .overlay {
+                            Circle()
+                                .strokeBorder(
+                                    LinearGradient(
+                                        colors: [
+                                            SylTheme.Colour.luminanceCore.opacity(0.95),
+                                            SylTheme.Colour.luminance.opacity(0.55),
+                                            SylTheme.Colour.accent.opacity(0.40),
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 1.2
+                                )
+                        }
+                        // Two shadows: a coloured bloom for the light it throws, and a
+                        // tighter deeper one so it sits *above* the veil rather than
+                        // being printed on it.
+                        .shadow(color: SylTheme.Colour.luminance.opacity(0.45), radius: 16, y: 2)
+                        .shadow(color: SylTheme.Colour.veilDeep.opacity(0.35), radius: 6, y: 3)
+                        .frame(width: diameter, height: diameter)
+
+                    Image(systemName: symbol)
+                        .font(.system(size: 27, weight: .ultraLight))
+                        .foregroundStyle(SylTheme.Colour.ink.opacity(0.75))
+                }
+
+                VStack(spacing: 1) {
+                    Text(title)
+                        .font(.system(.subheadline, design: .serif))
+                        .foregroundStyle(SylTheme.Colour.ink)
+
+                    if let detail {
+                        Text(detail)
+                            .font(SylTheme.Typeface.numeral)
+                            .foregroundStyle(SylTheme.Colour.inkFaint)
+                    }
+                }
+            }
+            .scaleEffect(pressed && !reduceMotion ? 0.94 : 1)
+            .animation(SylTheme.Motion.responsive, value: pressed)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        // The press state has to come from a gesture rather than a ButtonStyle
+        // configuration because the label is built here; a simultaneous zero-distance
+        // drag gives press-and-release without eating the tap.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in pressed = true }
+                .onEnded { _ in pressed = false }
+        )
+        .accessibilityLabel(detail.map { "\(title), \($0)" } ?? title)
+    }
+}

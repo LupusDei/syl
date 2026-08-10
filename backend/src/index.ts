@@ -22,6 +22,7 @@ import {
 import { createIntakeRouter } from "./connections/intake-route.js";
 import { ADMIN_BASE_PATH, createAdminRouter } from "./routes/admin.js";
 import { describeAdmin, inspectAdminBundle } from "./ops/admin-bundle.js";
+import { readBuildInfo, selfBuildStampPath } from "./ops/build-info.js";
 import { ArticleIntake } from "./connections/intake.js";
 import { IntakeStore } from "./connections/intake-store.js";
 import { requireBearerToken, requireScope } from "./middleware/auth.js";
@@ -89,6 +90,21 @@ const MAX_BODY_BYTES = "1mb";
 
 /** The contract's base path. Not configurable — it is part of the contract. */
 export const API_BASE_PATH = "/api/v1";
+
+/**
+ * What this process was built from, read once when the module loads.
+ *
+ * Module scope rather than per-app, because it describes the *artifact* and
+ * cannot change while the process lives. Reading it per request would mean
+ * asking the working tree instead of the build, which is precisely the mistake
+ * the stamp exists to make impossible. `null` under `tsx` and in every test —
+ * that is what "not a build" correctly looks like.
+ */
+const SELF_BUILD = readBuildInfo(selfBuildStampPath(), {
+  onWarn: (message) => {
+    console.warn(`[syl] ${message}`);
+  },
+});
 
 /**
  * Pull a client-error status off a thrown value.
@@ -250,7 +266,18 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // Mounted onto one router so the base path appears exactly once, and so a
   // route added later cannot land outside it by forgetting the prefix.
   const api = Router();
-  api.use(createHealthRouter(probes === undefined ? { config } : { config, probes }));
+  // `build` is read once, here, from the stamp inside the `dist/` this process
+  // was loaded from. Never from git at request time: the running service must
+  // report what it was BUILT FROM, and the working tree is a different — and
+  // in the stale-build case, contradictory — question.
+  api.use(
+    createHealthRouter({
+      config,
+      ...(probes === undefined ? {} : { probes }),
+      build: SELF_BUILD,
+      turnsInFlight: () => chat.pending,
+    }),
+  );
   // Every write router takes `idempotency`. `syl-ux1` — `POST /auth/pair` and
   // `POST /conversations/{id}/messages` were the two that did not, and a lost
   // response to the first consumed the pairing code and left the device

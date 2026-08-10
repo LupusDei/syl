@@ -117,6 +117,7 @@ export interface LaunchdJob {
 export const CORE_LABEL = "com.jmm.syl.core";
 export const WATCHDOG_LABEL = "com.jmm.syl.watchdog";
 export const CERT_LABEL = "com.jmm.syl.cert";
+export const UPDATE_LABEL = "com.jmm.syl.update";
 
 /**
  * A `PATH` that works under launchd.
@@ -255,9 +256,76 @@ export function certJob(paths: LaunchdPaths): LaunchdJob {
   };
 }
 
-/** All three jobs, in the order they should be loaded. */
+/** How often the update job looks for a new green commit, in seconds. */
+export const UPDATE_INTERVAL_SECONDS = 600;
+
+/**
+ * The auto-deploy.
+ *
+ * Every ten minutes it asks two questions and usually answers "no" to one of
+ * them: has `origin/main` moved, and **have that commit's checks passed**. The
+ * second is the whole design. "If HEAD moved, build and restart" would let a
+ * 2am commit with red CI take the Commander's assistant down while he sleeps,
+ * and the first symptom would be a 07:00 agenda that never arrives.
+ *
+ * `RunAtLoad` is **false**, deliberately. Loading a job should never be the
+ * thing that restarts a healthy service — installing supervision must not
+ * itself be an outage — and ten minutes later is soon enough for something
+ * nobody is waiting on.
+ *
+ * The interval is the second net as well as the first: a build that comes up,
+ * passes its soak window and then starts crashing is caught on the next tick,
+ * because the probation marker left in `~/.syl/deploy-state.json` tells this
+ * job to put the previous build back.
+ *
+ * It runs the SAME command a human runs, with `--unattended`, which only makes
+ * it stricter — quiet hours are respected and a commit that has already failed
+ * once is never retried. There is deliberately no path by which the service
+ * itself can start a deploy.
+ */
+export function updateJob(paths: LaunchdPaths): LaunchdJob {
+  return {
+    label: UPDATE_LABEL,
+    filename: `${UPDATE_LABEL}.plist`,
+    plist: {
+      Label: UPDATE_LABEL,
+      ProgramArguments: [join(paths.repoRoot, "scripts", "syl-update.sh")],
+      EnvironmentVariables: {
+        PATH: launchdPath(paths.home),
+        HOME: paths.home,
+        SYL_PORT: String(paths.port),
+        SYL_LOG_DIR: paths.logDirectory,
+        SYL_CORE_LABEL: CORE_LABEL,
+        // The quiet window this job declines to deploy inside. Passed through
+        // so it is the same window the service defers reminders past — two
+        // different answers to "is he asleep" would be worse than none.
+        ...(paths.environment?.SYL_QUIET_START === undefined
+          ? {}
+          : { SYL_QUIET_START: paths.environment.SYL_QUIET_START }),
+        ...(paths.environment?.SYL_QUIET_END === undefined
+          ? {}
+          : { SYL_QUIET_END: paths.environment.SYL_QUIET_END }),
+        ...(paths.environment?.SYL_TZ === undefined ? {} : { SYL_TZ: paths.environment.SYL_TZ }),
+      },
+      WorkingDirectory: paths.repoRoot,
+      // Never at load. See above: installing this must not restart her.
+      RunAtLoad: false,
+      StartInterval: UPDATE_INTERVAL_SECONDS,
+      // Nice, and Background rather than Adaptive: this job runs the entire
+      // test suite and a full TypeScript build. Nothing is waiting on it, and
+      // it must not compete with the turn Syl is answering for the Commander.
+      Nice: 5,
+      ProcessType: "Background",
+      LowPriorityIO: true,
+      StandardOutPath: join(paths.logDirectory, "launchd-update.log"),
+      StandardErrorPath: join(paths.logDirectory, "launchd-update.log"),
+    },
+  };
+}
+
+/** All four jobs, in the order they should be loaded. */
 export function sylLaunchdJobs(paths: LaunchdPaths): readonly LaunchdJob[] {
-  return [coreJob(paths), watchdogJob(paths), certJob(paths)];
+  return [coreJob(paths), watchdogJob(paths), certJob(paths), updateJob(paths)];
 }
 
 /**
