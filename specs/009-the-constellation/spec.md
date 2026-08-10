@@ -122,7 +122,36 @@ like an instrument rather than a night sky.
 - **Dream sessions as events on that timeline**, since the dream log already records every
   session permanently and is the record of *why* the graph changed.
 
-## Open questions for the Commander
+## DECIDED by the Commander, 2026-08-10
+
+> *"No, I want the constellation. Just as you described it. Nodes are stars, edges are
+> filaments, confidence is the brightness, tiers the depth. I like it and I want to see
+> it. It's possible it won't be super useful, but I'll have useful things in the admin
+> tools. What I want for the app is beauty."*
+
+So both open questions below are answered, and answered against my recommendation:
+
+1. **The phone constellation is built, and built first.** Not the admin instrument, and
+   not a list as an MVP.
+2. **Usefulness is explicitly not the bar.** The admin gets the instruments; the app gets
+   beauty. A feature whose purpose is to be beautiful is judged on whether it is
+   beautiful, and "but is it useful" is not a defect report against it.
+
+And one addition to the design, his:
+
+> *"I know you want the placement to be deterministic and I agree with that, but once
+> everything is placed, make it lifelike — have it hover and move around subtly."*
+
+**Deterministic placement, living motion.** Position is fixed and seeded from the data, so
+the sky is learnable and the same star is always in the same place. What moves is
+*around* that anchor: a slow hover on the app's existing vocabulary — coprime periods,
+sub-pixel drift, a breath — so nothing ever resynchronises into a visible loop and nothing
+is ever where the eye expects a rigid grid. The anchor is truth; the motion is life.
+
+The distinction matters and is easy to lose: a star may **drift around** its position and
+must never **travel to** a new one.
+
+## Open questions, now closed
 
 1. **Which comes first?** The admin instrument answers the question he originally asked
    for (is this engine any good). The phone constellation is the beautiful one. My
