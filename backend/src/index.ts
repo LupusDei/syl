@@ -64,6 +64,7 @@ import { autoMemoryAt } from "./memory/auto-memory.js";
 import { DreamJudge } from "./memory/dream/judge.js";
 import { DreamLog } from "./memory/dream/log.js";
 import { DreamSweep } from "./memory/dream/sweep.js";
+import { ConversationExtractor, ExtractionStore } from "./memory/extract-apply.js";
 import { MemoryGraph } from "./memory/graph.js";
 import { WorkingMemory } from "./memory/working.js";
 import { MemoryMetrics } from "./memory/metrics.js";
@@ -790,10 +791,60 @@ export function bootstrap(
     // Commander's canary on a haiku turn (`syl-03d`).
     runner: withMemoryIndex(options.runner ?? runTurn),
   });
+  // How conversation becomes graph.
+  //
+  // Auto-memory used to do this — Claude Code writes what a turn learned into
+  // `MEMORY.md` — and it is written BY THE MODEL through the Write tool. With
+  // `tools: ""` above there is no Write tool, so there is no auto-memory, so
+  // nothing filled the graph and the nightly dream swept an empty one. The
+  // answer is not to give the hands back; it is the split this project uses
+  // everywhere else: the model judges what matters, the service writes it.
+  const extractor = new ConversationExtractor({
+    store: new ExtractionStore({ db: database.handle, graph: memoryGraph, clock }),
+    // The extraction turn is a READER turn — no tools, no MCP, no
+    // pre-authorisation, auto-memory off, session never resumed — because a
+    // conversation contains whatever he pasted into it. It needs the same
+    // `claudeBin`/`model` overrides the tests give every other turn, and
+    // nothing else: `cwd` is deliberately NOT forwarded, since a turn with no
+    // tools cannot read the directory it stands in.
+    turnOptions: {
+      ...(options.turn?.model === undefined ? {} : { model: options.turn.model }),
+      ...(options.turn?.claudeBin === undefined ? {} : { claudeBin: options.turn.claudeBin }),
+    },
+    // Closes the loop the same day. `regenerate` costs no tokens and writes
+    // only when the digest moved, so rebuilding here rather than waiting for
+    // the nightly consolidation is free — and without it a fact he states at
+    // ten in the morning does not reach her prompt until midnight.
+    onGraphChanged: () => {
+      workingMemory.regenerate();
+    },
+    ...(log === undefined
+      ? {}
+      : {
+          log: (line: string, detail?: unknown) => {
+            if (detail === undefined) log.info("memory", { message: line });
+            else log.error("memory", { message: line, error: String(detail) });
+          },
+        }),
+  });
+
   const chat = new ConversationService({
     messages,
     agent,
     presence,
+    // After the reply is persisted and on the wire, never before: his answer
+    // must not wait on filing, and a failed extraction must not fail his
+    // conversation. `ConversationExtractor.extract` never rejects.
+    afterExchange: (exchange) =>
+      extractor
+        .extract({
+          conversationId: exchange.conversationId,
+          transcript: [
+            { id: exchange.prompt.id, role: "user", text: exchange.prompt.text },
+            { id: exchange.reply.id, role: "assistant", text: exchange.reply.text },
+          ],
+        })
+        .then(() => undefined),
     // Was omitted entirely, so the only thing that ever reached a file was a
     // failure — and only via a default that writes to stderr.
     ...(log === undefined

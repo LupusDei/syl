@@ -293,10 +293,24 @@ describe("US4 — untrusted content cannot act", () => {
    *
    * So the assertion inverts, and what it protects inverts with it. It is no
    * longer "nothing reaches the quarantine"; it is **exactly one door in, and
-   * the reader still has exactly one caller**. Intake being reachable is the
-   * fix; a second entry point would be the regression.
+   * every caller of the reader named**. Intake being reachable is the fix; an
+   * unaccounted-for entry point would be the regression.
+   *
+   * `syl-010.2.1` added the second caller, and the count moving from one to two
+   * is exactly the moment to say what the invariant actually is. It was never
+   * "one" — "one" was a proxy for **every place that reads text the Commander
+   * did not write goes through the sealed shape, and nothing that reads such
+   * text reaches `runTurn` directly**. So the list stays EXACT and gains an
+   * entry with its reason; a third, unexplained caller still fails here.
+   *
+   * `memory/extract.ts` belongs on that list rather than beside it. A
+   * conversation is untrusted text from the moment he pastes an article into
+   * it, and the extraction turn's output does not merely get consumed once —
+   * it becomes a fact loaded into the preamble of every later turn. That is a
+   * *stronger* reason to be inside the quarantine than intake has, not a
+   * weaker one.
    */
-  it("should be reachable through exactly one door, and the reader through one caller", () => {
+  it("should be reachable through exactly one door, and the reader through named callers", () => {
     const importers = sourceFiles(BACKEND_SRC).filter((file) => {
       if (file.includes("/connections/")) return false;
       const source = readFileSync(file, "utf8");
@@ -310,23 +324,30 @@ describe("US4 — untrusted content cannot act", () => {
 
     // The property that actually carries US4: the model that reads the
     // untrusted text has no tools, and `harness/reader.ts` is the only way to
-    // reach it. One caller, and it is the read step of the ladder. A second
-    // one would be a second place the boundary has to be got right.
+    // reach it. Every caller is named here, with the reason it is allowed to
+    // be one. An unnamed caller is a second place the boundary has to be got
+    // right by hand, which is the failure this assertion exists to prevent.
     const readerImporters = sourceFiles(BACKEND_SRC).filter((file) => {
       if (file.endsWith("harness/reader.ts")) return false;
       return /from "[^"]*reader\.js"/u.test(readFileSync(file, "utf8"));
     });
-    expect(readerImporters.map((file) => file.slice(BACKEND_SRC.length))).toEqual([
+    expect(readerImporters.map((file) => file.slice(BACKEND_SRC.length)).sort()).toEqual([
+      // The read step of the intake ladder: an article, an email, a page.
       "connections/intake.ts",
+      // The extraction turn: a transcript, which contains whatever he pasted
+      // into it, and whose output outlives the turn by becoming memory.
+      "memory/extract.ts",
     ]);
 
     // And `runTurn` — the tool-bearing path — is still not reachable from
-    // anywhere in `connections/`. This is the thesis as a grep: the model that
-    // reads the untrusted text has no tools and no memory; the model that has
-    // tools and memory never reads the untrusted text.
+    // anywhere in `connections/`, nor from the extraction turn. This is the
+    // thesis as a grep: the model that reads the untrusted text has no tools
+    // and no memory; the model that has tools and memory never reads the
+    // untrusted text.
     const toolBearing = sourceFiles(BACKEND_SRC).filter(
       (file) =>
-        file.includes("/connections/") && /from "[^"]*session\.js"/u.test(readFileSync(file, "utf8")),
+        (file.includes("/connections/") || file.endsWith("memory/extract.ts")) &&
+        /from "[^"]*session\.js"/u.test(readFileSync(file, "utf8")),
     );
     expect(toolBearing).toEqual([]);
   });
