@@ -62,6 +62,8 @@ initiative.
 | Explicit deletion | **The Commander's order deletes.** "Delete this memory" removes the memory and its edges outright — not demoted, not suppressed. Constraint 6 binds the SYSTEM (decay, sweeps, the dream), never him | Commander, 2026-08-10, answering the forget-residue question |
 | Dream vs reminder contention | **Acceptable for now.** A reminder delayed behind a running dream is tolerable while the dream is proven out; `syl-ncx` stays open rather than blocking the first night | Commander, 2026-08-10 |
 | Syl's tool surface | **No built-in tools.** Her turns think and speak; every capability runs through the service. Revisit if research needs it | Commander, 2026-08-10 |
+| Goals: one seat or several | **Single user.** Family goals stay his; if he ever wants to share one, Syl renders a **digest** he can send rather than anyone getting a second seat. Proposal B §13 #3 called this a real collision with child E and said to decide it now rather than discover it later — a second seat means auth, permissions and a different sync model | Commander, 2026-08-10 |
+| Does Syl propose structure? | **Yes, bounded.** She may land what she infers from conversation as `proposed`; the morning agenda surfaces **at most two or three**, one line each, one word resolves each, and anything unresolved after about a week is dropped **silently**. B §13 #4 called it "the thing most likely to feel presumptuous" and said his instinct should win. It did | Commander, 2026-08-10 |
 | Memory observability | **First principle, not a phase.** Per-session dream metrics, current memory-system state, and a permanent per-session log. Maximise now; revisit only if it becomes burdensome at scale | Commander, 2026-08-09 |
 
 **The payment-rails constraint is the strongest one and it selects the
@@ -699,6 +701,87 @@ to read the query and ask which end the window came from.
 
 **The general lesson: any query with a `LIMIT` needs a test where the limit
 actually bites.** A bounded read tested only with unbounded data is untested.
+
+### The named one: **consistency is not correspondence**
+
+This project's worst defects are all one shape, and it is worth naming once rather
+than rediscovering per costume. **The system is internally consistent and quietly
+wrong.** Every part agrees with every other part; nothing agrees with reality; so
+every check passes and nothing appears to be broken.
+
+Six instances so far, and the list is the argument:
+
+| The system said | Reality was |
+|---|---|
+| `/health` reports the running commit — asking git | The process was three hours older than the tree it asked |
+| A test named for correct behaviour, green for weeks | Syl could not reply to anyone |
+| `dist/` builds fine | It held a migration `src/` had renamed, and the service refused to boot |
+| `npm run verify` green | The Swift client no longer matched the wire |
+| The TestFlight workflow green | Four builds shipped and none were installable |
+| A pure ordering function and an `ORDER BY`, each correct | Under a `LIMIT` they select **different rows**, so to-dos never appear |
+
+The generalisation, which is the useful part:
+
+> **A consistency check compares the system to itself and cannot catch this class by
+> construction. Only a correspondence check — comparing the system to something
+> outside it — can.**
+
+Every defence that has actually worked here is a correspondence check: the build
+*stamp* against the commit; the test *name* against the story; the *fixture* captured
+from real output rather than authored from our own types; the pure function against
+the database **under the same limit**; the built `Info.plist` rather than the project
+file; the resolved colour against the ground it sits on.
+
+And the corollary, which the squads added and which is what makes it actionable:
+
+> **A correspondence check must be mutation-tested, or it may be a consistency check
+> wearing a correspondence check's clothes.**
+
+Two independent near-misses in one day prove it. A "no device-computed instant"
+assertion read the payload model and could not see the write to the indexed column
+beside it — it could not have failed for the reason it was named for. A goal-read
+ordering parity trio would have been the same shape of nothing on a fixture with no
+ties. **Neither weakness was visible by reading the test.** Both were settled by one
+deliberate regression, one run, one revert.
+
+So: break it on purpose, watch it go red, put it back. If you cannot make it fail,
+you have not written the check you think you wrote.
+
+### A green TestFlight workflow did not mean a build he could install
+
+`ITSAppUsesNonExemptEncryption` was never set on the app. So every upload landed
+in App Store Connect and **stopped**, waiting for the export-compliance question
+to be answered by hand before a tester could see it. Syl uses HTTPS/TLS and the
+system Keychain and nothing else — all exempt — so the answer was always `NO`,
+and nobody was there to give it.
+
+Four builds shipped across one afternoon, every workflow green, and the
+Commander could install none of them.
+
+The workflow cannot tell, and that is the part worth remembering. `Fastfile`
+passes `skip_waiting_for_build_processing: true`, so fastlane returns the moment
+Apple accepts the bytes and never learns what happens next. **Acceptance of an
+upload is not availability of a build.**
+
+Fixed by declaring it in both configurations
+(`INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO`). Verify it in the **built**
+`Info.plist`, never in the project file — a build setting that never reaches the
+plist is a fix in name only:
+
+```sh
+xcodebuild build -scheme Syl -configuration Release -derivedDataPath /tmp/syl-dd …
+/usr/libexec/PlistBuddy -c "Print :ITSAppUsesNonExemptEncryption" \
+  /tmp/syl-dd/Build/Products/Release-iphonesimulator/Syl.app/Info.plist
+```
+
+Builds uploaded before the key still need the question answered once, by hand.
+
+**And a trap inside the diagnosis.** Reading `Info.plist` out of the default
+`DerivedData` showed `0.1.0 (1)` and nearly produced a report that every version
+bump that day had been cosmetic. That artifact was three days old — the build in
+question had gone to a different derived-data directory. **Always build to an
+explicit `-derivedDataPath` before believing an artifact**, which is the same
+lesson as the stale `dist/` two sections up, wearing Xcode's clothes.
 
 ### A contract change and the Swift client are not separable, and no single command tells you
 

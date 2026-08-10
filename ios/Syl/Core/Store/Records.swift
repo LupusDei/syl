@@ -187,4 +187,11 @@ struct SyncStateRecord: Codable, FetchableRecord, PersistableRecord, Equatable {
     /// exactly the thing that carries it across. Nil on a database written before this
     /// column existed, and on one that has never held a socket connection.
     var serverEpoch: String?
+
+    /// When the one-time goal backfill ran, or nil if it has not.
+    ///
+    /// Goals were ignored by `SyncEngine` while the cursor still advanced past them, so
+    /// a device upgraded into goal support believes it is up to date and is missing
+    /// every goal that has not changed since. Nil means the recovery has not run.
+    var goalsBackfilledAt: Date?
 }

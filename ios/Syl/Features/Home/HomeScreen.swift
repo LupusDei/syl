@@ -9,18 +9,99 @@ import SylKit
 /// everything that draws lives one level down.
 struct HomeScreen: View {
     @ObservedObject var model: HomeViewModel
+    /// Everything he owes, and the capture that writes into it.
+    ///
+    /// A second model rather than more surface on `HomeViewModel`, because the two answer
+    /// different questions on different clocks: the day is rebuilt every minute so an
+    /// item can turn from upcoming to due, and the list only changes when something is
+    /// written or synced. Folding them together would re-read five hundred rows once a
+    /// minute for a screen that shows a number.
+    @ObservedObject var list: TodoListViewModel
 
     @Environment(\.scenePhase) private var scenePhase
 
+    /// Whether the list is up.
+    ///
+    /// A sheet rather than a second navigation push, and it is a considered choice. The
+    /// hero is sized with `containerRelativeFrame(.vertical)` — one *visible* screen of
+    /// its scroll container — and this layout has already been fixed once for exactly
+    /// that reason, when the day's first two lines ended up behind the tab bar. A sheet
+    /// leaves the day's geometry untouched.
+    @State private var showingList = false
+
+    /// The stack the orbs open into.
+    ///
+    /// Home had no navigation stack at all, which is why `HomeView.onOpen` existed and
+    /// went nowhere. The wiring lives here rather than in `HomeView` deliberately:
+    /// `HomeView` is a pure function of values that several squads are editing, and the
+    /// call site it already carries — `SylOrb("Goals") { onOpen(.goals) }` — needed a
+    /// handler, not a change.
+    ///
+    /// **The bar is hidden on home itself, and that is what makes the stack safe here.**
+    /// A navigation bar appearing above the hero would take a strip out of precisely the
+    /// measurement `OneScreenTall` exists to get right — the same defect the sheet above
+    /// is avoiding. Two squads reached that conclusion independently, from opposite
+    /// directions; the stack is kept for the goals drill-down and the list stays a sheet.
+    /// **`NavigationPath`, not `[HomeView.Destination]`, and the difference is a bug the
+    /// Commander hit.** A homogeneous typed path can only ever hold the one type it is
+    /// declared with, so every `NavigationLink(value: GoalRoute(…))` inside the goals
+    /// screens was inert — SwiftUI had nowhere to put the value, and tapping a goal did
+    /// nothing at all. The list rendered perfectly, which is what made it look finished.
+    ///
+    /// A type-erased path carries both the orb's destination and the routes the screens
+    /// beyond it push. Nothing else about the composition was wrong.
+    @State private var path = NavigationPath()
+
     var body: some View {
-        HomeView(
-            snapshot: model.snapshot,
-            presence: model.presence,
-            presenceIntensity: model.intensity,
-            now: model.now
-        )
+        NavigationStack(path: $path) {
+            HomeView(
+                snapshot: model.snapshot,
+                presence: model.presence,
+                presenceIntensity: model.intensity,
+                now: model.now,
+                // The view stays a pure function of values; the tasks are owned here,
+                // which is the same split `ContentView` makes and why the day can be
+                // rendered offscreen without booting the object graph.
+                onComplete: { moment in Task { await model.complete(moment) } },
+                onPostpone: { moment in Task { await model.postpone(moment) } },
+                onDismissRefusal: { moment in model.dismissRefusal(moment.id) },
+                onOpen: { destination in
+                    // Only Goals leads anywhere today. Today is already this screen, and
+                    // Memory belongs to `syl-010` — pushing a blank for either would be a
+                    // door that opens onto a wall.
+                    guard destination == .goals else { return }
+                    path.append(destination)
+                },
+                onCapture: capture,
+                onOpenList: { showingList = true }
+            )
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: HomeView.Destination.self) { destination in
+                switch destination {
+                case .goals: GoalsScreen(store: model.store)
+                case .memory, .today: EmptyView()
+                }
+            }
+        }
+        .sheet(isPresented: $showingList) {
+            TodoListView(
+                snapshot: list.snapshot,
+                onCapture: capture,
+                onClose: { showingList = false }
+            )
+            // The sheet's own ground. Without it the list floats on the system's default
+            // sheet fill, which is a stock colour behind a screen whose acceptance
+            // criterion is that it has none — and the veil would stop at its edges.
+            .presentationBackground(SylTheme.Colour.veilDeep)
+            .task { await list.refresh() }
+        }
         .task {
             model.start()
+            // The list is read on launch, not on open. Its own `.task` above would be
+            // enough to fill it, but the door at the foot of the day carries a count from
+            // this same snapshot — a door that said nothing until it had been opened once
+            // would hide the very to-dos it exists to surface.
+            await list.refresh()
         }
         .onChange(of: scenePhase) { _, phase in
             // Returning to the app is the moment the day is most likely to be stale —
@@ -31,11 +112,30 @@ struct HomeScreen: View {
             case .active:
                 model.start()
                 Task { await model.refresh() }
+                Task { await list.refresh() }
             case .background:
                 model.stop()
             default:
                 break
             }
+        }
+    }
+
+    /// One capture, from either place it can be typed.
+    ///
+    /// The day's field and the list's field are the same write, deliberately: two capture
+    /// paths would be two chances to disagree about what a capture is, which is the shape
+    /// of mistake `plan.md` R1 warns about at the transport layer.
+    ///
+    /// The day is refreshed as well as the list because a captured to-do is `pinned:
+    /// false` and `dueAt: nil` and therefore lands *behind the door* rather than on the
+    /// spine — so the only thing that visibly changes on the home screen is the count on
+    /// that door. If it did not move, capture from the day would look like it had done
+    /// nothing at all.
+    private func capture(_ text: String) {
+        Task {
+            await list.capture(text)
+            await model.refresh()
         }
     }
 }

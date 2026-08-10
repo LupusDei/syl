@@ -79,8 +79,8 @@ struct RootView: View {
             // and `SOUL.md` says that is what the first thing on any surface must
             // answer. It is also the only tab that leads anywhere else.
             Group {
-                if let home = appDelegate.home {
-                    HomeScreen(model: home)
+                if let home = appDelegate.home, let list = appDelegate.list {
+                    HomeScreen(model: home, list: list)
                 } else {
                     unopenableStore
                 }

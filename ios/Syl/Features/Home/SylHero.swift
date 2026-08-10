@@ -125,8 +125,18 @@ struct SylHero: View {
     private func figure(in size: CGSize, drift: Double, roll: Double, breath: Double) -> some View {
         // Fit the art to the space *by computing it*, so the view's bounds and the
         // picture's bounds are identical and the masks below land on the picture.
-        let height = min(size.height, size.width / Self.artAspect)
-        let width = height * Self.artAspect
+        // **Fill, not fit.** Fitting left the art standing in its own rectangle with the
+        // veil around it, and because the art carries its own dark starfield that
+        // rectangle was VISIBLE — a hard vertical seam down each side, which no amount
+        // of edge fading removes, because a fade between two different darks is still a
+        // boundary between two different darks. The Commander called them silly and he
+        // is right.
+        //
+        // Filling the width deletes the problem rather than hiding it: there are no side
+        // edges left to see. What overflows vertically is cropped, which costs a little
+        // of the starfield above her head and nothing of her.
+        let width = max(size.width, size.height * Self.artAspect)
+        let height = width / Self.artAspect
 
         return ZStack {
             // The aura behind her. Brightens with presence, so `alert` genuinely lights
@@ -176,29 +186,28 @@ struct SylHero: View {
                 // top where she meets the status bar, and a long one at the bottom so
                 // her dress dissolves into the veil rather than being cut off at the
                 // ankles.
+                // One mask now, and only vertical.
+                //
+                // The horizontal one is gone because there is nothing left for it to do:
+                // the art fills the width, so it has no side edges. It was never really
+                // fading an edge anyway — it was fading a seam between the art's own
+                // starfield and the veil, which is a boundary a gradient cannot dissolve.
+                //
+                // The vertical stops stay asymmetric: a short fade at the top where she
+                // meets the status bar, and a long one at the bottom so she dissolves
+                // into the veil rather than being cut off at the ankles. The bottom fade
+                // is longer than before, because the type and the orbs now sit ON it.
                 .mask {
                     LinearGradient(
                         stops: [
                             .init(color: .clear, location: 0.00),
-                            .init(color: .white, location: 0.16),
-                            .init(color: .white, location: 0.58),
-                            .init(color: .white.opacity(0.50), location: 0.84),
+                            .init(color: .white, location: 0.10),
+                            .init(color: .white, location: 0.52),
+                            .init(color: .white.opacity(0.55), location: 0.78),
                             .init(color: .clear, location: 1.00),
                         ],
                         startPoint: .top,
                         endPoint: .bottom
-                    )
-                }
-                .mask {
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0.00),
-                            .init(color: .white, location: 0.18),
-                            .init(color: .white, location: 0.82),
-                            .init(color: .clear, location: 1.00),
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
                     )
                 }
                 .scaleEffect(breath)
@@ -235,6 +244,18 @@ struct SylOrb: View {
     /// of the time — a badge on every orb is a dashboard, which is what we already threw
     /// out once.
     var detail: String?
+
+    /// Whether this orb leads anywhere yet.
+    ///
+    /// **An orb that looks exactly like the two beside it and does nothing when tapped is
+    /// worse than one that is visibly not ready.** Memory belongs to `syl-010` and is not
+    /// built; the Commander tapped it, and reasonably concluded the app was broken.
+    ///
+    /// So an unready orb dims, loses its press response, refuses the touch outright — a
+    /// dead tap is the thing being fixed, not the thing to keep — and says so to
+    /// VoiceOver rather than announcing a door that is a wall.
+    var isReady: Bool = true
+
     var action: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -321,11 +342,16 @@ struct SylOrb: View {
                     }
                 }
             }
-            .scaleEffect(pressed && !reduceMotion ? 0.94 : 1)
+            .scaleEffect(pressed && isReady && !reduceMotion ? 0.94 : 1)
             .animation(SylTheme.Motion.responsive, value: pressed)
             .contentShape(Rectangle())
+            // Enough to read as "not yet", not so much that it reads as broken. The
+            // composition keeps its third door; it simply is not open.
+            .opacity(isReady ? 1 : 0.4)
         }
         .buttonStyle(.plain)
+        .disabled(!isReady)
+        .allowsHitTesting(isReady)
         // The press state has to come from a gesture rather than a ButtonStyle
         // configuration because the label is built here; a simultaneous zero-distance
         // drag gives press-and-release without eating the tap.
@@ -335,5 +361,6 @@ struct SylOrb: View {
                 .onEnded { _ in pressed = false }
         )
         .accessibilityLabel(detail.map { "\(title), \($0)" } ?? title)
+        .accessibilityHint(isReady ? "" : "Not here yet")
     }
 }

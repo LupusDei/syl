@@ -173,6 +173,41 @@ export function isLoopbackUrl(url: URL): boolean {
   return isLoopbackHost(url.hostname);
 }
 
+/**
+ * What Syl says when her own credential stops being accepted.
+ *
+ * `syl-009.5.2`. **The API's own 401 is deliberately uninformative and must
+ * stay that way**: `middleware/auth.ts` renders every rejection — malformed,
+ * unknown, revoked, expired — as one sentence, because a caller who can tell
+ * them apart has an oracle for guessing tokens. That sentence ends "Re-pair
+ * this device", which is the right advice for the audience it was written for
+ * and the wrong advice for this one. Left alone it reaches the Commander as
+ * *Syl telling him to re-pair his phone* — sending him to fix the one thing
+ * that is not broken, at the exact moment somebody has deliberately taken her
+ * hands away.
+ *
+ * So the translation happens **here**, and here is the only place it can:
+ *
+ * - This client knows something the middleware refuses to guess — **which
+ *   credential was presented**. It presented the agent token itself, so a 401
+ *   is unambiguous about whose key stopped working, and no oracle is created
+ *   because nothing was learned from the response.
+ * - It never crosses the network. The message goes up the MCP pipe to a model
+ *   on the same machine; the wire body the service actually sent is unchanged,
+ *   and `tests/unit/auth.test.ts` still holds it to one indistinguishable form.
+ *
+ * The sentence says the three things a person can act on: nothing was written,
+ * his phone is unaffected, and how she gets her hands back.
+ */
+function revokedCredential(operation: string): string {
+  return (
+    `Syl's own credential is no longer accepted, so ${operation} did not happen and nothing ` +
+    "was written. Her key has been revoked or has expired — this says nothing about the " +
+    "Commander's phone, which carries a different credential and is unaffected. She gets a " +
+    "working one again when the service restarts."
+  );
+}
+
 /** The failure envelope, as far as this module reads it. */
 interface FailureBody {
   readonly success: false;
@@ -333,7 +368,8 @@ export class SylApiClient {
           operation,
           status: response.status,
           code: error.code,
-          message: error.message,
+          message:
+            error.code === "UNAUTHORIZED" ? revokedCredential(operation) : error.message,
           retryable: error.retryable,
           details: error.details ?? null,
         },

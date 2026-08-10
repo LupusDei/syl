@@ -18,6 +18,7 @@ import {
   defaultLogDirectory,
   formatHuman,
   safeField,
+  toolArgumentsForLog,
   type LogRecord,
 } from "../../src/ops/logging.js";
 
@@ -177,6 +178,103 @@ describe("safeField", () => {
 
   it("should leave an ordinary value alone", () => {
     expect(safeField(42)).toBe(42);
+  });
+});
+
+/**
+ * `syl-009.5` — the arguments are the audit, and the log is a file he reads.
+ *
+ * `turn.tool` carries what Syl actually did on the Commander's machine, which
+ * is the only reason the line is worth writing. The same property makes it the
+ * one place a value she was handled can end up on his disk, and the one place
+ * a pasted article can cost eight megabytes of log. Both guards live here
+ * rather than at the call site, so a second caller of `turn.tool` — a second
+ * lane with hands, a job that logs a call — cannot get a weaker version.
+ */
+describe("toolArgumentsForLog", () => {
+  /** A stand-in with the shape of the real thing: 32 hex characters. */
+  const CREDENTIAL = "9f2c17ab".repeat(4);
+
+  it("should keep the arguments intact, because they are the audit", () => {
+    // The control. A redactor that emptied the line would satisfy every
+    // assertion below and destroy the thing the line exists for.
+    const asked = {
+      text: "Take the bread out of the oven.",
+      because: "He asked for it, just now.",
+      when: { said: "in five minutes", kind: "relative", minutes: 5 },
+    };
+
+    expect(toolArgumentsForLog(asked, { secrets: [CREDENTIAL] })).toEqual(asked);
+  });
+
+  it("should remove her credential wherever it appears, however it is nested", () => {
+    // Matched as a VALUE, not by field name. A guard keyed on names like
+    // `token` covers the field somebody thought of and waves through the next.
+    const redacted = toolArgumentsForLog(
+      {
+        text: `curl -H "authorization: Bearer ${CREDENTIAL}"`,
+        nested: { deeper: [{ note: CREDENTIAL }] },
+      },
+      { secrets: [CREDENTIAL] },
+    );
+
+    expect(JSON.stringify(redacted)).not.toContain(CREDENTIAL);
+    expect(JSON.stringify(redacted)).toContain("[redacted]");
+    // And the rest of the sentence survives, so the log still says what she did.
+    expect(JSON.stringify(redacted)).toContain("authorization: Bearer");
+  });
+
+  it("should redact BEFORE it truncates, so a cut cannot leave half a secret", () => {
+    // The ordering bug this function is arranged to avoid. Truncating first
+    // puts the first N characters of the credential on the line and reads, in
+    // the log, exactly like a guard that worked.
+    const rendered = JSON.stringify(
+      toolArgumentsForLog({ text: `${"a".repeat(30)}${CREDENTIAL}` }, {
+        secrets: [CREDENTIAL],
+        maxStringLength: 40,
+      }),
+    );
+
+    expect(rendered).not.toContain(CREDENTIAL.slice(0, 10));
+    expect(rendered).toContain("[redacted]");
+  });
+
+  it("should cut a long string and say how much it dropped", () => {
+    // "Trailing off" and "there was more" are different facts, and only the
+    // second lets him decide whether he needs the rest.
+    const rendered = toolArgumentsForLog({ text: "x".repeat(5_000) }, { maxStringLength: 100 }) as {
+      text: string;
+    };
+
+    expect(rendered.text.startsWith("x".repeat(100))).toBe(true);
+    expect(rendered.text).toContain("+4900 more characters");
+  });
+
+  it("should keep the field names when the whole call is too large to write down", () => {
+    // The shape nobody predicts: not one long string but ten thousand short
+    // ones. Which verb was called with which fields is still the audit, so the
+    // keys survive and the values do not.
+    const rendered = toolArgumentsForLog(
+      { because: "he said so", items: Array.from({ length: 5_000 }, (_, index) => `item-${String(index)}`) },
+      { maxBytes: 500 },
+    ) as { omitted: string; fields: readonly string[] };
+
+    expect(rendered.fields).toEqual(["because", "items"]);
+    expect(rendered.omitted).toMatch(/too large for the log/u);
+  });
+
+  it("should ignore an empty secret, which would otherwise match everywhere", () => {
+    // A caller that passes a credential it has not minted yet must not blank
+    // the log. An empty needle is inside every string.
+    expect(toolArgumentsForLog({ text: "hello" }, { secrets: [""] })).toEqual({ text: "hello" });
+  });
+
+  it("should never throw, whatever it is handed", () => {
+    // Same rule as `safeField`: a logger that dies inside an error path takes
+    // the process down at the moment the log was about to say why.
+    expect(() => toolArgumentsForLog(undefined)).not.toThrow();
+    expect(toolArgumentsForLog(null)).toBeNull();
+    expect(toolArgumentsForLog(7)).toBe(7);
   });
 });
 

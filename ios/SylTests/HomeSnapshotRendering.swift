@@ -101,6 +101,98 @@ final class HomeSnapshotRendering: XCTestCase {
         }
     }
 
+    /// The day's spine on its own, in every state a tap can put a row into.
+    ///
+    /// Rendered apart from `HomeView` on purpose. The hero is sized to one whole screen,
+    /// so in an 852pt frame the day begins exactly at the bottom edge and the full-screen
+    /// renders show none of it — which is fine for judging *her* and useless for judging
+    /// a row. This frames the thing that changed.
+    ///
+    /// What to look for: the deferred row must show its **original** time and no new one;
+    /// the refused row must be the only warm thing in the frame; and the completed row
+    /// must still be legible while it is struck through, in both appearances.
+    func testRenderTheDayStates() throws {
+        try XCTSkipUnless(enabled, "set SYL_RENDER_SNAPSHOTS=1 to produce design images")
+        let directory = try XCTUnwrap(outputDirectory)
+
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let cases: [(String, ColorScheme, DynamicTypeSize)] = [
+            ("day-states-light", .light, .large),
+            ("day-states-night", .dark, .large),
+            ("day-states-night-ax3", .dark, .accessibility3),
+        ]
+
+        for (name, scheme, typeSize) in cases {
+            // Top-aligned. A row's thread segment is greedy (`maxHeight: .infinity`) so
+            // in a frame taller than the content every row stretches and the spacing
+            // reads as a design decision it is not. On the device the spine is inside a
+            // scroll view and takes its natural height; this reproduces that.
+            let view = ZStack {
+                SylTheme.Veil()
+                VStack(spacing: 0) {
+                    DaySpine(moments: actedOn, now: fixedNoon)
+                    Spacer(minLength: 0)
+                }
+                .padding(SylTheme.Metric.gutter)
+            }
+            // Tall enough that nothing is compressed. `ImageRenderer` has no scroll view,
+            // so a frame shorter than the content does not clip — the stack squeezes and
+            // rows draw over one another, which looks like a layout defect and is not one.
+            .frame(width: 393, height: typeSize.isAccessibilitySize ? 2400 : 620)
+            .environment(\.colorScheme, scheme)
+            .environment(\.dynamicTypeSize, typeSize)
+
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+
+            guard let image = renderer.uiImage, let data = image.pngData() else {
+                XCTFail("could not render \(name)")
+                continue
+            }
+            try data.write(to: directory.appendingPathComponent("\(name).png"))
+        }
+    }
+
+    /// One of each: settled, in flight, refused, and two ordinary rows for contrast.
+    private var actedOn: [DayMoment] {
+        func at(_ hour: Int, _ minute: Int) -> Date {
+            Calendar(identifier: .gregorian)
+                .date(from: DateComponents(year: 2026, month: 8, day: 10, hour: hour, minute: minute))
+                ?? .now
+        }
+
+        return [
+            DayMoment(
+                id: "done", title: "Morning light — gratitude and breath", at: at(7, 0),
+                standing: .done, origin: .reminder, urgent: false, late: false, pinned: false
+            ),
+            // A reminder with nothing asked of it yet: the only row that shows both
+            // controls, and the reason it is here. Every other row hides one of them for
+            // a different reason, so without this the render would never show Later.
+            DayMoment(
+                id: "open", title: "Call the roofer back about the north valley flashing",
+                at: at(9, 30), standing: .due, origin: .reminder,
+                urgent: true, late: false, pinned: false
+            ),
+            DayMoment(
+                id: "deferred", title: "Collect the prescription",
+                at: at(11, 0), standing: .upcoming, origin: .reminder,
+                urgent: false, late: false, pinned: false,
+                deferralAskedAt: at(9, 41)
+            ),
+            DayMoment(
+                id: "refused", title: "Book the dentist", at: nil,
+                standing: .upcoming, origin: .todo, urgent: false, late: false, pinned: true,
+                refusal: "Already finished"
+            ),
+            DayMoment(
+                id: "plain", title: "Create and flow — art, writing or music", at: at(14, 0),
+                standing: .upcoming, origin: .todo, urgent: false, late: false, pinned: false
+            ),
+        ]
+    }
+
     private var clear: HomeSnapshot {
         HomeSnapshot(moments: [], remaining: 0, note: nil, prominence: 1, greeting: "Good evening")
     }

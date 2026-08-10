@@ -634,12 +634,15 @@ final class SyncEngineTests: XCTestCase {
                 serverTime: try! Instant.parse("2026-08-09T07:00:05.000Z")
             )
         },
+        allGoals: @escaping @Sendable (String?) async throws -> GoalPage = { _ in
+            GoalPage(items: [], nextCursor: nil, hasMore: false)
+        },
         maxPagesPerRun: Int = 10
     ) -> SyncEngine {
         SyncEngine(
             store: store,
             outbox: outbox,
-            gateway: SyncGateway(push: push, pull: pull),
+            gateway: SyncGateway(push: push, pull: pull, allGoals: allGoals),
             maxPagesPerRun: maxPagesPerRun
         )
     }
@@ -801,5 +804,95 @@ final class SyncEngineTests: XCTestCase {
 
     private func instant(_ text: String) -> Date {
         try! Instant.parse(text)
+    }
+
+    // MARK: - The goals the cursor walked past (`syl-011.9`)
+
+    /// The recovery, and the defect behind it.
+    ///
+    /// `pullChanges` writes the cursor after every page whether or not anything in it was
+    /// applied. While `.goal` sat in the ignore list, every goal that came down a page was
+    /// dropped **and the cursor advanced past it** — and `GET /sync` only returns changes
+    /// since the cursor, so those goals are never offered again. The device believes it is
+    /// perfectly up to date and is missing them for good.
+    ///
+    /// The Commander hit it within the hour: three goals on the server, one on the phone,
+    /// and no error anywhere. This is the one-off list fetch that gets them back.
+    func testShouldRecoverGoalsTheChangeFeedWillNeverSendAgain() async throws {
+        // A device that has already synced past them — exactly his state.
+        try store.setCursor("cursor-well-past-the-goals")
+        let engine = makeEngine(allGoals: { _ in
+            GoalPage(items: [Self.goal(id: "syl:goal:0198f2c3-0001-7000-8000-00000000d001"),
+                             Self.goal(id: "syl:goal:0198f2c3-0002-7000-8000-00000000d002")],
+                     nextCursor: nil, hasMore: false)
+        })
+
+        _ = await engine.synchronise()
+
+        XCTAssertEqual(try store.goals().count, 2, "the change feed cannot produce these; the list route must")
+    }
+
+    func testShouldRunTheGoalRecoveryOnlyOnce() async throws {
+        // A full list fetch on every launch trades a one-off recovery for a permanent
+        // cost.
+        let calls = Counter()
+        let engine = makeEngine(allGoals: { _ in
+            await calls.increment()
+            return GoalPage(items: [], nextCursor: nil, hasMore: false)
+        })
+
+        _ = await engine.synchronise()
+        _ = await engine.synchronise()
+
+        let count = await calls.value
+        XCTAssertEqual(count, 1)
+    }
+
+    func testShouldNotRecordTheRecoveryWhenItFailed() async throws {
+        // The one thing it must not do is claim a success it did not have — that would
+        // leave the goals missing forever with the flag saying they were fetched.
+        struct Unreachable: Error {}
+        let engine = makeEngine(allGoals: { _ in throw Unreachable() })
+
+        let report = await engine.synchronise()
+
+        XCTAssertNil(try store.syncState().goalsBackfilledAt, "a failure must be retried")
+        XCTAssertTrue(report.failures.contains { $0.contains("goal backfill") })
+    }
+
+    func testShouldPageThroughEveryGoalRatherThanTakingTheFirstPage() async throws {
+        let engine = makeEngine(allGoals: { cursor in
+            cursor == nil
+                ? GoalPage(items: [Self.goal(id: "syl:goal:0198f2c3-0001-7000-8000-00000000d001")],
+                           nextCursor: "page-2", hasMore: true)
+                : GoalPage(items: [Self.goal(id: "syl:goal:0198f2c3-0002-7000-8000-00000000d002")],
+                           nextCursor: nil, hasMore: false)
+        })
+
+        _ = await engine.synchronise()
+
+        XCTAssertEqual(try store.goals().count, 2)
+    }
+
+    static func goal(id: SylID) -> Goal {
+        Goal(
+            id: id,
+            parentId: nil,
+            title: "Get out of debt",
+            why: nil,
+            targetDate: nil,
+            metricKey: nil,
+            targetValue: nil,
+            cadenceDays: nil,
+            status: .active,
+            statusReason: nil,
+            createdAt: try! Instant.parse("2026-08-09T07:00:00.000Z"),
+            updatedAt: try! Instant.parse("2026-08-09T07:00:00.000Z")
+        )
+    }
+
+    actor Counter {
+        private(set) var value = 0
+        func increment() { value += 1 }
     }
 }

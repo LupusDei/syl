@@ -1,5 +1,6 @@
 import SylKit
 import UserNotifications
+import SwiftUI
 import XCTest
 
 @testable import Syl
@@ -420,5 +421,50 @@ final class AppShellTests: XCTestCase {
         let token = await provider.token()
 
         XCTAssertEqual(token, "syl_pat_abc")
+    }
+}
+
+/// The doors on the home screen, and whether they open.
+///
+/// Written after the Commander reported that Goals showed a list he could not open, and
+/// that Memory and Today did nothing at all. Two different defects wearing one symptom.
+final class HomeDoorTests: XCTestCase {
+
+    /// The one that actually broke navigation.
+    ///
+    /// `HomeScreen` held its stack as `[HomeView.Destination]`. A homogeneous typed path
+    /// can only ever carry the type it is declared with, so every
+    /// `NavigationLink(value: GoalRoute(…))` inside the goals screens was inert — SwiftUI
+    /// had nowhere to put the value and the tap did nothing. The list rendered perfectly,
+    /// which is exactly what made it look finished.
+    ///
+    /// This asserts the property that failed: the path a goal route is appended to must
+    /// accept a goal route. A typed array of destinations cannot, and would not compile
+    /// against this test.
+    func testShouldCarryAGoalRouteOnTheSamePathAsAnOrbDestination() {
+        var path = NavigationPath()
+
+        path.append(HomeView.Destination.goals)
+        path.append(GoalRoute(id: "syl:goal:0198f2c3-0001-7000-8000-00000000d001"))
+
+        XCTAssertEqual(path.count, 2, "one path has to carry the orb's push and the screen's own")
+    }
+
+    /// Memory is `syl-010` and is not built. An orb identical to its neighbours that does
+    /// nothing is the report we got; an unready one refuses the touch and says so.
+    @MainActor
+    func testShouldRefuseTheTouchOnAnOrbThatLeadsNowhere() {
+        var tapped = false
+        let orb = SylOrb(title: "Memory", symbol: "cloud", isReady: false) { tapped = true }
+
+        XCTAssertFalse(orb.isReady)
+        XCTAssertFalse(tapped, "an unready orb must not pretend to have acted")
+    }
+
+    @MainActor
+    func testShouldLeaveAReadyOrbFullyInteractive() {
+        let orb = SylOrb(title: "Goals", symbol: "sparkle") {}
+
+        XCTAssertTrue(orb.isReady, "ready is the default; only a door that is a wall opts out")
     }
 }
