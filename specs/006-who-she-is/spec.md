@@ -1,4 +1,4 @@
-# 004 — Who she is: personality, memory, and the container she inhabits
+# 006 — Who she is: personality, memory, and the container she inhabits
 
 **Status**: planned · **Root epic**: `syl-009` · **Priority**: P0
 **Written**: 2026-08-10, after the Commander twice asked Syl who she was and

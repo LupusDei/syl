@@ -1,4 +1,4 @@
-# 004 — Plan
+# 006 — Plan
 
 ## Architecture decisions
 
