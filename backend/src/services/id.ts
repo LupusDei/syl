@@ -40,6 +40,11 @@ export type IdType =
   // retired, and the closed rows are what answers "what did I believe in
   // March?".
   | "memory_assertion"
+  // The audit record of an explicit deletion (`0018_memory_deletions.sql`).
+  // Type-prefixed because it IS referenced from outside: the scope table points
+  // at it, and every redaction tombstone left in surviving prose names it — so
+  // a dangling reference to a deletion has to stay legible.
+  | "memory_deletion"
   // Telemetry, not memory. A dream session is a row in the dream log
   // (`0013_dream_log.sql`) and never a node in the graph — see the header of
   // that migration for why the two must not touch.

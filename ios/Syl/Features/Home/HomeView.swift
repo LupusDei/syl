@@ -54,6 +54,8 @@ struct HomeView: View {
     /// looking at the first render, which came back as backdrop and no content at all.
     var scrolls: Bool = true
 
+    @Environment(\.colorScheme) private var systemScheme
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -70,8 +72,26 @@ struct HomeView: View {
                     stack(viewport: geometry.size)
                 }
             }
+            // The scene is deep space, so this screen is night — in both system
+            // appearances.
+            //
+            // Not a stylistic whim. The clips are painted on a starfield, and the light
+            // palette's ink is a deep slate blue chosen to be read against pale fog. Put
+            // that ink over a starfield and it is unreadable; put the pale veil around
+            // the starfield and you get the bright-rectangle problem in reverse, a dark
+            // box floating on a light page.
+            //
+            // Forcing the appearance rather than adding a third palette means every
+            // token already defined for night — ink, veil, hairline, glass — applies
+            // unchanged, and `Image("SylHero")` resolves to the night still for free,
+            // because the asset catalogue's `luminosity` variant follows this same
+            // environment value.
+            .environment(\.colorScheme, sceneIsPresent ? .dark : systemScheme)
         }
     }
+
+    /// True when the app ships scene clips, which makes this screen a night scene.
+    private var sceneIsPresent: Bool { !SceneCatalogue.clips.isEmpty }
 
     private func stack(viewport: CGSize) -> some View {
         VStack(spacing: 0) {
@@ -96,7 +116,7 @@ struct HomeView: View {
             // a current of light passing through her. It is also the only thing on this
             // screen that can say "thinking", because a still image cannot.
             ZStack {
-                SylHero(presence: presence, intensity: presenceIntensity)
+                SylHero(presence: presence, intensity: presenceIntensity, prefersStill: !scrolls)
 
                 // The ribbon appears only while she is *doing* something.
                 //
@@ -116,7 +136,10 @@ struct HomeView: View {
                         .transition(.opacity)
                 }
             }
-            .frame(height: max(viewport.height * 0.58, 320))
+            // Enlarged on the Commander's note. The ceiling is the art's own ratio: at
+            // this height she is already as wide as the screen, so any more height
+            // would only add margin above and below her rather than making her bigger.
+            .frame(height: max(viewport.height * 0.66, 360))
             .animation(SylTheme.Motion.breathe, value: presence)
 
             // Her name, in the one piece of real display type in the app. The glow
@@ -140,10 +163,10 @@ struct HomeView: View {
                 .padding(.top, SylTheme.Metric.tight)
                 .padding(.horizontal, SylTheme.Metric.gutter)
 
-            Spacer(minLength: SylTheme.Metric.step)
+            Spacer(minLength: SylTheme.Metric.snug)
 
             orbs
-                .padding(.bottom, SylTheme.Metric.chapter)
+                .padding(.bottom, SylTheme.Metric.gutter)
         }
         // One *visible* screen, not one raw geometry height.
         //

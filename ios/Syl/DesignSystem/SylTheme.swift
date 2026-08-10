@@ -117,6 +117,73 @@ extension SylTheme {
         /// Letterspaced small-caps labels — `TODAY · 16 MAY`, `GOALS`. Apply with
         /// ``SwiftUI/View/sylLabelStyle()``, which adds the tracking and the casing.
         static var label: Font { .system(.caption2, design: .default, weight: .semibold) }
+
+        /// The scale for *block* content — what rendered markdown is set in.
+        ///
+        /// The tokens above describe a screen assembled from labelled parts: a name, a
+        /// row, a caption. They have no answer for a heading with a paragraph under it,
+        /// because until `syl-008` nothing in this app rendered a document. Syl writes
+        /// documents — plans, briefs, comparisons, code — and a renderer with no scale to
+        /// aim at will invent one at every call site. That is how a screen ends up with
+        /// five heading sizes and no hierarchy.
+        ///
+        /// Everything here is relative to a text style, so Dynamic Type still scales the
+        /// whole page. Nothing here introduces a new colour or a new face — prose reuses
+        /// the same serif, the same ink, the same luminance. It is the *existing* voice
+        /// applied to longer form, which is the entire point: her writing must look like
+        /// the rest of her, not like a Markdown widget dropped into the app.
+        enum Prose {
+            /// A top-level heading in her writing.
+            ///
+            /// Deliberately the same face and size as ``Typeface/title`` — the section
+            /// headings on the home screen. A heading inside a message is not more
+            /// important than a heading on the day, and giving it its own larger size
+            /// would make every reply shout. Structure comes from space and weight
+            /// contrast, not from scale.
+            static var heading: Font { .system(.title3, design: .serif, weight: .regular) }
+
+            /// A second-level heading. The serif, one step down, still not bold.
+            static var subheading: Font { .system(.headline, design: .serif, weight: .regular) }
+
+            /// Body copy. The reading size, and the one that must never be sacrificed.
+            static var body: Font { .system(.body, design: .default, weight: .regular) }
+
+            /// Fenced code.
+            ///
+            /// A step *down* from body rather than level with it. A monospaced face runs
+            /// optically larger than a proportional one at the same point size, so
+            /// matching the numbers would make code louder than the sentence explaining
+            /// it. Stepping down lands them on the same apparent weight — and it buys
+            /// roughly eight more characters per line before a slab needs scrolling,
+            /// which on a 390pt screen is the difference between reading a line and
+            /// dragging it.
+            static var code: Font { .system(.footnote, design: .monospaced, weight: .regular) }
+
+            /// Inline code, inside a run of prose.
+            ///
+            /// One style larger than the fenced slab, for the same optical reason in
+            /// reverse: a `chip` sitting mid-sentence next to body text must not read as
+            /// a hole in the line. `.callout` under `.body` is the pairing that
+            /// disappears.
+            static var codeInline: Font { .system(.callout, design: .monospaced, weight: .regular) }
+
+            /// A quoted passage. Italic, and coloured `inkSoft` by the renderer — quiet
+            /// twice over, because a quote is something she is *relaying*, not saying.
+            static var quote: Font { .system(.body, design: .default, weight: .regular).italic() }
+
+            /// Table cells, and any dense tabular run.
+            ///
+            /// Monospaced digits, always: a column of figures that reflows as the values
+            /// change is not a table, it is a list that jitters.
+            static var table: Font { .system(.footnote, design: .default, weight: .regular).monospacedDigit() }
+
+            /// The marker on an ordered list item — `9.` then `10.`.
+            ///
+            /// Monospaced digits so the text column does not step sideways when the list
+            /// crosses ten. This is the single most common visible defect in hand-rolled
+            /// markdown renderers and it costs one modifier to avoid.
+            static var marker: Font { .system(.body, design: .default, weight: .regular).monospacedDigit() }
+        }
     }
 }
 
@@ -162,6 +229,32 @@ extension SylTheme {
         /// Apple's floor for anything tappable. Rows are padded up to it even when the
         /// text alone is shorter.
         static let minimumTouchTarget: CGFloat = 44
+
+        /// A fenced code slab.
+        ///
+        /// Deliberately *not* ``cardRadius``. A card is an object on the surface; a code
+        /// block is an element inside a document. Giving it the card corner makes a
+        /// paragraph of shell commands read as a widget someone can tap, which it is not.
+        static let codeRadius: CGFloat = 14
+
+        /// The widest a line of her prose may be set.
+        ///
+        /// Irrelevant on an iPhone and essential the first day this runs in an iPad or
+        /// Mac window, where an unconstrained text column becomes a 1000pt line the eye
+        /// cannot track back from. Typography's own answer is roughly 60–75 characters;
+        /// at this body size that is about here.
+        static let proseMeasure: CGFloat = 640
+
+        /// Extra leading inside a paragraph of her writing.
+        ///
+        /// SwiftUI's default leading is tuned for labels and single lines. A twelve-line
+        /// research brief set at the default reads as a wall; opening it up is the
+        /// cheapest legibility win available and costs one modifier.
+        static let proseLineSpacing: CGFloat = 5
+
+        /// The light-rail down the left margin of her turn — the transcript's answer to
+        /// the day's spine, and the cue that replaces a bubble as "this is Syl speaking".
+        static let railWidth: CGFloat = 1.5
     }
 }
 

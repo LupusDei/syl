@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 import SylKit
 
 @testable import Syl
@@ -314,24 +315,69 @@ final class HomeTests: XCTestCase {
 
     // MARK: - The hero art
 
-    /// `SylHero.artAspect` is hard-coded, and the edge masks are only correct while it
-    /// matches the shipped art. If it drifts, the picture regains a hard rectangular
-    /// edge on the veil — which is exactly the defect the Commander photographed on
-    /// device — and nothing else would fail. So this asserts the constant against the
-    /// asset actually in the bundle.
+    /// Every scene clip must have the same shape as the still.
+    ///
+    /// The hero's frame is computed from ``SylHero/artAspect`` and the edge masks are
+    /// computed from the frame, so a clip at any other ratio letterboxes inside it and
+    /// restores the hard-edged rectangle that already cost one TestFlight build. That
+    /// failure is silent and device-only, which is exactly why it is asserted here.
+    ///
+    /// Checks *every* bundled clip, not a sample: the whole point of the sequence is
+    /// that any clip can follow any other, so one odd file out is enough to break it.
     @MainActor
-    func testShouldKeepTheHeroAspectConstantMatchingTheShippedArt() throws {
-        for name in ["SylHero"] {
-            let image = try XCTUnwrap(UIImage(named: name), "\(name) is missing from the bundle")
-            let actual = Double(image.size.width / image.size.height)
+    func testShouldKeepEverySceneClipAtTheSameAspectAsTheStill() async throws {
+        let clips = SceneCatalogue.clips
+        XCTAssertFalse(clips.isEmpty, "no scene clips are bundled")
+
+        for url in clips {
+            let tracks = try await AVURLAsset(url: url).loadTracks(withMediaType: .video)
+            let track = try XCTUnwrap(tracks.first, "\(url.lastPathComponent) has no video track")
+
+            // The preferred transform matters: portrait video is routinely stored
+            // landscape with a rotation, and reading `naturalSize` alone would compare
+            // the wrong ratio and pass a clip that letterboxes on screen.
+            let natural = try await track.load(.naturalSize)
+            let transform = try await track.load(.preferredTransform)
+            let size = natural.applying(transform)
 
             XCTAssertEqual(
-                actual,
+                Double(abs(size.width) / abs(size.height)),
                 SylHero.artAspect,
-                accuracy: 0.005,
-                "SylHero.artAspect must match the art, or the edge masks fade into empty margin"
+                accuracy: 0.01,
+                "\(url.lastPathComponent) letterboxes and restores the hard rectangle"
             )
         }
+    }
+
+    /// No scene clip may carry an audio track.
+    ///
+    /// Muting the player is not enough to be sure: a video with an audio track is a
+    /// candidate for the audio session, and a home screen that pauses the Commander's
+    /// podcast the moment he opens the app is a defect he feels before he sees anything.
+    /// The source clips shipped *with* AAC audio and were stripped on import — this is
+    /// what stops the next import quietly forgetting.
+    @MainActor
+    func testShouldShipEverySceneClipSilent() async throws {
+        for url in SceneCatalogue.clips {
+            let audio = try await AVURLAsset(url: url).loadTracks(withMediaType: .audio)
+            XCTAssertTrue(
+                audio.isEmpty,
+                "\(url.lastPathComponent) has audio; re-encode with -an or it can interrupt playback"
+            )
+        }
+    }
+
+    /// The still must match too, since it is what shows under Reduce Motion.
+    @MainActor
+    func testShouldKeepTheStillMatchingTheSceneAspect() throws {
+        let image = try XCTUnwrap(UIImage(named: "SylHero"), "SylHero is missing from the bundle")
+
+        XCTAssertEqual(
+            Double(image.size.width / image.size.height),
+            SylHero.artAspect,
+            accuracy: 0.005,
+            "the fallback still must share the clips' shape or the masks fade into margin"
+        )
     }
 
     func testShouldScatterSparksDeterministicallySoTheyDoNotFlicker() {

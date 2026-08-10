@@ -36,3 +36,7 @@ tests/.vitest-results.json
 *.cer
 *.mobileprovision
 *.keystore
+
+# Source media for the app. Large, and the encoded copies that ship live in
+# ios/Syl/Resources — keeping both in git would double the weight for no gain.
+assets/*.mp4
