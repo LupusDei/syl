@@ -25,6 +25,9 @@ struct ContentView: View {
     /// previews and tests, which have no Keychain and no server — the section then
     /// says so rather than offering a link that cannot work.
     var adminAccess: AdminConsoleAccess? = nil
+    /// Crash and hang reports collected on this device. `nil` in previews and tests,
+    /// which have no MetricKit delivery to subscribe to.
+    var diagnostics: CrashDiagnostics? = nil
 
     var body: some View {
         NavigationStack {
@@ -57,6 +60,10 @@ struct ContentView: View {
                     )
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                }
+
+                if let diagnostics {
+                    DiagnosticsSection(diagnostics: diagnostics)
                 }
 
                 DeveloperSettingsSection(apiBaseURL: baseURL, access: adminAccess)
