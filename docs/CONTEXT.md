@@ -59,6 +59,9 @@ initiative.
 | Inferred-edge lifecycle | **Demote, never prune.** Asymptotic decay toward zero that never arrives; a dormant edge stays addressable and can be promoted back to high relevance if it ever matters | Commander, 2026-08-09, overruling proposal `62329e61` §4 at the point that proposal invited him to |
 | Nightly dream budget | **Start large — on the order of six hours**, expressed as a token ceiling per session, not wall-clock. Tune down once the admin shows what it produces | Commander, 2026-08-09 |
 | Graph visualisation | **Yes, build it**, in the web admin, during development. He wants to watch the memory evolve and judge how relevant the inferred engine actually is | Commander, 2026-08-09 |
+| Explicit deletion | **The Commander's order deletes.** "Delete this memory" removes the memory and its edges outright — not demoted, not suppressed. Constraint 6 binds the SYSTEM (decay, sweeps, the dream), never him | Commander, 2026-08-10, answering the forget-residue question |
+| Dream vs reminder contention | **Acceptable for now.** A reminder delayed behind a running dream is tolerable while the dream is proven out; `syl-ncx` stays open rather than blocking the first night | Commander, 2026-08-10 |
+| Syl's tool surface | **No built-in tools.** Her turns think and speak; every capability runs through the service. Revisit if research needs it | Commander, 2026-08-10 |
 | Memory observability | **First principle, not a phase.** Per-session dream metrics, current memory-system state, and a permanent per-session log. Maximise now; revisit only if it becomes burdensome at scale | Commander, 2026-08-09 |
 
 **The payment-rails constraint is the strongest one and it selects the

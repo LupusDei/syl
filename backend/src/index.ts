@@ -721,6 +721,23 @@ export function bootstrap(
       return {
         ...(options.turn ?? {}),
         ...(home === undefined ? {} : { cwd: home }),
+        // NO BUILT-IN TOOLS. The Commander's call, 2026-08-10, after she twice
+        // described herself as an engineer on this codebase: everything she
+        // owns — to-dos, goals, reminders, the daily rhythm — runs through the
+        // service, so her turns need to think and speak, not act.
+        //
+        // `--tools ""`, not `--allowedTools`: the latter pre-approves names on
+        // a surface that still exists; only the former makes a turn incapable
+        // of acting. It also bounds what `bypassPermissions` can reach, which
+        // CLAUDE.md has had as the outstanding follow-up for a while.
+        //
+        // KNOWN COST, measured not assumed: Claude Code's auto-memory is
+        // written BY THE MODEL through the Write tool. With no tools she cannot
+        // write one — verified live: `--tools ""` yields `tools: []`, the model
+        // makes no tool call when told to remember something, and no file
+        // appears. So conversational memory does not accumulate while this
+        // holds. Reversing it is this one line.
+        tools: "",
         onEvent: observe,
       };
     })(),

@@ -230,6 +230,33 @@ describe("SylAgent", () => {
     expect(optionsOfCall(runner, 0).cwd).toBe("/home/syl");
   });
 
+  it("should take her turns with no built-in tools at all", async () => {
+    // The Commander's call, 2026-08-10: "let's try it out without the tools."
+    // She is an assistant, not an engineer — everything she owns runs through
+    // the service. `--tools ""`, not `--allowedTools`: the latter pre-approves
+    // names on a surface that still exists, the former sets what exists at all,
+    // and only the latter makes a turn incapable of acting.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      turnOptions: { tools: "" },
+    });
+
+    await agent.ask("who are you?");
+
+    expect(optionsOfCall(runner, 0).tools).toBe("");
+  });
+
+  it("should carry the empty tool surface into a lane-scoped view", async () => {
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({ runner, store: memoryStore(), turnOptions: { tools: "" } });
+
+    await agent.forLane("heartbeat").ask("anything wrong?");
+
+    expect(optionsOfCall(runner, 0).tools).toBe("");
+  });
+
   it("should forward the soul as the system prompt on every turn", async () => {
     const runner = vi.fn<TurnRunner>(async () => fakeResult("s"));
     const agent = new SylAgent({ runner, store: memoryStore(), soul: "be helpful" });
