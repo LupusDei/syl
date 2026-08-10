@@ -315,72 +315,69 @@ final class HomeTests: XCTestCase {
 
     // MARK: - The hero art
 
-    /// `SylHero.artAspect` is hard-coded, and the edge masks are only correct while it
-    /// matches the shipped art. If it drifts, the picture regains a hard rectangular
-    /// edge on the veil — which is exactly the defect the Commander photographed on
-    /// device — and nothing else would fail. So this asserts the constant against the
-    /// asset actually in the bundle.
+    /// Every scene clip must have the same shape as the still.
+    ///
+    /// The hero's frame is computed from ``SylHero/artAspect`` and the edge masks are
+    /// computed from the frame, so a clip at any other ratio letterboxes inside it and
+    /// restores the hard-edged rectangle that already cost one TestFlight build. That
+    /// failure is silent and device-only, which is exactly why it is asserted here.
+    ///
+    /// Checks *every* bundled clip, not a sample: the whole point of the sequence is
+    /// that any clip can follow any other, so one odd file out is enough to break it.
     @MainActor
-    func testShouldKeepTheHeroAspectConstantMatchingTheShippedArt() throws {
-        for name in ["SylHero"] {
-            let image = try XCTUnwrap(UIImage(named: name), "\(name) is missing from the bundle")
-            let actual = Double(image.size.width / image.size.height)
+    func testShouldKeepEverySceneClipAtTheSameAspectAsTheStill() async throws {
+        let clips = SceneCatalogue.clips
+        XCTAssertFalse(clips.isEmpty, "no scene clips are bundled")
+
+        for url in clips {
+            let tracks = try await AVURLAsset(url: url).loadTracks(withMediaType: .video)
+            let track = try XCTUnwrap(tracks.first, "\(url.lastPathComponent) has no video track")
+
+            // The preferred transform matters: portrait video is routinely stored
+            // landscape with a rotation, and reading `naturalSize` alone would compare
+            // the wrong ratio and pass a clip that letterboxes on screen.
+            let natural = try await track.load(.naturalSize)
+            let transform = try await track.load(.preferredTransform)
+            let size = natural.applying(transform)
 
             XCTAssertEqual(
-                actual,
+                Double(abs(size.width) / abs(size.height)),
                 SylHero.artAspect,
-                accuracy: 0.005,
-                "SylHero.artAspect must match the art, or the edge masks fade into empty margin"
+                accuracy: 0.01,
+                "\(url.lastPathComponent) letterboxes and restores the hard rectangle"
             )
         }
     }
 
-    /// The loop must have the same shape as the still.
-    ///
-    /// This is the guard for the swap the Commander is about to make. The hero's frame
-    /// is computed from ``SylHero/artAspect``, and the edge masks are computed from the
-    /// frame — so a video at a different ratio letterboxes inside it and the hard-edged
-    /// rectangle comes straight back. That failure is silent, it only shows on a device,
-    /// and it already cost one TestFlight build.
-    ///
-    /// Skips rather than fails when no loop is bundled, because shipping the still alone
-    /// is a supported state.
-    @MainActor
-    func testShouldKeepAnyBundledHeroLoopAtTheSameAspectAsTheStill() async throws {
-        let url = try XCTUnwrap(HeroMedia.videoURL(dark: false), "no hero loop bundled")
-
-        let tracks = try await AVURLAsset(url: url).loadTracks(withMediaType: .video)
-        let track = try XCTUnwrap(tracks.first, "the hero loop has no video track")
-
-        // The preferred transform matters: a portrait video is commonly stored
-        // landscape with a rotation, and reading `naturalSize` alone would compare the
-        // wrong ratio and pass a video that letterboxes on screen.
-        let natural = try await track.load(.naturalSize)
-        let transform = try await track.load(.preferredTransform)
-        let size = natural.applying(transform)
-        let aspect = Double(abs(size.width) / abs(size.height))
-
-        XCTAssertEqual(
-            aspect,
-            SylHero.artAspect,
-            accuracy: 0.01,
-            "a hero loop at a different ratio letterboxes and restores the hard rectangle"
-        )
-    }
-
-    /// A hero loop must carry no audio track at all.
+    /// No scene clip may carry an audio track.
     ///
     /// Muting the player is not enough to be sure: a video with an audio track is a
     /// candidate for the audio session, and a home screen that pauses the Commander's
     /// podcast the moment he opens the app is a defect he feels before he sees anything.
-    /// The bundled file is stripped with `-an`; this is what stops that being forgotten
-    /// the next time somebody exports one.
+    /// The source clips shipped *with* AAC audio and were stripped on import — this is
+    /// what stops the next import quietly forgetting.
     @MainActor
-    func testShouldShipTheHeroLoopSilentSoItCannotStealTheAudioSession() async throws {
-        let url = try XCTUnwrap(HeroMedia.videoURL(dark: false), "no hero loop bundled")
-        let audio = try await AVURLAsset(url: url).loadTracks(withMediaType: .audio)
+    func testShouldShipEverySceneClipSilent() async throws {
+        for url in SceneCatalogue.clips {
+            let audio = try await AVURLAsset(url: url).loadTracks(withMediaType: .audio)
+            XCTAssertTrue(
+                audio.isEmpty,
+                "\(url.lastPathComponent) has audio; re-encode with -an or it can interrupt playback"
+            )
+        }
+    }
 
-        XCTAssertTrue(audio.isEmpty, "export the hero loop with -an; an audio track can interrupt playback")
+    /// The still must match too, since it is what shows under Reduce Motion.
+    @MainActor
+    func testShouldKeepTheStillMatchingTheSceneAspect() throws {
+        let image = try XCTUnwrap(UIImage(named: "SylHero"), "SylHero is missing from the bundle")
+
+        XCTAssertEqual(
+            Double(image.size.width / image.size.height),
+            SylHero.artAspect,
+            accuracy: 0.005,
+            "the fallback still must share the clips' shape or the masks fade into margin"
+        )
     }
 
     func testShouldScatterSparksDeterministicallySoTheyDoNotFlicker() {

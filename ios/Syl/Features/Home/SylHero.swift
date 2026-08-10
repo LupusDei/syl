@@ -50,8 +50,14 @@ struct SylHero: View {
     var presence: PresenceState
     var intensity: Double
 
+    /// Show the still even when scene clips are bundled.
+    ///
+    /// Set by the offscreen render path. `ImageRenderer` cannot capture an
+    /// `AVPlayerLayer`, so with the scene playing the hero renders as an empty box and
+    /// the resulting image proves nothing about the layout it exists to check.
+    var prefersStill: Bool = false
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.scenePhase) private var scenePhase
 
     /// Width ÷ height of the shipped art.
@@ -64,9 +70,14 @@ struct SylHero: View {
     /// the device showed a sharp-cornered rectangle floating on the veil.
     ///
     /// Knowing the ratio lets the frame be sized to the art exactly, so there is no
-    /// letterbox and mask space and image space are the same space. Both appearance
-    /// variants are exported at 1179×1652, and a test pins that.
-    static let artAspect: Double = 1179.0 / 1652.0
+    /// letterbox and mask space and image space are the same space.
+    ///
+    /// **The scene clips set this value, and the stills were re-cropped to match.** The
+    /// video is the primary medium now, so it is the video's shape that everything else
+    /// conforms to; cropping the fallback stills costs 70 pixels of margin, while
+    /// cropping the clips would have taken 70 pixels off her. Tests pin both the stills
+    /// and every bundled clip against this constant.
+    static let artAspect: Double = 784.0 / 1168.0
 
     var body: some View {
         GeometryReader { geometry in
@@ -114,9 +125,8 @@ struct SylHero: View {
             // and masked identically, which is the whole point: swapping the media
             // must not change the composition by a pixel.
             Group {
-                if let video = HeroMedia.videoURL(dark: scheme == .dark),
-                   HeroMedia.shouldAnimate(reduceMotion: reduceMotion) {
-                    LoopingVideo(url: video, isPlaying: scenePhase == .active)
+                if !prefersStill, SceneCatalogue.shouldPlay(reduceMotion: reduceMotion) {
+                    SceneVideo(isPlaying: scenePhase == .active)
                 } else {
                     Image("SylHero")
                         .resizable()
