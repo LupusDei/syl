@@ -23,6 +23,16 @@ enum MarkdownParser {
     /// quote is preserved verbatim as a paragraph: bounded, never dropped.
     static let maximumBlockquoteDepth = 16
 
+    /// The deepest ``MarkdownBlock/ListItem/depth`` this parser will report.
+    ///
+    /// Four levels below the top is more structure than any answer worth reading has, and
+    /// past it the indent alone would eat the width of a phone. Deeper items **clamp** to
+    /// this depth — they are still there, still in order, just no longer distinguished
+    /// from their parent. Same instinct as ``maximumBlockquoteDepth``: bounded, never
+    /// dropped. Depth is derived with a stack rather than recursion, so this is a
+    /// legibility bound rather than a safety one.
+    static let maximumListDepth = 4
+
     static func parse(_ input: String) -> [MarkdownBlock] {
         parse(input, depth: 0)
     }
@@ -117,42 +127,22 @@ enum MarkdownParser {
                 continue
             }
 
-            if isTaskListItem(trimmed) {
-                var items: [MarkdownBlock.TaskItem] = []
+            // Every kind of list is scanned as **one run**, because nesting crosses the
+            // kinds: `- parent` with `1. child` under it is one structure, and measuring
+            // the child's depth needs the parent in the same pass. The run is split back
+            // into blocks by kind afterwards.
+            if listKind(trimmed) != nil {
+                var rows: [ListRow] = []
                 while index < lines.count {
-                    let candidate = lines[index].trimmingCharacters(in: .whitespaces)
-                    guard isTaskListItem(candidate) else { break }
-                    items.append(parseTaskItem(candidate))
+                    let candidate = lines[index]
+                    let candidateTrimmed = candidate.trimmingCharacters(in: .whitespaces)
+                    guard let kind = listKind(candidateTrimmed) else { break }
+                    rows.append(
+                        ListRow(kind: kind, indent: indentWidth(candidate), content: candidateTrimmed)
+                    )
                     index += 1
                 }
-                blocks.append(.taskList(items))
-                continue
-            }
-
-            if isUnorderedListItem(trimmed) {
-                var items: [String] = []
-                while index < lines.count {
-                    let candidate = lines[index].trimmingCharacters(in: .whitespaces)
-                    guard isUnorderedListItem(candidate) else { break }
-                    items.append(stripBullet(candidate))
-                    index += 1
-                }
-                blocks.append(.unorderedList(items))
-                continue
-            }
-
-            if isOrderedListItem(trimmed) {
-                // R3: the ordinal the source wrote, not the loop index. Adjutant rendered
-                // the index, so a list beginning at `3.` came out as `1.`.
-                let start = orderedListOrdinal(trimmed) ?? 1
-                var items: [String] = []
-                while index < lines.count {
-                    let candidate = lines[index].trimmingCharacters(in: .whitespaces)
-                    guard isOrderedListItem(candidate) else { break }
-                    items.append(stripOrderedPrefix(candidate))
-                    index += 1
-                }
-                blocks.append(.orderedList(start: start, items: items))
+                blocks.append(contentsOf: listBlocks(rows))
                 continue
             }
 
@@ -164,8 +154,7 @@ enum MarkdownParser {
                 if candidateTrimmed.isEmpty || candidateTrimmed.hasPrefix("```")
                     || parseHeading(candidateTrimmed) != nil
                     || isHorizontalRule(candidateTrimmed) || isBlockquote(candidateTrimmed)
-                    || isTaskListItem(candidateTrimmed) || isUnorderedListItem(candidateTrimmed)
-                    || isOrderedListItem(candidateTrimmed)
+                    || listKind(candidateTrimmed) != nil
                 {
                     break
                 }
@@ -265,6 +254,134 @@ enum MarkdownParser {
         return String(line[line.index(after: afterDot)...])
     }
 
+    // MARK: - Lists and nesting (R1)
+    //
+    // The defect this section exists for: `parse` trimmed each line before matching, so
+    // the indentation that says "this item belongs to the one above" was destroyed before
+    // anything looked at it, and every nested item came out a sibling. Claude emits nested
+    // lists constantly, and a plan whose sub-steps render as top-level steps does not
+    // merely look worse — it asserts a different plan than the one she wrote.
+
+    private enum ListKind {
+        case unordered
+        case ordered
+        case task
+    }
+
+    /// One source line of a list run, before its depth is known.
+    private struct ListRow {
+        var kind: ListKind
+        /// Leading whitespace measured in columns.
+        var indent: Int
+        /// The line with surrounding whitespace removed — still carrying its marker.
+        var content: String
+    }
+
+    private static func listKind(_ trimmed: String) -> ListKind? {
+        if isTaskListItem(trimmed) { return .task }
+        if isUnorderedListItem(trimmed) { return .unordered }
+        if isOrderedListItem(trimmed) { return .ordered }
+        return nil
+    }
+
+    /// Leading whitespace in columns, with a tab advancing to the next four-column stop.
+    ///
+    /// Columns rather than characters because a tab and four spaces mean the same nesting
+    /// to whoever wrote them, and a message can contain both.
+    private static func indentWidth(_ line: String) -> Int {
+        var width = 0
+        for character in line {
+            if character == " " {
+                width += 1
+            } else if character == "\t" {
+                width += 4 - (width % 4)
+            } else {
+                break
+            }
+        }
+        return width
+    }
+
+    /// Depth for each row of a run, from the *shape* of the indentation rather than its
+    /// size.
+    ///
+    /// A stack of open indent widths: a wider indent than the one on top opens a level, a
+    /// narrower one closes levels until it fits, and an equal one is a sibling. Nothing is
+    /// divided by a fixed number, which matters because two-space and four-space nesting
+    /// are both ordinary markdown and a constant divisor gets one of them wrong. It also
+    /// means a run that jumps two levels at once — `- a` then six spaces — nests by one,
+    /// which is both what CommonMark says and the only reading that cannot invent a level
+    /// nobody wrote.
+    ///
+    /// Iterative on purpose. The blockquote scanner above recurses and had to be capped at
+    /// 16 because parsing runs on a detached task with a small stack; a stack in an array
+    /// cannot have that problem at all.
+    private static func depths(for rows: [ListRow]) -> [Int] {
+        var open: [Int] = []
+        var result: [Int] = []
+        result.reserveCapacity(rows.count)
+
+        for row in rows {
+            while let innermost = open.last, row.indent < innermost {
+                open.removeLast()
+            }
+            if let innermost = open.last {
+                if row.indent > innermost { open.append(row.indent) }
+            } else {
+                open.append(row.indent)
+            }
+            result.append(min(open.count - 1, maximumListDepth))
+        }
+        return result
+    }
+
+    /// Splits a scanned run into blocks, one per stretch of the same kind.
+    ///
+    /// The block model is flat by design — a bulleted list containing an ordered sub-list
+    /// cannot be one `case` — so the run becomes `.unorderedList` then `.orderedList` and
+    /// the relationship survives in each item's `depth`. Depth is computed across the
+    /// **whole** run before the split, so a sub-list that changes marker still knows it is
+    /// a sub-list.
+    private static func listBlocks(_ rows: [ListRow]) -> [MarkdownBlock] {
+        let depths = depths(for: rows)
+        var blocks: [MarkdownBlock] = []
+        var start = 0
+
+        while start < rows.count {
+            let kind = rows[start].kind
+            var end = start
+            while end < rows.count, rows[end].kind == kind { end += 1 }
+            let run = start..<end
+
+            switch kind {
+            case .unordered:
+                blocks.append(
+                    .unorderedList(
+                        run.map { .init(depth: depths[$0], text: stripBullet(rows[$0].content)) }
+                    )
+                )
+            case .task:
+                blocks.append(
+                    .taskList(run.map { parseTaskItem(rows[$0].content, depth: depths[$0]) })
+                )
+            case .ordered:
+                // R3: the ordinal the source wrote, not the loop index. Adjutant rendered
+                // the index, so a list beginning at `3.` came out as `1.`.
+                let ordinal = orderedListOrdinal(rows[start].content) ?? 1
+                blocks.append(
+                    .orderedList(
+                        start: ordinal,
+                        items: run.map {
+                            .init(depth: depths[$0], text: stripOrderedPrefix(rows[$0].content))
+                        }
+                    )
+                )
+            }
+            start = end
+        }
+        return blocks
+    }
+
     // MARK: - Task lists
 
     private static let taskMarkers = ["- [ ]", "- [x]", "- [X]"]
@@ -273,11 +390,11 @@ enum MarkdownParser {
         taskMarkers.contains { line.hasPrefix($0) }
     }
 
-    private static func parseTaskItem(_ line: String) -> MarkdownBlock.TaskItem {
+    private static func parseTaskItem(_ line: String, depth: Int) -> MarkdownBlock.TaskItem {
         let checked = line.hasPrefix("- [x]") || line.hasPrefix("- [X]")
         var text = Substring(line).dropFirst(5)
         if text.first == " " { text = text.dropFirst() }
-        return .init(checked: checked, text: String(text))
+        return .init(depth: depth, checked: checked, text: String(text))
     }
 
     // MARK: - Tables

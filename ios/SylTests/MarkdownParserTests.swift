@@ -170,7 +170,7 @@ final class MarkdownParserTests: XCTestCase {
     func testShouldKeepAListInsideABlockquote() {
         XCTAssertEqual(
             MarkdownParser.parse("> - one\n> - two"),
-            [.blockquote([.unorderedList(["one", "two"])])]
+            [.blockquote([.unorderedList([item("one"), item("two")])])]
         )
     }
 
@@ -198,17 +198,17 @@ final class MarkdownParserTests: XCTestCase {
     // MARK: - Unordered lists
 
     func testShouldParseADashList() {
-        XCTAssertEqual(MarkdownParser.parse("- one\n- two"), [.unorderedList(["one", "two"])])
+        XCTAssertEqual(MarkdownParser.parse("- one\n- two"), [.unorderedList([item("one"), item("two")])])
     }
 
     func testShouldParseAnAsteriskList() {
-        XCTAssertEqual(MarkdownParser.parse("* one\n* two"), [.unorderedList(["one", "two"])])
+        XCTAssertEqual(MarkdownParser.parse("* one\n* two"), [.unorderedList([item("one"), item("two")])])
     }
 
     func testShouldEndAListAtTheFirstNonItem() {
         XCTAssertEqual(
             MarkdownParser.parse("- one\nafter"),
-            [.unorderedList(["one"]), .paragraph("after")]
+            [.unorderedList([item("one")]), .paragraph("after")]
         )
     }
 
@@ -220,19 +220,22 @@ final class MarkdownParserTests: XCTestCase {
     func testShouldStartAnOrderedListAtOneWhenTheSourceDoes() {
         XCTAssertEqual(
             MarkdownParser.parse("1. one\n2. two"),
-            [.orderedList(start: 1, items: ["one", "two"])]
+            [.orderedList(start: 1, items: [item("one"), item("two")])]
         )
     }
 
     func testShouldKeepTheSourceOrdinalWhenAnOrderedListDoesNotStartAtOne() {
         XCTAssertEqual(
             MarkdownParser.parse("3. three\n4. four"),
-            [.orderedList(start: 3, items: ["three", "four"])]
+            [.orderedList(start: 3, items: [item("three"), item("four")])]
         )
     }
 
     func testShouldKeepAZeroBasedOrderedListStart() {
-        XCTAssertEqual(MarkdownParser.parse("0. zero"), [.orderedList(start: 0, items: ["zero"])])
+        XCTAssertEqual(
+            MarkdownParser.parse("0. zero"),
+            [.orderedList(start: 0, items: [item("zero")])]
+        )
     }
 
     func testShouldIgnoreLaterOrdinalsAndRenumberFromTheStart() {
@@ -240,32 +243,300 @@ final class MarkdownParserTests: XCTestCase {
         // that stored every ordinal would let `1. / 1. / 1.` render as three ones.
         XCTAssertEqual(
             MarkdownParser.parse("1. a\n1. b\n1. c"),
-            [.orderedList(start: 1, items: ["a", "b", "c"])]
+            [.orderedList(start: 1, items: [item("a"), item("b"), item("c")])]
         )
     }
 
-    // MARK: - R1: nested lists flatten (characterisation, NOT a fix)
+    // MARK: - R1: nested lists nest
     //
-    // The scanner trims leading whitespace before matching, so an indented child item
-    // becomes a sibling of its parent. Claude emits nested lists constantly, so this is
-    // real — but fixing it means indentation tracking through the whole scanner, which is
-    // a decision the epic takes in Phase 2, not a fix taken here.
+    // These two tests used to assert the FLATTENING — `...ForNowSeeBeadSyl00825` — because
+    // the scanner trimmed each line before matching and destroyed the indentation that
+    // says "this belongs to the one above". They are rewritten here rather than deleted,
+    // which is the visibility that naming was for.
     //
-    // **This test asserts current behaviour on purpose.** It is the one place in this
-    // suite that does. When `syl-008.2.5` decides to add indentation tracking, this test
-    // must be rewritten rather than deleted, which is exactly the visibility we want.
+    // Why it was worth fixing rather than living with: Claude emits nested lists
+    // constantly, and a plan whose sub-steps render as top-level steps is not merely less
+    // pretty — it silently asserts a different structure than the one she wrote. The
+    // epic's acceptance criterion is that a plan reads as a plan at a glance. `syl-008.2.5`.
 
-    func testShouldFlattenNestedUnorderedListsForNowSeeBeadSyl00825() {
+    func testShouldNestAnIndentedChildUnderItsParent() {
         XCTAssertEqual(
             MarkdownParser.parse("- parent\n  - child\n- sibling"),
-            [.unorderedList(["parent", "child", "sibling"])]
+            [.unorderedList([item("parent"), item("child", depth: 1), item("sibling")])]
         )
     }
 
-    func testShouldFlattenAnOrderedListNestedUnderABulletForNowSeeBeadSyl00825() {
+    func testShouldNestAnOrderedListUnderABullet() {
+        // The block model is flat — a bulleted list cannot contain an ordered one as a
+        // case — so this is two blocks, and the relationship lives in the child's depth.
         XCTAssertEqual(
             MarkdownParser.parse("- parent\n  1. child"),
-            [.unorderedList(["parent"]), .orderedList(start: 1, items: ["child"])]
+            [
+                .unorderedList([item("parent")]),
+                .orderedList(start: 1, items: [item("child", depth: 1)]),
+            ]
+        )
+    }
+
+    func testShouldNestOnTwoSpaceIndentation() {
+        XCTAssertEqual(
+            MarkdownParser.parse("- a\n  - b\n    - c"),
+            [.unorderedList([item("a"), item("b", depth: 1), item("c", depth: 2)])]
+        )
+    }
+
+    func testShouldNestOnFourSpaceIndentationToTheSameDepths() {
+        // The same tree as the two-space case. Depth comes from the *shape* of the
+        // indentation, not its size: real markdown uses both widths and a fixed divisor
+        // would report depth 2 for what the author wrote as depth 1.
+        XCTAssertEqual(
+            MarkdownParser.parse("- a\n    - b\n        - c"),
+            MarkdownParser.parse("- a\n  - b\n    - c")
+        )
+        XCTAssertEqual(
+            MarkdownParser.parse("- a\n    - b\n        - c"),
+            [.unorderedList([item("a"), item("b", depth: 1), item("c", depth: 2)])]
+        )
+    }
+
+    func testShouldNestOnThreeSpaceIndentationTheWidthClaudeUsesUnderOrderedItems() {
+        // `1. step` puts its continuation at column 3, and that is what Claude emits.
+        XCTAssertEqual(
+            MarkdownParser.parse("1. step\n   - detail"),
+            [
+                .orderedList(start: 1, items: [item("step")]),
+                .unorderedList([item("detail", depth: 1)]),
+            ]
+        )
+    }
+
+    func testShouldNestOnTabIndentation() {
+        XCTAssertEqual(
+            MarkdownParser.parse("- a\n\t- b\n\t\t- c"),
+            [.unorderedList([item("a"), item("b", depth: 1), item("c", depth: 2)])]
+        )
+    }
+
+    func testShouldTreatATabAndFourSpacesAsTheSameLevel() {
+        // A tab advances to the next four-column stop, so these are siblings — not a
+        // third level invented by counting characters.
+        XCTAssertEqual(
+            MarkdownParser.parse("- a\n\t- b\n    - c"),
+            [.unorderedList([item("a"), item("b", depth: 1), item("c", depth: 1)])]
+        )
+    }
+
+    func testShouldNestAcrossDifferentBulletMarkers() {
+        XCTAssertEqual(
+            MarkdownParser.parse("- a\n  * b\n    - c\n- d"),
+            [
+                .unorderedList([
+                    item("a"), item("b", depth: 1), item("c", depth: 2), item("d"),
+                ])
+            ]
+        )
+    }
+
+    func testShouldReturnToTheParentLevelAfterANestedRun() {
+        XCTAssertEqual(
+            MarkdownParser.parse("- a\n  - b\n  - c\n- d"),
+            [.unorderedList([item("a"), item("b", depth: 1), item("c", depth: 1), item("d")])]
+        )
+    }
+
+    func testShouldTreatAPartialDedentAsAReturnToTheEnclosingLevel() {
+        // `c` is indented, but less than `b`. It is not a new level between them; it
+        // closes `b`'s level and sits beside it.
+        XCTAssertEqual(
+            MarkdownParser.parse("- a\n    - b\n  - c"),
+            [.unorderedList([item("a"), item("b", depth: 1), item("c", depth: 1)])]
+        )
+    }
+
+    func testShouldNestByOnlyOneLevelWhenTheSourceJumpsTwo() {
+        // Malformed, and Claude does emit it. CommonMark's reading is the only one that
+        // cannot invent a level nobody wrote: one step in, not two.
+        XCTAssertEqual(
+            MarkdownParser.parse("- a\n      - b"),
+            [.unorderedList([item("a"), item("b", depth: 1)])]
+        )
+    }
+
+    func testShouldNestATaskListAndKeepEachRowChecked() {
+        XCTAssertEqual(
+            MarkdownParser.parse("- [ ] parent\n  - [x] child"),
+            [
+                .taskList([
+                    .init(checked: false, text: "parent"),
+                    .init(depth: 1, checked: true, text: "child"),
+                ])
+            ]
+        )
+    }
+
+    func testShouldKeepInlineMarkupRawInANestedItem() {
+        // Depth tracking must not eat into the text. Inline is still `MarkdownInline`'s
+        // job, and a child's run arrives as untouched as a parent's.
+        XCTAssertEqual(
+            MarkdownParser.parse("- parent\n  - a **bold** [link](https://a.co) and `code`"),
+            [
+                .unorderedList([
+                    item("parent"),
+                    item("a **bold** [link](https://a.co) and `code`", depth: 1),
+                ])
+            ]
+        )
+    }
+
+    func testShouldClampNestingAtTheMaximumDepthRatherThanGrowingWithoutBound() {
+        // Bounded, never dropped — the same rule as the blockquote cap. Every item is
+        // still present and still in order past the cap; it simply stops being told
+        // apart from its parent.
+        let deepest = MarkdownParser.maximumListDepth
+        let levels = deepest + 4
+        let source = (0..<levels)
+            .map { String(repeating: " ", count: $0 * 2) + "- level \($0)" }
+            .joined(separator: "\n")
+
+        let expected = (0..<levels).map { item("level \($0)", depth: min($0, deepest)) }
+
+        XCTAssertEqual(parseWithinTimeout(source), [.unorderedList(expected)])
+    }
+
+    func testShouldSurviveAThousandLevelsOfListIndentation() {
+        // Depth is derived with a stack in an array, not by recursion, so the blockquote
+        // failure mode — a crash any message can trigger on a detached task's small
+        // stack — cannot happen here. This proves it rather than asserting it.
+        let levels = 1_000
+        let source = (0..<levels)
+            .map { String(repeating: " ", count: $0 * 2) + "- level \($0)" }
+            .joined(separator: "\n")
+
+        let blocks = parseWithinTimeout(source)
+
+        guard case .unorderedList(let items) = blocks.first, blocks.count == 1 else {
+            return XCTFail("expected one unordered list, got \(blocks)")
+        }
+        XCTAssertEqual(items.count, levels, "no item may be dropped")
+        XCTAssertEqual(items.last, item("level \(levels - 1)", depth: MarkdownParser.maximumListDepth))
+        XCTAssertTrue(items.allSatisfy { $0.depth <= MarkdownParser.maximumListDepth })
+    }
+
+    func testShouldStartAFreshRunAtDepthZeroEvenWhenTheWholeRunIsIndented() {
+        // An indented list with no parent is a top-level list. Depth is relative to the
+        // run, not to column zero.
+        XCTAssertEqual(
+            MarkdownParser.parse("    - a\n    - b"),
+            [.unorderedList([item("a"), item("b")])]
+        )
+    }
+
+    // MARK: - R1: an ordered sub-list restarts its own numbering
+    //
+    // `start` applies to the level the first item sits at. Rendering `start + index` down
+    // a nested list numbers two sub-steps of step 3 as `4.` and `5.`, which is a different
+    // plan than the one she wrote. `MarkdownBlock.orderedNumbers` is where that is
+    // decided, so it is tested here rather than left to a view nobody can assert on.
+
+    func testShouldNumberAFlatOrderedListFromItsStart() {
+        XCTAssertEqual(
+            MarkdownBlock.orderedNumbers(start: 3, items: [item("a"), item("b"), item("c")]),
+            [3, 4, 5]
+        )
+    }
+
+    func testShouldRestartNumberingInsideANestedOrderedRun() {
+        XCTAssertEqual(
+            MarkdownBlock.orderedNumbers(
+                start: 1,
+                items: [item("a"), item("x", depth: 1), item("y", depth: 1), item("b")]
+            ),
+            [1, 1, 2, 2]
+        )
+    }
+
+    func testShouldResumeTheParentCountAfterANestedOrderedRun() {
+        XCTAssertEqual(
+            MarkdownBlock.orderedNumbers(
+                start: 3,
+                items: [
+                    item("three"), item("sub one", depth: 1), item("sub two", depth: 1),
+                    item("four"), item("five"),
+                ]
+            ),
+            [3, 1, 2, 4, 5]
+        )
+    }
+
+    func testShouldSeedTheStartAtWhateverDepthTheFirstItemSitsAt() {
+        // `- parent` then `3. child` — the block holds only the children, and the ordinal
+        // the source wrote still counts.
+        XCTAssertEqual(
+            MarkdownBlock.orderedNumbers(
+                start: 3,
+                items: [item("c", depth: 1), item("d", depth: 1)]
+            ),
+            [3, 4]
+        )
+    }
+
+    func testShouldNumberNothingForAnEmptyOrderedList() {
+        XCTAssertTrue(MarkdownBlock.orderedNumbers(start: 1, items: []).isEmpty)
+    }
+
+    func testShouldNumberADepthJumpWithoutTrappingOnTheMissingLevel() {
+        // Defensive: the parser never emits a two-level jump, but `orderedNumbers` is a
+        // public function on the model and must not index off the end if one arrives.
+        XCTAssertEqual(
+            MarkdownBlock.orderedNumbers(
+                start: 1,
+                items: [item("a"), item("deep", depth: 3), item("b")]
+            ),
+            [1, 1, 2]
+        )
+    }
+
+    func testShouldNumberANegativeDepthAsTopLevel() {
+        XCTAssertEqual(
+            MarkdownBlock.orderedNumbers(start: 1, items: [.init(depth: -5, text: "a")]),
+            [1]
+        )
+    }
+
+    func testShouldParseTheNestedPlanShapeClaudeActuallyEmits() {
+        let source = """
+            1. Unstick the deploy gate
+               - Check the run
+               - Re-run it
+            2. Quarterly review
+               1. Draft
+               2. Circulate
+            """
+
+        XCTAssertEqual(
+            MarkdownParser.parse(source),
+            [
+                .orderedList(start: 1, items: [item("Unstick the deploy gate")]),
+                .unorderedList([item("Check the run", depth: 1), item("Re-run it", depth: 1)]),
+                .orderedList(
+                    start: 2,
+                    items: [
+                        item("Quarterly review"),
+                        item("Draft", depth: 1),
+                        item("Circulate", depth: 1),
+                    ]
+                ),
+            ]
+        )
+
+        // And the numbering that comes out of it: step 2, then sub-steps 1 and 2 — not
+        // 3 and 4.
+        XCTAssertEqual(
+            MarkdownBlock.orderedNumbers(
+                start: 2,
+                items: [item("Quarterly review"), item("Draft", depth: 1), item("Circulate", depth: 1)]
+            ),
+            [2, 1, 2]
         )
     }
 
@@ -294,7 +565,7 @@ final class MarkdownParserTests: XCTestCase {
     func testShouldNotSwallowATaskListIntoAnUnorderedList() {
         XCTAssertEqual(
             MarkdownParser.parse("- plain\n- [ ] task"),
-            [.unorderedList(["plain"]), .taskList([.init(checked: false, text: "task")])]
+            [.unorderedList([item("plain")]), .taskList([.init(checked: false, text: "task")])]
         )
     }
 
@@ -482,8 +753,8 @@ final class MarkdownParserTests: XCTestCase {
             [
                 .heading(level: 1, text: "Report"),
                 .paragraph("Intro **text**."),
-                .blockquote([.paragraph("A quote"), .unorderedList(["with a list"])]),
-                .orderedList(start: 1, items: ["first", "second"]),
+                .blockquote([.paragraph("A quote"), .unorderedList([item("with a list")])]),
+                .orderedList(start: 1, items: [item("first"), item("second")]),
                 .taskList([.init(checked: false, text: "open"), .init(checked: true, text: "shut")]),
                 .table(headers: ["a", "b"], alignments: [.left, .left], rows: [["1", "2"]]),
                 .codeBlock(language: "sh", code: "echo hi"),
@@ -500,12 +771,24 @@ final class MarkdownParserTests: XCTestCase {
         // task inside `ChatSnapshotLoader.load()` and the finished blocks are consumed on
         // the main actor. Under Swift 6 this stops compiling the day that conformance is
         // lost, which is the earliest anyone could be told.
-        let blocks = await Task.detached { MarkdownParser.parse("# Title\n\n- one") }.value
+        let blocks = await Task.detached { MarkdownParser.parse("# Title\n\n- one\n  - nested") }.value
 
-        XCTAssertEqual(blocks, [.heading(level: 1, text: "Title"), .unorderedList(["one"])])
+        XCTAssertEqual(
+            blocks,
+            [
+                .heading(level: 1, text: "Title"),
+                .unorderedList([.init(text: "one"), .init(depth: 1, text: "nested")]),
+            ]
+        )
     }
 
     // MARK: - Helpers
+
+    /// One row of a list. Depth defaults to top level, so the many assertions that do not
+    /// care about nesting stay readable and the ones that do say so in one word.
+    private func item(_ text: String, depth: Int = 0) -> MarkdownBlock.ListItem {
+        .init(depth: depth, text: text)
+    }
 
     /// Parses off the main thread and fails the test rather than hanging it. A parser
     /// that loops forever on hostile input is the failure mode that has no error message.
@@ -538,8 +821,8 @@ final class MarkdownParserTests: XCTestCase {
             case .heading(_, let text): return [text]
             case .codeBlock(_, let code): return [code]
             case .blockquote(let inner): return flatten(inner)
-            case .unorderedList(let items): return items
-            case .orderedList(_, let items): return items
+            case .unorderedList(let items): return items.map(\.text)
+            case .orderedList(_, let items): return items.map(\.text)
             case .horizontalRule: return []
             case .table(let headers, _, let rows): return headers + rows.flatMap { $0 }
             case .taskList(let items): return items.map(\.text)
