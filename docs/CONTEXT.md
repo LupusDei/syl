@@ -653,6 +653,28 @@ to read the query and ask which end the window came from.
 **The general lesson: any query with a `LIMIT` needs a test where the limit
 actually bites.** A bounded read tested only with unbounded data is untested.
 
+### `npm run build` does not prune `dist/`, and a renamed migration is fatal
+
+Two agents working in parallel both took migration version 15. The collision was
+caught properly in source — one renumbered to `0016_agent_scope.sql`, and the
+migration reader **refuses to boot** rather than guess, which is the correct
+design and made the cause legible: *"Two migrations claim version 15"*.
+
+What was not caught is that `npm run build` **copies into `dist/` without
+removing what is no longer in `src/`**. So `dist/migrations/` kept the old
+`0015_agent_scope.sql` next to the new `0016_agent_scope.sql`, and the service —
+which boots from `dist` — hit the same fatal collision even though the source
+tree was already correct.
+
+It surfaces as far from the cause as it possibly could: ten failing
+*service-lifecycle* tests, all reporting "the service exited before it answered".
+Nothing points at a stale build. `rm -rf backend/dist && npm run build` fixes it.
+
+**Any rename or renumber under `src/migrations/` needs a clean `dist/`.** This is
+a close relative of the stale-build problem `/health` already exists to make
+visible — a stale build is invisible by construction, because everything that
+survives in it is perfectly healthy.
+
 ### `ImageRenderer` renders neither a `ScrollView` nor a `NavigationStack`
 
 The offscreen render harnesses (`HomeSnapshotRendering`, `ChatSnapshotRendering`)
