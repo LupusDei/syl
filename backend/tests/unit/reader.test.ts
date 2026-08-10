@@ -1,6 +1,15 @@
+import { readFileSync } from "node:fs";
+
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ReaderCapabilityError, ReaderOutputError, readStructured, runReaderTurn } from "../../src/harness/reader.js";
+import {
+  READER_SYSTEM_PROMPT,
+  ReaderCapabilityError,
+  ReaderOutputError,
+  readStructured,
+  runReaderTurn,
+} from "../../src/harness/reader.js";
+import { MEMORY_FENCE, PRECEDENCE_CLAUSES } from "../../src/harness/turn-context.js";
 import {
   flagValue,
   loadFixture,
@@ -243,6 +252,215 @@ describe("runReaderTurn", () => {
       await expect(
         runReaderTurn({ instruction: "Summarise.", untrusted: ARTICLE }, { claudeBin: f.bin, timeoutMs: 150 }),
       ).rejects.toThrow(/timeout/i);
+    });
+  });
+
+  describe("the reader carries no memory", () => {
+    /**
+     * The property already held before this block existed — `runReaderTurn`
+     * builds its turn options from scratch and whitelists four. So these are not
+     * a fix; they are what turns a property that is true by one file's
+     * discipline into one that is true by a rule something objects to.
+     *
+     * The argument, which had not been written down anywhere: if the
+     * working-memory projection is injected into a turn reading a hostile
+     * article, then the Commander's goals, finances and family are sitting next
+     * to attacker-written text, and the turn's OUTPUT is the exfiltration path.
+     * A model that cannot ACT can still be made to REPEAT.
+     *
+     * The refactor these exist to stop is the obvious and reasonable one: make
+     * the reader spread caller options like every other function in the harness.
+     * That reopens the hole silently, with nothing objecting.
+     */
+
+    /** An options bag carrying every shape that could smuggle memory in. */
+    const HOSTILE_OPTIONS = {
+      systemPrompt: "You are Syl. He has $40,000 in savings and a daughter named Ana.",
+      recall: () => "He has $40,000 in savings.",
+      contributors: [{ id: "soul", kind: "identity", text: "He has $40,000 in savings." }],
+      autoMemory: { mode: "directory", directory: "/srv/syl/memory" },
+      resume: "a-lane-that-remembers-him",
+      permissionMode: "bypassPermissions",
+      tools: "Bash",
+      mcpConfig: "/tmp/attacker.json",
+      strictMcpConfig: false,
+    };
+
+    it("should send only its own standing orders as the system prompt", async () => {
+      // Equality, not a list of things it must not contain: a blocklist only
+      // catches the smuggling routes someone thought of.
+      const f = replaying(READER_INJECTION);
+
+      await runReaderTurn({ instruction: "Summarise.", untrusted: ARTICLE }, { claudeBin: f.bin });
+
+      expect(flagValue(invocationOf(f).argv, "--append-system-prompt")).toBe(READER_SYSTEM_PROMPT);
+    });
+
+    it("should compose no turn context — the sealed room does not participate", async () => {
+      // `harness/turn-context.ts` owns every OTHER prompt in the system, and
+      // that is exactly why the reader must not be one of its call sites. Route
+      // it through and the sealed room comes to depend on every future edit
+      // there continuing to respect an empty-contributor case; the first person
+      // to add a sensible default ("always include the soul") breaks it from a
+      // file they were not thinking about.
+      //
+      // This assertion fails the moment someone pulls the reader inside.
+      const f = replaying(READER_INJECTION);
+
+      await runReaderTurn({ instruction: "Summarise.", untrusted: ARTICLE }, { claudeBin: f.bin });
+
+      const prompt = flagValue(invocationOf(f).argv, "--append-system-prompt") ?? "";
+      for (const clause of Object.values(PRECEDENCE_CLAUSES)) {
+        expect(prompt).not.toContain(clause);
+      }
+      expect(prompt).not.toContain(MEMORY_FENCE);
+    });
+
+    it("should ignore a caller trying to hand it a soul, a recall or a contributor", async () => {
+      // The whitelist IS the boundary. This is the test that fails when the
+      // reader is refactored to spread its options.
+      const f = replaying(READER_INJECTION);
+
+      await runReaderTurn(
+        { instruction: "Summarise.", untrusted: ARTICLE },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reaching past the type on purpose
+        { claudeBin: f.bin, ...HOSTILE_OPTIONS } as any,
+      );
+
+      const { argv, stdin } = invocationOf(f);
+      expect(flagValue(argv, "--append-system-prompt")).toBe(READER_SYSTEM_PROMPT);
+      expect(argv.join(" ")).not.toMatch(/40,000|savings|Ana/);
+      expect(stdin).not.toMatch(/40,000|savings|Ana/);
+    });
+
+    it("should ignore a caller trying to resume a lane that does remember him", async () => {
+      // Memory injection is lane-scoped and the reader is not a lane. Resuming
+      // one would put the whole transcript of a remembering conversation in the
+      // same context as the article — and leave the article in that lane
+      // afterwards.
+      const f = replaying(READER_INJECTION);
+
+      await runReaderTurn(
+        { instruction: "Summarise.", untrusted: ARTICLE },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reaching past the type on purpose
+        { claudeBin: f.bin, ...HOSTILE_OPTIONS } as any,
+      );
+
+      expect(invocationOf(f).argv).not.toContain("--resume");
+    });
+
+    it("should keep auto-memory off even when the caller asks for a directory", async () => {
+      const f = replaying(READER_INJECTION);
+
+      await runReaderTurn(
+        { instruction: "Summarise.", untrusted: ARTICLE },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reaching past the type on purpose
+        { claudeBin: f.bin, ...HOSTILE_OPTIONS } as any,
+      );
+
+      expect(JSON.parse(flagValue(invocationOf(f).argv, "--settings") ?? "null")).toEqual({
+        autoMemoryEnabled: false,
+      });
+    });
+
+    it("should hold BOTH conditions for an empty tool surface, since neither alone is enough", async () => {
+      // MEASURED on 2.1.226, and this corrects what CLAUDE.md currently says:
+      //
+      //   without --tools  : 29 built-ins + 59 MCP tools
+      //   with    --tools "": 0  built-ins + 59 MCP tools   <- server still connected
+      //
+      // `--tools ""` removes the BUILT-INS ONLY. An attached MCP server passes
+      // straight through it. So the surface is empty because of two independent
+      // conditions with different mechanisms:
+      //
+      //   1. --tools ""            — kills the built-ins. Alone: 59 MCP tools live.
+      //   2. --strict-mcp-config
+      //      with no --mcp-config  — kills the MCP tools. Alone: 29 built-ins live.
+      //
+      // Asserted separately and on purpose. A single "the surface is empty"
+      // check passes today and stops meaning anything the moment someone
+      // attaches an MCP server to a reader turn for a plausible reason —
+      // believing, from the old sentence in CLAUDE.md, that `--tools ""` still
+      // protected them.
+      const f = replaying(READER_INJECTION);
+
+      await runReaderTurn(
+        { instruction: "Summarise.", untrusted: ARTICLE },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reaching past the type on purpose
+        { claudeBin: f.bin, ...HOSTILE_OPTIONS } as any,
+      );
+
+      const { argv } = invocationOf(f);
+
+      // Condition 1 — built-ins. Insufficient alone.
+      expect(flagValue(argv, "--tools")).toBe("");
+
+      // Condition 2 — MCP tools. Insufficient alone, and NOT belt-and-braces.
+      expect(argv).toContain("--strict-mcp-config");
+      expect(argv).not.toContain("--mcp-config");
+    });
+
+    it("should not let a caller attach an MCP server, which --tools \"\" does not defend against", async () => {
+      // The specific hole the corrected measurement opens up: a caller passing
+      // an MCP config would leave a live tool surface on a turn that "has no
+      // tools". The whitelist is what stops it, and this is what watches the
+      // whitelist.
+      const f = replaying(READER_INJECTION);
+
+      await runReaderTurn(
+        { instruction: "Summarise.", untrusted: ARTICLE },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reaching past the type on purpose
+        { claudeBin: f.bin, mcpConfig: "/tmp/attacker.json", strictMcpConfig: false } as any,
+      );
+
+      const { argv } = invocationOf(f);
+      expect(argv).not.toContain("--mcp-config");
+      expect(argv.join(" ")).not.toContain("attacker.json");
+      expect(argv).toContain("--strict-mcp-config");
+    });
+
+    it("should not pre-authorise, even when the caller asks it to", async () => {
+      const f = replaying(READER_INJECTION);
+
+      await runReaderTurn(
+        { instruction: "Summarise.", untrusted: ARTICLE },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reaching past the type on purpose
+        { claudeBin: f.bin, ...HOSTILE_OPTIONS } as any,
+      );
+
+      expect(flagValue(invocationOf(f).argv, "--permission-mode")).not.toBe("bypassPermissions");
+    });
+
+    it("should not let a caller put the built-in tools back", async () => {
+      const f = replaying(READER_INJECTION);
+
+      await runReaderTurn(
+        { instruction: "Summarise.", untrusted: ARTICLE },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reaching past the type on purpose
+        { claudeBin: f.bin, ...HOSTILE_OPTIONS } as any,
+      );
+
+      expect(flagValue(invocationOf(f).argv, "--tools")).toBe("");
+    });
+
+    it("should accept exactly four caller options, so widening the seam is a visible edit", async () => {
+      // The whitelist stated as a test rather than left implicit in the source.
+      // `cwd`, `model`, `claudeBin`, `onEvent` — plus `timeoutMs` and
+      // `requireEmptyToolSurface`, which never reach the child's memory or its
+      // capabilities. Anything else is a new hole and this is where it is
+      // argued about.
+      const accepted = ["cwd", "model", "claudeBin", "timeoutMs", "onEvent", "requireEmptyToolSurface"];
+      const source = readFileSync(
+        new URL("../../src/harness/reader.ts", import.meta.url),
+        "utf8",
+      );
+      const block = source.slice(
+        source.indexOf("export interface ReaderTurnOptions"),
+        source.indexOf("export interface ReaderTurnResult"),
+      );
+      const declared = [...block.matchAll(/^\s*readonly (\w+)\??:/gm)].map((m) => m[1]);
+
+      expect(declared.sort()).toEqual([...accepted].sort());
     });
   });
 

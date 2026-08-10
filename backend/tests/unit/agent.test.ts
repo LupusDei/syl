@@ -13,6 +13,7 @@ import {
   type SessionStore,
 } from "../../src/harness/agent.js";
 import type { TurnOptions, TurnResult, TurnRunner } from "../../src/harness/session.js";
+import { DEFAULT_PRECEDENCE, PRECEDENCE_CLAUSES } from "../../src/harness/turn-context.js";
 import { autoMemoryAt } from "../../src/memory/auto-memory.js";
 
 function fakeResult(sessionId: string, text = "ok"): TurnResult {
@@ -174,6 +175,104 @@ describe("SylAgent", () => {
 
     expect(optionsOfCall(runner, 0).systemPrompt).toContain("memory 1");
     expect(optionsOfCall(runner, 1).systemPrompt).toContain("memory 2");
+  });
+
+  it("should state the precedence policy, so a conflict has an answer she was given", async () => {
+    // Composition moved to `harness/turn-context.ts`, and the reason it moved is
+    // this: when a recalled fact contradicts a standing order, the answer used
+    // to be whatever concatenation happened to imply. Now it is a policy, stated
+    // to her, changed in one constant when the Commander rules.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      recall: () => "He prefers very short answers.",
+    });
+
+    await agent.ask("morning");
+
+    expect(optionsOfCall(runner, 0).systemPrompt).toContain(
+      PRECEDENCE_CLAUSES[DEFAULT_PRECEDENCE],
+    );
+  });
+
+  it("should say nothing about precedence when she remembers nothing yet", async () => {
+    // A clause about weighing her memories, on a first run, tells her she has
+    // memories. Same argument as not emitting an empty memory section.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({ runner, store: memoryStore(), soul: "You are Syl.", recall: () => "" });
+
+    await agent.ask("morning");
+
+    expect(optionsOfCall(runner, 0).systemPrompt).toBe("You are Syl.");
+  });
+
+  it("should let a contributor add to the prompt without touching this file", async () => {
+    // `syl-009` adds tool schemas. It must not have to edit the composition,
+    // which is exactly how three tracks end up each believing they own a slice.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      recall: () => "He has a daughter.",
+      contributors: [{ id: "tools", kind: "capability", text: "TOOL SCHEMAS" }],
+    });
+
+    await agent.ask("morning");
+
+    const prompt = optionsOfCall(runner, 0).systemPrompt ?? "";
+    expect(prompt.indexOf("You are Syl.")).toBeLessThan(prompt.indexOf("He has a daughter."));
+    expect(prompt.indexOf("He has a daughter.")).toBeLessThan(prompt.indexOf("TOOL SCHEMAS"));
+  });
+
+  it("should let contributors differ per lane, the way auto-memory already does", async () => {
+    // MEMORYLESS_LANES is the same argument one layer down: a lane that must not
+    // carry something is a decision made per lane, not per agent.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      contributors: (lane) =>
+        lane === LANES.consolidation ? [] : [{ id: "tools", kind: "capability", text: "TOOL SCHEMAS" }],
+    });
+
+    await agent.ask("dream", LANES.consolidation);
+    await agent.ask("morning", LANES.agenda);
+
+    expect(optionsOfCall(runner, 0).systemPrompt).not.toContain("TOOL SCHEMAS");
+    expect(optionsOfCall(runner, 1).systemPrompt).toContain("TOOL SCHEMAS");
+  });
+
+  it("should refuse a contributor that tries to be a second memory", async () => {
+    // The double registration the module exists to catch: two tracks each
+    // believing they own the memory slice, and the prompt quietly carrying both.
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      recall: () => "He has a daughter.",
+      contributors: [{ id: "working-memory", kind: "memory", text: "he has a son" }],
+    });
+
+    await expect(agent.ask("morning")).rejects.toThrow(/working-memory/);
+  });
+
+  it("should carry contributors into a lane-scoped view", async () => {
+    const runner = announcingRunner(() => "sess-1");
+    const agent = new SylAgent({
+      runner,
+      store: memoryStore(),
+      soul: "You are Syl.",
+      contributors: [{ id: "tools", kind: "capability", text: "TOOL SCHEMAS" }],
+    });
+
+    await agent.forLane("agenda").ask("morning");
+
+    expect(optionsOfCall(runner, 0).systemPrompt).toContain("TOOL SCHEMAS");
   });
 
   it("should carry recall into a lane-scoped view", async () => {

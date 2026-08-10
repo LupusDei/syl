@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { autoMemoryOff, type AutoMemory } from "../memory/auto-memory.js";
 
 import { runTurn, type TurnOptions, type TurnResult, type TurnRunner } from "./session.js";
+import { composeTurnContext, type Contributor } from "./turn-context.js";
 
 /**
  * A lane is one independent thread of conversation.
@@ -150,6 +151,21 @@ export interface SylAgentOptions {
    * describing her own configuration file.
    */
   readonly recall?: () => string;
+  /**
+   * Anything else that contributes to the system prompt — tool schemas under
+   * `syl-009`, and whatever comes after.
+   *
+   * A function form because the contributor set is LANE-DEPENDENT: the same
+   * argument that makes {@link MEMORYLESS_LANES} exist applies one layer up, and
+   * a lane that must not carry a capability is a decision the caller makes per
+   * lane rather than per agent.
+   *
+   * `soul` and `recall` are folded in alongside these as the `identity` and
+   * `memory` contributors, and `harness/turn-context.ts` decides the order. Do
+   * not pass a second `identity` or `memory` contributor here — it will be
+   * refused as a double registration, which is the point.
+   */
+  readonly contributors?: readonly Contributor[] | ((lane: Lane) => readonly Contributor[]);
   /** Lane used by `ask` when none is named. Defaults to `LANES.commander`. */
   readonly lane?: Lane;
   /**
@@ -185,6 +201,7 @@ export class SylAgent {
   readonly #store: SessionStore;
   readonly #soul: string | undefined;
   readonly #recall: (() => string) | undefined;
+  readonly #contributors: SylAgentOptions["contributors"];
   readonly #autoMemory: AutoMemory | undefined;
   readonly #turnOptions: TurnOptions;
   readonly #lane: Lane;
@@ -193,6 +210,7 @@ export class SylAgent {
     this.#runner = options.runner ?? runTurn;
     this.#soul = options.soul;
     this.#recall = options.recall;
+    this.#contributors = options.contributors;
     this.#autoMemory = options.autoMemory;
     this.#turnOptions = options.turnOptions ?? {};
     this.#store = options.store ?? memorySessionStore();
@@ -200,28 +218,35 @@ export class SylAgent {
   }
 
   /**
-   * Who she is, then what she remembers — as one prompt.
+   * Who she is, then what she remembers, then what she can do — as one prompt.
    *
-   * Memory is appended UNDER the soul because `SOUL.md` ends by telling her how
-   * to read what follows: as her own memory rather than as a briefing, and that
-   * an empty one means she is early rather than broken. Sent as a separate
-   * block it would be a data dump she narrates consulting; sent here it is
-   * something she knows.
+   * This agent no longer decides that order, or the budget, or what happens when
+   * a memory contradicts a standing order. It *contributes* to
+   * `harness/turn-context.ts`, which owns all three. The reason is that three
+   * tracks write into this prompt — identity, memory, and tools under
+   * `syl-009` — and each will reasonably assume it owns its slice; composition
+   * living here, in the file one of those tracks happens to touch, is how the
+   * ordering became an accident of string concatenation in the first place.
    *
-   * An empty recall appends NOTHING — not an empty section. A heading over
-   * blankness tells her she has a memory and that it is empty, which reads as
-   * damage; saying nothing lets the soul's own line about being early stand.
+   * Read fresh on every turn: the projection is rebuilt by the nightly
+   * consolidation and this service outlives the night.
    */
-  #systemPrompt(): string | undefined {
-    const soul = this.#soul;
-    const remembered = this.#recall?.().trim() ?? "";
+  #systemPrompt(lane: Lane): string | undefined {
+    const extra =
+      typeof this.#contributors === "function" ? this.#contributors(lane) : (this.#contributors ?? []);
 
-    if (soul === undefined || soul === "") {
-      return remembered === "" ? undefined : remembered;
-    }
-    if (remembered === "") return soul;
+    const prompt = composeTurnContext({
+      contributors: [
+        ...(this.#soul ? [{ id: "soul", kind: "identity", text: this.#soul } as const] : []),
+        ...(this.#recall ? [{ id: "working-memory", kind: "memory", text: this.#recall() } as const] : []),
+        ...extra,
+      ],
+    }).systemPrompt;
 
-    return `${soul}\n\n---\n\n${remembered}`;
+    // `undefined` rather than `""`: an empty `--append-system-prompt` is a flag
+    // going out for no reason, and `TurnOptions` reads its absence as "nothing
+    // to say" everywhere else.
+    return prompt === "" ? undefined : prompt;
   }
 
   /** The lane this agent talks in when `ask` is called without one. */
@@ -252,6 +277,9 @@ export class SylAgent {
       turnOptions: this.#turnOptions,
       ...(this.#soul !== undefined ? { soul: this.#soul } : {}),
       ...(this.#recall !== undefined ? { recall: this.#recall } : {}),
+      // Carried for the same reason as `recall`: a contributor forgotten here is
+      // a lane that silently loses part of her prompt.
+      ...(this.#contributors !== undefined ? { contributors: this.#contributors } : {}),
       // Shared across lanes on purpose: a lane view is a different transcript,
       // not a different assistant.
       ...(this.#autoMemory !== undefined ? { autoMemory: this.#autoMemory } : {}),
@@ -343,7 +371,7 @@ export class SylAgent {
         return forLane === undefined ? {} : { autoMemory: forLane };
       })(),
       ...((): { systemPrompt?: string } => {
-        const prompt = this.#systemPrompt();
+        const prompt = this.#systemPrompt(lane);
         return prompt === undefined ? {} : { systemPrompt: prompt };
       })(),
       ...(resume ? { resume } : {}),
