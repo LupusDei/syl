@@ -1,7 +1,7 @@
 /**
  * The app must be entitled to receive every interruption level the server sends.
  *
- * `syl-tsn`. This test exists because both halves were individually correct and
+ * `syl-kqc`. This test exists because both halves were individually correct and
  * disagreed with each other, which is the only kind of bug this project keeps
  * producing.
  *

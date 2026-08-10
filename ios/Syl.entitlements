@@ -22,7 +22,7 @@
   not ask for.
 
   time-sensitive is the opposite case: a capability we DID rely on and had not asked
-  for. `syl-tsn`.
+  for. `syl-kqc`.
 
   The Commander set a five minute reminder on 2026-08-10. It was created, scheduled
   and delivered 362ms after its due instant, and he never saw it — Focus mode was on.
