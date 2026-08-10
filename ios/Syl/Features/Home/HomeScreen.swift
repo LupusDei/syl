@@ -17,7 +17,13 @@ struct HomeScreen: View {
             snapshot: model.snapshot,
             presence: model.presence,
             presenceIntensity: model.intensity,
-            now: model.now
+            now: model.now,
+            // The view stays a pure function of values; the tasks are owned here, which
+            // is the same split `ContentView` makes and why the day can be rendered
+            // offscreen without booting the object graph.
+            onComplete: { moment in Task { await model.complete(moment) } },
+            onPostpone: { moment in Task { await model.postpone(moment) } },
+            onDismissRefusal: { moment in model.dismissRefusal(moment.id) }
         )
         .task {
             model.start()

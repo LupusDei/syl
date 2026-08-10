@@ -37,7 +37,12 @@ struct HomeView: View {
     var presence: PresenceState
     var presenceIntensity: Double
     var now: Date
-    var onSelect: (DayMoment) -> Void = { _ in }
+    /// The day's two intents, passed straight through to ``DaySpine``. They replaced a
+    /// single anonymous `onSelect` that went nowhere: a row can be finished, and a
+    /// reminder can be asked to move, and those are different acts.
+    var onComplete: (DayMoment) -> Void = { _ in }
+    var onPostpone: (DayMoment) -> Void = { _ in }
+    var onDismissRefusal: (DayMoment) -> Void = { _ in }
     var onOpen: (Destination) -> Void = { _ in }
 
     /// Where an orb goes. Only `today` is wired; the other two are the next screens.
@@ -259,7 +264,13 @@ struct HomeView: View {
             if snapshot.moments.isEmpty {
                 clearDay
             } else {
-                DaySpine(moments: snapshot.moments, now: now, onSelect: onSelect)
+                DaySpine(
+                    moments: snapshot.moments,
+                    now: now,
+                    onComplete: onComplete,
+                    onPostpone: onPostpone,
+                    onDismissRefusal: onDismissRefusal
+                )
             }
         }
         .padding(.horizontal, SylTheme.Metric.gutter)

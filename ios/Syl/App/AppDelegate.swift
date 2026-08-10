@@ -170,7 +170,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
             flush: { await engine.synchronise() }
         )
 
-        let home = HomeViewModel(store: store)
+        // The same `flush` chat already gets. A completion tapped on the spine writes the
+        // row and the intent in one transaction and then wants to leave the device now —
+        // without this it would sit in the outbox until something else happened to
+        // trigger a sync.
+        let home = HomeViewModel(store: store, flush: { await engine.synchronise() })
 
         self.store = store
         self.syncEngine = engine

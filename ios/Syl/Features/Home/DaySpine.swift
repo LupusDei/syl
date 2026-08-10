@@ -22,12 +22,35 @@ import SylKit
 /// signature — a luminous vertical line with the day threaded onto it — is exactly
 /// preserved, which is what made the concept good. What is lost is the symmetry, and
 /// symmetry was the part that was costing legibility.
+///
+/// ## The affordances (`syl-011.2`)
+///
+/// The row used to carry one anonymous `onSelect` and a comment saying completion landed
+/// later. This is later, and what replaced it is deliberately **not** a bare tap on the
+/// row. Two named intents, two visible controls, two labelled accessibility actions:
+///
+/// - **Done** on everything. A to-do and a reminder both finish, through different store
+///   helpers, and both settle rather than vanish.
+/// - **Later** on a reminder only, because the contract has no deferral for a to-do.
+///
+/// A whole-row tap that quietly completed something would be the wrong shape twice over:
+/// this screen is opened dozens of times a day so a mis-tap is a certainty, and a
+/// VoiceOver user would be left to infer what activating the row means. The row is an
+/// element that *carries* actions; it is not itself a button.
 struct DaySpine: View {
     var moments: [DayMoment]
     var now: Date
-    /// Fires when a row is tapped. Completion lands later; the affordance is here so
-    /// the layout is built around a real touch target rather than gaining one after.
-    var onSelect: (DayMoment) -> Void = { _ in }
+    /// He finished it. The store decides whether that is allowed.
+    var onComplete: (DayMoment) -> Void = { _ in }
+    /// He asked Syl to move it. **Never a new time** — see ``DayMoment/deferralAskedAt``.
+    var onPostpone: (DayMoment) -> Void = { _ in }
+    /// He has read what she refused and wants it off the row.
+    var onDismissRefusal: (DayMoment) -> Void = { _ in }
+
+    /// Motion is a scarce resource here and a nuisance to some. Under Reduce Motion a row
+    /// still arrives and leaves — silently ignoring a completion would be worse — but it
+    /// fades rather than sliding in from the edge.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -36,17 +59,21 @@ struct DaySpine: View {
                     moment: moment,
                     isFirst: index == 0,
                     isLast: index == moments.count - 1,
-                    onSelect: onSelect
+                    onComplete: onComplete,
+                    onPostpone: onPostpone,
+                    onDismissRefusal: onDismissRefusal
                 )
-                .transition(
-                    .asymmetric(
-                        insertion: .opacity.combined(with: .move(edge: .leading)),
-                        removal: .opacity
-                    )
-                )
+                .transition(.asymmetric(insertion: arrival, removal: .opacity))
             }
         }
+        // The curve a finished row leaves on. `marking(_:as:)` puts it in `done` first,
+        // so what this animates is the departure *after* the confirmation, not instead
+        // of it.
         .animation(SylTheme.Motion.settle, value: moments)
+    }
+
+    private var arrival: AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .leading))
     }
 }
 
@@ -55,7 +82,16 @@ private struct SpineRow: View {
     let moment: DayMoment
     let isFirst: Bool
     let isLast: Bool
-    let onSelect: (DayMoment) -> Void
+    let onComplete: (DayMoment) -> Void
+    let onPostpone: (DayMoment) -> Void
+    let onDismissRefusal: (DayMoment) -> Void
+
+    /// At the accessibility sizes the controls move under the text instead of beside it.
+    ///
+    /// Two 44pt targets on the trailing edge cost 88pt, which at `AX5` leaves a title
+    /// about four characters wide. This screen is read at 06:00 without glasses; the
+    /// affordances give up the row before the words do.
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     /// The thread's column. Wide enough for the marker's halo without pushing the text
     /// so far right that a long title loses a whole word to it.
@@ -71,21 +107,60 @@ private struct SpineRow: View {
     @ScaledMetric(relativeTo: .body) private var markerCentreFromTop: CGFloat = 23
 
     var body: some View {
-        Button {
-            onSelect(moment)
-        } label: {
-            HStack(alignment: .top, spacing: SylTheme.Metric.step) {
-                thread
+        HStack(alignment: .top, spacing: SylTheme.Metric.step) {
+            thread
+
+            VStack(alignment: .leading, spacing: SylTheme.Metric.tight) {
                 content
-                Spacer(minLength: 0)
+                if typeSize.isAccessibilitySize {
+                    actions
+                }
             }
-            .frame(minHeight: SylTheme.Metric.minimumTouchTarget)
-            .contentShape(Rectangle())
+
+            Spacer(minLength: 0)
+
+            if !typeSize.isAccessibilitySize {
+                actions
+            }
         }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
+        .frame(minHeight: SylTheme.Metric.minimumTouchTarget)
+        // One element carrying named actions, rather than three focus stops whose
+        // relationship a VoiceOver user has to reconstruct. `.ignore` is what keeps the
+        // controls out of the rotor as separate buttons; they are reachable as the row's
+        // actions instead, which is where they belong.
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint("Opens this item")
+        // Named, distinct, and in the same words the visible controls carry. A VoiceOver
+        // user gets "Done" and "Later" as actions on the row rather than a tap whose
+        // meaning has to be inferred from the fact that the row is a button.
+        .accessibilityActions {
+            if moment.mayBeCompleted {
+                Button("Done") { onComplete(moment) }
+            }
+            if moment.mayBeDeferred {
+                Button("Later, by \(ReminderNotification.snoozeMinutes) minutes") {
+                    onPostpone(moment)
+                }
+            }
+            if moment.refusal != nil {
+                Button("Dismiss what Syl said") { onDismissRefusal(moment) }
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    private var actions: some View {
+        HStack(spacing: SylTheme.Metric.tight) {
+            if moment.mayBeDeferred {
+                RowAction(symbol: "clock.arrow.circlepath", title: "Later") {
+                    onPostpone(moment)
+                }
+            }
+            if moment.mayBeCompleted {
+                RowAction(symbol: "checkmark", title: "Done") { onComplete(moment) }
+            }
+        }
     }
 
     // MARK: - Thread
@@ -127,18 +202,32 @@ private struct SpineRow: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 3) {
+            // `inkSoft` for a finished row, not `inkFaint`, and the render is why.
+            //
+            // This is the `syl-008` lesson arriving on the other screen: the day sits on
+            // the **bare veil**, whose blooms composite `plusLighter`, so the ground under
+            // a given word is the base colour plus up to 60% of `luminanceCore`. A
+            // mid-tone has ample contrast against the base and almost none in the middle
+            // of a bloom. Struck through at `inkFaint` the settled row was simply gone —
+            // which destroys the point of settling at all. The completed state is the
+            // confirmation, and a confirmation nobody can read is a row that vanished
+            // with extra steps.
             Text(moment.title)
                 .font(SylTheme.Typeface.item)
-                .foregroundStyle(moment.standing == .done ? SylTheme.Colour.inkFaint : SylTheme.Colour.ink)
-                .strikethrough(moment.standing == .done, color: SylTheme.Colour.inkFaint)
+                .foregroundStyle(moment.standing == .done ? SylTheme.Colour.inkSoft : SylTheme.Colour.ink)
+                .strikethrough(moment.standing == .done, color: SylTheme.Colour.inkSoft)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: SylTheme.Metric.snug) {
+                // Also `inkSoft`, for the same reason as the title above — and it matters
+                // most on a deferred row, where this is the *original* time and the whole
+                // claim being made is that it still stands. A claim rendered in a tone
+                // the background can reach is a claim that is sometimes not there.
                 if let at = moment.at {
                     Text(at, format: .dateTime.hour().minute())
                         .font(SylTheme.Typeface.numeral)
-                        .foregroundStyle(SylTheme.Colour.inkFaint)
+                        .foregroundStyle(SylTheme.Colour.inkSoft)
                 }
 
                 if moment.late {
@@ -148,8 +237,84 @@ private struct SpineRow: View {
                     Badge(text: "Pinned", tint: SylTheme.Colour.accent)
                 }
             }
+
+            if moment.deferralAskedAt != nil {
+                deferralNote
+            }
+            if let refusal = moment.refusal {
+                refusalNote(refusal)
+            }
         }
         .padding(.vertical, SylTheme.Metric.step)
+    }
+
+    /// He asked. She has not answered. **The time above has not moved and must not.**
+    ///
+    /// This is the one place in the app where the optimistic render is deliberately
+    /// weaker than it could be. Showing "10:15" — the fifteen minutes the device knows
+    /// perfectly well it asked for — would look right and be an instant that exists
+    /// nowhere: the server owns a deferral's new time, and it may refuse the ask outright
+    /// with `DEFERRAL_NOT_LATER`. So the row states exactly what is known, which is that
+    /// he asked and it has not landed yet.
+    ///
+    /// `accent`, not `warmth`. Nothing is wrong here; something is in flight. Warmth is
+    /// the palette's one warm note and it is spent on a refusal, one line down.
+    private var deferralNote: some View {
+        Text("Waiting on Syl to move this")
+            .sylLabelStyle()
+            .foregroundStyle(SylTheme.Colour.accent)
+            // It must wrap, never truncate. At `AX3` this line came back as "WAITING ON
+            // SYL…", which is not a shortened version of the sentence — it is a different
+            // and worse claim, because what is missing is the half that says the time
+            // above has not moved.
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// What she refused, beside the thing it is about.
+    ///
+    /// The `syl-008` treatment, reused as the epic asks: `warmth` — the palette's single
+    /// warm note, held in reserve for exactly this — outlining the note rather than
+    /// filling it, so it reads as "attend to this" without the alarm of red.
+    ///
+    /// On the row and not in a banner. A message at the top of the screen saying a to-do
+    /// was already finished makes him hunt for which one, and the naming is the whole
+    /// reason the store refuses by name in the first place.
+    private func refusalNote(_ refusal: String) -> some View {
+        Button {
+            onDismissRefusal(moment)
+        } label: {
+            // One line where there is room, two where there is not — and the interpunct
+            // goes with the single line, because a separator alone on a row separates
+            // nothing. Left as one `HStack` at `AX3` this hyphenated the recovery across
+            // the break — "DIS-MISS" — which is the sort of thing only a render finds.
+            VStack(alignment: .leading, spacing: SylTheme.Metric.tight) {
+                if typeSize.isAccessibilitySize {
+                    Text(refusal)
+                    Text("Dismiss").underline()
+                } else {
+                    HStack(spacing: SylTheme.Metric.tight) {
+                        Text(refusal)
+                        Text("·")
+                        Text("Dismiss").underline()
+                    }
+                }
+            }
+            .sylLabelStyle()
+            .foregroundStyle(SylTheme.Colour.warmth)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, SylTheme.Metric.snug)
+            .padding(.vertical, SylTheme.Metric.tight)
+            .frame(minHeight: SylTheme.Metric.minimumTouchTarget)
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(SylTheme.Colour.warmth.opacity(0.75), lineWidth: 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHidden(true)
     }
 
     private var accessibilityLabel: String {
@@ -166,7 +331,58 @@ private struct SpineRow: View {
         }
         if moment.pinned { parts.append("pinned") }
 
+        // Said the same way it is drawn: a deferral was asked for, and the time read out
+        // a moment ago is still the one that stands.
+        if moment.deferralAskedAt != nil {
+            parts.append("waiting on Syl to move this, still at this time until she answers")
+        }
+        if let refusal = moment.refusal {
+            parts.append(refusal)
+        }
+
         return parts.joined(separator: ", ")
+    }
+}
+
+/// One control on a row: a glyph in a ring, padded out to Apple's floor.
+///
+/// Icon-only on purpose. A row already carries a title that can run to two lines at the
+/// reading size, and two word-labelled buttons beside it would take the title down to a
+/// column. The words are not lost — they are the row's accessibility actions, which is
+/// the surface where a label is actually read rather than merely displayed.
+private struct RowAction: View {
+    let symbol: String
+    /// Kept as the button's own label so this reads correctly even if a caller stops
+    /// merging the row into one element.
+    let title: String
+    let action: () -> Void
+
+    private var tint: Color { SylTheme.Colour.accent }
+
+    /// The ring grows with the type it sits beside. A fixed 32pt disc next to `AX3` body
+    /// text reads as a decoration rather than a control — small enough that it stops
+    /// looking like the thing you are meant to press.
+    @ScaledMetric(relativeTo: .body) private var ring: CGFloat = 32
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(.subheadline, design: .default, weight: .regular))
+                .foregroundStyle(tint)
+                .frame(width: ring, height: ring)
+                .background { Circle().fill(tint.opacity(0.12)) }
+                .overlay { Circle().stroke(tint.opacity(0.34), lineWidth: 0.8) }
+                // The ring starts at 32pt because a 44pt disc beside body text reads as a
+                // button bar. The *target* is still 44pt — the frame around it is what
+                // Apple's floor is actually about.
+                .frame(
+                    minWidth: SylTheme.Metric.minimumTouchTarget,
+                    minHeight: SylTheme.Metric.minimumTouchTarget
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
     }
 }
 

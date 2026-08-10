@@ -24,11 +24,85 @@ struct DayMoment: Identifiable, Equatable, Sendable {
     /// capture rule is that every column except the text is nullable — so the spine has
     /// to render an undated item without inventing a time for it.
     let at: Date?
-    let standing: Standing
+    /// `var` so ``HomeSnapshot/marking(_:as:)`` can settle a row in place. Nothing else
+    /// moves it — it is otherwise derived from disk on every rebuild.
+    var standing: Standing
     let origin: Origin
     let urgent: Bool
     let late: Bool
     let pinned: Bool
+
+    /// When he asked Syl to move this, if he has and she has not answered yet.
+    ///
+    /// **This is an instant he chose, never one the device computed.** `at` above still
+    /// holds the time the server last stated, unmoved, because the server owns a
+    /// deferral's new instant (plan D2, constraint 4). Rendering `at + 15 minutes` here
+    /// would look right on screen and be a time that exists nowhere else — and a phone
+    /// that was wiped would take it with it.
+    ///
+    /// Sliced out of ``LocalStore/deferralRequests()`` **in the loader**, so the row
+    /// carries one optional date rather than a map covering the whole list. `syl-008`
+    /// shipped the opposite and it cost the Commander two crashes.
+    var deferralAskedAt: Date?
+
+    /// Why the last thing he asked of this row did not happen, in one line.
+    ///
+    /// On the row rather than in a banner: a refusal that names a to-do from the top of
+    /// the screen makes him hunt for which one, and the whole point of naming it is that
+    /// hearing the wrong title is the last place a wrong id is catchable.
+    var refusal: String?
+}
+
+extension DayMoment {
+    /// Whether Done may be offered.
+    ///
+    /// A finished row keeps its place for a beat so the completion can be read, and for
+    /// that beat it must not be completable again — the store would refuse it by name,
+    /// which is correct and would still read as the app having gone wrong.
+    var mayBeCompleted: Bool { standing != .done }
+
+    /// Whether Later may be offered.
+    ///
+    /// Reminders only: the contract has no deferral for a to-do. And **not while one is
+    /// already in flight** — a second ask mints a second idempotency key, which the server
+    /// would honour as a second deferral and land the reminder half an hour late instead
+    /// of fifteen minutes. That is the failure `Outbox.Kind` documents, arriving through
+    /// the UI rather than through a retry, and it is invisible here precisely because D2
+    /// forbids the row from showing a new time: he would have no way to tell.
+    ///
+    /// A rule with that much consequence does not belong inside a `body`, where nothing
+    /// can assert it.
+    var mayBeDeferred: Bool {
+        origin == .reminder && deferralAskedAt == nil && mayBeCompleted
+    }
+}
+
+/// What a row says when Syl refused what he asked of it.
+///
+/// A translation, not a rendering of `Error`. `LocalStoreError`'s own text names the
+/// item — `"Book the dentist" is already finished` — which is exactly right coming from
+/// the store and wrong on a row that is already showing that title two lines up. Here it
+/// is the row that supplies the subject and this that supplies the verb.
+enum DayRefusal {
+    /// One line, always. Silence is the failure this exists to prevent, so an error it
+    /// has never seen still gets a sentence rather than nothing.
+    static func phrase(for error: Error) -> String {
+        guard let refusal = error as? LocalStoreError else { return "That did not go through" }
+
+        switch refusal {
+        case .todoAlreadyFinished, .reminderAlreadyFinished:
+            return "Already finished"
+        case .noSuchTodo, .noSuchReminder:
+            return "No longer on this device"
+        case .todoHasNotReachedSylYet:
+            // `syl-011.1.8`. Completing a capture the server has never heard of would
+            // undo itself on the next sweep, so it is refused rather than lost — and
+            // that has to read as a "not yet", because it is one.
+            return "Not with Syl yet — this one completes once she has it"
+        case .emptyCapture:
+            return "There was nothing to write down"
+        }
+    }
 }
 
 /// The one thing worth saying, if there is one.
@@ -153,11 +227,16 @@ extension HomeSnapshot {
     /// on a timeline, and floating it to the top would push the next actual commitment
     /// below the fold. It still appears, because a text-only to-do "appears in the right
     /// places" is one of proposal B's ten named guarantees.
+    ///
+    /// `deferralsAskedAt` is handed in whole and **sliced here, once per row**, rather
+    /// than queried per row in a `body`. Keys are canonical because the contract permits
+    /// either hex case for an id, and a bare `==` would quietly lose the marker.
     static func build(
         reminders: [Reminder],
         todos: [Todo],
         now: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        deferralsAskedAt: [SylID: Date] = [:]
     ) -> HomeSnapshot {
         let dayStart = calendar.startOfDay(for: now)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? now
@@ -181,7 +260,8 @@ extension HomeSnapshot {
                     origin: .reminder,
                     urgent: reminder.urgent,
                     late: reminder.late,
-                    pinned: false
+                    pinned: false,
+                    deferralAskedAt: deferralsAskedAt[SylIDs.canonical(reminder.id)]
                 )
             )
         }
@@ -204,7 +284,11 @@ extension HomeSnapshot {
                     origin: .todo,
                     urgent: false,
                     late: false,
-                    pinned: todo.pinned
+                    pinned: todo.pinned,
+                    // Deliberately never consulted for a to-do: the contract has no
+                    // deferral for one, so a key that happened to collide must not put
+                    // an affordance on a row that cannot honour it.
+                    deferralAskedAt: nil
                 )
             )
         }
@@ -218,6 +302,16 @@ extension HomeSnapshot {
             }
         }
 
+        return recomposed(moments, greeting: greeting(at: now, calendar: calendar))
+    }
+
+    /// Everything derived from the spine, derived once.
+    ///
+    /// `remaining`, the note and Syl's prominence are all functions of the rows. Anything
+    /// that changes a row has to go back through here, or the count above the day starts
+    /// disagreeing with the rows under it — which is precisely the self-contradicting
+    /// state the preview data was fixed for.
+    private static func recomposed(_ moments: [DayMoment], greeting: String) -> HomeSnapshot {
         let remaining = moments.filter { $0.standing != .done }.count
 
         return HomeSnapshot(
@@ -225,8 +319,50 @@ extension HomeSnapshot {
             remaining: remaining,
             note: note(from: moments),
             prominence: prominence(remaining: remaining),
-            greeting: greeting(at: now, calendar: calendar)
+            greeting: greeting
         )
+    }
+
+    /// Moves one row's standing without re-reading disk.
+    ///
+    /// ## Why completion needs this at all
+    ///
+    /// Both stores drop a finished item on the next read: `openTodos` filters on
+    /// `status = open`, and `upcomingReminders` filters `completed` and `cancelled` out.
+    /// So a plain refresh after a completion makes the row *vanish* — no confirmation,
+    /// nothing to check, and no moment in which he could tell he tapped the wrong one.
+    ///
+    /// This is the settling instead: the row stays exactly where it is and turns
+    /// finished — struck through, its marker gone quiet, the count above the day already
+    /// ticked down — and only then does it leave, on ``SylTheme/Motion/settle``. The
+    /// held beat *is* the confirmation, which is what a list with no undo owes him.
+    ///
+    /// Ids are compared canonically. A bare `==` against a differently-cased id would
+    /// mark nothing at all, and look identical to a tap that never registered.
+    func marking(_ id: SylID, as standing: DayMoment.Standing) -> HomeSnapshot {
+        let target = SylIDs.canonical(id)
+        let moved = moments.map { moment -> DayMoment in
+            guard SylIDs.canonical(moment.id) == target else { return moment }
+            var moment = moment
+            moment.standing = standing
+            return moment
+        }
+        return Self.recomposed(moved, greeting: greeting)
+    }
+
+    /// Attaches each refusal to its own row, and takes off any that is no longer held.
+    ///
+    /// One pass over the spine, in the model. The alternative — handing every row the
+    /// whole map and letting each look itself up in `body` — is the quadratic render
+    /// `syl-008` shipped, and the reason risk R4 is written down.
+    func applying(refusals: [SylID: String]) -> HomeSnapshot {
+        var updated = self
+        updated.moments = moments.map { moment in
+            var moment = moment
+            moment.refusal = refusals[SylIDs.canonical(moment.id)]
+            return moment
+        }
+        return updated
     }
 
     /// The single most worth-saying thing, or nothing.
@@ -264,11 +400,14 @@ struct HomeSnapshotLoader: Sendable {
         // the one behaviour this project forbids.
         let dayStart = calendar.startOfDay(for: now)
 
+        // Read once, whole, and sliced per row inside `build`. A row that held the map
+        // and looked itself up while drawing is R4 — the defect `syl-008` shipped.
         return HomeSnapshot.build(
             reminders: try store.upcomingReminders(after: dayStart, limit: 50),
             todos: try store.openTodos(limit: 100),
             now: now,
-            calendar: calendar
+            calendar: calendar,
+            deferralsAskedAt: try store.deferralRequests()
         )
     }
 }
