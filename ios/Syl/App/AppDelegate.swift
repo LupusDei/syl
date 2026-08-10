@@ -66,6 +66,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     /// The home screen's model. Holds its own `PresenceTimeline` rather than reading
     /// chat's, because chat keeps the raw frame state and never decays it.
     private(set) var home: HomeViewModel?
+    /// Everything he owes, and the one write on it — capture.
+    ///
+    /// Built here beside the others rather than owned by `HomeScreen` as a `@StateObject`
+    /// because it needs the same `LocalStore` and the same sync engine, and reaching them
+    /// from a view would mean handing the view the object graph the split exists to keep
+    /// out of it.
+    private(set) var list: TodoListViewModel?
     private var syncEngine: SyncEngine?
     /// Answers for anything push accepted but never showed. See `syl-u9e`.
     private var deliveryReconciler: DeliveryReconciler?
@@ -171,6 +178,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         )
 
         let home = HomeViewModel(store: store)
+        // A capture written on a live network should reach Syl now rather than at the
+        // next scheduled sync. It is already durable either way — `createTodo` writes the
+        // row and the intent in one transaction — so this only shortens the wait.
+        let list = TodoListViewModel(store: store, flush: { await engine.synchronise() })
 
         self.store = store
         self.syncEngine = engine
@@ -179,6 +190,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         self.socketBaseURL = backend.baseURL
         self.chat = chat
         self.home = home
+        self.list = list
 
         // Notification actions write to the outbox rather than calling the network, so
         // a snooze tapped while the tailnet is down survives.
@@ -338,6 +350,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         rebuildSocketIfServerChanged()
         await reconcile()
         await chat?.refresh()
+        // The list re-reads too. A to-do finished on the Mac while the phone was in his
+        // pocket is exactly the change this pass exists to pick up, and a list that only
+        // refreshed when it was opened would show yesterday's answer on the first frame —
+        // which is worse than a spinner, because it looks correct.
+        await list?.refresh()
     }
 
     /// Reopens the socket when the selected server profile has moved.

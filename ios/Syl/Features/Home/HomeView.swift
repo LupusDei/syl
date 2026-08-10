@@ -39,6 +39,15 @@ struct HomeView: View {
     var now: Date
     var onSelect: (DayMoment) -> Void = { _ in }
     var onOpen: (Destination) -> Void = { _ in }
+    /// Writes a to-do from the foot of the day. See ``CaptureField``.
+    ///
+    /// A closure of its own rather than a new `Destination` case, deliberately: adding a
+    /// case to that enum breaks every exhaustive `switch` over it, and three squads are
+    /// in this file's neighbourhood at once. Additive with a default, nothing else moves.
+    var onCapture: (String) -> Void = { _ in }
+    /// Opens everything he owes — the list the day cannot show, because the day can only
+    /// show things with a time.
+    var onOpenList: () -> Void = {}
 
     /// Where an orb goes. Only `today` is wired; the other two are the next screens.
     enum Destination: Equatable, Sendable {
@@ -261,6 +270,17 @@ struct HomeView: View {
             } else {
                 DaySpine(moments: snapshot.moments, now: now, onSelect: onSelect)
             }
+
+            // Write one down, and the door to everything the day cannot show. See
+            // ``FootOfDay`` — it lives in its own file because this one is being edited
+            // by three squads at once, and because a whole-screen render can never draw
+            // it.
+            FootOfDay(
+                openElsewhere: snapshot.openElsewhere,
+                onCapture: onCapture,
+                onOpenList: onOpenList
+            )
+            .padding(.top, SylTheme.Metric.step)
         }
         .padding(.horizontal, SylTheme.Metric.gutter)
         .padding(.top, SylTheme.Metric.gutter)
@@ -394,7 +414,11 @@ extension HomeSnapshot {
             remaining: outstanding,
             note: late ? DayNote(tone: .late, text: "Clarity focus — this was due earlier. I was late.") : nil,
             prominence: HomeSnapshot.prominence(remaining: outstanding),
-            greeting: "Good morning"
+            greeting: "Good morning",
+            // The whole point of the door: things with no day, which the spine above it
+            // can never show. A preview with zero here would screenshot the one state
+            // that hides the feature.
+            openElsewhere: 7
         )
     }
 }

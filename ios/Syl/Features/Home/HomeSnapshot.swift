@@ -62,6 +62,15 @@ struct HomeSnapshot: Equatable, Sendable {
     /// Time-of-day greeting, e.g. "Good morning".
     var greeting: String = ""
 
+    /// Open to-dos that are **not** on today's spine — the ones with no date, and the
+    /// dated ones belonging to another day.
+    ///
+    /// This is the number on the door at the foot of the day, and it is the whole reason
+    /// undated to-dos stop being invisible: the spine can only show things with a time,
+    /// so without a count of what it cannot show, "everything else" is a door with no
+    /// indication that there is anything behind it.
+    var openElsewhere: Int = 0
+
     /// Nothing left today. The screen's best state, and composed as such.
     var isClear: Bool { remaining == 0 }
 }
@@ -153,16 +162,26 @@ extension HomeSnapshot {
     /// on a timeline, and floating it to the top would push the next actual commitment
     /// below the fold. It still appears, because a text-only to-do "appears in the right
     /// places" is one of proposal B's ten named guarantees.
+    /// - Parameter openTodoCount: how many open to-dos exist in total, which is **not**
+    ///   `todos.count` when the read was windowed. Defaults to counting the to-dos handed
+    ///   in, which is correct exactly when the caller passed everything. It exists so the
+    ///   door at the foot of the day cannot say "100 open" forever once he passes a
+    ///   hundred — a number that stops being true precisely when it starts mattering.
     static func build(
         reminders: [Reminder],
         todos: [Todo],
         now: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        openTodoCount: Int? = nil
     ) -> HomeSnapshot {
         let dayStart = calendar.startOfDay(for: now)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? now
 
         var moments: [DayMoment] = []
+        /// Open to-dos that earned a place on today's spine. Counted rather than filtered
+        /// again afterwards, so the two can never disagree about what "on the spine"
+        /// means.
+        var todosOnSpine = 0
 
         for reminder in reminders {
             let instant = reminder.nextFireAt
@@ -195,6 +214,7 @@ extension HomeSnapshot {
             let dueToday = todo.dueAt.map { $0 >= dayStart && $0 < dayEnd } ?? false
             guard dueToday || todo.pinned else { continue }
 
+            todosOnSpine += 1
             moments.append(
                 DayMoment(
                     id: todo.id,
@@ -225,7 +245,11 @@ extension HomeSnapshot {
             remaining: remaining,
             note: note(from: moments),
             prominence: prominence(remaining: remaining),
-            greeting: greeting(at: now, calendar: calendar)
+            greeting: greeting(at: now, calendar: calendar),
+            // Clamped at zero rather than trusted to be positive. The count and the
+            // window are two reads a moment apart, so a to-do completed between them
+            // would otherwise put "-1 open" on his home screen.
+            openElsewhere: max((openTodoCount ?? todos.filter { $0.status == .open }.count) - todosOnSpine, 0)
         )
     }
 
@@ -268,7 +292,10 @@ struct HomeSnapshotLoader: Sendable {
             reminders: try store.upcomingReminders(after: dayStart, limit: 50),
             todos: try store.openTodos(limit: 100),
             now: now,
-            calendar: calendar
+            calendar: calendar,
+            // A real `COUNT(*)`, because the read above is windowed at a hundred and the
+            // door's count must not stop being true at a hundred and one.
+            openTodoCount: try store.openTodoCount()
         )
     }
 }

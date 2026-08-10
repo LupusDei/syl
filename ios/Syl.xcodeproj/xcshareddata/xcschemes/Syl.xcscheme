@@ -70,6 +70,32 @@
             ReferencedContainer = "container:Syl.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <!--
+         The design render harnesses are gated on SYL_RENDER_SNAPSHOTS, and this is the
+         only place setting it actually works.
+
+         `SYL_RENDER_SNAPSHOTS=1 xcodebuild test …` sets it on xcodebuild, which is a
+         different process on a different machine from the test; the simulator does not
+         inherit it. `xcodebuild test … TEST_RUNNER_SYL_RENDER_SNAPSHOTS=1` is documented
+         to forward it with the prefix stripped and — verified on this toolchain, by
+         printing every SYL-matching key the runner can see — forwards nothing at all.
+         Both were tried and both silently skipped the tests, which is the failure mode
+         that makes a harness nobody runs.
+
+         TestAction has shouldUseLaunchSchemeArgsEnv = "YES", so an entry here reaches the
+         tests. Left DISABLED so an ordinary run neither writes files nor pays the render
+         cost: tick it in Product ▸ Scheme ▸ Edit Scheme ▸ Run ▸ Arguments, or flip
+         isEnabled to YES for one run, then retrieve the images with
+
+           open "$(xcrun simctl get_app_container booted com.jmm.syl data)/Documents/design-snapshots"
+      -->
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "SYL_RENDER_SNAPSHOTS"
+            value = "1"
+            isEnabled = "NO">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
