@@ -26,10 +26,14 @@ struct ChatTurn: View {
     let group: MessageGroup
     let showsTime: Bool
 
-    /// Parsed markdown for every message in this turn, keyed by id. Supplied by the
-    /// snapshot rather than computed here, so a body re-evaluation costs a dictionary
-    /// lookup and not a parse.
-    var blocks: [SylID: [MarkdownBlock]] = [:]
+    /// Parsed markdown for **this turn's** messages, in order.
+    ///
+    /// Deliberately a small array and not the transcript-wide dictionary. SwiftUI
+    /// compares a row's stored values to decide whether to re-render it, so holding the
+    /// whole map here made every update deep-compare every message's markdown, once per
+    /// row — quadratic work on the main thread, which presents as the app freezing and
+    /// then being killed by the watchdog.
+    var blocks: [[MarkdownBlock]] = []
 
     /// True when this turn is queued and the connection is not up, so "sending" would
     /// be a lie. Derived rather than stored: there is no failure state on a message yet
@@ -43,6 +47,13 @@ struct ChatTurn: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isFromCommander: Bool { group.role == .user }
+
+    /// The blocks for one message, positionally. The array is built from
+    /// `group.messages` in the loader, so index alignment holds — and the fallback means
+    /// a mismatch degrades to plain text rather than losing the words.
+    private func blocks(at index: Int, fallback message: Message) -> [MarkdownBlock] {
+        index < blocks.count ? blocks[index] : [.paragraph(message.text)]
+    }
 
     var body: some View {
         Group {
@@ -97,7 +108,7 @@ struct ChatTurn: View {
             VStack(alignment: .leading, spacing: SylTheme.Metric.step) {
                 ForEach(Array(group.messages.enumerated()), id: \.element.id) { index, message in
                     MessageBody(
-                        blocks: blocks[message.id] ?? [.paragraph(message.text)],
+                        blocks: blocks(at: index, fallback: message),
                         attachments: message.attachments,
                         // Only the first message in the turn carries the "Syl said,
                         // 9:14" preamble. Repeating it on every message would read the
@@ -148,7 +159,7 @@ struct ChatTurn: View {
             VStack(alignment: .leading, spacing: SylTheme.Metric.snug) {
                 ForEach(Array(group.messages.enumerated()), id: \.element.id) { index, message in
                     MessageBody(
-                        blocks: blocks[message.id] ?? [.paragraph(message.text)],
+                        blocks: blocks(at: index, fallback: message),
                         // Inside the glass, not beside it. His turn is an object, and a
                         // picture he sent is part of that object rather than a thing
                         // floating next to it.
