@@ -456,6 +456,76 @@ session answered `VESPENE-7741` instead of `NONE`. The second rebuild was a
 no-op, which is the steady state — the cost of running it after every turn is one
 `readdir`, no tokens and no subprocess.
 
+### A stale build is invisible by construction — `syl-dep1.4`
+
+Every health check passes against an old build, because an old build is
+perfectly healthy: it answers, its store is fine, its certificate is fine, and
+it is simply not the code anybody believes is running. It cost three hours — the
+service came up at 19:58, an MCP fix landed at 20:18, and Syl went on answering
+through a tool surface that had been removed, diagnosed only because the
+Commander thought something read oddly and asked.
+
+The fix is one line of provenance and one rule about where it comes from.
+`backend/scripts/write-build-info.mjs` writes `dist/build-info.json` **during the
+build**; `/health` reports it; `scripts/syl-verify.sh stale` compares it with
+`HEAD`.
+
+**Never read git at request time.** It is the obvious implementation and it is
+worthless: a service that shells out to `git rev-parse HEAD` would have reported
+the *new* commit throughout those three hours. The running process must report
+what it was BUILT FROM. The working tree is a different question, and the value
+is entirely in the two answers disagreeing.
+
+A second property fell out of putting the stamp inside `dist/` rather than
+beside it: **it travels with the artifact**. `npm run deploy` rolls back by
+restoring the previous `dist/`, and the restored build reports the previous
+commit immediately — nothing to keep in sync, and no way for provenance to
+disagree with the code it describes.
+
+### Deploy: the health gate is not "does she answer" — `syl-dep1.5`
+
+The subtle one, and it is why (e) had to come before (c). If a new build fails
+to load, launchd's `KeepAlive` can leave the **previous** process answering
+perfectly, so a deploy that polled for a 200 would report success while nothing
+had changed. The gate is "does she answer **as the new commit**", which is only
+askable because the build stamp exists.
+
+Two further shapes worth keeping:
+
+- **A soak window.** A process that starts and dies thirty seconds later looks
+  identical to a healthy one for those thirty seconds, and `KeepAlive` restarts
+  it into the same broken build forever. The soak watches `startedAt`: if it
+  moves, she restarted herself, and that is a crash loop rather than a deploy.
+- **Save `dist/` before building, not after.** The build writes over it in
+  place, so after `tsc` starts there is no previous build to go back to — and a
+  build that fails half way leaves a directory that is neither.
+
+What it does **not** do is roll back the database. Migrations run forward and
+there is no down path, so a rollback restores the code and leaves the schema
+ahead of it. That is stated in the outcome rather than papered over, and there
+is a red acceptance test — `syl-dep1.7` — that says what should happen instead.
+
+### The CI gate is a safety boundary, not a convenience — `syl-dep1.6`
+
+"If `origin/main` moved, build and restart" is the obvious auto-deploy and the
+wrong one: it would let a 2am commit with red CI take the Commander's assistant
+down while he sleeps, and the first symptom would be a 07:00 agenda that never
+arrives.
+
+Everything ambiguous means do not deploy — checks pending, a commit with **no**
+check runs (merge commits produce exactly that, and absence of evidence is not
+evidence of passing), a conclusion string GitHub has not used before, and above
+all **the API being unreachable**. The two errors are not symmetrical: waiting
+costs a few hours of staleness, which `/health` now makes visible, and guessing
+costs the 07:00 agenda.
+
+The Commander's stated direction is that Syl may eventually update herself. She
+is not being given that, and nothing here builds toward it. What makes the
+eventual version survivable is that **everything which deploys goes through one
+function and no option turns the check off** — asserted over every combination
+of every option in `deploy-gate.test.ts`, so a bypass added later fails the
+suite rather than shipping.
+
 ## 8. Design principles to hold
 
 **Never silently drop a reminder.** A late reminder is a nuisance; a vanished one

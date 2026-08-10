@@ -1256,6 +1256,16 @@ components:
     HealthStatus:
       type: object
       required: [status, version, startedAt, now, checks]
+      description: |
+        Liveness, dependency status, and — the part that is not obvious —
+        **what code is answering**.
+
+        A stale build is invisible by construction: every check passes, because
+        the old build is perfectly healthy. It has already cost real time here.
+        The service ran from 19:58 while a fix landed at 20:18, so for three
+        hours Syl answered through a tool surface that had been removed, and it
+        was noticed only because the Commander thought something read oddly and
+        asked. `build` is what turns that silent failure into a visible one.
       properties:
         status:
           type: string
@@ -1266,6 +1276,60 @@ components:
         checks:
           type: array
           items: { $ref: "#/components/schemas/HealthCheck" }
+        build:
+          description: |
+            What this process was BUILT FROM, stamped at build time.
+
+            `null` when the service is running from source rather than from a
+            build — `npm run dev`, a test, a `tsx` invocation — which is a real
+            and useful answer rather than a missing one.
+          oneOf:
+            - { $ref: "#/components/schemas/BuildInfo" }
+            - { type: "null" }
+        turnsInFlight:
+          type: integer
+          minimum: 0
+          description: |
+            How many conversations have a turn running or queued right now.
+
+            Here so that an automated deploy can decline to restart her
+            mid-sentence. It is the only thing on this endpoint that changes
+            second to second, and it is deliberately a count and not a list:
+            `/health` takes no bearer token, so it may say that she is busy and
+            must never say what about.
+
+    BuildInfo:
+      type: object
+      required: [commit, builtAt, dirty]
+      description: |
+        Provenance for the artifact that is running, written by
+        `backend/scripts/write-build-info.mjs` at build time into
+        `dist/build-info.json`.
+
+        **Stamped at build time, never read from git at request time.** Those
+        two answers differ, and the difference is the entire point: the running
+        service must report the commit it was BUILT FROM, not whatever the
+        working tree happens to say now. Because the stamp lives inside `dist/`,
+        it also travels with a rolled-back build automatically.
+      properties:
+        commit:
+          type: [string, "null"]
+          description: |
+            The full 40-character SHA the build was made from. `null` only when
+            the build happened outside a git checkout, which is worth reporting
+            rather than hiding — a build nobody can trace back to a commit is a
+            build nobody can reason about.
+          examples: ["49ac2dce862dfca27edaeb6c2e69c157ea434eda"]
+        builtAt: { $ref: "#/components/schemas/Instant" }
+        dirty:
+          type: boolean
+          description: |
+            Whether the working tree had uncommitted changes when the build ran.
+            A dirty build cannot be reproduced from `commit`, so "running the
+            commit at HEAD" is not the same statement about it.
+        branch:
+          type: [string, "null"]
+          description: The branch checked out at build time, for a human reading a log.
 
     HealthCheck:
       type: object

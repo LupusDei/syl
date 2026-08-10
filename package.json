@@ -64,7 +64,9 @@
     "prelogs": "npm run check:env",
     "logs": "tsx backend/src/ops/cli/logs.ts",
     "prelaunchd": "npm run check:env",
-    "launchd": "tsx backend/src/ops/cli/launchd.ts"
+    "launchd": "tsx backend/src/ops/cli/launchd.ts",
+    "predeploy": "npm run check:env",
+    "deploy": "tsx backend/src/ops/cli/deploy.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

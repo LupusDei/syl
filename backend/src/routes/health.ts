@@ -1,6 +1,6 @@
 import { Router } from "express";
 
-import type { HealthCheck, HealthStatus } from "@syl/shared";
+import type { BuildInfo, HealthCheck, HealthStatus } from "@syl/shared";
 
 import type { SylConfig } from "../config.js";
 import { instant, systemClock, type Clock } from "../services/clock.js";
@@ -100,6 +100,22 @@ export interface HealthRouterOptions {
   /** Extra dependencies to report. The billing check is always included. */
   readonly probes?: readonly HealthProbe[];
   readonly clock?: Clock;
+  /**
+   * What this process was built from, read once at boot from the stamp inside
+   * `dist/`. `null` — the default — is what running from source looks like, and
+   * is a real answer rather than a missing one.
+   *
+   * Deliberately a value and not a function. It cannot change while the process
+   * lives, and anything that recomputed it per request would be asking the
+   * working tree rather than the artifact, which is the exact mistake this
+   * field exists to make impossible.
+   */
+  readonly build?: BuildInfo | null;
+  /**
+   * How many conversations have a turn running or queued, asked at request
+   * time. Omit for a service with no conversation surface.
+   */
+  readonly turnsInFlight?: () => number;
 }
 
 /**
@@ -113,6 +129,8 @@ export function createHealthRouter(options: HealthRouterOptions): Router {
   const clock = options.clock ?? systemClock;
   const probes: readonly HealthProbe[] = [subscriptionRailsProbe(config), ...(options.probes ?? [])];
   const startedAt = instant(clock());
+  const build = options.build ?? null;
+  const turnsInFlight = options.turnsInFlight;
 
   const router = Router();
 
@@ -128,6 +146,12 @@ export function createHealthRouter(options: HealthRouterOptions): Router {
       startedAt,
       now: instant(clock()),
       checks,
+      // Always present, explicitly null when unknown. A field that disappears
+      // when there is nothing to say is indistinguishable from an old build
+      // that never had the field at all — which is the one question this
+      // endpoint must be able to answer.
+      build,
+      ...(turnsInFlight === undefined ? {} : { turnsInFlight: turnsInFlight() }),
     };
 
     // Always 200. `status` inside the body is the answer; a non-200 here would

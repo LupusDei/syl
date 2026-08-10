@@ -79,6 +79,9 @@ backend/                          the Node 22 service (npm workspace)
   src/routes/admin.ts             serves the built web admin at /admin
   src/ops/admin-bundle.ts         where that bundle is, and what a missing one does
   src/harness/schedule.ts         wall-clock scheduling + quiet hours
+  src/ops/build-info.ts           what this process was BUILT FROM. Never asks git.
+  src/ops/deploy.ts               deploy, health-gate, roll back. All seams injected.
+  src/ops/deploy-gate.ts          may this commit be deployed? The CI gate.
   src/harness/cli/ping.ts         end-to-end smoke test
   tests/unit/**                   vitest
 frontend/                         web admin — Vite + React (npm workspace)
@@ -141,6 +144,7 @@ npm run typecheck # root tooling + tsc --noEmit per workspace
 npm run verify    # typecheck + test — run this before pushing
 npm test -w backend             # one workspace, focused
 npm run ping -- "your prompt"   # live end-to-end check
+npm run deploy -- --dry-run     # what a deploy would do, touching nothing
 ```
 
 **Adding a workspace**: create `<name>/package.json` and a `<name>/tsconfig.json`
@@ -231,6 +235,27 @@ to add is about *additional* surfaces and blocks nothing.
   a dot.** `send` cannot tell caller-supplied path from request-supplied path,
   so it refuses the lot — a bundle under `~/.syl/` or an agent worktree in
   `.claude/` silently disappears. Always `sendFile(name, { root })`.
+- **`/health` reports the commit and build time the running process was BUILT
+  FROM**, stamped into `backend/dist/build-info.json` by
+  `backend/scripts/write-build-info.mjs` during `npm run build`. **Never shell
+  out to git at request time.** The two answers differ exactly when it matters:
+  a service that asked git would have reported the *new* commit throughout the
+  three hours it was running the old one. A stale build is invisible by
+  construction — every check passes, because the old build is perfectly
+  healthy — and `bash scripts/syl-verify.sh stale` is the one check that can
+  fail because of it. Because the stamp lives inside `dist/`, it travels with a
+  rolled-back build automatically.
+- **Deploys go through one gate and there is no bypass.** `npm run deploy` and
+  the unattended `com.jmm.syl.update` job both call `decideDeploy`
+  (`ops/deploy-gate.ts`), which deploys only a commit whose GitHub check runs
+  have passed. Every ambiguous answer — pending, no checks at all, an unknown
+  conclusion string, GitHub unreachable — means do not deploy. `--unattended`
+  only makes a run *stricter*. `deploy-gate.test.ts` asserts that no
+  combination of options lets an ungreen commit through, so a bypass added
+  later fails the suite. **Do not add a way for the service to deploy itself.**
+- The health gate after a restart asks "does she answer **as the new commit**",
+  not "does she answer". Those differ in the case that matters: if the new build
+  fails to load, `KeepAlive` can leave the previous process answering perfectly.
 - The `claude` binary is resolved by `backend/src/harness/claude-bin.ts`, not by trusting `PATH`.
   Claude Code installs to `~/.local/bin`, which shell profiles add for
   interactive use — so the same machine resolves under zsh and throws `ENOENT`

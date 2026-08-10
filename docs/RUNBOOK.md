@@ -279,13 +279,19 @@ launchctl enable   gui/$(id -u)/com.jmm.syl.core
 `Bootstrap failed: 5: Input/output error`, which says nothing at all about the
 cause.)
 
-The three jobs and why there are three:
+The four jobs and why there are four:
 
 | Label | What it does | Why it exists |
 | --- | --- | --- |
 | `com.jmm.syl.core` | `RunAtLoad`, `KeepAlive`, `ThrottleInterval 10` | Starts Syl and restarts her if she **dies** |
 | `com.jmm.syl.watchdog` | `StartInterval 60` | Restarts her if she **wedges** — running, holding the port, answering nothing. launchd cannot see this, and it is the 3am failure |
 | `com.jmm.syl.cert` | daily 03:40 + `RunAtLoad` | Renews the 90-day certificate before it expires |
+| `com.jmm.syl.update` | `StartInterval 600`, **not** `RunAtLoad` | Deploys a new commit **only if its GitHub checks passed**, and rolls back if she does not come up. See §12 |
+
+`com.jmm.syl.update` is the one job that is safe to leave out. Everything else
+keeps Syl running; that one changes what she runs. Install it deliberately,
+after reading §12, and never as part of a batch you are half paying attention
+to.
 
 **Proves**: the service is supervised, in both of the two ways it can fail.
 **Worked if**:
@@ -426,12 +432,125 @@ are closed.
 
 ---
 
+## 12. Updating her — `syl-dep1`
+
+### The question every other check is blind to
+
+```sh
+bash scripts/syl-verify.sh stale
+```
+
+It compares the commit `/health` reports against `HEAD` and prints one of:
+
+```
+  PASS  that is the commit at HEAD
+  FAIL  STALE: she is running 49ac2dc and HEAD is b0521f9
+```
+
+**A stale build is invisible by construction.** Every other line in this runbook
+passes against one, because an old build is perfectly healthy — it answers, its
+database is fine, its certificate is fine, and it is simply not the code you are
+reading. That cost three hours once: the service came up at 19:58, a fix landed
+at 20:18, and Syl went on answering through a tool surface that had been removed
+until you noticed something read oddly and asked.
+
+The commit is stamped into `backend/dist/build-info.json` **when the build
+runs**, and `/health` reports that file. It is never `git rev-parse` at request
+time — the running service must say what it was BUILT FROM, and the working tree
+is a different question. The stamp lives inside `dist/`, so a rolled-back build
+reports the rolled-back commit with nothing to keep in sync.
+
+### Deploying by hand
+
+```sh
+npm run deploy              # deploy origin/main, if its checks passed
+npm run deploy -- --dry-run # say what it would do and touch nothing
+```
+
+It fetches, checks the CI status of the target commit, refuses if the tree is
+dirty or you are not on `main`, runs `npm run verify`, **saves the current
+`dist/`**, builds, waits for any in-flight turn to finish, kickstarts the core
+job, and then polls `/health` until she answers **as the new commit** — not
+merely until something answers, which is a different and much weaker claim.
+
+If she does not come up, or comes up and restarts herself inside the ninety-
+second soak window, it puts the previous `dist/` back, resets the checkout, and
+restarts her — and it does not report success until the restored build is
+answering.
+
+Exit codes: `0` deployed or correctly declined, `1` did not deploy and said why,
+`70` **something went wrong and she may be down**, `78` misconfigured.
+
+`npm run deploy` requires green CI just as the unattended job does. That is
+deliberate and there is no flag to skip it: the value of a gate that everything
+goes through is that there is nothing to remember. If CI has not finished, wait
+for it.
+
+### The auto-deploy — install this one on purpose
+
+**The gate is the whole design.** It deploys a commit only when GitHub says that
+commit's checks have PASSED — never merely because `origin/main` moved. "If HEAD
+moved, build and restart" would let a 2am commit with red CI take your assistant
+down while you sleep, and the first symptom would be a 07:00 agenda that never
+arrives.
+
+Everything ambiguous means *do not deploy*: checks still running, a commit with
+no checks at all (merge commits produce exactly that), a conclusion string we
+have never seen, and — the important one — **GitHub being unreachable**. It also
+declines inside quiet hours, declines while a turn is in flight, and never
+retries a commit that has already failed to deploy once.
+
+> **Do not load this job yet — `syl-dep1.8`.** `.github/workflows/ci.yml` runs
+> `npm test` (zero failures) rather than `npm run test:gate` (failures ==
+> declared), so the `verify` check is **red on every commit to main** and has
+> been since the expected-failures mechanism landed. The gate will therefore
+> decline every commit, correctly, and say `checks-failed` — which is right, and
+> looks exactly like nothing happening. Fix CI first, then load this.
+
+Install it, when you want it:
+
+```sh
+launchctl bootout  gui/$(id -u)/com.jmm.syl.update 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jmm.syl.update.plist
+launchctl enable   gui/$(id -u)/com.jmm.syl.update
+```
+
+(`npm run launchd -- --install` writes the plist; those three lines load it. It
+is deliberately **not** `RunAtLoad` — installing supervision must never itself
+be a restart — so nothing happens for the first ten minutes.)
+
+Turn it off again with a single `launchctl bootout gui/$(id -u)/com.jmm.syl.update`.
+Nothing else depends on it.
+
+Watch it:
+
+```sh
+npm run logs -- --event deploy.decision   # what it decided, and why
+npm run logs -- --event deploy.rolled_back
+cat ~/.syl/deploy-state.json              # probation, and commits it will not retry
+```
+
+### What it does NOT handle
+
+- **The database does not roll back.** Migrations run forward on the way up and
+  there is no down path, so a rollback restores the code and leaves the schema
+  ahead of it. The deploy says so, loudly, when migrations were involved.
+  `syl-dep1.7`, with an acceptance test that stays red until it is fixed.
+- **A build that starts crashing more than thirty minutes after deploying.**
+  Probation expires; after that an unhealthy service is the watchdog's problem.
+- **Anything wrong that `/health` reports as healthy.** The gate is the CI run;
+  if CI is green and the build is broken in a way health cannot see, this will
+  deploy it and keep it.
+
+---
+
 ## When something is wrong
 
 Start here, always:
 
 ```sh
-bash scripts/syl-verify.sh status   # what is broken
+bash scripts/syl-verify.sh status   # what is broken, including "is she stale"
+bash scripts/syl-verify.sh stale    # just the build question
 npm run logs -- --failure           # the most recent warning or error
 npm run logs -- --level warn        # everything that has gone wrong lately
 ```
@@ -450,6 +569,9 @@ truncates them in place when they pass 32 MiB.
 | `service.start` says `credentialSource=ANTHROPIC_API_KEY` | Something exported a key into the service's environment | Remove it from the plist and from your shell profile. This is billing, not a warning |
 | Crash loop, exit 78 | Bad configuration — an offset instead of an IANA zone, an unbuilt `dist/`, a missing `SYL_APNS_ENVIRONMENT` | `npm run logs -- --level error`; the message names the variable |
 | Nothing has been logged since a certain hour | The service died in a way `KeepAlive` could not fix, or the whole machine slept | `launchctl print gui/$(id -u)/com.jmm.syl.core`; `pmset -g custom` |
+| She behaves like an older version of herself, and every check passes | A stale build. Invisible by construction — the old build is perfectly healthy | `bash scripts/syl-verify.sh stale`, then `npm run deploy` |
+| The auto-deploy never deploys anything | Usually the gate doing its job. It says which one | `npm run logs -- --event deploy.decision`; if it says `checks-unknown`, check `gh auth status` |
+| She was updated and then rolled back overnight | The new build did not come up, or crash-looped | `npm run logs -- --event deploy.rolled_back`; the commit is in `~/.syl/deploy-state.json` and will not be retried |
 
 ### Restarting by hand
 
@@ -550,6 +672,13 @@ Automated, in `npm run verify`:
 - The APNs environment assertion, on the real `startSyl` path.
 - `pmset` parsing, against output captured from this machine.
 
+- The deploy's decision sequence — including every rollback path — against a
+  simulated machine with injected git, npm, launchctl, health-probe and clock.
+  The CI gate against **real captured `gh api` output**, including a commit
+  whose `verify` genuinely failed and one with no check runs at all.
+- `scripts/syl-verify.sh stale`, against a real HTTP server and a real git
+  repository, agreeing and disagreeing.
+
 **Never executed here**, and therefore first run by you:
 
 - `tailscale` anything. No tailscale binary exists on this machine.
@@ -557,3 +686,7 @@ Automated, in `npm run verify`:
 - launchd itself. The plists are validated by `plutil`, but no Syl job has ever
   been loaded.
 - The reboot, the sleep/wake cycle and the power cut.
+- **A real deploy, and therefore a real rollback.** Every branch is tested
+  against a simulation; none has replaced a running process on this machine.
+  The first `npm run deploy` is yours, and it is worth doing by hand, awake,
+  before `com.jmm.syl.update` is ever loaded.

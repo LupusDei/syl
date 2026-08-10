@@ -73,12 +73,43 @@ export type PageInfo = {
   readonly hasMore: boolean;
 };
 
+/**
+ * Liveness, dependency status, and — the part that is not obvious —
+ * **what code is answering**.
+ *
+ * A stale build is invisible by construction: every check passes, because
+ * the old build is perfectly healthy. It has already cost real time here.
+ * The service ran from 19:58 while a fix landed at 20:18, so for three
+ * hours Syl answered through a tool surface that had been removed, and it
+ * was noticed only because the Commander thought something read oddly and
+ * asked. `build` is what turns that silent failure into a visible one.
+ */
 export type HealthStatus = {
   readonly status: "ok" | "degraded" | "down";
   readonly version: string;
   readonly startedAt: Instant;
   readonly now: Instant;
   readonly checks: HealthCheck[];
+  readonly build?: BuildInfo | null;
+  readonly turnsInFlight?: number;
+};
+
+/**
+ * Provenance for the artifact that is running, written by
+ * `backend/scripts/write-build-info.mjs` at build time into
+ * `dist/build-info.json`.
+ *
+ * **Stamped at build time, never read from git at request time.** Those
+ * two answers differ, and the difference is the entire point: the running
+ * service must report the commit it was BUILT FROM, not whatever the
+ * working tree happens to say now. Because the stamp lives inside `dist/`,
+ * it also travels with a rolled-back build automatically.
+ */
+export type BuildInfo = {
+  readonly commit: string | null;
+  readonly builtAt: Instant;
+  readonly dirty: boolean;
+  readonly branch?: string | null;
 };
 
 export type HealthCheck = {

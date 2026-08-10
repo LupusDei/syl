@@ -78,7 +78,8 @@ jobs:
             tests/unit/launchd.test.ts \
             tests/integration/launchd-entrypoint.test.ts \
             tests/integration/cert-renew.test.ts \
-            tests/integration/watchdog.test.ts
+            tests/integration/watchdog.test.ts \
+            tests/integration/update-entrypoint.test.ts
 
       - name: Run every phase of the suite
         run: ios/scripts/test.sh
