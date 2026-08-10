@@ -188,6 +188,52 @@ final class LocalStoreTests: XCTestCase {
         )
     }
 
+    /// The case that decided the rule, and the one nobody had written down.
+    ///
+    /// `pinned` is an **elevator, not an override**. Pin "call the roofer", which has no
+    /// date, and pinned-first puts it above "submit the taxes" due in two hours — that is
+    /// not the list saying *this one matters*, it is the list lying about what is urgent.
+    ///
+    /// Proposal B calls `pinned` durable and never calls it more important than a
+    /// deadline; its whole argument for computing order rather than storing it is that
+    /// urgency belongs to the moment.
+    ///
+    /// This existed as a disagreement between the SQL here and `TodoOrdering` — read as
+    /// correct in both files and wrong on screen, which is the worst kind of defect this
+    /// project produces, because every test passes. Decided 2026-08-10.
+    func testShouldRankADeadlineAboveAPin() throws {
+        try store.upsert([
+            todo(id: "syl:todo:0198f2c2-0001-7000-8000-00000000c001", pinned: true, dueAt: nil),
+            todo(
+                id: "syl:todo:0198f2c2-0002-7000-8000-00000000c002",
+                pinned: false,
+                dueAt: instant("2026-08-09T08:00:00.000Z")
+            ),
+        ])
+
+        XCTAssertEqual(
+            try store.openTodos().map(\.id),
+            [
+                "syl:todo:0198f2c2-0002-7000-8000-00000000c002",
+                "syl:todo:0198f2c2-0001-7000-8000-00000000c001",
+            ],
+            "a pin lifts a to-do above other undated ones, not above something actually due"
+        )
+    }
+
+    func testShouldReportTodosTheServerHasNotAcknowledged() throws {
+        // So a view can disable completion WITH A REASON rather than offering a control
+        // that refuses on contact. A capture has no clientId in the contract, so
+        // `pendingKey` is the only thing tying the optimistic row to its intent.
+        let captured = try store.createTodo(
+            text: "Call the roofer",
+            idempotencyKey: "k-1",
+            now: instant("2026-08-09T07:00:00.000Z")
+        )
+
+        XCTAssertEqual(try store.unsyncedTodoIDs(), [captured.id])
+    }
+
     /// A regression. `openTodos` ordered on `dueAt` alone, and SQLite puts NULLs first —
     /// so every undated to-do sorted above the one due in an hour, which is exactly
     /// backwards for this question. The server's `todos_agenda_idx` says so in its own

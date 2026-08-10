@@ -334,14 +334,77 @@ struct LocalStore: Sendable {
     /// an hour — exactly backwards for this question, and precisely what the server's
     /// `todos_agenda_idx` says in its own comment. It was invisible in the suite because
     /// the only ordering test had two undated rows.
+    /// Open to-dos, in the order he should meet them.
+    ///
+    /// **Deadline first. `pinned` is an elevator, not an override** (`syl-011`, decided
+    /// 2026-08-10 when the SQL and `TodoOrdering` were found to disagree).
+    ///
+    /// This ordered `pinned DESC` first, which sounds right and is wrong in the case
+    /// that matters: pin "call the roofer", which has no date, and it outranks "submit
+    /// the taxes" due in two hours. That is not the list saying *this one matters*, it
+    /// is the list lying about what is urgent. Proposal B calls `pinned` **durable**; it
+    /// never calls it more important than a deadline, and its entire argument for
+    /// computing order rather than storing it is that urgency belongs to the moment.
+    ///
+    /// So a pinned undated to-do ranks above other *undated* ones, and below anything
+    /// actually due.
+    ///
+    /// `dueAt IS NULL` stays, and is separate: SQLite sorts NULLs **first**, so ordering
+    /// on `dueAt` alone put every undated to-do above every dated one — the day spine
+    /// has been wrong about this for as long as it has existed.
+    ///
+    /// This must agree with `TodoOrdering`, which is the pure, tested statement of the
+    /// same rule. A function and an `ORDER BY` that quietly disagree read as correct in
+    /// both files and wrong on screen.
     func openTodos(limit: Int = 100) throws -> [Todo] {
         try database.queue.read { db in
             try TodoRecord
-                .order(literal: "pinned DESC, dueAt IS NULL, dueAt, updatedAt DESC")
+                .order(literal: "dueAt IS NULL, dueAt, pinned DESC, updatedAt DESC")
                 .filter(Column("status") == TodoStatus.open.rawValue)
                 .limit(limit)
                 .fetchAll(db)
                 .map { try $0.model() }
+        }
+    }
+
+    /// How many open to-dos there are, in total.
+    ///
+    /// Separate from `openTodos` because that read is **windowed**, and deriving a count
+    /// from a window means the day would say "100 open" forever once he passed a
+    /// hundred — a number that stops being true exactly when it starts mattering.
+    func openTodoCount() throws -> Int {
+        try database.queue.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM todo WHERE status = ?",
+                arguments: [TodoStatus.open.rawValue]
+            ) ?? 0
+        }
+    }
+
+    /// To-dos the server has not acknowledged yet.
+    ///
+    /// A captured to-do has **no `clientId` in the contract** — unlike a message, there
+    /// is nothing the server echoes back that would let the device match its copy to the
+    /// optimistic row. So a capture is tied to its outbox entry by `pendingKey` until
+    /// the server's own row arrives and replaces it (`syl-011.1.8`).
+    ///
+    /// While that is true, `completeTodo` refuses the row: completing something the
+    /// server has never heard of would return `NOT_FOUND`, abandon the intent, and let
+    /// the next sync reinstate the server's still-open copy — a completion that silently
+    /// undoes itself, which is the worst available outcome.
+    ///
+    /// This exists so a view can say so *before* he taps, rather than presenting a
+    /// control that refuses. A disabled affordance with a reason is an explanation; one
+    /// that fails on contact is a bug he has to interpret.
+    func unsyncedTodoIDs() throws -> Set<SylID> {
+        try database.queue.read { db in
+            Set(
+                try String.fetchAll(
+                    db,
+                    sql: "SELECT id FROM todo WHERE pendingKey IS NOT NULL"
+                )
+            )
         }
     }
 
@@ -389,7 +452,10 @@ struct LocalStore: Sendable {
     func todos(goalId: SylID, limit: Int = 200) throws -> [Todo] {
         try database.queue.read { db in
             try TodoRecord
-                .order(literal: "pinned DESC, dueAt IS NULL, dueAt, updatedAt DESC")
+                // The same four terms as `openTodos`, and for the same reason. A goal
+                // that ordered its to-dos differently from the list they also appear in
+                // would be two answers to one question.
+                .order(literal: "dueAt IS NULL, dueAt, pinned DESC, updatedAt DESC")
                 .filter(Column("goalId") == goalId)
                 .limit(limit)
                 .fetchAll(db)
