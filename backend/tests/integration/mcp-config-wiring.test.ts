@@ -62,7 +62,21 @@ import { BACKEND_SRC } from "../helpers/sql-tables.js";
  * one entry, and say in a comment which lane it serves and why that lane and no
  * other.
  */
-const MAY_HAND_OUT_THE_TOOLS: readonly string[] = [];
+const MAY_HAND_OUT_THE_TOOLS: readonly string[] = [
+  // `index.ts`, and it serves the COMMANDER lane and no other.
+  //
+  // Declared before it provides anything, deliberately. It forwards a config
+  // path to `assertContainer` today and will attach the surface itself when
+  // `syl-009.3.3` lands — and that transition is the exact event this guard
+  // exists to catch. Parked in a validators list it would go on passing on the
+  // day its meaning changed, which is the failure this whole file is about.
+  //
+  // The other lanes get nothing: the dream must not be able to write a reminder
+  // while judging, the heartbeat and agenda read rather than act, and the
+  // extraction turn is a sealed reader. An empty-but-declared intent is what
+  // this list is for.
+  "index.ts",
+];
 
 /** The module that declares the option. Excluded from the count, never from the code. */
 const DECLARES_THE_OPTION = "harness/session.ts";
@@ -86,7 +100,7 @@ const DECLARES_THE_OPTION = "harness/session.ts";
  * {@link MAY_HAND_OUT_THE_TOOLS}.** Nothing here may pass `mcpConfig` into a
  * turn's options; `tests/unit/container.test.ts` asserts what the check does.
  */
-const VALIDATE_THE_OPTION: readonly string[] = ["index.ts", "ops/container.ts"];
+const VALIDATE_THE_OPTION: readonly string[] = ["ops/container.ts"];
 
 const fakes: FakeClaude[] = [];
 const temps: string[] = [];
