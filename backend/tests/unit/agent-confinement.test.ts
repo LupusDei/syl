@@ -13,6 +13,7 @@ import {
 import { ApiFailure } from "../../src/routes/envelope.js";
 import { THE_COMMANDER, type ApiKeyService, type KeyScope } from "../../src/services/api-key-service.js";
 import type { SylDatabase } from "../../src/services/database.js";
+import { mountedRoutes, type MountedRoute } from "../helpers/contract.js";
 import { startTestApp, type RunningApp } from "../helpers/http.js";
 import { testConfig, testDatabase, testDeps } from "../helpers/service.js";
 
@@ -107,6 +108,14 @@ const OUT_OF_REACH: [method: string, path: string, body?: unknown][] = [
   ["POST", "/devices", { token: "a".repeat(64), platform: "ios", environment: "production" }],
   ["GET", "/auth/whoami"],
   ["GET", "/conversations"],
+  // The WRITE, and it is the one that matters most on this list (`syl-009.6`).
+  // Reading his transcript is a privacy question; writing to it is an
+  // authorship question, and a credential that can post into a conversation can
+  // put words in the Commander's mouth — after which nothing in the record can
+  // be trusted, including the record of what she did. She speaks through
+  // `ConversationService` in process, where the service decides whose message
+  // it is; this door has to stay shut.
+  ["POST", "/conversations/syl:conversation:interactive/messages", { text: "I said that." }],
   ["GET", "/sync"],
   ["GET", "/jobs"],
   ["GET", "/deliveries"],
@@ -227,6 +236,116 @@ describe("the agent scope, over HTTP", () => {
 
       expect(response.status).toBe(200);
     });
+  });
+});
+
+/**
+ * `syl-009.6` — **every route, not the ones somebody remembered.**
+ *
+ * `OUT_OF_REACH` above is a hand-written list and is the better test of the two
+ * for the doors we care about most, because it names them. Its blind spot is
+ * the door added next month: a router mounted tomorrow is out of her reach by
+ * construction — the confinement is an allowlist — but nothing in this file
+ * would notice if that stopped being true.
+ *
+ * So this sweep is derived from **what Express will actually dispatch**, which
+ * is the one source that grows on its own. Note what it is NOT derived from:
+ * `AGENT_SURFACE`. The three nouns are spelled out here as literals, so
+ * widening the allowlist makes this go red rather than quietly agreeing with
+ * the change — which is the failure mode the comment above `OUT_OF_REACH`
+ * warns about, avoided by taking one side of the comparison from the code and
+ * the other from the requirement.
+ */
+describe("everything the agent scope cannot reach, swept from the router", () => {
+  /** Her three nouns, written down rather than imported. See above. */
+  const HERS: readonly string[] = ["/reminders", "/todos", "/goals"];
+
+  /**
+   * The two operations that answer without a token, and why each must.
+   *
+   * `security: []` in the contract. They never reach `confineAgent`, because
+   * `requireBearerToken` is what runs it — so they are excluded from the sweep
+   * and accounted for by name here instead. Both are checked below.
+   */
+  const UNAUTHENTICATED: readonly string[] = ["GET /health", "POST /auth/pair"];
+
+  /** Every route the app dispatches that is not hers and not unauthenticated. */
+  function beyondHer(): readonly MountedRoute[] {
+    return mountedRoutes(createApp(testConfig(), testDeps(db)))
+      .filter((route) => !UNAUTHENTICATED.includes(route))
+      .filter((route) => {
+        const path = route.slice(route.indexOf(" ") + 1);
+        return !HERS.some((noun) => path === noun || path.startsWith(`${noun}/`));
+      });
+  }
+
+  it("should have a great many doors to check, so the sweep cannot pass vacuously", () => {
+    // The failure mode of every derived guard: an introspection helper that
+    // returns nothing turns the assertion below green forever.
+    const routes = beyondHer();
+
+    expect(routes.length).toBeGreaterThan(10);
+    // And it really is finding the ones we know about by name.
+    expect(routes).toContain("GET /logs");
+    expect(routes).toContain("POST /devices");
+  });
+
+  it("should refuse her at every one of them, including routes nobody has written yet", async () => {
+    const refused: string[] = [];
+
+    for (const route of beyondHer()) {
+      const [method = "GET", template = ""] = route.split(" ");
+      // Any id at all: the confinement runs in the authentication middleware,
+      // before routing, so what the id points at never comes up.
+      const path = template.replace(/\{[^}]+\}/gu, "syl:nothing:0");
+      const response = await call(method, path, { token: agentToken() });
+      if (response.status !== 403) {
+        refused.push(`${route} answered ${String(response.status)}`);
+      }
+      // Drained so no socket is left open by a body nobody read.
+      await response.text();
+    }
+
+    expect(refused).toEqual([]);
+  });
+
+  it("should leave the two unauthenticated operations giving her nothing", async () => {
+    // They are outside the confinement by construction, so they are the only
+    // places the sweep above cannot speak for. Both are safe, and for reasons
+    // rather than by accident:
+    //
+    // `GET /health` is the clock. `tools/server.ts` asks it on every reminder
+    // precisely because it is unauthenticated and reaches nothing — one
+    // authority for time, and a test can hold it still.
+    const health = await call("GET", "/health", { token: agentToken() });
+    expect(health.status).toBe(200);
+    expect(JSON.stringify(await health.json())).not.toContain("token");
+
+    // `POST /auth/pair` is the escalation that would make the whole scope
+    // decorative: a device key steps around every line in `middleware/auth.ts`.
+    // It takes a pairing code, and a code is issued at the machine's own
+    // console — never over HTTP — so holding her credential buys nothing here.
+    const paired = await call("POST", "/auth/pair", {
+      token: agentToken(),
+      body: { pairingCode: "000000", deviceName: "Syl's own phone" },
+    });
+    expect(paired.status).not.toBe(200);
+    expect(JSON.stringify(await paired.json())).not.toContain("syl:apikey");
+  });
+
+  it("should publish no operation that hands out a pairing code", () => {
+    // The other half of "she cannot pair a device", and the one that survives
+    // somebody adding a route. She cannot present a code she has no way to
+    // obtain; this is the assertion that keeps that true.
+    //
+    // That `POST /auth/pair` mints `device` and takes no scope argument — so it
+    // is not one refactor away from handing out an `agent` key — is proved in
+    // `tests/integration/agent-credential.test.ts` and is not restated here.
+    const issuing = mountedRoutes(createApp(testConfig(), testDeps(db))).filter((route) =>
+      /pairing|pair-code|pairingcode/iu.test(route),
+    );
+
+    expect(issuing).toEqual([]);
   });
 });
 

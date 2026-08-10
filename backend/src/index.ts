@@ -47,7 +47,7 @@ import {
   type PushEnvironmentAssertion,
 } from "./ops/apns-environment.js";
 import { assertContainer, describeContainer } from "./ops/container.js";
-import { createLogger, type Logger } from "./ops/logging.js";
+import { createLogger, toolArgumentsForLog, type Logger } from "./ops/logging.js";
 import { assessPower, describePower } from "./ops/power.js";
 import { installShutdownHandlers } from "./ops/shutdown.js";
 import { tailnetCertProbe } from "./ops/tailnet-cert.js";
@@ -880,7 +880,20 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     // urgency, and the reason she attached. Without them the log can tell him
     // that something happened and never what, which is the same shape of
     // uselessness as a service that logged nothing between startup and failure.
-    if (event.kind === "tool_use") log.info("turn.tool", { tool: event.name, arguments: event.input });
+    //
+    // Through `toolArgumentsForLog`, because the destination is a file HE READS
+    // (`syl-009.5`). The credential handed to `secrets` is the one this process
+    // actually minted a few lines up rather than a pattern that might match it
+    // — the same "derive the claim from the thing itself" the container check
+    // and `harness/capability.ts` are built on — so there is no second copy of
+    // the secret to keep in step, and a field name nobody predicted is covered
+    // because the guard is on the VALUE.
+    if (event.kind === "tool_use") {
+      log.info("turn.tool", {
+        tool: event.name,
+        arguments: toolArgumentsForLog(event.input, { secrets: [agentKey.token] }),
+      });
+    }
     else if (event.kind === "init") log.info("turn.start", { sessionId: event.sessionId });
     else if (event.kind === "api_error") log.error("turn.api_error", { message: event.message });
     else if (event.kind === "result") {

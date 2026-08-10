@@ -123,6 +123,130 @@ export function safeField(value: unknown): unknown {
   return value;
 }
 
+/**
+ * What a tool call's arguments may cost the log, in both senses.
+ *
+ * Defaults chosen so that a caller who names neither still gets both guards —
+ * an option that must be remembered is an option that will be missed, and the
+ * failure mode of forgetting is the credential on disk.
+ */
+export interface ToolArgumentLimits {
+  /**
+   * Strings that must never reach a log line, whatever field carries them.
+   *
+   * **Values, not field names.** A denylist of names — `token`, `secret`,
+   * `authorization` — guards the fields somebody thought of and hands the next
+   * one through; this guards the value itself, so it does not matter which key
+   * it arrives under or how deeply it is nested. It is the same rule as
+   * `harness/capability.ts`: when two things must agree, make one a function of
+   * the other. The secret here is *the credential this process actually holds*,
+   * so there is no second copy to keep in step.
+   *
+   * Empty strings are ignored. An empty needle matches everywhere, which would
+   * redact the whole log the first time a caller passed a credential it had not
+   * minted yet.
+   */
+  readonly secrets?: readonly string[];
+  /** Longest a single string may be before it is cut. */
+  readonly maxStringLength?: number;
+  /** Longest the whole rendering may be, as JSON bytes. */
+  readonly maxBytes?: number;
+}
+
+/**
+ * Generous enough that a real reminder, a real reason and a real goal survive
+ * whole — those ARE the audit — and finite so a pasted article is not.
+ */
+export const DEFAULT_TOOL_ARGUMENT_STRING = 2_000;
+/** One tool call may not cost more of the log than this. */
+export const DEFAULT_TOOL_ARGUMENT_BYTES = 8_000;
+
+/** What replaces a secret wherever one is found. */
+export const REDACTED = "[redacted]";
+
+/**
+ * A tool call's arguments, made safe to write down.
+ *
+ * `syl-009.5`. The arguments are the record of what Syl did on the Commander's
+ * machine and the whole reason `turn.tool` is worth having — "she called
+ * `finish_todo`" and "she called `finish_todo` on the dentist appointment
+ * because she inferred you'd done it" are different facts and only the second
+ * can be audited. But the destination is **a file he reads**, so the same line
+ * that makes her reviewable is a line that can spill.
+ *
+ * Two guards, and the order between them is load-bearing:
+ *
+ * 1. **Redact, then truncate.** Truncating first can cut a secret in half and
+ *    leave the first two thousand characters of it on the line, which is a leak
+ *    that looks like a guard working. Redaction runs over the whole string
+ *    while the whole string is still there.
+ * 2. **Bound the volume twice** — per string, then over the finished object.
+ *    The per-string cap is what a long argument hits; the byte cap is for the
+ *    shape nobody predicted, an array of ten thousand short items. When it
+ *    trips, the KEYS survive and the values do not: the fact that she called a
+ *    verb with these fields is the audit, and it must not be lost to a value
+ *    that was too big to keep.
+ *
+ * Never throws, for `safeField`'s reason one line down: a logger that dies
+ * inside an error path takes the process with it at the moment the log was
+ * about to say why.
+ */
+export function toolArgumentsForLog(input: unknown, limits: ToolArgumentLimits = {}): unknown {
+  const secrets = (limits.secrets ?? []).filter((secret) => secret !== "");
+  const maxStringLength = limits.maxStringLength ?? DEFAULT_TOOL_ARGUMENT_STRING;
+  const maxBytes = limits.maxBytes ?? DEFAULT_TOOL_ARGUMENT_BYTES;
+
+  const clean = (value: unknown, depth: number): unknown => {
+    // A depth stop rather than a cycle set: `event.input` is parsed JSON off the
+    // CLI's stdout, so it cannot be circular, and a bound is the cheaper thing
+    // to be sure of.
+    if (depth > 12) return "[too deeply nested to log]";
+    if (typeof value === "string") return cut(redact(value, secrets), maxStringLength);
+    if (Array.isArray(value)) return value.map((item) => clean(item, depth + 1));
+    if (typeof value === "object" && value !== null) {
+      const out: Record<string, unknown> = {};
+      for (const [key, nested] of Object.entries(value)) out[key] = clean(nested, depth + 1);
+      return out;
+    }
+    return value;
+  };
+
+  const cleaned = clean(input, 0);
+
+  let rendered: string;
+  try {
+    rendered = JSON.stringify(cleaned) ?? "";
+  } catch {
+    return "[arguments could not be serialised]";
+  }
+  if (Buffer.byteLength(rendered) <= maxBytes) return cleaned;
+
+  // Over the cap. Keep the shape — which verb was called with which fields is
+  // the reviewable fact — and drop the contents.
+  const keys =
+    typeof cleaned === "object" && cleaned !== null && !Array.isArray(cleaned)
+      ? Object.keys(cleaned)
+      : [];
+  return {
+    omitted: `${String(Buffer.byteLength(rendered))} bytes of arguments, too large for the log`,
+    fields: keys,
+  };
+}
+
+/** Every occurrence of every secret, replaced. Plain `split`/`join`: no regex. */
+function redact(text: string, secrets: readonly string[]): string {
+  let out = text;
+  for (const secret of secrets) out = out.split(secret).join(REDACTED);
+  return out;
+}
+
+/** A string cut to length, saying how much was dropped rather than trailing off. */
+function cut(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const dropped = text.length - max;
+  return `${text.slice(0, max)}… (+${String(dropped)} more characters)`;
+}
+
 export interface Logger {
   log(level: LogLevel, event: string, fields?: Readonly<Record<string, unknown>>): void;
   debug(event: string, fields?: Readonly<Record<string, unknown>>): void;
