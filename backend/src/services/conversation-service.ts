@@ -2,6 +2,7 @@ import type { Message } from "@syl/shared";
 
 import { LANES, type Lane, type SylAgent } from "../harness/agent.js";
 import { TurnTimeoutError } from "../harness/session.js";
+import { systemClock, type Clock } from "./clock.js";
 import { INTERACTIVE_CONVERSATION_ID } from "./database.js";
 import type { AffectHint, AppendMessage, AppendResult, MessageStore } from "./message-store.js";
 
@@ -143,6 +144,7 @@ export interface ConversationServiceOptions {
   /** Where a failure goes. Defaults to stderr. */
   readonly log?: (line: string, error?: unknown) => void;
   readonly drainTimeoutMs?: number;
+  readonly clock?: Clock;
 }
 
 export class ConversationService {
@@ -151,15 +153,18 @@ export class ConversationService {
   readonly #presence: TurnSink | null;
   readonly #log: (line: string, error?: unknown) => void;
   readonly #drainTimeoutMs: number;
+  readonly #clock: Clock;
   /** One promise chain per conversation. Its presence means work is pending. */
   readonly #queues = new Map<string, Promise<void>>();
   #sink: MessageSink | null = null;
   #closed = false;
+  #lastActiveAt: number | null = null;
 
   constructor(options: ConversationServiceOptions) {
     this.#messages = options.messages;
     this.#agent = options.agent;
     this.#presence = options.presence ?? null;
+    this.#clock = options.clock ?? systemClock;
     this.#log =
       options.log ??
       ((line, error) => {
@@ -177,6 +182,27 @@ export class ConversationService {
   /** How many conversations have a turn running or queued. */
   get pending(): number {
     return this.#queues.size;
+  }
+
+  /**
+   * When the Commander was last talking to Syl, or `null`.
+   *
+   * Set when an interactive turn is queued and again when it settles, so it
+   * reads "the last moment this service was doing something for him" rather
+   * than "the last time a turn started".
+   *
+   * **This is what drives the dream's yield signal** (`syl-cbb`).
+   * `DreamJudge.shouldYield` is checked at every checkpoint boundary and
+   * needed a real source; `pending > 0` alone is only true while the model is
+   * actually thinking, and the gaps between his messages are longer than the
+   * turns. `jobs/dream-job.ts` combines the two.
+   *
+   * The dream's own turns never appear here: `DreamJudge` drives `runTurn`
+   * directly on the `consolidation` lane and does not go through this queue,
+   * so a dream can never be mistaken for the Commander and yield to itself.
+   */
+  get lastActiveAt(): number | null {
+    return this.#lastActiveAt;
   }
 
   /**
@@ -280,6 +306,11 @@ export class ConversationService {
       return;
     }
 
+    // Stamped on the way in AND on the way out. In, so the dream yields the
+    // moment he says something rather than when the reply lands; out, so the
+    // grace window is measured from the end of the exchange.
+    this.#lastActiveAt = this.#clock();
+
     const key = message.conversationId;
     const previous = this.#queues.get(key) ?? Promise.resolve();
     // `#turn` settles rather than rejecting, so one failure cannot poison the
@@ -287,6 +318,7 @@ export class ConversationService {
     const chain = previous.then(() => this.#turn(message));
     this.#queues.set(key, chain);
     void chain.finally(() => {
+      this.#lastActiveAt = this.#clock();
       if (this.#queues.get(key) === chain) this.#queues.delete(key);
     });
   }
