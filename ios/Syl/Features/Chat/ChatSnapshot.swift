@@ -4,6 +4,18 @@ import SylKit
 /// Everything the chat view renders, prepared in one go.
 struct ChatSnapshot: Equatable, Sendable {
     var groups: [MessageGroup] = []
+
+    /// The transcript as the view renders it: turns, interleaved with day rules.
+    ///
+    /// Computed here rather than in the view. `ChatView` derived this in a computed
+    /// property, which SwiftUI re-evaluates on **every** body pass — including one per
+    /// keystroke, because the draft publishes from the same view model. That is an O(n)
+    /// walk of the whole transcript per character typed, against an explicit requirement
+    /// that 500 messages scroll without dropping frames.
+    ///
+    /// It is the same argument as the markdown parse, and it belongs in the same place:
+    /// the view should only ever assign a finished value.
+    var rows: [TranscriptRow] = []
     /// How many messages are still waiting on the server. Shown, not hidden: an
     /// assistant that silently fails to send is worse than one that says so.
     var pendingCount: Int = 0
@@ -104,9 +116,11 @@ struct ChatSnapshotLoader: Sendable {
         let messages = mayHaveEarlier ? Array(window.dropFirst()) : window
 
         let pendingIds = Set(try store.pendingMessages().map(\.id))
+        let groups = MessageGrouping.group(messages, pendingIds: pendingIds)
 
         return ChatSnapshot(
-            groups: MessageGrouping.group(messages, pendingIds: pendingIds),
+            groups: groups,
+            rows: TranscriptRhythm.rows(for: groups),
             pendingCount: messages.filter { pendingIds.contains($0.id) }.count,
             highestSeq: messages.map(\.seq).max() ?? 0,
             blocks: markdown.blocks(for: messages),
