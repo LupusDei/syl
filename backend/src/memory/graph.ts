@@ -238,6 +238,19 @@ export interface NeighbourhoodOptions {
   readonly limit?: number;
 }
 
+/**
+ * A hot node with the total weight of the hot edges touching it.
+ *
+ * `salience` is a RANKING number and nothing else: it is not stored, not
+ * decayed here, and not a fact about the node. It exists so the working-memory
+ * projection can pick the graph's hot region's most connected corner
+ * deterministically. When `weights.ts` lands its decay law, the sum should be
+ * over EFFECTIVE weight; the shape of this type does not change.
+ */
+export interface SalientNode extends MemoryNode {
+  readonly salience: number;
+}
+
 /** A node and what surrounds it. */
 export interface Neighbourhood {
   readonly origin: MemoryNode;
@@ -254,6 +267,37 @@ export const DEFAULT_NODE_LIMIT = 50;
 export const DEFAULT_NEIGHBOURHOOD_LIMIT = 200;
 
 const NODE_COLUMNS = "id, tier, kind, label, body, subject_id, created_at, updated_at";
+
+/** {@link NODE_COLUMNS}, qualified, for the one query that joins. */
+const NODE_COLUMNS_QUALIFIED = NODE_COLUMNS.split(", ")
+  .map((column) => `n.${column}`)
+  .join(", ");
+
+/**
+ * Hot nodes ranked by how much hot edge weight touches them, pinned as text.
+ *
+ * Written as a `UNION ALL` over the two endpoint columns and then aggregated,
+ * rather than as a correlated `SUM(...) WHERE source = n.id OR target = n.id`.
+ * The `OR` form cannot use `memory_edges_rank_idx` or the reverse index — it
+ * degrades to a full edge scan per node, so the cost is quadratic in a graph
+ * that grows monotonically forever by construction (constraint 6).
+ *
+ * Both halves carry `tier = 'hot'`: this is a SCAN, and the whole reason
+ * dormant edges are MOVED rather than merely ranked down is that a scan must
+ * not pay for the graph's accumulated history.
+ */
+export const SALIENCE_SQL =
+  `WITH incident AS ( ` +
+  `SELECT source_node AS node_id, weight FROM memory_edges WHERE tier = 'hot' ` +
+  `UNION ALL ` +
+  `SELECT target_node AS node_id, weight FROM memory_edges WHERE tier = 'hot' ` +
+  `), salience AS ( ` +
+  `SELECT node_id, sum(weight) AS total FROM incident GROUP BY node_id ` +
+  `) ` +
+  `SELECT ${NODE_COLUMNS_QUALIFIED}, coalesce(s.total, 0.0) AS salience ` +
+  `FROM memory_nodes n LEFT JOIN salience s ON s.node_id = n.id ` +
+  `WHERE n.tier = 'hot' ` +
+  `ORDER BY salience DESC, n.updated_at DESC, n.id LIMIT ?`;
 
 const EDGE_COLUMNS =
   "id, tier, kind, source_node, target_node, relation, weight, confidence, " +
@@ -525,6 +569,61 @@ export class MemoryGraph {
       .map((row) => toNode(row as unknown as NodeRow));
   }
 
+  /**
+   * The hot region, most connected first.
+   *
+   * A SCAN, and the one query in this module that ranks rather than filters.
+   * It exists for the working-memory projection (`syl-005.5.1`): "the graph's
+   * hot region" is the hot tier, and "distilled" is this ordering plus a byte
+   * budget applied on the way out.
+   *
+   * The ordering is TOTAL — salience, then recency, then id — so two runs over
+   * an unchanged graph produce the same rows in the same order. That is not a
+   * nicety: a projection that reorders on every run is regenerated on every
+   * run, and "regenerate only when the graph moved" stops being detectable.
+   *
+   * @throws {GraphError} `bad_limit`.
+   */
+  listSalientNodes(limit: number = DEFAULT_NODE_LIMIT): SalientNode[] {
+    const capped = requireCount(limit, "bad_limit", "A limit", 1);
+    return this.#db
+      .prepare(SALIENCE_SQL)
+      .all(capped)
+      .map((row) => {
+        const typed = row as unknown as NodeRow & { salience: number };
+        return { ...toNode(typed), salience: typed.salience };
+      });
+  }
+
+  /**
+   * Rename a node.
+   *
+   * The projection contract (`syl-005.1.4`) is `{ id, type, label, ref }`, and
+   * `label` is the one of the four that can legitimately move: a goal gets
+   * retitled, an article's `<title>` is found on the second fetch. Without
+   * this, regeneration could only ever create — so the graph would keep
+   * asserting the old name forever, which is precisely the silent drift the
+   * four-field contract exists to prevent, just relocated to the one field it
+   * did not remove.
+   *
+   * The statement carries `AND label <> ?`, so **relabelling to the name it
+   * already has touches nothing** — no write, no `updated_at` bump. That is
+   * what lets an idempotence test assert on `updatedAt` instead of merely on
+   * the row count.
+   *
+   * @throws {GraphError} `blank_label`, `unknown_node`.
+   */
+  relabel(node: MemoryNode, label: string): MemoryNode {
+    const next = requireText(label, "blank_label", "A node's label");
+    const at = instant(this.#clock());
+
+    this.#db
+      .prepare("UPDATE memory_nodes SET label = ?, updated_at = ? WHERE id = ? AND label <> ?")
+      .run(next, at, node.id, next);
+
+    return this.#nodeOrThrow(node.id);
+  }
+
   // ── Edges: the two species ───────────────────────────────────────────────
 
   /**
@@ -648,6 +747,34 @@ export class MemoryGraph {
       )
       .all(a, b, b, a)
       .map((row) => toEdge(row as unknown as EdgeRow));
+  }
+
+  /**
+   * Every observation one node asserted, in every tier.
+   *
+   * An IDENTITY LOOKUP, served by `memory_edges_asserted_by_idx` — which is
+   * partial on `asserted_by IS NOT NULL`, so it holds observations only and an
+   * inference cannot be returned here whatever the caller does.
+   *
+   * This is the graph half of the provenance chain the retention classes exist
+   * for: `intake_sources` can hard-delete a source's chunks and extracts
+   * through its foreign keys, but a foreign key cannot reach the graph (and
+   * deliberately must not — see `0013`'s header on why the graph stays
+   * unreferenced). So the reach has to be a query, and this is it. Without it,
+   * "the class is assigned at intake so a delete can later follow the chain"
+   * is a promise with no mechanism behind it.
+   *
+   * The return type is `ObservedEdge[]` rather than `MemoryEdge[]` because
+   * that is what makes {@link MemoryGraph.retract} callable on the result: a
+   * caller forgetting a source can withdraw everything the source asserted
+   * without narrowing, and still cannot reach an inference.
+   */
+  edgesAssertedBy(nodeId: string): ObservedEdge[] {
+    return this.#db
+      .prepare(`SELECT ${EDGE_COLUMNS} FROM memory_edges WHERE asserted_by = ? ORDER BY created_at, id`)
+      .all(nodeId)
+      .map((row) => toEdge(row as unknown as EdgeRow))
+      .filter((edge): edge is ObservedEdge => edge.kind === "observed");
   }
 
   /**
