@@ -1084,6 +1084,31 @@ computed from the wrong ref produces **a plausible number and a conclusion** —
 no guard is the one that propagates*, which is why it reached a second agent's
 report before it was caught.
 
+**BUILD THE FIXTURE FROM THE THING THAT REALLY WRITES IT.** Constitution Rule 1
+says build fixtures from real captured CLI output rather than from our own type
+definitions, and it is written about the wire. The same rule holds one layer in,
+against our own stores, and it is easy to miss there because the thing you are
+faking is *code you can read*.
+
+Setting up `syl-9ro`'s test, I hand-wrote the `INSERT`s into
+`memory_extractions` and invented a `message_count` column that does not exist.
+Rebuilt to go through `ExtractionStore.apply`, the real writer immediately
+caught a second one: `Extraction` requires `instructionsFound`, which I had not
+passed. **Both were my idea of the shape rather than the shape**, and I had read
+the migration minutes earlier.
+
+What makes this worth its own entry is *where the defect lands*. A wrong
+assertion fails. **A wrong fixture makes a green test meaningless rather than
+red** — it sets up a world the code never produces, and then faithfully proves
+something about that world. Nothing in the suite can see it, because the suite's
+only question is whether the assertion held.
+
+So: if a store, a service or a codec can produce the row, let it. The cost is a
+few more lines of setup; the return is that every constraint the real writer
+enforces is enforced on your fixture too, for free and forever. Hand-rolled SQL
+in a test is a second implementation of the write path, and it drifts exactly
+like every other second implementation in this file.
+
 **An instruction and the capability it assumes are ONE decision, and the failure
 is always prose.** Hit three times on 2026-08-10, in both directions:
 
