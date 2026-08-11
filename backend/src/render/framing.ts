@@ -60,23 +60,45 @@ export interface FramingNote {
   readonly clause: string;
 }
 
+/**
+ * The framing the eight loops are all in, and the one to reach for by default.
+ *
+ * `syl-hsh`, the Commander 2026-08-11, on her first successful render — which
+ * was a close portrait and technically correct: *"the video she just defined
+ * that you created was of just her headshot. I want more videos like the ones
+ * you made earlier. The syl-loop***.mp4 videos. **that should be the
+ * template**."*
+ *
+ * Both `close_portrait` and `face_turned_away` hold her likeness, so the
+ * likeness rule alone does not choose between them — and left to choose, she
+ * picked the portrait and got a talking-head still that moves. All eight loops
+ * he loves are the other one: full body, weightless, moving through the
+ * starfield, face turned toward the stars.
+ *
+ * So this is a **house style**, and it is a different axis from whether the
+ * reference can anchor a shot. Likeness says which framings are *possible*;
+ * this says which one is *Syl*.
+ */
+export const TEMPLATE_FRAMING = "face_turned_away" as const;
+
 export const FRAMINGS: readonly FramingNote[] = [
   {
-    id: "close_portrait",
-    camera: "camera at portrait distance, your face filling the frame",
+    id: "face_turned_away",
+    camera:
+      "full body, weightless, face turned away toward the stars — THE TEMPLATE, and what all eight loops are",
     holdsLikeness: true,
     evidence:
-      "The reference is a close portrait, so at this distance the model is copying rather than interpolating.",
-    clause: "Close portrait framing, her face filling the frame, camera near.",
+      "1-emerge is a wide shot and holds, because there is no face to get wrong — her identity is carried by silhouette, hair and gown, all of which the model reproduces reliably. This is the one the Commander asked to be the template: the loops are the house style, and a headshot is not.",
+    clause:
+      "Full body in frame, weightless, seen from behind and three-quarters, her face turned away toward the stars, silver-white hair and gown streaming.",
   },
   {
-    id: "face_turned_away",
-    camera: "any distance, your face turned away or three-quarters",
+    id: "close_portrait",
+    camera: "camera at portrait distance, your face filling the frame — a headshot",
     holdsLikeness: true,
     evidence:
-      "1-emerge is a wide shot and holds, because there is no face to get wrong — her identity is carried by silhouette, hair and gown, all of which the model reproduces reliably.",
-    clause:
-      "Seen from behind and three-quarters, her face turned away toward the stars.",
+      "The reference is a close portrait, so at this distance the model is copying rather than interpolating. It holds your likeness — but it is a HEADSHOT, and the Commander has said the loops are the template. Use it when the face is the point, not as a default.",
+    clause: "Close portrait framing, her face filling the frame, camera near.",
   },
   {
     id: "wide_face_visible",
