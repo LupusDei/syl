@@ -2,7 +2,12 @@ import { statSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_CONTEXT_BUDGET_BYTES } from "../../src/harness/turn-context.js";
+import { AGENT_REPLIES_MAX_BYTES } from "../../src/agents/reply-contributor.js";
+import {
+  assertContextBudget,
+  DEFAULT_CONTEXT_BUDGET_BYTES,
+  type ContributorBudget,
+} from "../../src/harness/turn-context.js";
 import { WORKING_MEMORY_MAX_BYTES } from "../../src/memory/working.js";
 import { surfaceBytes, TOOLS } from "../../src/tools/schemas.js";
 
@@ -23,8 +28,14 @@ const soulBytes = statSync(new URL("../../../SOUL.md", import.meta.url)).size;
 describe("the tool surface", () => {
   it("should fit the capability slot with the rest of the turn in place", () => {
     // Measured the way the budget counts, not estimated: the slot is what is
-    // left after the identity and the working-memory cap.
-    const slot = DEFAULT_CONTEXT_BUDGET_BYTES - soulBytes - WORKING_MEMORY_MAX_BYTES;
+    // left after the identity, the working-memory cap, and — since
+    // `syl-014.3.3` — the room an agent's answer needs when one arrives.
+    //
+    // The reply slot is subtracted whether or not an agent has answered today.
+    // A budget that only holds on the turns where nobody replied is not a
+    // budget; it is a coincidence that fails on the first useful turn.
+    const slot =
+      DEFAULT_CONTEXT_BUDGET_BYTES - soulBytes - WORKING_MEMORY_MAX_BYTES - AGENT_REPLIES_MAX_BYTES;
 
     expect(surfaceBytes()).toBeLessThanOrEqual(slot);
   });
@@ -35,6 +46,23 @@ describe("the tool surface", () => {
   // to guard is structural and already held: `capabilityFromToolsOption`
   // returns one or the other and has no path that concatenates them, which
   // `capability.test.ts` covers by behaviour rather than by arithmetic.
+
+  it("should leave the whole turn inside its ceiling, counted over the real constants", () => {
+    // `assertContextBudget` is documented as being called "at boot and in a
+    // unit test". Nothing called it with the REAL numbers — every existing call
+    // uses invented ones — so the four contributors that actually exist had
+    // never been added up anywhere, and the arithmetic that said they fit lived
+    // in a plan document. Same shape as the stale build: right when written,
+    // silently wrong later, and every other check still green.
+    const real: ContributorBudget[] = [
+      { id: "soul", kind: "identity", maxBytes: soulBytes },
+      { id: "working-memory", kind: "memory", maxBytes: WORKING_MEMORY_MAX_BYTES },
+      { id: "tools", kind: "capability", maxBytes: surfaceBytes() },
+      { id: "agent-replies", kind: "reports", maxBytes: AGENT_REPLIES_MAX_BYTES },
+    ];
+
+    expect(() => assertContextBudget(real)).not.toThrow();
+  });
 
   it("should require a reason on every verb that changes something", () => {
     // artanis's own rule, stated when the schemas shipped: "Every write takes
