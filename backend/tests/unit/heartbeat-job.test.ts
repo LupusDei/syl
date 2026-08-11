@@ -239,6 +239,39 @@ describe("the prompt she is woken with", () => {
     expect(heartbeatPrompt(moment).toLowerCase()).toMatch(/nobody|no one|unprompted|your own/);
   });
 
+  it("should point her at the verb that shows her what is outstanding", () => {
+    // The hour used to carry the time, the allowance and the quiet window, and
+    // NOT ONE reminder, to-do or goal. She was asked whether anything was worth
+    // doing while unable to see anything at all — so the answer was structurally
+    // "nothing", every hour, and it looked like restraint.
+    //
+    // Named rather than pasted: she already has `whats_outstanding`, and what it
+    // returns is true at the moment she calls it. A list built into the prompt
+    // is true whenever the prompt was built, and she has no way to tell.
+    const prompt = heartbeatPrompt(moment);
+
+    expect(prompt).toContain("whats_outstanding");
+  });
+
+  it("should name the things the hour is over: his reminders, to-dos and goals", () => {
+    // Not just a verb she could call. An hour that does not say what is hers to
+    // notice is an hour she has no reason to spend the call on.
+    const prompt = heartbeatPrompt(moment).toLowerCase();
+
+    expect(prompt).toContain("reminders");
+    expect(prompt).toContain("to-dos");
+    expect(prompt).toContain("goals");
+  });
+
+  it("should still point her at his day when he is asleep", () => {
+    // 03:00 is the hour she is most able to think and least able to interrupt.
+    // Taking the look away inside the window would leave the one uninterrupted
+    // hour of the night as the blindest.
+    expect(heartbeatPrompt({ ...moment, now: SMALL_HOURS, inQuietHours: true })).toContain(
+      "whats_outstanding",
+    );
+  });
+
   it("should state the ceiling as a rate, and say it does not accumulate", () => {
     const prompt = heartbeatPrompt(moment);
 
