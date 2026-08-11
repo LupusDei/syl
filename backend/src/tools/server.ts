@@ -1128,9 +1128,10 @@ const showHim: ToolHandler = async (input, context) => {
     );
   }
 
-  const named = text(input, "renderName");
-  const renderName = named === null || named.toLowerCase() === "latest" ? null : named;
-  if (renderName === null) return chooseARender(context);
+  const renderName = text(input, "renderName");
+  if (renderName === null || renderName.toLowerCase() === "latest") {
+    return chooseARender(context);
+  }
 
   const created = await context.client.post<Sending>("/sendings", { words, because, renderName });
   if (!created.ok) return refused("show_him", created.failure);
