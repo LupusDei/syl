@@ -1817,3 +1817,53 @@ database migrated to `N-1` and one migrated to `N`, it is exactly the assertion
 "this migration changed nothing it did not mean to change", and nothing can
 satisfy it by accident. The name-list version is the same shape of mistake as a
 comment claiming an invariant: it describes the object without checking it.
+
+### `git commit` with an explicit pathspec finishes a merge somebody else started (2026-08-11)
+
+CLAUDE.md warns about `git add -A` in a shared worktree, because a bare add
+takes other people's work under your message. This is the sibling, and the
+pathspec is no defence against it: **if a merge is in progress, `git commit`
+completes it, whatever paths you name.** The result is a merge commit with two
+parents, your subject line, and somebody else's conflict resolutions inside it.
+
+It happened here. `3161d22` reads as a one-file test fix and is a merge of
+`origin/main` into the branch. The fix is not more care about pathspecs — it is
+one more thing to look at:
+
+> **In a shared checkout, read `git status` for `MERGE_HEAD` before committing,
+> not only for files you did not stage.** `git rev-parse -q --verify MERGE_HEAD`
+> answers it in one line.
+
+Two things went right afterwards and both are worth copying.
+
+**Amend the message rather than let the commit lie.** The tree and the parents
+were correct; only the subject was wrong, and a merge commit describing itself
+as a test fix is a trap for whoever bisects it later.
+
+**There is a cheap, exact check for what a merge silently dropped**, and it is
+better than reading the diff. For each file changed on BOTH sides of the merge
+base, compare the merge result's blob against each parent's:
+
+```sh
+for f in $(comm -12 <(git diff --name-only $BASE $A|sort) <(git diff --name-only $BASE $B|sort)); do
+  ...  # merge blob == A's  -> took ours, theirs dropped
+       # merge blob == B's  -> took theirs, ours dropped
+       # neither            -> genuinely combined
+done
+```
+
+Identical to one parent is the signature of a resolution that took a side
+wholesale, which is exactly the loss no test can see. It found one here — two
+agents had independently created `backend/tests/unit/memory-relations.test.ts`,
+the merge kept origin's, and twenty-one passing tests stopped existing with the
+gate still green. **A file path is a shared namespace, and so is an export
+name**; the migration-number rule applies to both, and neither had been checked
+against origin.
+
+And the correction, because I reported it worse than it was before checking:
+the second parent was **already `origin/main`'s tip**. `git merge-base
+--is-ancestor <parent> origin/main` is the one command that separates "I
+captured somebody's unpublished work" from "I completed a routine integration",
+and I sent two messages before running it. A commit's SUBJECT names the branch
+it was made on, not where it lives now — `aeb2559` says "into agent/fenix" and
+is plain shared history.
