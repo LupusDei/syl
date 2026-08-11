@@ -189,6 +189,32 @@ final class ModelCodingTests: XCTestCase {
         XCTAssertThrowsError(try change.decodeResource(as: Todo.self))
     }
 
+    /// **A resource type this enum does not know takes the whole page down with it.**
+    ///
+    /// `SyncChange.type` is a non-optional enum, so one unknown value fails the decode
+    /// of the array, which fails the decode of `SyncResponse`, which fails the sync —
+    /// not the one change, all of it, on every pass, for as long as the row exists. The
+    /// contract added `sending` to `SyncResourceType` when the sendings backend landed,
+    /// and until this test the phone would simply have stopped synchronising the first
+    /// time she sent him something.
+    func testShouldDecodeEveryResourceTypeTheContractCanPutOnTheSyncFeed() throws {
+        // Straight from `SyncResourceType` in `shared/openapi.yaml`.
+        let contractTypes = [
+            "conversation", "message", "reminder", "todo", "goal",
+            "device", "delivery", "job", "run", "sending",
+        ]
+
+        for type in contractTypes {
+            let json = """
+                {"type":"\(type)","op":"delete","id":"syl:\(type):0198f2c2-0002-7000-8000-00000000c002",
+                 "at":"2026-08-09T06:30:00.000Z","resource":null}
+                """
+            XCTAssertNoThrow(
+                try SylJSON.decoder().decode(SyncChange.self, from: Data(json.utf8)),
+                "a \(type) change on the feed must not fail the whole page")
+        }
+    }
+
     // MARK: - Frame unions
 
     func testShouldDecodeAServerFrameByItsTypeDiscriminator() throws {

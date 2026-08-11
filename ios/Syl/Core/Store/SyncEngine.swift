@@ -297,6 +297,20 @@ actor SyncEngine {
         case .goal:
             guard let value = try change.decodeResource(as: Goal.self) else { return false }
             try store.upsert([value])
+        case .sending:
+            // **Applied here, and depended on nowhere.**
+            //
+            // From Syl reads `GET /sendings` directly and re-reads it on foreground, for
+            // the reason `ConstellationSource` states at length: this engine writes its
+            // cursor after every page whether or not anything in it was stored
+            // (`syl-011.9`, open, P0), so a surface that learned about her sendings only
+            // from this feed would inherit silent data loss. The surface therefore asks.
+            //
+            // But a change that has arrived is free, and dropping it would leave a row
+            // stale until the next open for no reason. So it is stored when it comes,
+            // and nothing anywhere assumes it did.
+            guard let value = try change.decodeResource(as: Sending.self) else { return false }
+            try store.replaceSendings(SendingPage(items: [value], nextCursor: nil, hasMore: false))
         case .device, .delivery, .job, .run:
             // Not stored on the device. The admin surface reads these live and the
             // phone has no use for them; skipping is correct, not a gap.
