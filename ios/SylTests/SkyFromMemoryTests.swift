@@ -9,6 +9,21 @@ import XCTest
 /// built the read flagged three traps waiting in that crossing; each one is a test here,
 /// because a trap named in a handover message and not asserted is a trap.
 final class SkyFromMemoryTests: XCTestCase {
+    private var database: SylDatabase!
+    private var store: LocalStore!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        database = try SylDatabase.inMemory()
+        store = LocalStore(database: database)
+    }
+
+    override func tearDown() {
+        store = nil
+        database = nil
+        super.tearDown()
+    }
+
 
     /// Depth is age, and the optional date is the wrong one.
     ///
@@ -131,5 +146,45 @@ final class SkyFromMemoryTests: XCTestCase {
             stars: stars,
             filaments: []
         )
+    }
+
+    /// The defect that shipped, and the reason this distinction exists.
+    ///
+    /// The first build with this screen called a route thirty minutes younger than the
+    /// running service. Every fetch 404'd, the adapter shrugged and returned an empty sky,
+    /// and the Commander was told **"I have not learned anything about you worth keeping"**
+    /// over thirty real memories.
+    ///
+    /// Empty is a statement. Unreachable is the app having no idea. Rendering the first
+    /// over the second tells him she has forgotten him, when the phone simply could not ask.
+    func testShouldNotClaimSheKnowsNothingWhenItSimplyCouldNotAsk() async {
+        struct Unreachable: Error {}
+        let source = SkyFromMemory.source(
+            ConstellationSource(
+                store: store,
+                gateway: ConstellationGateway { _ in throw Unreachable() }
+            )
+        )
+
+        let sky = await source()
+
+        XCTAssertTrue(sky.unreachable, "a failed read must say so")
+        XCTAssertTrue(sky.isEmpty, "and it still has no stars to draw")
+    }
+
+    /// The other half, or the flag would simply always be on.
+    func testShouldCallAGenuinelyEmptyGraphEmptyRatherThanUnreachable() async {
+        let empty = constellation(stars: [])
+        let source = SkyFromMemory.source(
+            ConstellationSource(
+                store: store,
+                gateway: ConstellationGateway { _ in empty }
+            )
+        )
+
+        let sky = await source()
+
+        XCTAssertFalse(sky.unreachable, "she answered; she just knows nothing yet")
+        XCTAssertTrue(sky.isEmpty)
     }
 }

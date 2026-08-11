@@ -21,6 +21,9 @@ struct ConstellationView: View {
     /// a spinner nor a false "she knows nothing about you".
     var hasRead: Bool = true
 
+    /// Whether the read failed outright. See ``ConstellationSnapshot/unreachable``.
+    var unreachable: Bool = false
+
     /// What clock the sky is on. See ``ConstellationTime``.
     var time: ConstellationTime = .live
 
@@ -105,11 +108,18 @@ struct ConstellationView: View {
     /// one surface that is not lying to him.
     private var nothingYet: some View {
         VStack(spacing: SylTheme.Metric.snug) {
-            Text("Nothing yet")
+            Text(unreachable ? "I can't reach my memory" : "Nothing yet")
                 .font(SylTheme.Typeface.title)
                 .foregroundStyle(SylTheme.Colour.ink)
 
-            Text("I have not learned anything about you worth keeping. I will, as we talk.")
+            Text(
+                unreachable
+                    // Never "nothing to show". The app does not know what there is, and
+                    // saying she has learned nothing would be inventing an answer out of
+                    // its own failure to ask.
+                    ? "This device could not reach the graph, so I don't know what to show you yet."
+                    : "I have not learned anything about you worth keeping. I will, as we talk."
+            )
                 .font(SylTheme.Typeface.detail)
                 .foregroundStyle(SylTheme.Colour.inkSoft)
                 .multilineTextAlignment(.center)
@@ -141,6 +151,7 @@ struct MemoryScreen: View {
         ConstellationView(
             sky: model.sky,
             hasRead: model.hasRead,
+            unreachable: model.sky.unreachable,
             onSize: { size = $0 }
         )
         .task(id: size) {

@@ -29,6 +29,19 @@ struct ConstellationSnapshot: Equatable, Sendable {
     /// When the graph was read. Nil until anything has been.
     var capturedAt: Date?
 
+    /// True when nothing could be read at all — no stored sky, and the server did not
+    /// answer.
+    ///
+    /// **Not the same as an empty sky, and the difference is a lie.** An empty sky is a
+    /// statement: she has learned nothing worth keeping. An unreachable one is the app
+    /// having no idea, and rendering the first over the second tells him she has forgotten
+    /// him when in fact the phone could not ask.
+    ///
+    /// It happened on the first build that shipped this screen: the route was thirty
+    /// minutes younger than the running service, every fetch 404'd, and the sky said
+    /// "I have not learned anything about you worth keeping" over thirty real memories.
+    var unreachable: Bool = false
+
     static let empty = ConstellationSnapshot()
 
     var isEmpty: Bool { nodes.isEmpty }

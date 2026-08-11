@@ -35,10 +35,13 @@ enum SkyFromMemory {
             }
 
             guard let fetched = try? await constellation.refresh() else {
-                // Nothing on disk and nothing from the network. The view model's `hasRead`
-                // flag is what separates this from an answer; this value carries no
-                // `capturedAt`, so nothing downstream can mistake it for one.
-                return .empty
+                // Nothing on disk AND no answer from the server. This is the state I
+                // originally returned `.empty` for, and it rendered as "I have not learned
+                // anything about you worth keeping" over thirty real memories, because the
+                // route was younger than the running service.
+                //
+                // Empty is a statement. This is not one.
+                return ConstellationSnapshot(unreachable: true)
             }
             return snapshot(from: fetched)
         }

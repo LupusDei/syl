@@ -24,6 +24,10 @@ struct PreparedSky: Equatable, Sendable {
     /// travels with it and the view re-prepares when it changes.
     var size: CGSize = .zero
 
+    /// Carried through from the snapshot: the read failed outright, rather than finding
+    /// nothing. See ``ConstellationSnapshot/unreachable``.
+    var unreachable: Bool = false
+
     static let empty = PreparedSky()
 
     var isEmpty: Bool { stars.isEmpty }
@@ -104,7 +108,7 @@ struct SkyPreparer: Sendable {
 
     func prepare(_ snapshot: ConstellationSnapshot, size: CGSize) -> PreparedSky {
         guard size.width > 1, size.height > 1, !snapshot.nodes.isEmpty else {
-            return PreparedSky(stars: [], filaments: [], size: size)
+            return PreparedSky(size: size, unreachable: snapshot.unreachable)
         }
 
         let layout = ConstellationLayout(size: size)
@@ -188,7 +192,12 @@ struct SkyPreparer: Sendable {
         // clipping, so the brightest threads land last and stay bright.
         filaments.sort { $0.alpha < $1.alpha }
 
-        return PreparedSky(stars: stars, filaments: filaments, size: size)
+        return PreparedSky(
+            stars: stars,
+            filaments: filaments,
+            size: size,
+            unreachable: snapshot.unreachable
+        )
     }
 
     /// How strongly a filament is drawn.
