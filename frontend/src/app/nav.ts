@@ -50,6 +50,14 @@ export const NAV_ITEMS: readonly NavItem[] = [
     status: "ready",
   },
   {
+    path: "/reminders",
+    label: "Reminders",
+    summary:
+      "Every reminder with the reason it exists, and which of them Syl thought of herself rather than being asked for.",
+    bead: "syl-y82",
+    status: "ready",
+  },
+  {
     path: "/delivery",
     label: "Delivery outbox",
     summary: "What was sent, what was retried, and what is still unconfirmed.",
