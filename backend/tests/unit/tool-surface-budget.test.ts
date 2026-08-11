@@ -8,6 +8,7 @@ import {
   DEFAULT_CONTEXT_BUDGET_BYTES,
   type ContributorBudget,
 } from "../../src/harness/turn-context.js";
+import { UNATTENDED_MAX_BYTES } from "../../src/jobs/unattended-contributor.js";
 import { WORKING_MEMORY_MAX_BYTES } from "../../src/memory/working.js";
 import { surfaceBytes, TOOLS } from "../../src/tools/schemas.js";
 
@@ -35,7 +36,11 @@ describe("the tool surface", () => {
     // A budget that only holds on the turns where nobody replied is not a
     // budget; it is a coincidence that fails on the first useful turn.
     const slot =
-      DEFAULT_CONTEXT_BUDGET_BYTES - soulBytes - WORKING_MEMORY_MAX_BYTES - AGENT_REPLIES_MAX_BYTES;
+      DEFAULT_CONTEXT_BUDGET_BYTES -
+      soulBytes -
+      WORKING_MEMORY_MAX_BYTES -
+      AGENT_REPLIES_MAX_BYTES -
+      UNATTENDED_MAX_BYTES;
 
     expect(surfaceBytes()).toBeLessThanOrEqual(slot);
   });
@@ -57,11 +62,32 @@ describe("the tool surface", () => {
     const real: ContributorBudget[] = [
       { id: "soul", kind: "identity", maxBytes: soulBytes },
       { id: "working-memory", kind: "memory", maxBytes: WORKING_MEMORY_MAX_BYTES },
+      { id: "unattended-work", kind: "ledger", maxBytes: UNATTENDED_MAX_BYTES },
       { id: "tools", kind: "capability", maxBytes: surfaceBytes() },
       { id: "agent-replies", kind: "reports", maxBytes: AGENT_REPLIES_MAX_BYTES },
     ];
 
     expect(() => assertContextBudget(real)).not.toThrow();
+  });
+
+  it("should keep a margin worth having, not merely fit", () => {
+    // The half nothing checked, and the one that went wrong. The budget's own
+    // prose claimed ~2,950 bytes of margin while the real figure had fallen to
+    // about 600 — `SOUL.md` and the surface had each grown by a thousand bytes
+    // and every test still passed, because "does it fit" is true right up to
+    // the moment it is not.
+    //
+    // A stated margin that nothing asserts is a comment. This makes the next
+    // contributor's author read the paragraph rather than discover the number
+    // in a reply.
+    const declared =
+      soulBytes +
+      WORKING_MEMORY_MAX_BYTES +
+      UNATTENDED_MAX_BYTES +
+      surfaceBytes() +
+      AGENT_REPLIES_MAX_BYTES;
+
+    expect(DEFAULT_CONTEXT_BUDGET_BYTES - declared).toBeGreaterThanOrEqual(2_000);
   });
 
   it("should require a reason on every verb that changes something", () => {

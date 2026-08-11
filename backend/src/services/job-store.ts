@@ -256,6 +256,17 @@ export interface JobStoreOptions {
 /** What `listRuns` may filter on. */
 export interface RunFilter extends PageOptions {
   readonly jobId?: string;
+  /**
+   * Restrict to particular job kinds.
+   *
+   * Needed because runs are ordered by time across every kind, and
+   * `reminder_delivery` wakes at least once a minute: a page of "the most
+   * recent hundred runs" is a hundred deliveries and none of the two kinds a
+   * caller asking about her unattended work actually means. Filtering by job
+   * id cannot express "these two kinds" without the caller first finding two
+   * rows it has no other reason to hold.
+   */
+  readonly kinds?: readonly string[];
 }
 
 export class JobStore {
@@ -696,8 +707,20 @@ export class JobStore {
   /** A page of runs, newest first. */
   listRuns(filter: RunFilter = {}): RunPage {
     const { limit, offset } = resolvePage(filter);
-    const where = filter.jobId === undefined ? "" : "WHERE job_id = ?";
-    const bindings = filter.jobId === undefined ? [] : [filter.jobId];
+
+    const clauses: string[] = [];
+    const bindings: string[] = [];
+    if (filter.jobId !== undefined) {
+      clauses.push("job_id = ?");
+      bindings.push(filter.jobId);
+    }
+    // Placeholders rather than an interpolated list: the kinds are a closed
+    // catalogue today and this stays sound the day one of them is a variable.
+    if (filter.kinds !== undefined && filter.kinds.length > 0) {
+      clauses.push(`kind IN (${filter.kinds.map(() => "?").join(", ")})`);
+      bindings.push(...filter.kinds);
+    }
+    const where = clauses.length === 0 ? "" : `WHERE ${clauses.join(" AND ")}`;
 
     const rows = this.#db
       .prepare(

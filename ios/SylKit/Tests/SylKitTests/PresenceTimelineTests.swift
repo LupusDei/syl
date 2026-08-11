@@ -68,14 +68,31 @@ final class PresenceTimelineTests: XCTestCase {
         XCTAssertEqual(timeline.state(at: received.addingTimeInterval(15 + 31)), .absent)
     }
 
+    /// A zero TTL means the frame's state stops asserting itself at once.
+    ///
+    /// **This test used to assert that a zero-TTL frame reads as `idle`, and named the
+    /// case in its own comment while doing it:** *"`absent` carries ttl_ms 0"*. It did —
+    /// `PRESENCE_TTL_MS.absent` is 0 and the service sends that frame at the end of every
+    /// turn — so the assertion said that when the server states she is gone, the client
+    /// draws her resting, with "Here if you need me." under her name, for thirty seconds.
+    /// That is the client contradicting the only party that knows.
+    ///
+    /// The behaviour it locked in was current, not correct. What the name actually
+    /// describes is kept below and now asserted of a state that has somewhere to decay
+    /// *to*; the `absent` case has its own test, because decay only ever makes her less
+    /// present and there is nothing below absent.
     func testShouldExpireAZeroTTLFrameImmediately() {
-        // `absent` carries ttl_ms 0.
         var timeline = PresenceTimeline()
         timeline.record(
-            WsPresence(state: .absent, intensity: 0, since: received, ttlMs: 0),
+            WsPresence(state: .thinking, intensity: 0.55, since: received, ttlMs: 0),
             at: received
         )
 
+        XCTAssertNotEqual(
+            timeline.state(at: received),
+            .thinking,
+            "a frame with no time to live must not go on claiming she is working"
+        )
         XCTAssertEqual(timeline.state(at: received), .idle)
     }
 
@@ -106,6 +123,43 @@ final class PresenceTimelineTests: XCTestCase {
         timeline.clear()
 
         XCTAssertEqual(timeline.state(at: received), .absent)
+        XCTAssertNil(timeline.nextTransition())
+    }
+
+    // MARK: - The frame that says she is gone
+
+    /// `absent` is the one state the service ships with **`ttl_ms: 0`**, and the ladder
+    /// used to read that as "expired the instant it arrived" and decay it — *upward* —
+    /// into `idle`. So the server said she is gone and the client drew her resting, for
+    /// thirty seconds, every time a turn ended.
+    ///
+    /// Decay only ever makes her less present. There is nothing below `absent`, so a
+    /// frame that already says it has nowhere to go.
+    func testShouldTakeAnExplicitAbsentFrameAtItsWord() {
+        var timeline = PresenceTimeline()
+        timeline.record(
+            WsPresence(state: .absent, intensity: 0, since: received, ttlMs: 0),
+            at: received
+        )
+
+        XCTAssertEqual(timeline.state(at: received), .absent)
+        XCTAssertEqual(
+            timeline.state(at: received.addingTimeInterval(1)),
+            .absent,
+            "the service said absent; idle is a more present state than it asked for"
+        )
+        XCTAssertEqual(timeline.intensity(at: received.addingTimeInterval(1)), 0)
+    }
+
+    /// And nothing is scheduled for it. A resting state has no boundary to wake up for,
+    /// so a view arming a timer on this is arming one that changes nothing.
+    func testShouldHaveNoNextTransitionForAFrameThatIsAlreadyAtRest() {
+        var timeline = PresenceTimeline()
+        timeline.record(
+            WsPresence(state: .absent, intensity: 0, since: received, ttlMs: 0),
+            at: received
+        )
+
         XCTAssertNil(timeline.nextTransition())
     }
 

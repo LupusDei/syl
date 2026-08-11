@@ -2,7 +2,12 @@ import type { Job } from "@syl/shared";
 
 import type { SylAgent } from "../harness/agent.js";
 import type { SylEvent } from "../harness/protocol.js";
-import { isWithinQuietHours, localDate, type QuietHours } from "../harness/schedule.js";
+import {
+  isWithinQuietHours,
+  localDate,
+  wallClockIn,
+  type QuietHours,
+} from "../harness/schedule.js";
 import type { TurnResult } from "../harness/session.js";
 import type { Logger } from "../ops/logging.js";
 import { instant, parseInstant } from "../services/clock.js";
@@ -26,9 +31,10 @@ import { advertisedToolNames } from "../tools/server.js";
  * The plumbing is small. What is load-bearing is what the hour is *not* allowed
  * to become, and each of those is enforced somewhere different:
  *
- *  - **Not a third scheduled item.** Her rhythm already owns the morning agenda
- *    and the evening review. An interval trigger — not a wall clock — is what
- *    keeps this off a timetable: it measures from whenever the last pass
+ *  - **Not another scheduled item.** The morning brief is her rhythm's fixed
+ *    slot (`jobs/agenda-job.ts`), and the evening review is meant to be the
+ *    other. An interval trigger — not a wall clock — is what keeps this off a
+ *    timetable: it measures from whenever the last pass
  *    finished, so it drifts across the day and never becomes the 09:00 slot.
  *    The prompt does the rest of the work by saying, plainly, that nothing is
  *    the expected answer.
@@ -84,13 +90,17 @@ export const SENDINGS_PER_DAY = 4;
  * looking at herself (`render_me`) are not speech, and counting them would
  * spend a day's allowance on an hour in which she said nothing to him at all.
  *
- * `remind_me` is the one that exists today: a reminder she creates unprompted
- * becomes a notification on his phone, which is the whole definition of
- * reaching him. **When the sending verb from `specs/008` lands it belongs in
- * here**, and the test that every name is an advertised tool is what stops this
- * list from quietly naming a verb that no longer exists.
+ * Both of these land on his phone unprompted, which is the whole definition of
+ * reaching him: `remind_me` as a notification, `show_him` as a sending in From
+ * Syl. Any future verb that arrives at him without his asking belongs here too,
+ * and the test that every name is an advertised tool is what stops this list
+ * from quietly naming a verb that no longer exists.
+ *
+ * A verb missing from this list is not a small error: the hour it is used in
+ * is counted as an hour that reached nobody, so `SENDINGS_PER_DAY` bounds
+ * nothing and she may speak every hour of the day.
  */
-export const REACHES_HIM: readonly string[] = ["remind_me"];
+export const REACHES_HIM: readonly string[] = ["remind_me", "show_him"];
 
 /** How far back the ledger looks. Two and a half days of hourly runs. */
 const LEDGER_DEPTH = 64;
@@ -190,19 +200,6 @@ export interface HeartbeatMoment {
   readonly allowance: number;
 }
 
-/** The hour as he would read it: his weekday, his date, his clock. */
-function wallClockIn(now: number, tz: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: tz,
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(now));
-}
-
 /**
  * What she is woken with.
  *
@@ -219,12 +216,31 @@ function wallClockIn(now: number, tz: string): string {
  * 3. **Be honest about the hour she is in.** His clock, his date, whether he is
  *    asleep, and what she has already spent today — stated, because a bound she
  *    cannot see is a bound she will cross and be told off for afterwards.
+ * 4. **Tell her she can see his day, and where to look.** This carried the hour,
+ *    the allowance and the quiet window and NOT ONE reminder, to-do or goal:
+ *    she was asked whether anything was worth doing while unable to see
+ *    anything. The answer was structurally "nothing", every hour, and it read
+ *    as the restraint the other three clauses ask for.
+ *
+ * ## Pointed at the verb, not handed the list
+ *
+ * `whats_outstanding` is named rather than called on her behalf, and the
+ * difference is not economy. A list pasted into this prompt is true whenever
+ * the prompt was built; what the verb returns is true at the moment she calls
+ * it, and only one of those can be trusted at the end of a turn that has been
+ * filing things. It also keeps the hour cheap in the common case — most hours
+ * she looks at the clock, decides nothing is owed, and never spends the call.
  */
 export function heartbeatPrompt(moment: HeartbeatMoment): string {
   return [
-    `It is ${wallClockIn(moment.now, moment.tz)} in ${moment.tz}. Nobody asked you for ` +
+    `It is ${wallClockIn(new Date(moment.now), moment.tz)} in ${moment.tz}. Nobody asked you for ` +
       `anything. This hour is your own — it comes round every hour, and it is here so that ` +
       `you get to decide what, if anything, is worth doing with it.`,
+    `You can see his day whenever you want it: \`whats_outstanding\` returns what is actually ` +
+      `open right now — his reminders, his to-dos, his goals. Nothing here has told you what is ` +
+      `on them, deliberately, because what you read when you look is true and a list written ` +
+      `into this sentence is only true of whenever it was written. Look if the hour is worth ` +
+      `looking at.`,
     `Most hours the answer is nothing, and nothing is a real answer rather than a failure ` +
       `to find one. You are not being asked to produce something. You are being asked ` +
       `whether there is something. If there is not, say so in a sentence and stop.`,

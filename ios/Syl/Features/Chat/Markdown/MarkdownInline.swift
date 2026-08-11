@@ -28,12 +28,104 @@ enum MarkdownInline {
     ///
     /// `LinkPolicy` runs **inside** this function rather than beside it, so no call site
     /// can render a run and forget to sanitise it.
+    ///
+    /// ## Memoised, and this is the freeze
+    ///
+    /// Every call site is inside a SwiftUI `body` — `MarkdownView` renders paragraphs,
+    /// headings, list rows (twice, the second time for the VoiceOver label) and table
+    /// cells — and `ChatView.body` re-runs on **every keystroke** and on **every presence
+    /// frame**, because `draft`, `presence` and `intensity` all publish from the same
+    /// object. Worse, `.defaultScrollAnchor(.bottom)` has to know the transcript's total
+    /// height, so the `LazyVStack` sizes every row in the window rather than the visible
+    /// ones.
+    ///
+    /// Unmemoised, that makes one body pass a full parse of the entire transcript, on the
+    /// main thread. Two hundred messages of ordinary prose is enough to stop the main
+    /// thread answering, and a main thread that stops answering long enough is a watchdog
+    /// termination rather than a slow screen — which is exactly what the Commander
+    /// reported, three times.
+    ///
+    /// **The two earlier fixes were real and were not this one.** `ChatSnapshotLoader`
+    /// moved *block* scanning off the main actor and `ChatSnapshot.blocksByGroup` stopped
+    /// every row deep-comparing the whole transcript. Inline parsing was never in either,
+    /// and the doc comment on `MarkdownView` has claimed "it never parses" the whole time.
+    ///
+    /// Caching the finished `AttributedString` is safe across appearance changes because
+    /// the only colour applied is `SylTheme.Colour.luminance`, which is a *dynamic*
+    /// `Color` — it carries its light and dark values and resolves against the trait
+    /// collection at draw time, not here.
     static func render(_ source: String) -> AttributedString {
+        if let hit = memo.value(for: source) { return hit }
+        let rendered = parse(source)
+        memo.store(rendered, for: source)
+        return rendered
+    }
+
+    private static func parse(_ source: String) -> AttributedString {
         guard let parsed = try? AttributedString(markdown: source, options: options) else {
             return AttributedString(source)
         }
         return style(LinkPolicy.sanitize(parsed))
     }
+
+    // MARK: - The memo
+
+    /// How many rendered runs are kept.
+    ///
+    /// Comfortably more than one window of `ChatSnapshotLoader`'s 200 messages, so an
+    /// ordinary transcript never evicts anything it is about to be asked for again, and
+    /// bounded so a session that reaches back through months of history cannot grow one.
+    /// A cache that only ever grows is a leak with a good reputation — and the key here is
+    /// message text, which is the largest thing this app holds.
+    static let memoLimit = 512
+
+    private static let memo = Memo(limit: memoLimit)
+
+    /// Lock-guarded rather than an actor, for the reason `MarkdownCache` gives: every
+    /// caller is a synchronous `body`, and an actor would force each of them to become
+    /// asynchronous — which is the opposite of the point.
+    private final class Memo: @unchecked Sendable {
+        private let lock = NSLock()
+        private let limit: Int
+        private var entries: [String: AttributedString] = [:]
+
+        init(limit: Int) {
+            self.limit = limit
+        }
+
+        func value(for source: String) -> AttributedString? {
+            lock.lock()
+            defer { lock.unlock() }
+            return entries[source]
+        }
+
+        func store(_ rendered: AttributedString, for source: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            // Cleared wholesale rather than evicted one at a time. There is no recency
+            // information to evict *by* — tracking it would cost a write on every read,
+            // which is the hot path this exists to keep cheap — and the next pass over a
+            // live transcript refills only what that transcript actually uses.
+            if entries.count >= limit { entries.removeAll(keepingCapacity: true) }
+            entries[source] = rendered
+        }
+
+        func count() -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return entries.count
+        }
+
+        func reset() {
+            lock.lock()
+            defer { lock.unlock() }
+            entries.removeAll()
+        }
+    }
+
+    static func memoCountForTesting() -> Int { memo.count() }
+
+    static func resetMemoForTesting() { memo.reset() }
 
     /// Give surviving links Syl's colour.
     ///

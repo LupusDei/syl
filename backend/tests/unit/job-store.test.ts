@@ -384,6 +384,40 @@ describe("JobStore", () => {
       expect(jobs.listRuns({ limit: 1, cursor: page.nextCursor }).items).toHaveLength(1);
     });
 
+    it("should filter runs by kind, so a noisy kind cannot crowd out a quiet one", () => {
+      // Runs are ordered by time across the whole catalogue, and
+      // `reminder_delivery` wakes at least once a minute. Without this, "the
+      // most recent hundred runs" is a hundred deliveries and not one of the
+      // hourly turns a caller asking about her unattended work actually means.
+      const delivery = jobs.define(reminderDelivery());
+      const hourly = jobs.define(reminderDelivery({ kind: "heartbeat" }));
+      const brief = jobs.define(reminderDelivery({ kind: "morning_agenda" }));
+
+      jobs.startRun(hourly, hourly.nextRunAt ?? "", now);
+      now += 1_000;
+      jobs.startRun(brief, brief.nextRunAt ?? "", now);
+      for (let i = 0; i < 5; i += 1) {
+        now += 1_000;
+        jobs.startRun(delivery, delivery.nextRunAt ?? "", now);
+      }
+
+      const unattended = jobs.listRuns({ kinds: ["heartbeat", "morning_agenda"] }).items;
+
+      expect(unattended.map((run) => run.kind).sort()).toEqual(["heartbeat", "morning_agenda"]);
+      // Still newest first, and still combinable with the job filter.
+      expect(unattended[0]?.kind).toBe("morning_agenda");
+      expect(jobs.listRuns({ kinds: ["heartbeat"], jobId: brief.id }).items).toHaveLength(0);
+    });
+
+    it("should ignore an empty kind filter rather than matching nothing", () => {
+      // `IN ()` is not valid SQL, and a caller that computed an empty list means
+      // "no restriction" far more often than it means "no rows".
+      const job = jobs.define(reminderDelivery());
+      jobs.startRun(job, job.nextRunAt ?? "", now);
+
+      expect(jobs.listRuns({ kinds: [] }).items).toHaveLength(1);
+    });
+
     it("should return null for a run it does not have", () => {
       expect(jobs.run("syl:run:missing")).toBeNull();
       expect(jobs.finishRun("syl:run:missing", { outcome: "success" })).toBeNull();

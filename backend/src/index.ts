@@ -24,6 +24,16 @@ import {
   describeHeartbeat,
   ensureHeartbeatJob,
 } from "./jobs/heartbeat-job.js";
+import {
+  createMorningAgendaHandler,
+  describeAgenda,
+  ensureMorningAgendaJob,
+} from "./jobs/agenda-job.js";
+import {
+  unattendedContributor,
+  UNATTENDED_KINDS,
+  UNATTENDED_RUN_DEPTH,
+} from "./jobs/unattended-contributor.js";
 import { createDeliveryRuntime, describeRuntime, type DeliveryRuntime } from "./jobs/runtime.js";
 import { AdjutantClient } from "./agents/adjutant-client.js";
 import { loadConfig, type SylConfig } from "./config.js";
@@ -79,6 +89,7 @@ import {
   type Lane,
 } from "./harness/agent.js";
 import { runTurn, type TurnOptions, type TurnRunner } from "./harness/session.js";
+import type { Contributor } from "./harness/turn-context.js";
 import {
   mcpToolName,
   toolConfigPath,
@@ -1044,25 +1055,25 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
    *
    * **And only for HIS lane**, which used to be the same statement and is not
    * any more. `mcpConfig !== undefined` meant "the commander lane" while the
-   * commander lane was the only tooled one; since the hourly self-ping was given
-   * hands it would also be true of a heartbeat, and writing a heartbeat's prompt
-   * here would be two failures at once. She could quote the prompt she was woken
-   * with to satisfy `harness/urgency.ts` and wake him at 03:00 with words he
-   * never said — and an hourly write would clobber his real message, so an
-   * urgent reminder he genuinely asked for could be refused because a background
-   * turn landed in the same second.
+   * commander lane was the only tooled one; since the hourly self-ping and the
+   * morning brief were given hands it is true of them too, and writing an
+   * unattended turn's prompt here would be two failures at once. She could
+   * quote the prompt she was woken with to satisfy `harness/urgency.ts` and
+   * wake him at 03:00 with words he never said — and an hourly write would
+   * clobber his real message, so an urgent reminder he genuinely asked for
+   * could be refused because a background turn landed in the same second.
    *
-   * So a heartbeat leaves this file alone, and the tool server therefore reads
-   * whatever he last actually said. That is the *safe* direction and it is what
-   * makes "she cannot reach him during quiet hours" structural rather than
-   * instructed: the Outbox already holds every non-urgent notification until the
-   * window ends, and urgency is the only way past it.
+   * So an unattended turn leaves this file alone, and the tool server therefore
+   * reads whatever he last actually said. That is the *safe* direction and it
+   * is what makes "she cannot reach him during quiet hours" structural rather
+   * than instructed: the Outbox already holds every non-urgent notification
+   * until the window ends, and urgency is the only way past it.
    */
   const recordHisWords =
     (runner: TurnRunner): TurnRunner =>
     async (prompt, turnOptions) => {
       // Identified by the LANE rather than by "has any declaration at all" —
-      // the property this was always about. The two lanes with hands share one
+      // the property this was always about. Every lane with hands shares one
       // declaration, so the path cannot tell them apart and only the name can.
       if (home !== undefined && turnOptions.lane === LANES.commander) {
         writeTurnMessage(home, prompt);
@@ -1102,6 +1113,36 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     // that can be tested.
     autoMemory: autoMemoryOff(),
     ...(soul === undefined ? {} : { soul }),
+    /**
+     * What she did while nobody was watching — on HIS lane, and no other.
+     *
+     * The lanes keep her unattended turns out of his transcript, and until now
+     * that separation was total in both directions: a reminder the hourly turn
+     * filed at 07:04 was something the Syl he talks to had never heard of, and
+     * she said so when he asked. Nothing she does is meant to be invisible;
+     * this was invisible to her.
+     *
+     * Read fresh on every turn, from the runs table rather than from a second
+     * store — `jobs/unattended-contributor.ts` decides what fits and what it
+     * says about the rest.
+     *
+     * **His lane only**, deliberately. The question this answers is one he
+     * asks; the hourly turn already remembers its own day within its own
+     * thread, and handing every lane the same block would spend the same bytes
+     * on a turn nobody is questioning.
+     */
+    contributors: (lane: Lane): readonly Contributor[] => {
+      if (lane !== LANES.commander) return [];
+      const record = unattendedContributor(
+        // Filtered by KIND, not merely paged. Runs are ordered by time across
+        // the whole catalogue and `reminder_delivery` wakes every minute, so an
+        // unfiltered page of this depth is a hundred deliveries and not one
+        // hour of hers.
+        jobs.listRuns({ kinds: UNATTENDED_KINDS, limit: UNATTENDED_RUN_DEPTH }).items,
+        { now: clock(), tz: config.quietHours.tz },
+      );
+      return record === undefined ? [] : [record];
+    },
     // Both halves are load-bearing and neither survives alone: `onEvent` is how
     // the service observes a turn at all, and the index wrapper is what makes a
     // written memory findable again.
@@ -1125,13 +1166,12 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       return {
         ...turnOverrides,
         ...(home === undefined ? {} : { cwd: home }),
-        // HER HANDS, ON HIS OWN LANE AND NO OTHER.
+        // HER HANDS, ON THE LANES THAT WERE DECLARED TO HAVE THEM AND NO OTHER.
         //
         // The dream must not be able to write a reminder while judging what
-        // matters; the heartbeat and the agenda read rather than act; and the
-        // extraction turn is a sealed reader that never comes near this object
-        // at all. Those are not three separate decisions — they are one, and
-        // this is where it is made.
+        // matters, and the extraction turn is a sealed reader that never comes
+        // near this object at all. Those are not separate decisions — they are
+        // one, `LANES_WITH_HANDS` states it, and this is where it is applied.
         //
         // `strictMcpConfig` is redundant beside a config (`runTurn` adds
         // `--strict-mcp-config` whenever one is set) and is stated anyway: it
@@ -1704,6 +1744,11 @@ export async function startSyl(
   // becomes a third fixed slot beside the morning agenda and the evening review.
   const heartbeatSchedule = { tz: config.quietHours.tz, quiet: config.quietHours.quiet };
   const heartbeatJob = ensureHeartbeatJob(deps.jobs, heartbeatSchedule, clock());
+  // The morning brief, which nothing had ever scheduled. A `wall_clock` trigger
+  // in his own zone, a quarter of an hour ahead of the note that announces it,
+  // so the brief exists before he is told it does.
+  const agendaSchedule = { tz: config.quietHours.tz, quiet: config.quietHours.quiet };
+  const agendaJob = ensureMorningAgendaJob(deps.jobs, agendaSchedule, clock());
 
   const runtime = createDeliveryRuntime({
     jobs: deps.jobs,
@@ -1741,6 +1786,19 @@ export async function startSyl(
           jobs: deps.jobs,
           ...heartbeatSchedule,
           // A failed hour is silent to him and loud here.
+          ...(options.logger === undefined ? {} : { log: options.logger }),
+        }),
+      ],
+      [
+        "morning_agenda",
+        createMorningAgendaHandler({
+          // The lane, bound once. It carries the same MCP declaration the
+          // commander lane does — see `LANES_WITH_HANDS` — because a brief she
+          // cannot file is a brief that exists only in a run record.
+          voice: agent.forLane(LANES.agenda),
+          ...agendaSchedule,
+          // A morning that composed nothing, and a morning that died, are both
+          // reported here and nowhere near him.
           ...(options.logger === undefined ? {} : { log: options.logger }),
         }),
       ],
@@ -1788,6 +1846,8 @@ export async function startSyl(
       // Re-read for the same reason the dream is: the runner's first tick has
       // already run since `ensureHeartbeatJob` returned the row.
       ...describeHeartbeat(deps.jobs.get(heartbeatJob.id) ?? heartbeatJob, heartbeatSchedule),
+      // Re-read for the same reason.
+      ...describeAgenda(deps.jobs.get(agendaJob.id) ?? agendaJob, agendaSchedule),
       ...describePushEnvironment(push, { pushConfigured: runtime.pushEnabled }),
       ...describePower(power),
       ...describeAdmin(admin),
