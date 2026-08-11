@@ -124,19 +124,26 @@ describe("buildWorkingMemory", () => {
   it("should NAME what did not fit rather than dropping it silently", () => {
     // The auto-memory index cliff (`syl-03d`) in one assertion: past a limit
     // the thing stops being loaded and nothing says so. Here it says so.
-    const plan = buildWorkingMemory(many(400));
+    //
+    // Deliberately sized to overflow the REAL production budget rather than a
+    // caller-supplied one — this asserts the cliff at the ceiling that actually
+    // ships. 400 stopped overflowing when the budget went 4,000 -> 32,000
+    // (`syl-ulf`); the count has to track the budget or the test quietly stops
+    // testing anything, which is the same class of rot the expected-failures
+    // gate exists to catch.
+    const plan = buildWorkingMemory(many(1_200));
 
     expect(plan.dropped.length).toBeGreaterThan(0);
     expect(plan.text).toContain(`…and ${String(plan.dropped.length)} more`);
-    expect(plan.included).toHaveLength(400 - plan.dropped.length);
+    expect(plan.included).toHaveLength(1_200 - plan.dropped.length);
   });
 
   it("should drop the LEAST salient tail, never the most salient head", () => {
-    const plan = buildWorkingMemory(many(400));
-    const first = many(400)[0];
+    const plan = buildWorkingMemory(many(1_200));
+    const first = many(1_200)[0];
 
     expect(plan.included[0]).toBe(first?.id);
-    expect(plan.dropped).toContain(many(400)[399]?.id);
+    expect(plan.dropped).toContain(many(1_200)[1_199]?.id);
   });
 
   it("should be deterministic — the same input renders the same bytes", () => {

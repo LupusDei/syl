@@ -198,7 +198,7 @@ export const MEMORY_FENCE_END = "--- END OF WHAT YOU REMEMBER ---";
  * | contributor | then | now | why |
  * |---|---|---|---|
  * | `SOUL.md` | 5,502 | ~8,400 | the personality work, and the Commander's ruling that she be curious |
- * | working memory | 4,000 | 4,000 | a hard cap, enforced three ways |
+ * | working memory | 4,000 | 32,000 | `syl-ulf` — the Commander's order, 2026-08-11 |
  * | tool schemas | 0 | ~6,500 | the verbs, so she can manage his data rather than only add to it |
  * | agent replies | 0 | 4,800 | `syl-014` — one fenced answer at `MAX_REPLY_BYTES`, and the note saying what did not fit |
  *
@@ -224,8 +224,35 @@ export const MEMORY_FENCE_END = "--- END OF WHAT YOU REMEMBER ---";
  * to-dos, goals and memory is not that. Raise it when the intended contributors
  * outgrow it; narrow the contributor when one of them is bloated. The two rules
  * are not in conflict, they are answers to different questions.
+ *
+ * ### 24,000 -> 56,000, on 2026-08-11
+ *
+ * This is the first case the rule above describes: an **intended** contributor
+ * outgrew the ceiling, deliberately and by the Commander's order. Working
+ * memory went 4,000 -> 32,000 (`syl-ulf`) after it was measured dropping his
+ * own name, his wife, his son and his daughter from the document she reads
+ * every turn. He accepted the recurring cost in terms — *"I'm fine with it
+ * burning extra tokens"* — and named the rollback.
+ *
+ * So the ceiling is raised rather than the contributor narrowed, which is
+ * exactly what the rule prescribes. The declared maxima now sum to **51,956
+ * bytes**, so 56,000 leaves a margin of ~4,000.
+ *
+ * **The margin is deliberately wider than the ~300 bytes it replaces.** That
+ * number was flagged above as worth knowing before the next contributor is
+ * added, and it had a failure mode this build has now seen twice: a guard so
+ * tight that it fires on a change with nothing to do with it, at which point
+ * the temptation is to write a worse `SOUL.md` paragraph rather than to ask
+ * whether the number is right. A tripwire needs to be loose enough that it
+ * only fires on a runaway. ~4,000 bytes is room for the reviewed growth of one
+ * contributor and not room for a runaway one.
+ *
+ * This does NOT reopen the token-economy question. It is still nothing against
+ * the context window; what it is against is a recurring per-turn cost, and
+ * that argument lives on {@link WORKING_MEMORY_MAX_BYTES} where the number
+ * that actually moved is.
  */
-export const DEFAULT_CONTEXT_BUDGET_BYTES = 24_000;
+export const DEFAULT_CONTEXT_BUDGET_BYTES = 56_000;
 
 /** A contributor was wired up wrong. A programming error, not a runtime condition. */
 export class TurnContextError extends Error {

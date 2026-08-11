@@ -459,9 +459,16 @@ describe("assertContextBudget", () => {
   });
 
   it("should throw when the declared maxima sum over, naming each and the overage", () => {
+    // The runaway contributor is sized against DEFAULT_CONTEXT_BUDGET_BYTES
+    // rather than hard-coded, so this keeps asserting "the tripwire fires"
+    // after the ceiling moves. It was a literal 40,000 and silently stopped
+    // overflowing when the ceiling went 24,000 -> 56,000 (`syl-ulf`) — a test
+    // that no longer tests what it names is the failure mode this suite cares
+    // about most.
+    const runaway = DEFAULT_CONTEXT_BUDGET_BYTES + 10_000;
     const error = (() => {
       try {
-        assertContextBudget([...today, { id: "syl-009-tools", kind: "capability", maxBytes: 40_000 }]);
+        assertContextBudget([...today, { id: "syl-009-tools", kind: "capability", maxBytes: runaway }]);
         return undefined;
       } catch (e) {
         return e as TurnContextBudgetError;
@@ -470,7 +477,7 @@ describe("assertContextBudget", () => {
 
     expect(error).toBeInstanceOf(TurnContextBudgetError);
     expect(error?.message).toMatch(/syl-009-tools/);
-    expect(error?.message).toMatch(/40000|40,000/);
+    expect(error?.message).toContain(String(runaway));
   });
 
   it("should fail on the SUM, not on any single contributor being large", () => {
