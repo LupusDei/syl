@@ -389,6 +389,8 @@ final class APIClientTests: XCTestCase {
             "id": "syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f",
             "kind": "commitment",
             "text": "Call the pharmacy — the refill lapses today.",
+            "because": "you asked me to chase it after you said the refill lapses today",
+            "origin": "he_asked",
             "todoId": NSNull(), "eventId": NSNull(),
             "wallTime": "16:00", "tz": "America/Chicago", "rrule": NSNull(),
             "scheduledFor": "2026-08-09T21:00:00.000Z",

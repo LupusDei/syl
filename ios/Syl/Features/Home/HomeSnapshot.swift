@@ -45,6 +45,31 @@ struct DayMoment: Identifiable, Equatable, Sendable {
     /// shipped the opposite and it cost the Commander two crashes.
     var deferralAskedAt: Date?
 
+    /// Why this reminder exists, if the reason was recorded. `syl-y82`.
+    ///
+    /// Nil means one of two ordinary things — a to-do, which has no provenance of
+    /// this kind, or a reminder written before the reason was kept. **It never means
+    /// Syl declined to explain herself**: `remind_me` refuses a call without a
+    /// `because`, and nothing was backfilled, because a guessed reason is exactly the
+    /// claim-beyond-the-evidence the field exists to prevent.
+    ///
+    /// So a nil renders as *nothing* here, and the row looks exactly as it did before
+    /// this existed. The admin says "recorded before Syl kept her reasons" because a
+    /// reader there is auditing provenance and silence would be ambiguous with a bug.
+    /// This is his day, not an instrument, and a line narrating the app's own history
+    /// at him is the noise `SOUL.md` says gets an assistant muted.
+    var reason: String?
+
+    /// Whether she offered this unprompted, rather than being asked for it.
+    ///
+    /// `SOUL.md` promises that if he ignores a kind of suggestion again and again he
+    /// can tell her to stop making it — which needs a day he can scan and think "she
+    /// thought of these". False for a to-do, for a reminder he asked for, **and for a
+    /// row whose origin was never recorded**: an unattributed reminder is not evidence
+    /// of anything, and defaulting it to hers would invent the very attribution this
+    /// field exists to make checkable.
+    var sheNoticed: Bool = false
+
     /// Why the last thing he asked of this row did not happen, in one line.
     ///
     /// On the row rather than in a banner: a refusal that names a to-do from the top of
@@ -75,6 +100,19 @@ extension DayMoment {
     var mayBeDeferred: Bool {
         origin == .reminder && deferralAskedAt == nil && mayBeCompleted
     }
+}
+
+/// A recorded reason, or nil when there is genuinely nothing recorded.
+///
+/// Collapses "absent" and "present but blank" into the same nil once, here, so no view
+/// downstream has to decide whether a string of spaces is a reason. It never
+/// substitutes a sentence: how to say nothing is the view's decision, and a helper that
+/// returned "no reason given" would have made the wrong one on its behalf.
+private func recordedReason(_ because: String?) -> String? {
+    guard let trimmed = because?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !trimmed.isEmpty
+    else { return nil }
+    return trimmed
 }
 
 /// What a row says when Syl refused what he asked of it.
@@ -280,7 +318,13 @@ extension HomeSnapshot {
                     urgent: reminder.urgent,
                     late: reminder.late,
                     pinned: false,
-                    deferralAskedAt: deferralsAskedAt[SylIDs.canonical(reminder.id)]
+                    deferralAskedAt: deferralsAskedAt[SylIDs.canonical(reminder.id)],
+                    // Trimmed here rather than in the view, so "recorded but blank"
+                    // and "not recorded" become the same nil once, in one place.
+                    reason: recordedReason(reminder.because),
+                    // Derived from the origin alone. A `because` is prose and answers
+                    // "why does this exist"; it is not evidence of who asked.
+                    sheNoticed: reminder.origin == .sheNoticed
                 )
             )
         }

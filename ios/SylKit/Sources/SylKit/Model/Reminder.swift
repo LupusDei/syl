@@ -22,12 +22,36 @@ public enum ReminderDeliveryState: String, Codable, Equatable, Sendable, CaseIte
     case failed
 }
 
+/// Whether HE asked for a reminder, or SHE thought of it.
+///
+/// A different question from `because`, and the one a careful reader actually got
+/// wrong: prose answers "why does this exist" and only sometimes "did he ask".
+///
+/// DERIVED rather than claimed wherever it can be — a heartbeat or a dream turn has
+/// no message from him at all, so "she thought of it" is a fact about that turn
+/// rather than a self-report, and those are exactly the 3am ones. Same rule as
+/// `urgentBecauseHeSaid`: a conclusion can only be trusted, evidence can be checked.
+public enum ReminderOrigin: String, Codable, Equatable, Sendable, CaseIterable {
+    case heAsked = "he_asked"
+    case sheNoticed = "she_noticed"
+}
+
 public struct Reminder: Codable, Equatable, Sendable, Identifiable {
     public let id: SylID
     public let kind: ReminderKind
     /// Composed at creation time, in Syl's voice. Delivery is a zero-turn path and
     /// reads this verbatim — no model is in the way to improve it later.
     public let text: String
+    /// Why this reminder exists, in his words or hers.
+    ///
+    /// Null means the row was written before the reason was kept — NOT that Syl
+    /// declined to give one. `remind_me` refuses a call without a `because`, and
+    /// nothing was backfilled, because a guessed reason is exactly the
+    /// claim-beyond-the-evidence this field exists to prevent. Nothing may render
+    /// a null as though she had failed to explain herself.
+    public let because: String?
+    /// Whether he asked, or she noticed. Null on rows that predate the record.
+    public let origin: ReminderOrigin?
     public let todoId: SylID?
     public let eventId: SylID?
     public let wallTime: WallTime
@@ -56,6 +80,8 @@ public struct Reminder: Codable, Equatable, Sendable, Identifiable {
         id: SylID,
         kind: ReminderKind,
         text: String,
+        because: String? = nil,
+        origin: ReminderOrigin? = nil,
         todoId: SylID?,
         eventId: SylID?,
         wallTime: WallTime,
@@ -75,6 +101,8 @@ public struct Reminder: Codable, Equatable, Sendable, Identifiable {
         self.id = id
         self.kind = kind
         self.text = text
+        self.because = because
+        self.origin = origin
         self.todoId = todoId
         self.eventId = eventId
         self.wallTime = wallTime
@@ -93,7 +121,7 @@ public struct Reminder: Codable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, text, todoId, eventId, wallTime, tz, rrule, scheduledFor
+        case id, kind, text, because, origin, todoId, eventId, wallTime, tz, rrule, scheduledFor
         case nextFireAt, urgent, late, deferredFrom, supersedesPrevious
         case deliveryState, createdAt, updatedAt, completedAt
     }
@@ -103,6 +131,11 @@ public struct Reminder: Codable, Equatable, Sendable, Identifiable {
         id = try container.decode(SylID.self, forKey: .id)
         kind = try container.decode(ReminderKind.self, forKey: .kind)
         text = try container.decode(String.self, forKey: .text)
+        // Required-and-nullable, like every other absent-able field here. A
+        // MISSING key is a bug; an explicit null is a statement about when the
+        // row was written, and the two must not be decoded into the same thing.
+        because = try container.decodeRequiredNullable(String.self, forKey: .because)
+        origin = try container.decodeRequiredNullable(ReminderOrigin.self, forKey: .origin)
         todoId = try container.decodeRequiredNullable(SylID.self, forKey: .todoId)
         eventId = try container.decodeRequiredNullable(SylID.self, forKey: .eventId)
         wallTime = try container.decode(WallTime.self, forKey: .wallTime)
@@ -125,6 +158,8 @@ public struct Reminder: Codable, Equatable, Sendable, Identifiable {
         try container.encode(id, forKey: .id)
         try container.encode(kind, forKey: .kind)
         try container.encode(text, forKey: .text)
+        try container.encodeRequiredNullable(because, forKey: .because)
+        try container.encodeRequiredNullable(origin, forKey: .origin)
         try container.encodeRequiredNullable(todoId, forKey: .todoId)
         try container.encodeRequiredNullable(eventId, forKey: .eventId)
         try container.encode(wallTime, forKey: .wallTime)
