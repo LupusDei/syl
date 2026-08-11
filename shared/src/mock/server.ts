@@ -379,6 +379,13 @@ export class MockServer {
       return found === undefined ? notFound("to-do") : ok(found);
     },
 
+    listSendings: ({ store }) => ok(page(store.sendings)),
+    createSending: ({ body, store }) => ok(store.createSending(body), 201),
+    getSending: ({ params, store }) => {
+      const found = store.sending(params["sendingId"] ?? "");
+      return found === undefined ? notFound("sending") : ok(found);
+    },
+
     listGoals: ({ store, query }) => {
       const status = query.get("status");
       const items = status === null ? store.goals : store.goals.filter((g) => g.status === status);

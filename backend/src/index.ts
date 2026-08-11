@@ -67,6 +67,7 @@ import { createLogRouter } from "./routes/logs.js";
 import { createMemoryRouter, type MemoryViews } from "./routes/memory.js";
 import { createReminderRouter } from "./routes/reminders.js";
 import { createRenderRouter } from "./routes/renders.js";
+import { createSendingRouter } from "./routes/sendings.js";
 import { createSyncRouter } from "./routes/sync.js";
 import { createTodoRouter } from "./routes/todos.js";
 import {
@@ -112,6 +113,8 @@ import { MessageStore } from "./services/message-store.js";
 import { Outbox } from "./services/outbox.js";
 import { PresenceService } from "./services/presence.js";
 import { ReminderService } from "./services/reminder-service.js";
+import { SendingService } from "./services/sending-service.js";
+import { SendingStore } from "./services/sending-store.js";
 import { SyncService, type SyncResolvers } from "./services/sync-service.js";
 import { TodoService } from "./services/todo-service.js";
 import { SylSocketServer, WS_PATH } from "./services/ws-server.js";
@@ -300,6 +303,18 @@ export interface AppDependencies {
    * decision `ToolContext.fleet` makes about a missing Adjutant.
    */
   readonly renders: RenderService;
+  /**
+   * The things she chose to give him: her words, and the video of her saying
+   * them.
+   *
+   * Two objects rather than one, and the split is the feature. `sendings` is
+   * the store every read goes through; `composer` is the only thing that can
+   * make one, and it delivers the words before it looks at a render. Handing a
+   * route the store alone makes it structurally unable to compose, which is
+   * what keeps the ordering out of reach of a future caller.
+   */
+  readonly sendings: SendingStore;
+  readonly composer: SendingService;
   /** Extra health probes. The billing check is always present. */
   readonly probes?: readonly HealthProbe[];
   /**
@@ -375,6 +390,8 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     memory,
     attachments,
     renders,
+    sendings,
+    composer,
     probes,
     clock,
   } = deps;
@@ -436,6 +453,9 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // for the argument, which is that this is the first surface she reaches for
   // herself rather than for him, and that it reaches nothing of his.
   api.use(createRenderRouter({ renders, idempotency, authenticate }));
+  // What she has already given him. Unlike `/renders` this is his surface, so
+  // it takes an ordinary `device` token.
+  api.use(createSendingRouter({ sendings, composer, idempotency, authenticate }));
   // Read-only, so no idempotency ledger: there is nothing here to run twice.
   api.use(createSyncRouter({ sync, authenticate }));
   api.use(createJobRouter({ jobs, authenticate }));
@@ -904,6 +924,10 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     blobDir: config.attachmentDir,
   });
   const messages = new MessageStore({ db: database.handle, clock, attachments });
+  // The rows behind "From Syl". Built here beside the two stores it joins; the
+  // service that COMPOSES a sending is built further down, because it needs the
+  // render service and that needs the studio.
+  const sendings = new SendingStore({ db: database.handle, clock, attachments });
   const devices = new DeviceTokenService({ db: database.handle, clock });
   const idempotency = new IdempotencyStore({ db: database.handle, clock });
   // From the config, not from `process.env`. `loadConfig` has already refused
@@ -918,7 +942,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // than mapping rows a second time. A second mapping is a second place for
   // the wire shape to drift, and drift between the contract and the service is
   // the bug this whole endpoint was blocked behind (`syl-c1m`).
-  const sync = new SyncService({ db: database.handle, clock, resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs }) });
+  const sync = new SyncService({ db: database.handle, clock, resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings }) });
   // One zone for the whole service, and the one `loadConfig` has already
   // checked is a place rather than an offset. The quiet *window* stays
   // presence's own: `absent` is about whether Syl shows a character, which
@@ -1318,6 +1342,23 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // constraint 4 wearing a different hat.
   renders.resume();
 
+  // Composing a sending needs the renders (to find the clip), the attachments
+  // (to store the compressed copy) and the outbox (to carry her sentence), so
+  // it is built last. `workDir` is under her home and is NEVER the studio
+  // directory: the compressed copy is derived and regenerable, the render is
+  // the record, and writing one next to the other invites a cleanup job that
+  // cannot tell them apart.
+  const composer = new SendingService({
+    sendings,
+    // Her words go out through the same object the socket subscribes to, so a
+    // sending appears in an open chat window the moment it is composed.
+    chat,
+    attachments,
+    outbox,
+    renders,
+    workDir: join(config.attachmentDir, "sendings"),
+  });
+
   const intakeQueue = new IntakeQueue();
   const intakeStore = new IntakeStore({ db: database.handle, clock });
   const intake = new ArticleIntake({ store: intakeStore, clock, scheduler: intakeQueue });
@@ -1350,6 +1391,8 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       memoryRuntime,
       attachments,
       renders,
+      sendings,
+      composer,
       presence,
       intakeQueue,
       // The same clock every store above was built on — not a second one. See
@@ -1363,6 +1406,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
 /** The stores `GET /sync` reads each resource type through. */
 export interface SyncSources {
   readonly messages: MessageStore;
+  readonly sendings: SendingStore;
   readonly reminders: ReminderService;
   readonly todos: TodoService;
   readonly goals: GoalService;
@@ -1383,7 +1427,7 @@ export interface SyncSources {
  * what `op: "delete"` is derived from.
  */
 export function syncResolvers(sources: SyncSources): SyncResolvers {
-  const { messages, reminders, todos, goals, devices, outbox, jobs } = sources;
+  const { messages, reminders, todos, goals, devices, outbox, jobs, sendings } = sources;
   // Safe assertion: each store returns the contract type for that resource,
   // and `SyncChange.resource` is that same object seen as an open record.
   const as = <T>(value: T | null): Record<string, unknown> | null =>
@@ -1399,6 +1443,11 @@ export function syncResolvers(sources: SyncSources): SyncResolvers {
     delivery: (id) => as(outbox.get(id)),
     job: (id) => as(jobs.get(id)),
     run: (id) => as(jobs.run(id)),
+    // On the feed because a sending CHANGES after its message is written: the
+    // video lands minutes later and nothing about the message moves when it
+    // does. Without this a device that had already synced the words would
+    // never learn the video arrived.
+    sending: (id) => as(sendings.get(id)),
   };
 }
 

@@ -56,20 +56,36 @@ describe("the conversation service, as wired into the running service", () => {
   });
 
   /**
-   * **Both write paths, named.**
+   * **Both write paths, named — plus the one thing Syl originates.**
    *
-   * This is the assertion that keeps HTTP and the socket equivalent. A message
-   * posted over HTTP used to be stored and never announced, because the router
-   * had no reference to the socket at all; the fix is that neither path knows
-   * about the socket and both call the same two methods on the same object.
+   * The first two entries are the assertion that keeps HTTP and the socket
+   * equivalent. A message posted over HTTP used to be stored and never
+   * announced, because the router had no reference to the socket at all; the
+   * fix is that neither path knows about the socket and both call the same two
+   * methods on the same object.
+   *
+   * `services/sending-service.ts` is a different kind of caller and is listed
+   * deliberately rather than excused. The other two carry a message from the
+   * COMMANDER; a sending is Syl saying something unprompted, so it appends
+   * `role: "assistant"` and `accept` publishes it without queueing a turn.
+   * Going through this object rather than `MessageStore` directly is the whole
+   * point: the socket subscribes itself here, so her words reach an open chat
+   * window with no second sink and no bootstrap line to forget. A sending that
+   * wrote to the store directly would be `syl-vls` again, one feature later.
+   *
+   * If a fourth caller ever appears, the question to ask is which of those two
+   * it is. A new way for HIM to send needs both methods; anything Syl
+   * originates needs to be sure `accept` cannot make her answer herself.
    */
   it("should be called from both write paths and no others", () => {
     expect(callersOf("chat.accept(", { except: "conversation-service.ts" })).toEqual([
       "routes/conversations.ts",
+      "services/sending-service.ts",
       "services/ws-server.ts",
     ]);
     expect(callersOf("chat.append(", { except: "conversation-service.ts" })).toEqual([
       "routes/conversations.ts",
+      "services/sending-service.ts",
       "services/ws-server.ts",
     ]);
   });
