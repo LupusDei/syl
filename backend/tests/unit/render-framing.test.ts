@@ -39,6 +39,56 @@ describe("the framings she can ask for", () => {
     expect([...holds].sort()).toEqual(["close_portrait", "face_turned_away"]);
   });
 
+  it("should hold a likeness only where there is no face to get wrong or a picture pinning it", () => {
+    // The invariant `syl-63v` exists because nothing enforced. `holdsLikeness`
+    // was a boolean written by hand beside each framing, so when `promptImage`
+    // stopped being her headshot on 2026-08-11 the flag on `close_portrait`
+    // went on claiming an anchor that had been taken away, and the schema went
+    // on teaching it to her.
+    //
+    // Derived rather than asserted, so the same removal cannot happen quietly
+    // again: a framing that shows her face holds its likeness exactly when
+    // something pins that face, and no hand-written flag can disagree.
+    for (const framing of FRAMINGS) {
+      expect(framing.holdsLikeness, `${framing.id} claims something its inputs do not`).toBe(
+        !framing.facesCamera || framing.anchor !== "none",
+      );
+    }
+  });
+
+  it("should pin her face to the closing frame for the one framing whose subject is her face", () => {
+    // Measured on seedance2, 2026-08-11: `promptImage` accepts an array of
+    // `{uri, position}` with position first|last, and the model honours both.
+    // So the ribbon can open the shot while a portrait of her pins the frame it
+    // arrives at — which is what gives `close_portrait` its likeness back.
+    expect(framingNote("close_portrait")?.anchor).toBe("closing_frame");
+    expect(framingNote("close_portrait")?.facesCamera).toBe(true);
+    expect(framingNote("close_portrait")?.holdsLikeness).toBe(true);
+  });
+
+  it("should anchor nothing for the reel framing, which needs no anchor to hold", () => {
+    // The template, and every one of the Commander's eight favourites. It holds
+    // because her face is never toward the camera: identity is carried by
+    // silhouette, hair and gown. Pinning a closing frame here would also break
+    // the loop, whose whole trick is that the clip ends where it began.
+    expect(framingNote("face_turned_away")?.facesCamera).toBe(false);
+    expect(framingNote("face_turned_away")?.anchor).toBe("none");
+    expect(framingNote("face_turned_away")?.holdsLikeness).toBe(true);
+  });
+
+  it("should leave the two mid-band framings unanchored, because the anchor is the wrong distance", () => {
+    // `docs/VIDEO.md` option 2: the reference must be framed like the shot it
+    // anchors. The picture on hand is a close portrait, so pinning it to the
+    // last frame of a wide or mid shot does not anchor that shot — it ends it
+    // somewhere else. These two stay honest at `false` until there is a
+    // full-body and a mid-shot portrait of her to pin them with.
+    for (const id of ["wide_face_visible", "mid_face_visible"] as const) {
+      expect(framingNote(id)?.facesCamera).toBe(true);
+      expect(framingNote(id)?.anchor).toBe("none");
+      expect(framingNote(id)?.holdsLikeness).toBe(false);
+    }
+  });
+
   it("should mark the band in between as the one that stops being her", () => {
     // `7-twin` and `8-descent` — the two the Commander liked and the two that
     // came out as somebody else. Both are still offered: he ruled that trying
@@ -70,6 +120,20 @@ describe("the framings she can ask for", () => {
     // And the two halves distinguishable without reading `docs/VIDEO.md`.
     expect(guidance).toMatch(/holds your likeness/iu);
     expect(guidance).toMatch(/drift|somebody else|different woman/iu);
+  });
+
+  it("should not tell her the picture she is sent is a close portrait, because it is the ribbon", () => {
+    // The guidance said "the only picture of you is a close portrait, so it
+    // anchors a close shot" — true while `promptImage` was her headshot and
+    // false from the moment it became the opening ribbon. It is the same
+    // sentence `syl-63v` was filed about, in the text she actually reads.
+    const guidance = framingGuidance();
+
+    expect(guidance).not.toMatch(/the only picture of you is a close portrait/iu);
+    // What replaces it has to say where the anchor now comes from, or she is
+    // being asked to trust a flag with no account behind it.
+    expect(guidance).toMatch(/ribbon/iu);
+    expect(guidance).toMatch(/last frame|closing frame|frame it (ends|arrives) (on|at)/iu);
   });
 });
 

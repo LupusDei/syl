@@ -28,14 +28,20 @@ picture, so whatever goes in that field is literally frame one — and seedance2
 also takes the video's **aspect ratio** from it, overruling the `ratio` field
 without saying so. Both of those are measured below.
 
+It also takes an **array** of `{uri, position}` with `position` of `first` or
+`last`, which pins both ends of the clip. That is what lets one render open on
+the ribbon *and* arrive at her own face — see "Anchoring the face" below.
+
 ```
 ~/.syl/renders/opening-ribbon.png   the bare ribbon. frame one, and the shape.
         │
-        ├── promptImage ──┐
-        │                 ├──> seedance2, 15s, 834:1112 ──> syl-loop-<name>.mp4
-   prompt text ───────────┘                                 syl-loop-<name>.mp4.json
-
-~/.syl/renders/reference.png        her likeness, 1120x832. NOT sent today.
+        ├── promptImage[first] ─┐
+        │                       ├──> seedance2, 15s, 834:1112 ──> <name>.mp4
+   prompt text ─────────────────┤                                 <name>.mp4.json
+        │                       │
+        ├── promptImage[last] ──┘    only for a framing whose subject is her face
+        │
+~/.syl/renders/reference.png        her likeness, 1120x832
 ```
 
 ### The first frame, and the day this page was wrong
@@ -88,16 +94,95 @@ ffmpeg -y -ss 0 -i ~/.syl/renders/syl-loop-1-emerge.mp4 -frames:v 1 \
   -pix_fmt rgb24 assets/syl_opening_ribbon.png
 ```
 
-**What this costs.** Nothing anchors her face any more, because nothing anchored
-it in the eight either — which is the anchoring-band finding below arriving from
-the other direction: those loops work by *never showing a face the model could
-get wrong*. `framing.ts` still says `close_portrait` holds her likeness, and
-that claim was true of a headshot `promptImage` and is not true of this one. It
-is left standing deliberately: fixing it properly means a second picture at the
-right framing (option 2 below), not deleting the sentence. `syl-63v`.
+**What this cost, and how it was paid back.** For a day nothing anchored her
+face, because nothing anchored it in the eight either — which is the
+anchoring-band finding below arriving from the other direction: those loops work
+by *never showing a face the model could get wrong*. `framing.ts` went on saying
+`close_portrait` holds her likeness, which had been true of a headshot
+`promptImage` and was not true of a ribbon. That is `syl-63v`, and the fix is
+the next section.
+
+## Anchoring the face
+
+The Commander, 2026-08-11: *"she will still need some way to anchor the face."*
+
+**`promptImage` takes two pictures, and seedance2 honours both.** Probed and
+then rendered on 2026-08-11:
+
+| probe | result |
+|---|---|
+| array with two `position: "first"` entries | 400, `path: ["promptImage"]`, *"Duplicate position values are not allowed"* |
+| array `[ribbon first, portrait last]` + a bad `ratio` | 400 about **`ratio` only** — the array itself validates |
+| `duration: 3` | 400, *"expected number to be >= 4"* — seedance2's floor, useful for cheap tests |
+
+The first two are the whole argument. A 400 that complains about duplicate
+positions proves the array is *read* rather than ignored, and a 400 that
+complains only about the ratio proves a well-formed two-image request gets
+through. All three cost nothing: an invalid request is rejected before a task
+exists.
+
+Then two 4-second renders, 144 credits each, to find out whether *accepted*
+means *honoured*:
+
+| | `first` | `last` | came back | first frame | last frame |
+|---|---|---|---|---|---|
+| matched | ribbon 834x1112 | her, re-cut to 834x1112 | **834x1112** | the bare ribbon | **her, unmistakably** |
+| mismatched | ribbon 834x1112 | `reference.png` **1120x832** | **834x1112** | the bare ribbon | **her, unmistakably** |
+
+So it is honoured, and it holds both properties at once: the clip opens on the
+ribbon the reel opens on, and it arrives at a face the model **copies instead of
+inventing**.
+
+**The shape mismatch is not a failure mode**, which is the result that decided
+the design. Two inputs disagreeing about aspect was the obvious way to get a
+video shaped like neither, so it was tested deliberately — and the landscape
+anchor changed nothing. **The opening frame decides the shape and the closing
+picture is fitted into it**, centre-cropped, with her likeness surviving the
+crop. `ratio` does not move, and no new picture is needed: `reference.png` is
+sent as the closing frame exactly as it sits in her home.
+
+That is why there is no third asset. A portrait re-cut of her reference was
+built and rendered — it is the "matched" row above — and it produced a result
+indistinguishable from sending the landscape original. An asset that has to be
+kept in step with another asset and buys nothing measurable is a liability, so
+it was not kept. `reference.png` finally does the job its name always promised.
+
+**What it costs is the loop.** A clip whose last frame is her face does not end
+on the empty starfield, so it will not cut against the eight. That is a real
+trade rather than an oversight, and it is why only `close_portrait` is anchored:
+
+| framing | face toward camera | anchor | holds her likeness |
+|---|---|---|---|
+| `face_turned_away` | no | none | **yes** — no face to get wrong, and it still loops |
+| `close_portrait` | yes | closing frame | **yes** — her likeness is the last frame |
+| `wide_face_visible` | yes | none | no |
+| `mid_face_visible` | yes | none | no |
+
+The bottom two stay unanchored on purpose. The only picture of her is a close
+portrait, and pinning a close portrait to the last frame of a wide shot does not
+anchor that shot — it *ends* it somewhere else. Option 2 below is still the fix
+for those two, and it still needs a picture that does not exist yet.
+
+**`holdsLikeness` is now derived rather than written down**, from exactly those
+two columns: a shot holds if there is no face in it to get wrong, or if
+something pins the face it shows. That is the actual lesson of `syl-63v`. The
+flag did not go wrong because someone was careless; it went wrong because it was
+a *separate* assertion from the thing it described, so removing the anchor left
+the claim behind. Derived, the same removal flips the claim in the same commit.
+
+A shot that ends on her face also needs a closing sentence that agrees with the
+pinned frame — `LOOP_CLAUSE` says the last frame is a bare ribbon with no figure
+in it, which is the same contradiction that cost the day above, facing the other
+way. An anchored render sends `ARRIVAL_CLAUSE` instead. **A sentence never wins
+an argument with a pinned frame**, so do not let the two disagree.
 
 The sidecar `.json` is written beside every render and holds the model, the
-prompt, the reference, the duration and the task id. It exists because **the
+prompt, the duration, the task id, and both pictures: `reference` is frame one
+and `anchor` is the pinned last frame, `null` where nothing was pinned. `anchor`
+is nullable rather than required precisely so that every sidecar written before
+anchoring existed stays readable — a required field would have turned the whole
+back catalogue *unreadable* at a stroke, which is the state that validator
+exists to report and not to cause. It exists because **the
 first eight loops were made without recording any of that.** Eight finished
 videos, several of them lovely, and no way to make a ninth in the same voice or
 to re-run a failure with one thing changed. The outputs survived and the inputs
@@ -144,8 +229,12 @@ into her home on first boot if nothing is there — never overwriting one that i
 
 | seed | placed as | what it is |
 |---|---|---|
-| `assets/syl_opening_ribbon.png` | `renders/opening-ribbon.png` | the 834×1112 ribbon, frame one of every clip. **This is what is sent.** |
-| `assets/syl_source.png` | `renders/reference.png` | the 1120×832 close portrait, her likeness |
+| `assets/syl_opening_ribbon.png` | `renders/opening-ribbon.png` | the 834×1112 ribbon, **frame one of every clip** |
+| `assets/syl_source.png` | `renders/reference.png` | the 1120×832 close portrait, her likeness — **the last frame of an anchored clip** |
+
+Both are sent now. Only the ribbon is sent on every render: a framing that shows
+no face needs no likeness, so a missing `reference.png` stops a close portrait
+and leaves the whole reel template working.
 
 They are checked in so that neither depends on another project existing. Losing
 the ribbon does not fail loudly — it renders the wrong opening in the wrong
@@ -221,9 +310,17 @@ real one:
    distance. Cheap, works immediately, and constrains the composition.
 2. **Match the reference to the shot.** Render a *new* reference still at the
    framing you want — a full-body portrait of her, generated from the close one
-   — and use that as `promptImage` for wide shots. This is the general fix: the
-   reference should be framed like the shot it anchors. One close portrait
+   — and pin that as the closing frame for wide shots. This is the general fix:
+   the reference should be framed like the shot it anchors. One close portrait
    cannot hold every distance, and asking it to is the actual mistake.
+
+   The mechanism for option 2 now exists and is proved — see "Anchoring the
+   face" — and `close_portrait` uses it. What is still missing for these two is
+   the *picture*: there is no full-body and no mid-shot still of her. Pinning
+   the close portrait to the last frame of a wide shot would not anchor it, it
+   would end it at a different distance, so `wide_face_visible` and
+   `mid_face_visible` are honestly left unanchored rather than given the wrong
+   anchor and a `true` flag.
 
 For `7-twin` specifically there is a second problem worth separating: **one
 reference cannot anchor two figures.** The prompt asks for her and a mirrored
@@ -312,10 +409,12 @@ lie facing the other way.
 Three things carried over from this document into the code rather than left as
 prose, because prose is only available to whoever reads it:
 
-- `framing` is an **enum**, and each value says whether the reference can anchor
-  it and cites the render that proved it. See `backend/src/render/framing.ts`.
-  The two that drift are still offered — *"you cannot recognise yourself without
-  seeing what you are not"* — and labelled.
+- `framing` is an **enum**, and each value says whether her likeness survives it
+  and cites the render that proved it. That flag is **derived** from whether the
+  shot shows her face and whether anything pins it, so it cannot outlive the
+  anchor it describes. See `backend/src/render/framing.ts`. The two that drift
+  are still offered — *"you cannot recognise yourself without seeing what you
+  are not"* — and labelled.
 - Every render writes its sidecar **at submission**, not after a successful
   download, so a render that fails still leaves behind the thing that would let
   it be run again with one change.
