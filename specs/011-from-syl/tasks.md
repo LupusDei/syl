@@ -471,20 +471,51 @@ so that search needs him, and he has said not now.
       still go first and are still not contingent on any of this**, so a failure to
       speak settles the sending `failed` with a reason and leaves her sentence already
       delivered.
+      **Do not re-point `render_name` — it will `ABORT`.** `speak()` writes a *second*
+      file, `<render>-voiced.mp4` (`VOICED_SUFFIX`, `voice-service.ts:144`), with its
+      own render record and its own `voicedFrom` provenance, and the tempting move is
+      to point the sending at that record. `0024_sendings.sql:144` refuses any `UPDATE`
+      where `OLD.render_name IS NOT NULL AND OLD.render_name IS NOT NEW.render_name`,
+      because a sending whose record can be swapped is a sending that can be rewritten.
+      **Keep the original render name as the sending's record and change only the
+      source path handed to the compressor** — `sending-service.ts:342`,
+      `source: record.video`. The voiced file is derived in exactly the sense the
+      compressed copy is. One line, and the provenance chain stays intact.
       **Do not touch the compressor, and do not "optimise" it.** Two deliberate
-      properties of `sending-media.ts` that this task depends on: it already passes
-      audio through **unconditionally** (no `-map`, `-c:a aac -b:a 96k`), so a render
-      that comes back with a voice on it keeps it with no change to that layer; and the
-      bitrate budget subtracts the 96k audio allowance **whether or not there is any
-      audio**, which costs a little quality on silent clips and is the reason a voice
-      track can never push a sending over the 10MB ceiling. It looks like a bug and is
-      not. Phases: **write failing tests first** in
+      properties of `sending-media.ts` mean this task needs **zero** changes there: it
+      already passes audio through **unconditionally** (no `-map`, `-c:a aac -b:a 96k`),
+      so a voiced source keeps its audio with no change to that layer; and the bitrate
+      budget subtracts the 96k audio allowance **whether or not there is any audio**,
+      which costs a little quality on silent clips and is the reason a voice track can
+      never push a sending over the 10MB ceiling. It looks like a bug and is not.
+      **No job is needed either** — `#makeVideo` already runs detached, so `speak()`'s
+      ~50s await fits inside it. The one rule the whole feature rests on: **`speak()` is
+      never awaited inside `compose()`.** Phases: **write failing tests first** in
       `backend/tests/unit/sending-service.test.ts` — the attached video carries audio;
       a speech failure does not retract the assistant message or the push; the original
       render is byte-identical afterwards — **confirm RED** → implement → **confirm
       GREEN**. Gate: `npm run verify`. **Blocked by T022 and by T007b.**
 
-**Checkpoint**: a sending is her, in her voice, saying the thing she chose.
+- [ ] **T026** `[P]` `ensureSample()` at boot, or a fresh install has a voice that
+      refuses. `voice-service.ts:368` defines `ensureSample()` and **nothing calls it** —
+      one reference in the whole tree, its own definition. `speak()` refuses with a
+      sentence when the voice sample is not on the machine, and the sample currently
+      sits at `~/.syl/voice/93b52581-….mp3` **on this machine only**, placed by hand. So
+      every test passes, this machine works, and a restore or a fresh install produces a
+      voice that politely refuses forever. **That is the shape of gap that is invisible
+      until it is a deploy**, which is why it is a bead and not a comment. The precedent
+      solves the identical problem for her face: `ensureReference(studio)` at
+      `backend/src/index.ts:1303` (declared `render/studio.ts:207`). Put `ensureSample()`
+      beside it — same place, same shape. Phases: **write failing tests first** in
+      `backend/tests/unit/voice-service.test.ts` and beside the container-boot tests — a
+      missing sample is placed at boot; an existing one is never overwritten, same rule
+      as the reference; an unplaceable one degrades to `speak()` refusing with a sentence
+      rather than throwing at startup, because a service that will not boot over a voice
+      is worse than a voice that says why it cannot speak — **confirm RED** → implement →
+      **confirm GREEN**. Gate: `npm run verify`.
+
+**Checkpoint**: a sending is her, in her voice, saying the thing she chose — on a
+machine that was set up today as well as on this one.
 
 ---
 

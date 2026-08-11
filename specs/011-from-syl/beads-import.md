@@ -19,7 +19,7 @@
 | `syl-015.2` | 2 — the hourly turn | built on `syl-heartbeat`, merging | 6 |
 | `syl-015.3` | 3 — sendings, the backend | landed on main; gaps + one bug | 7 |
 | `syl-015.4` | 4 — From Syl, the surface | not started | 9 |
-| `syl-015.5` | 5 — her voice | not started | 6 |
+| `syl-015.5` | 5 — her voice | landed on a branch; verify, close, + 1 gap | 7 |
 | `syl-015.6` | 6 — proof | not started | 1 |
 
 Epic-level dependencies. None were created or removed by this import; recorded as they
@@ -86,6 +86,7 @@ reaping of the derived working directory (`#reap(sendingId)`). Not planned, not 
 | T021b | The speech client | `backend/src/render/voice.ts` | `syl-015.5.4` |
 | T022 | The mux — her voice onto the render, the render untouched | `backend/src/render/voice.ts` | `syl-015.5.5` |
 | T023 | A sending carries her voice | `backend/src/services/sending-service.ts` | `syl-015.5.6` |
+| T026 | `ensureSample()` at boot, or a fresh install refuses | `backend/src/index.ts` | `syl-015.5.7` |
 
 ### Phase 6 — proof (`syl-015.6`)
 
@@ -101,14 +102,24 @@ reaping of the derived working directory (`#reap(sendingId)`). Not planned, not 
 | 2: the hourly turn | 6 | 0 | `syl-015.2` |
 | 3: sendings — the backend | 7 | 0 | `syl-015.3` |
 | 4: From Syl — the surface | 9 | 0 | `syl-015.4` |
-| 5: her voice | 6 | 0 | `syl-015.5` |
+| 5: her voice | 7 | 0 | `syl-015.5` |
 | 6: proof | 1 | 0 | `syl-015.6` |
-| **Total task beads** | **29** | | |
+| **Total task beads** | **30** | | |
 
-25 T-IDs; four of them (`T007`, `T008`, `T014`, `T021`) are Shape A splits and become
-two beads each. 29 task beads in all, under six pre-existing sub-epics under one
-pre-existing root. `T025` is the one bead added after planning — a bug found by the
-agent that wrote the code it is against.
+26 T-IDs; four of them (`T007`, `T008`, `T014`, `T021`) are Shape A splits and become
+two beads each. 30 task beads in all, under six pre-existing sub-epics under one
+pre-existing root. Two were added after planning, both handed over by agents who found
+them in their own code: `T025`, a bug in the mock's ordering, and `T026`, a boot call
+with no owner.
+
+**Phase 5 has since landed on a branch** — `cf503f4` and `f032e89` on
+`worktree-agent-a787b3529c3561574` (**not** `agent/artanis`, and not on `main`), adding
+`backend/src/voice/{her-voice,speech,mux,voice-service}.ts` with four matching test
+files. `syl-015.5.1`–`.5.5` are therefore likely satisfied and each carries a note
+saying what to verify before closing it. They are deliberately **not** closed here:
+closing another agent's work unverified is how a task's durable half — the recorded
+schema, the captured fixture, the byte-identical original — goes missing while the code
+passes.
 
 ## Dependency graph
 
