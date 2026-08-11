@@ -912,6 +912,29 @@ Constitution Rule 1 and it has already paid for itself.
 **Fail loudly on auth and billing.** These are the failures that would quietly
 change what the Commander is paying, or quietly stop the assistant working.
 
+**If a property can be STATED, it can be forgotten. If it can be DERIVED, it
+cannot.** artanis's line, and the through-line under most of what follows —
+worth reading before the individual cases, because we rediscovered it about
+once an hour on 2026-08-10 and treated each instance as its own lesson.
+
+Every one of these was a guarantee held by somebody remembering, rather than by
+the structure:
+
+| the guarantee | how it was held | what it became |
+|---|---|---|
+| "this turn has no MCP" | a boot line asserting it | derived from the config it actually passes |
+| "three workers is right" | a measurement frozen as a constant | derived from the machine it runs on |
+| "this reminder is time-sensitive" | a payload claiming it | checked against what the binary is signed for |
+| "the signal stays covered" | a comment claiming an order the code did not have | cover before uncovering |
+| "every write says why" | required at the door, dropped at the store | carried to the row |
+| "outside text is fenced" | a fence you had to remember to apply | `validate` refuses the slot without the marker |
+| "she can act" | a sentence in `SOUL.md` | computed from `TurnOptions.tools` |
+
+The repair is the same every time: make the claim a function of the thing it is
+about. `advertisedTools()` from the handler map; `origin` from whether he spoke;
+the capability sentence from the surface. **A stated property has a shelf life
+and nothing announces its expiry.**
+
 **An instruction and the capability it assumes are ONE decision, and the failure
 is always prose.** Hit three times on 2026-08-10, in both directions:
 
@@ -957,6 +980,24 @@ and the manifest will not tell you. Declare the seam for real instead: a module
 that exports the true signature and throws a named `NotImplementedError` is
 better than a string in someone else's test file, because it hands the next
 person a typed contract and puts the warning where they will be standing.
+
+**A fix to a race is done when the old failure is unrepresentable AND a new
+failure at that site names itself.** artanis's standard, adopted for `syl-g4u`
+after we had both watched green runs lie under load. Two questions, and a run
+count is not one of them:
+
+1. **Can the original symptom still occur?** Unrepresentable, not unlikely.
+2. **If this site fails again, does the message say which bug it is** — or does
+   it repeat the old sentence and send the next person down a path already
+   closed?
+
+`us2` passes both: each spawn writes its own record, and the test filters to his
+own lane by permission mode, so a reader turn cannot be read as a commander turn
+even by accident. A future failure there says *"the second turn never spawned"*
+rather than *"missing --resume"*. **That is worth more than the eight green runs
+it also has**, because green runs under load are exactly what we already know
+can lie. Record the new failure sentence in the bead, so the next person knows
+what a genuine recurrence looks like.
 
 **Where the rule CANNOT be applied, the defence is a loud failure and nothing
 else.** artanis's observation, and it is the exception that proves the rule
@@ -1081,6 +1122,35 @@ and the Commander found the missing project registration before I did.
 
 ---
 
+**"The platform cannot do X" — believed twice, checked neither time, wrong both
+times.** This is now a repeat offender and deserves its own line.
+
+| what we believed | how long it stood | what it cost |
+|---|---|---|
+| a turn cannot complete with stdin open, so one subprocess per turn | months, and it decided the whole architecture | a 4-7x latency floor on every turn Syl takes |
+| Syl cannot send a message under her own name | the length of one epic's planning | an epic designed around an impersonation workaround |
+
+The second was found on 2026-08-11. `POST /api/messages` stamps every message
+`from: "user"`, so the obvious integration would have had Syl asking the
+treasurer about the Commander's money **in his voice**. That was true, and the
+conclusion drawn from it — that she had no identity available — was not: the MCP
+path carries one, and a probe came back `from: 'syl'`, `role: 'agent'` on the
+first try.
+
+Both share a shape worth naming: **a real observation, generalised into a
+capability claim, and never re-tested.** The first was correctly measured and
+went stale; the second was correctly measured about the *wrong door*. Neither
+was carelessness, and that is the point — the check is cheap and the belief is
+load-bearing, so the rule is to spend ten minutes proving a platform limit
+before designing around it.
+
+Related, and the same failure from the other side: `maxWorkers: 3` was a
+measurement taken on a 20-core machine and committed as a constant, then applied
+to a 2-core CI runner. **A measurement is a fact about a time and a place; a
+constant is a claim about everywhere.** Writing one down as the other is the
+same move as a hard-coded "she cannot act yet".
+
+
 ## 11. Reference
 
 | Bead | What |
@@ -1097,3 +1167,43 @@ superseded.
 
 Adjutant project id for syl: `3ba5667d`. Backend runs on port **4201** — read it
 from `.mcp.json`, never assume 3001.
+
+### A concurrent agent's commit silently wiped an in-progress merge (2026-08-11)
+
+I merged `syl-ryp.4` (wander), hit two additive conflicts in `PreparedSky.swift`,
+resolved them, and built. Between the build and the test run another agent
+working in this repo committed its own planning change — and the tree came back
+to `HEAD` with **the merge gone**: no `MERGE_HEAD`, `git status` clean, and none
+of wander's symbols anywhere on disk.
+
+The dangerous part is that **the test suite still passed.** 705 tests, zero
+failures, against a tree that no longer contained the feature I believed I was
+testing. Nothing was red. The count was the only witness — the squad had said
+762, I got 705, and that gap is the entire reason this was caught rather than
+shipped as "wander is merged and green".
+
+Two rules out of it:
+
+1. **Commit a merge before doing anything slow with it.** A resolved-but-
+   uncommitted merge is the most fragile state in a repo shared with other
+   agents, and the window here was one build.
+2. **A test count is evidence and a pass is not.** "Zero failures" cannot
+   distinguish *the feature works* from *the feature is absent*. When a squad
+   reports a number, check the number.
+
+This is the same family as everything in the "consistency is not correspondence"
+entry, with a new source: the tree itself moved. Every check agreed with every
+other check, and none of them agreed with the branch.
+
+### Blind additive conflict resolution produces plausible garbage (2026-08-11)
+
+Resolving the same conflicts a second time, I scripted it: keep ours, then
+theirs, drop the markers. Both hunks were genuinely additive, so this was
+"right" — and it emitted a `PreparedSky(...)` call with a stray closing paren
+followed by another argument, which is not a merge error but a *syntax* error.
+Swift caught it instantly, which is the only reason it cost a minute.
+
+The lesson is not "don't script it". It is that **an additive resolve is safe
+for declarations and unsafe for call sites**: two branches adding a field each
+to the same initialiser produce two complete calls, and concatenating them is
+never what you want. Resolve declarations by union, and call sites by hand.

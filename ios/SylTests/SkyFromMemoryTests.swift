@@ -100,6 +100,69 @@ final class SkyFromMemoryTests: XCTestCase {
         XCTAssertEqual(sky.capturedAt, generated)
     }
 
+    // MARK: - What the card is made of
+
+    /// **Provenance is the whole content of the card**, and dropping it here would leave the
+    /// card with nothing to say but the label the sky had already drawn.
+    func testShouldCarryProvenanceThroughToTheCard() {
+        let learned = try! Instant.parse("2026-05-01T12:00:00.000Z")
+        let sky = SkyFromMemory.snapshot(from: constellation(stars: [
+            star(
+                id: "syl:fact:0198f2c4-0005-7000-8000-00000000e005",
+                provenance: MemoryStarProvenance(
+                    species: .observed, assertedBy: "Dad", reasoning: nil, learnedAt: learned),
+                body: "The longer version, in her words.")
+        ]))
+
+        let node = try! XCTUnwrap(sky.nodes.first)
+        XCTAssertEqual(node.provenance.species, .observed)
+        XCTAssertEqual(node.provenance.assertedBy, "Dad")
+        XCTAssertEqual(node.provenance.learnedAt, learned)
+        XCTAssertEqual(node.body, "The longer version, in her words.")
+    }
+
+    /// `unattested` is not a species of edge and must not be flattened into `observed` —
+    /// which would have the card claim somebody said something nobody said.
+    func testShouldKeepUnattestedAsItsOwnThing() {
+        let sky = SkyFromMemory.snapshot(from: constellation(stars: [
+            star(id: "syl:memory:0198f2c4-0006-7000-8000-00000000e006")
+        ]))
+
+        XCTAssertEqual(sky.nodes.first?.provenance.species, .unattested)
+        XCTAssertEqual(
+            ConstellationWords.provenance(
+                species: .unattested, assertedBy: nil),
+            "Nothing yet says where this came from.")
+    }
+
+    /// **Her reasoning, verbatim.** The only place the inference engine ever explains itself
+    /// to him, carried across the seam without a single character changed.
+    func testShouldCarryAFilamentsReasoningAcrossVerbatim() {
+        let reasoning = "The Mandarin hour and the cello hour are the same hour on a Tuesday."
+        let touched = try! Instant.parse("2026-04-02T09:30:00.000Z")
+        let sky = SkyFromMemory.snapshot(from: constellation(
+            stars: [],
+            filaments: [
+                MemoryFilament(
+                    id: "syl:edge:0198f2c4-0007-7000-8000-00000000e007",
+                    from: "a", to: "b",
+                    relation: "set_it_down_for",
+                    species: .inferred,
+                    tier: .hot,
+                    confidence: 0.54,
+                    inferredConfidence: 0.71,
+                    reasoning: reasoning,
+                    assertedBy: nil,
+                    lastTouchedAt: touched
+                )
+            ]))
+
+        let edge = try! XCTUnwrap(sky.edges.first)
+        XCTAssertEqual(edge.reasoning, reasoning)
+        XCTAssertEqual(edge.relation, "set_it_down_for")
+        XCTAssertEqual(edge.touchedAt, touched)
+    }
+
     // MARK: - Harness
 
     private func star(
@@ -108,21 +171,19 @@ final class SkyFromMemoryTests: XCTestCase {
         confidence: Double = 0.5,
         anchor: Bool = false,
         anchorId: SylID? = nil,
-        createdAt: Date = try! Instant.parse("2026-08-09T07:00:00.000Z")
+        createdAt: Date = try! Instant.parse("2026-08-09T07:00:00.000Z"),
+        provenance: MemoryStarProvenance = MemoryStarProvenance(
+            species: .unattested, assertedBy: nil, reasoning: nil, learnedAt: nil),
+        body: String? = nil
     ) -> MemoryStar {
         MemoryStar(
             id: id,
             kind: kind,
             tier: .hot,
             label: "something",
-            body: nil,
+            body: body,
             confidence: confidence,
-            provenance: MemoryStarProvenance(
-                species: .unattested,
-                assertedBy: nil,
-                reasoning: nil,
-                learnedAt: nil
-            ),
+            provenance: provenance,
             anchor: anchor,
             anchorId: anchorId,
             createdAt: createdAt,
@@ -132,6 +193,7 @@ final class SkyFromMemoryTests: XCTestCase {
 
     private func constellation(
         stars: [MemoryStar],
+        filaments: [MemoryFilament] = [],
         generatedAt: Date = try! Instant.parse("2026-08-09T07:00:00.000Z")
     ) -> MemoryConstellation {
         MemoryConstellation(
@@ -139,12 +201,12 @@ final class SkyFromMemoryTests: XCTestCase {
             bound: MemoryConstellationBound(
                 stars: stars.count,
                 starsReturned: stars.count,
-                filamentsReturned: 0,
+                filamentsReturned: filaments.count,
                 mayHaveMore: false,
                 explanation: "test"
             ),
             stars: stars,
-            filaments: []
+            filaments: filaments
         )
     }
 

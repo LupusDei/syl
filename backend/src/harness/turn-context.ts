@@ -43,7 +43,13 @@
  * `harness/protocol.ts`: the subtle bugs in a composition layer are composition
  * bugs, and being able to provoke them without spawning anything is worth the
  * seam.
+ *
+ * The one import from outside is `agents/fencing.ts`, and it is two string
+ * constants. See {@link CONTRIBUTOR_ORDER} on the `reports` kind for why the
+ * check that needs them belongs here rather than at the call site.
  */
+
+import { REPLY_FENCE_OPEN } from "../agents/fencing.js";
 
 /**
  * The order contributions are emitted in, as data.
@@ -87,8 +93,38 @@
  *
  * So the ladder is stated in one place and enforced in one place, and the two
  * are different places on purpose.
+ *
+ * ## `reports` — an agent's answer, and why it gets a position when a page does not
+ *
+ * `syl-014` gives her a verb for asking the treasurer what his insurance costs.
+ * The answer is text she did not write, arriving in the **commander lane**,
+ * which runs `bypassPermissions` with her whole tool surface. Every other route
+ * by which outside text reaches her goes through `runReaderTurn` and cannot act
+ * at all; this one cannot, because the point is that she reads an answer and
+ * then carries on talking to him with her hands still attached.
+ *
+ * So rung 6 cannot be enforced here the way it is for a fetched page — by there
+ * being no position at all. What it gets instead is **the last position**, which
+ * is what "never moves up" means once something is in the prompt:
+ *
+ * - **Below `MEMORY_FENCE_END`**, or `SOUL.md`'s sentence about everything past
+ *   the fence annexes whatever another agent said into what she knows about the
+ *   Commander. That is this module's failure mode with the stakes raised: a
+ *   tool schema annexed into her memory is a confusing prompt, and an answer
+ *   annexed into her memory is another process's text becoming a belief about
+ *   him. An agent's answer is *plausible* in a way an article is not — about his
+ *   life, in the right register, from a source he trusts.
+ * - **Below capability**, because a report about the world does not outrank the
+ *   description of what she can do about it.
+ *
+ * And because a position is a hole if anything may occupy it, {@link validate}
+ * requires a `reports` contribution to carry `fencing.ts`'s marker. The check
+ * lives here rather than at the call site for the reason `runReaderTurn` passes
+ * `autoMemoryOff()` unconditionally: a quarantine you have to remember to
+ * switch on is not a quarantine. `reports` is not a general slot for outside
+ * text — it is the slot for text `fenceReplies` has already been through.
  */
-export const CONTRIBUTOR_ORDER = ["identity", "memory", "capability"] as const;
+export const CONTRIBUTOR_ORDER = ["identity", "memory", "capability", "reports"] as const;
 
 /** What a contribution is. Derived from the order, so no kind can lack a position. */
 export type ContributorKind = (typeof CONTRIBUTOR_ORDER)[number];
@@ -163,7 +199,17 @@ export const MEMORY_FENCE_END = "--- END OF WHAT YOU REMEMBER ---";
  * |---|---|---|---|
  * | `SOUL.md` | 5,502 | ~8,400 | the personality work, and the Commander's ruling that she be curious |
  * | working memory | 4,000 | 4,000 | a hard cap, enforced three ways |
- * | tool schemas | 0 | ~5,700 | nine verbs, so she can manage his data rather than only add to it |
+ * | tool schemas | 0 | ~6,500 | the verbs, so she can manage his data rather than only add to it |
+ * | agent replies | 0 | 4,800 | `syl-014` — one fenced answer at `MAX_REPLY_BYTES`, and the note saying what did not fit |
+ *
+ * **The margin is now about 300 bytes**, and that is worth knowing before the
+ * next contributor is added rather than after. `tests/unit/tool-surface-budget.
+ * test.ts` proves the sum over the REAL constants — `SOUL.md`'s actual size,
+ * `surfaceBytes()`, the two caps — so the next verb on the tool surface fails
+ * there, in the test run of whoever added it. When that happens, read the two
+ * paragraphs below before reaching for a bigger number: a fourth intended
+ * contributor outgrowing the ceiling is the case for raising it, and one
+ * contributor being bloated is the case for narrowing that contributor.
  *
  * At 16,000 the tripwire had begun firing on **contributors that all exist and
  * were all deliberate**, which is the exact case its own definition says it
@@ -286,6 +332,21 @@ function validate(contributors: readonly Contributor[]): void {
           `moves up, and the sealed reader stops fetched text ACTING but not being BELIEVED.`,
       );
     }
+    // The `reports` position exists so an agent's answer can reach the lane
+    // that acts. It is not a general slot for outside text, and a position
+    // anything may occupy is a hole: without this, the containment argument in
+    // `agents/fencing.ts` reduces to whoever wired up the call site having
+    // remembered to call it. Same rule as the sealed reader passing
+    // `autoMemoryOff()` unconditionally.
+    if (contributor.kind === "reports" && !contributor.text.includes(REPLY_FENCE_OPEN)) {
+      throw new TurnContextError(
+        `Contributor "${contributor.id}" is kind "reports" but its text has not been through the ` +
+          `fence — it does not contain ${JSON.stringify(REPLY_FENCE_OPEN)}. Put it through ` +
+          `fenceReplies() in agents/fencing.ts first: an agent's answer reaches the lane that can ` +
+          `act, so it has to arrive saying whose words it is and that nothing inside it is an ` +
+          `instruction. If this is not an agent's reply, it does not belong in this position.`,
+      );
+    }
     if (seen.has(contributor.id)) {
       throw new TurnContextError(
         `Two turn-context contributors share the id "${contributor.id}". That is a double ` +
@@ -331,10 +392,14 @@ export function composeTurnContext(options: ComposeTurnContextOptions): TurnCont
     // unexplained rule is noise.
     if (contributor.kind === "memory" && previousKind === "identity") parts.push(MEMORY_FENCE);
 
-    // Closes it before anything that is not memory. Emits NOTHING today —
-    // nothing follows memory yet — and exists for `syl-009`, whose tool schemas
-    // would otherwise land inside the region SOUL.md calls what she knows about
-    // the Commander.
+    // Closes it before anything that is not memory: `syl-009`'s tool schemas,
+    // and `syl-014`'s agent replies, would otherwise land inside the region
+    // SOUL.md calls what she knows about the Commander.
+    //
+    // Keyed on "the previous kind was memory" rather than on "the next kind is
+    // capability", which is what makes it hold for a lane with no tool surface —
+    // otherwise the lane with no hands would be the one where another agent's
+    // answer slid back inside her memory.
     // (`hasIdentity` because a fence that was never opened must not be closed.)
     if (hasIdentity && previousKind === "memory" && contributor.kind !== "memory") {
       parts.push(MEMORY_FENCE_END);

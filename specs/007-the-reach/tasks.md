@@ -4,6 +4,12 @@
 
 Every task names exact paths. Phase numbers match sub-epic numbers.
 
+**Revised 2026-08-11.** `reach_do` and the delegate. T006 and T007 rewritten in
+place; T031, T032 and T033 appended as `syl-013.1.9`, `.1.10` and `.1.11`. T028
+and T029 gained a clause each. **No existing task was renumbered.** Task numbers
+are allocation order, not execution order — T031–T033 belong to Phase 1 and the
+`Dependencies` section below carries the ordering.
+
 ## Phase 1 — The reach
 
 - **T001 [P]** `backend/src/reach/allowlist.ts` — pure. `assertAllowed(url,
@@ -44,13 +50,32 @@ Every task names exact paths. Phase numbers match sub-epic numbers.
   performs a page action, computes its consequence and writes the ledger row, in
   that order, in one place. Nothing else in the codebase may drive a page. The
   static guard for that is T022; the seam is here.
-- **T007** The verbs: `reach_open`, `reach_look`, `reach_click`, `reach_type`,
-  `reach_wait`, `reach_close` in `backend/src/tools/schemas.ts`, with handlers in
-  `backend/src/tools/server.ts` that are thin calls through
-  `backend/src/tools/client.ts` to `/reach/*`. **Browser-generic, never
-  site-semantic** — a `book_gym_class` verb is the handcuff this epic exists
-  against. Reassert the `surfaceBytes()` ceiling. `because` is required on every
-  verb that acts, guarded by shape rather than by a list of names.
+  **Two callers, one door**: her, steering with the granular verbs, and the
+  delegate, looping. The delegate is a second *caller*, never a second path — if
+  it needed its own allowlist or its own ledger the design would be wrong.
+  The door also exposes **readable page text** (not the accessibility tree, not
+  HTML) for T032, and that extraction is here rather than in `read.ts` so there
+  is still exactly one thing that touches a page.
+- **T007** The verbs, and the **two surfaces**.
+  In `backend/src/tools/schemas.ts`: `reach_do(goal, host, because)` — the front
+  door — plus `reach_read(question)` and the granular six `reach_open`,
+  `reach_look`, `reach_click`, `reach_type`, `reach_wait`, `reach_close`.
+  Handlers in `backend/src/tools/server.ts` are thin calls through
+  `backend/src/tools/client.ts` to `/reach/*`.
+  **Browser-generic, never site-semantic** — a `book_gym_class` verb is the
+  handcuff this epic exists against. `reach_do` takes a *goal in his words*, not
+  a site-specific operation, and that distinction is what keeps it on the right
+  side of the line. Reassert the `surfaceBytes()` ceiling. `because` is required
+  on every verb that acts, guarded by shape rather than by a list of names.
+  **The granular six stay.** They are how she steers a flow that went wrong; a
+  capability removed to tidy an interface is the handcuff by another route.
+  **The surface split** is the security half of this task: `advertisedTools()`
+  **and the handler lookup** take a surface — `"commander" | "delegate"` — read
+  from the tool server's environment, which the declaration file sets.
+  `backend/src/tools/config.ts` gains `delegateToolConfigPath(home)` writing
+  `~/.syl/tools/delegate-hands.json` at `0600` beside `hands.json`.
+  Scoping `tools/list` is **not** confinement; the handler lookup must be scoped
+  too, or a name seen once can still be called. T033 proves both halves.
 - **T008** Reach her, and only her: `AGENT_SURFACE` in
   `backend/src/middleware/auth.ts` gains `/reach`, while `/reach/hosts`,
   `/reach/frame` and `/reach/ledger` stay `admin`. Test both halves — she can
@@ -58,6 +83,72 @@ Every task names exact paths. Phase numbers match sub-epic numbers.
   visible mode is opt-in via one explicit flag on the reach session
   (`backend/src/reach/browser.ts`); a test asserts the default and that the flag
   is the only way to change it.
+- **T032** *(`syl-013.1.10`)* Ask the page, do not snapshot it:
+  `backend/src/reach/read.ts` — `answerFromPage(question, sessionId)` takes the
+  readable page text from T006 and answers **through `runReaderTurn`**
+  (`backend/src/harness/reader.ts`), unmodified, with the page as untrusted
+  content. Bounded answer, schema-validated or discarded, and *"not on this
+  page"* when it is not on the page — a reader turn that invents an answer is
+  worse than a snapshot.
+  **The test that matters is which path was taken**, not what came back:
+  `backend/tests/unit/reach-read.test.ts` asserts the sealed shape was used and
+  its tool surface was empty. This is one refactor from "just ask the delegate to
+  summarise the page it already has", that refactor looks like a simplification,
+  and it silently deletes the central claim of `spec.md` § *The residual*.
+  Borrowed from OpenClaw's *"question answering over readable page text without
+  returning a full snapshot"* —
+  `https://github.com/openclaw/openclaw/blob/main/docs/tools/browser.md`.
+- **T033** *(`syl-013.1.11`)* **The delegate holds none of her verbs**, proven —
+  `backend/tests/unit/reach-delegate-confinement.test.ts`, in the shape of
+  `backend/tests/unit/agent-confinement.test.ts` and `reader-containment.test.ts`
+  (`syl-009.6`, the precedent). Written **before** `delegate.ts`, red first: a
+  confinement test shaped by the surface it found is worth much less.
+  Five claims:
+  1. `advertisedTools()` on the delegate surface contains the reach verbs and
+     **no Syl verb** — `remind_me`, `cancel_reminder`, `change_reminder`,
+     `add_todo`, `finish_todo`, `drop_todo`, `set_goal`, `change_goal`,
+     `whats_outstanding` as **literals, not imported**. `syl-009.6` learned this
+     the expensive way: a test that imports the constant agrees with a widened
+     constant and stays green.
+  2. A `tools/call` naming each of those on the delegate surface is **refused**,
+     driven through `createToolServer`. Unlisted is not unreachable.
+  3. The delegate's system prompt equals `DELEGATE_SYSTEM_PROMPT` **by
+     equality** — the trick `tests/unit/reader.test.ts` uses so the test need not
+     enumerate everything it must not contain. No soul, no memory, no turn
+     context.
+  4. `--tools ""`, `--strict-mcp-config`, `--setting-sources ""`, and a session
+     id that is never `resume`d and never Syl's.
+  5. Its import closure never reaches the store, the delivery path or
+     `agent-key.ts` — the structural half, via
+     `backend/tests/helpers/source-scan.ts`.
+- **T031** *(`syl-013.1.9`)* **The delegate**: `backend/src/reach/delegate.ts`.
+  Spawned through `backend/src/harness/session.ts` with options built **from
+  scratch** — `runReaderTurn`'s construction, whitelisted not spread, because it
+  is one stray `...options` from inheriting her soul.
+  Handed: the goal verbatim, the host, a reach session id, a step budget, and the
+  operating loop as standing orders. Not handed: `SOUL.md`, memory, turn context,
+  or any credential.
+  **The loop**, taken from OpenClaw's `browser-automation` skill and cited:
+  *"check status/tabs first, label task tabs, snapshot before acting, resnapshot
+  after UI changes, recover stale refs once, and report login/2FA/captcha or
+  camera/microphone blockers as manual action instead of guessing"* —
+  `https://github.com/openclaw/openclaw/blob/main/docs/tools/browser.md`. Plus
+  ours: **ask the page before you snapshot it** — `reach_read` to *know*,
+  `reach_look` only when you need a ref to *click*.
+  **The outcome**: `done | blocked | question`, and **no fourth**, the same rule
+  as `frame-gate.ts`. A crash, a timeout or an exhausted budget is a `blocked`
+  carrying the work so far — never an empty return, never a hang. It carries the
+  ledger rows it produced so what she is told can be **compared** to what was
+  recorded rather than trusted.
+  `backend/src/reach/outcome.ts` — pure — validates or discards, caps, and fences
+  via `backend/src/agents/fencing.ts` before it reaches her. Reuse that module;
+  do not format a string at the call site. Its header already argues why an
+  agent's answer is more dangerous than an article.
+  `POST /reach/do` in `backend/src/routes/reach.ts`, agent-scoped.
+  Tests: `backend/tests/unit/reach-delegate.test.ts` (options built from scratch;
+  three outcomes and no fourth; an exhausted budget returns `blocked` with its
+  rows) and `backend/tests/unit/reach-outcome.test.ts` (validate-or-discard, the
+  cap, the fence).
 
 ## Phase 2 — Credentials
 
@@ -181,17 +272,24 @@ Every task names exact paths. Phase numbers match sub-epic numbers.
 
 - **T028** `backend/tests/acceptance/us7-she-can-reach.test.ts` — she completes a
   booking on a local fixture site through the real conversation path, and the
-  ledger row says what it cost and why. Written **RED first** and declared in
-  `tests/expected-failures.json` under `syl-013` until it passes. Check it fails
-  for the reason it is named for; a red test that cannot compile is a broken
-  build with a bead attached.
+  ledger row says what it cost and why. **Through one `reach_do` call**, not
+  fifteen — the ergonomic claim is part of the acceptance criterion, so a test
+  that drives the granular verbs would pass while the feature failed. Written
+  **RED first** and declared in `tests/expected-failures.json` under `syl-013`
+  until it passes. Check it fails for the reason it is named for; a red test that
+  cannot compile is a broken build with a bead attached.
 - **T029** The residual, pinned where it can be:
   `backend/tests/acceptance/us4-untrusted-content-cannot-act.test.ts` stays green
-  for the reader lane, and a new assertion in
-  `backend/tests/unit/reach-is-not-the-reader.test.ts` proves a reach session is
-  a third shape that never claims the reader's properties. The failure this
-  guards is the project's named one: a property quietly stops being true while
-  the test naming it goes on passing.
+  for the reader lane, and `backend/tests/unit/reach-is-not-the-reader.test.ts`
+  proves a reach session is a third shape, and the delegate a fourth, and neither
+  ever claims the reader's properties.
+  **Second half, added 2026-08-11**: pin the property the delegate actually
+  recovered — **her main conversation ingests no page text**. Assert it against
+  the turn's events from the T028 run, not by declaration. This is the one claim
+  in `spec.md` § *The residual* that is a genuine gain, and an unpinned recovered
+  property is the next thing to quietly stop being true.
+  The failure this guards is the project's named one: a property quietly stops
+  being true while the test naming it goes on passing.
 - **T030** The live proof, by hand: she books something real on an allowed host,
   unattended, **watched in the visible mode**, and the ledger says what it cost.
   This is the acceptance criterion and it cannot be automated. Record the run in
@@ -200,7 +298,7 @@ Every task names exact paths. Phase numbers match sub-epic numbers.
 ## Dependencies
 
 - T001 → T005 → T006 → T007 (the predicate, then the chokepoint, then the door,
-  then the verbs)
+  then the verbs and the two surfaces)
 - T003 → T004 → T005
 - T002 → T008 (the store before the scope split)
 - T004 → T009..T012 (credentials need a profile to inject into)
@@ -209,7 +307,13 @@ Every task names exact paths. Phase numbers match sub-epic numbers.
 - T006 → T019 (the door is where the ledger write lives)
 - T023 → T024, T025
 - T026 → T027
-- T006, T017, T019, T025 → T028
+- **T006 → T032** (page question-answering needs the door's readable text)
+- **T007 → T033 → T031** (the surface split, then the confinement sweep, then the
+  delegate — the guard before the handler, deliberately)
+- **T032 → T031** (the delegate's loop prefers reading over snapshotting, so the
+  read path must exist or the default is a comment)
+- T006, T017, T019, T025, **T031** → T028
+- **T031 → T029** (the residual's recovered half is about the delegate)
 - everything → T030
 
 ## Parallel Opportunities
@@ -217,8 +321,10 @@ Every task names exact paths. Phase numbers match sub-epic numbers.
 Four independent tracks at the start: **T001** (pure allowlist), **T013–T016**
 (pure consequence modules, testable against captured observations before a
 browser exists), **T018** (the migration), **T026** (the soul draft, which is
-prose and blocks nothing).
+prose and blocks nothing). The three tasks added on 2026-08-11 are all downstream
+of T007, so the ready set is unchanged — re-verified against `bd ready`.
 
-T005 and T017 deserve to go early for the reason `syl-009.6.*` did: they are the
-tests that say what this system must never do, and they should be green before
-anything gains the ability to do it.
+T005, T017 and **T033** deserve to go early for the reason `syl-009.6.*` did:
+they are the tests that say what this system must never do, and they should be
+green before anything gains the ability to do it. T033 blocks T031 for exactly
+that reason.

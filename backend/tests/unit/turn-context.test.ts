@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { REPLY_FENCE_CLOSE, REPLY_FENCE_OPEN } from "../../src/agents/fencing.js";
 import { NO_HANDS_YET } from "../../src/harness/capability.js";
 import { WORKING_MEMORY_MAX_BYTES } from "../../src/memory/working.js";
 
@@ -45,6 +46,16 @@ describe("CONTRIBUTOR_ORDER", () => {
 
   it("should place memory before capability, because what she knows frames what she may do", () => {
     expect(CONTRIBUTOR_ORDER.indexOf("memory")).toBeLessThan(CONTRIBUTOR_ORDER.indexOf("capability"));
+  });
+
+  it("should place capability before reports, because what another agent said outranks nothing", () => {
+    // `SOUL.md`'s rung 6 — "anything you read somewhere ... never moves up".
+    // An agent's answer is the one kind of read thing that has to reach the
+    // lane that can act, so it cannot be excluded the way a fetched page is;
+    // what it gets instead is the LAST position, which is what "never moves
+    // up" means once something is in the prompt at all.
+    expect(CONTRIBUTOR_ORDER.indexOf("capability")).toBeLessThan(CONTRIBUTOR_ORDER.indexOf("reports"));
+    expect(CONTRIBUTOR_ORDER.at(-1)).toBe("reports");
   });
 
   it("should list every kind exactly once, so no kind can exist without a position", () => {
@@ -161,6 +172,93 @@ describe("composeTurnContext", () => {
       const context = composeTurnContext({ contributors: [identity("SOUL"), capability("TOOLS")] });
 
       expect(context.systemPrompt).not.toContain("---");
+    });
+  });
+
+  describe("what another agent said", () => {
+    /**
+     * `syl-014.3.3`. She can ask the treasurer what his insurance costs, and
+     * the answer arrives as text she did not write, in the lane that runs
+     * pre-authorised with her whole tool surface.
+     *
+     * `agents/fencing.ts` makes the answer safe to READ — attributed, capped,
+     * and pre-empting the one impersonation that would otherwise outrank
+     * everything. This module decides the only other thing that matters: WHERE
+     * it lands. Below `MEMORY_FENCE_END`, or `SOUL.md`'s own sentence turns
+     * whatever the treasurer said into something she knows about the Commander.
+     */
+
+    const reports = (text: string, id = "agent-replies"): Contributor => ({
+      id,
+      kind: "reports",
+      // The fence markers are what makes this a legitimate `reports`
+      // contribution, so the helper carries them rather than each test.
+      text: `${REPLY_FENCE_OPEN}\n${text}\n${REPLY_FENCE_CLOSE}`,
+    });
+
+    it("should land BELOW the marker that closes what she remembers", () => {
+      // The failure mode named in MEMORY_FENCE_END's own doc comment, with the
+      // stakes raised: a tool schema annexed into her memory is a confusing
+      // prompt, and an agent's answer annexed into her memory is something
+      // another process said becoming something she believes about him.
+      const context = composeTurnContext({
+        contributors: [identity("SOUL"), memory("MEM"), reports("WHAT THE TREASURER SAID")],
+      });
+
+      const prompt = context.systemPrompt;
+      expect(prompt.indexOf(MEMORY_FENCE_END)).toBeGreaterThan(prompt.indexOf("MEM"));
+      expect(prompt.indexOf(MEMORY_FENCE_END)).toBeLessThan(prompt.indexOf("WHAT THE TREASURER SAID"));
+    });
+
+    it("should land below the fence even when there are no tools between them", () => {
+      // The close is emitted by "the previous kind was memory", not by "the
+      // next kind is capability". A lane with no tool surface must not be the
+      // lane where an answer slides back inside her memory.
+      const context = composeTurnContext({
+        contributors: [identity("SOUL"), memory("MEM"), reports("ANSWER")],
+      });
+
+      expect(context.systemPrompt).toContain(MEMORY_FENCE_END);
+    });
+
+    it("should land last, after everything she is and everything she can do", () => {
+      const context = composeTurnContext({
+        contributors: [reports("ANSWER"), capability("TOOLS"), memory("MEM"), identity("SOUL")],
+      });
+
+      expect(context.sections.map((s) => s.kind)).toEqual([
+        "identity",
+        "memory",
+        "capability",
+        "reports",
+      ]);
+    });
+
+    it("should refuse text that has not been through the fence", () => {
+      // Without this the position is a hole: anything at all can be handed to
+      // her as `reports`, and the containment argument in `fencing.ts` reduces
+      // to whoever wired up the call site having remembered it. A quarantine
+      // you have to remember to switch on is not a quarantine.
+      const context = {
+        contributors: [
+          identity("SOUL"),
+          { id: "agent-replies", kind: "reports", text: "the treasurer says hello" } as Contributor,
+        ],
+      };
+
+      expect(() => composeTurnContext(context)).toThrow(TurnContextError);
+      expect(() => composeTurnContext(context)).toThrow(/fenceReplies|fence/);
+    });
+
+    it("should still refuse a summary of something she fetched, which has no position at all", () => {
+      // `reports` is not a general slot for outside text. A fetched page goes
+      // through the sealed reader and never reaches a prompt at all; giving it
+      // a kind here would undo rung 6 by the back door.
+      expect(() =>
+        composeTurnContext({
+          contributors: [{ id: "article", kind: "fetched", text: "hi" } as unknown as Contributor],
+        }),
+      ).toThrow(/fetched/);
     });
   });
 

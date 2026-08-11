@@ -42,6 +42,19 @@ struct Constellation: View {
     /// What clock this sky is on. ``ConstellationTime/live`` everywhere but a render.
     var time: ConstellationTime = .live
 
+    /// Where he is standing. Applied to the drawing context, so a magnified sky is
+    /// **redrawn** at that scale rather than a rasterised one blown up — every star stays
+    /// as crisp at four times as it is at one.
+    var transform: ConstellationTransform = .identity
+
+    /// What he touched, and what that lights. See ``ConstellationEmphasis``.
+    var emphasis: ConstellationEmphasis = .none
+
+    /// What to do when VoiceOver activates a star or a filament. The touch path does its
+    /// own hit-testing in ``ConstellationView``; this is the same selection, reached by
+    /// somebody who cannot aim at a point of light.
+    var onSelect: (ConstellationHit) -> Void = { _ in }
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
 
@@ -67,16 +80,25 @@ struct Constellation: View {
                 }
             }
         }
-        // A `Canvas` is invisible to VoiceOver, and phase 4 owns the full treatment: every
-        // star an element, with her words and its provenance. Until then this is one
-        // element that says what the screen is — never a count, which would be a dashboard
-        // statistic on a screen whose doors are documented as *not statistics*.
+        // **A `Canvas` is invisible to VoiceOver.** Not partially, not badly — a canvas is
+        // one opaque rectangle with no children, so without this the screen whose entire
+        // purpose is to be looked at does not exist at all for anyone who cannot look at
+        // it. That is worse here than it would be anywhere else in the app, not more
+        // forgivable.
         //
-        // Nothing here forecloses that: ``PreparedStar`` already carries `label` and
-        // `anchor`, so the accessibility pass is an overlay of rectangles over points that
-        // already exist.
-        .accessibilityElement()
+        // `accessibilityChildren` is the modifier built for exactly this: it hangs
+        // synthetic elements off a drawing. Each one sits where its star actually is on
+        // glass, so the rotor order and the explore-by-touch positions agree with the
+        // picture, and each carries her own words for the thing plus where it came from.
+        //
+        // The container keeps a label and no count. A number of stars would be a dashboard
+        // statistic on a screen whose doors are documented as *not statistics* — and it
+        // would be the only place in the app that told him how much she knows.
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("The constellation of what she remembers")
+        .accessibilityChildren {
+            ConstellationVoice(sky: sky, transform: transform, onSelect: onSelect)
+        }
     }
 
     private func canvas(at t: TimeInterval, moving: Bool) -> some View {
@@ -95,6 +117,20 @@ struct Constellation: View {
         guard !sky.isEmpty else { return }
 
         context.blendMode = additive ? .plusLighter : .normal
+
+        // **Where he is standing, applied to the context rather than to the coordinates.**
+        //
+        // Translate then scale, in that order, which is `view = sky · s + t` — the same
+        // arithmetic ``ConstellationTransform/apply(_:)`` does for the hit test, so a tap
+        // and a pixel can never disagree about where a star is.
+        //
+        // Doing it here rather than with a `scaleEffect` on the view is the whole point: a
+        // `scaleEffect` magnifies the rasterised canvas and a four-times sky comes back
+        // soft. This re-runs the drawing at the new scale, so a star is as crisp close up
+        // as it is far away — and it means the hover, the glow and the filament widths all
+        // magnify together, which is what approaching something actually looks like.
+        context.translateBy(x: transform.translation.width, y: transform.translation.height)
+        context.scaleBy(x: transform.scale, y: transform.scale)
 
         // Filaments first. They are behind the stars because a thread passing over a star
         // reads as a scratch on the lens.
@@ -118,10 +154,17 @@ struct Constellation: View {
     private func drawStar(_ star: PreparedStar, in context: inout GraphicsContext, at t: TimeInterval, moving: Bool) {
         let centre = point(anchor: star.anchor, seed: star.seed, depth: star.depth, at: t, moving: moving)
         let breath = ConstellationMotion.breath(seed: star.seed, at: t, moving: moving)
-        let alpha = min(1, star.alpha * breath)
-        guard alpha > 0.004 else { return }
 
-        let core = star.coreRadius
+        // The selection, as a weight on the light rather than as a ring drawn round it.
+        // Capped at one, and floored for the one he touched — see
+        // ``ConstellationEmphasis/floor(forStar:)``, which is there because a faint memory
+        // multiplied by anything is still faint.
+        let alpha = max(
+            min(1, star.alpha * breath * emphasis.weight(forStar: star.id, additive: additive)),
+            emphasis.floor(forStar: star.id))
+        guard alpha > PreparedSky.faintestDrawn else { return }
+
+        let core = star.coreRadius * emphasis.swell(forStar: star.id)
 
         // **A glow and an ink bleed are not the same size.**
         //
@@ -162,7 +205,10 @@ struct Constellation: View {
         // first render came back looking like a screen full of gun sights.** A real spike
         // is bright at the star and gone by its tip. Two gradient strokes buy exactly that
         // and cost the same as the two flat ones did.
-        if star.hasSpikes {
+        // Spikes are rare by design, and the one he touched earns a pair whether or not it
+        // was born with them. It is the difference between a bright dot and a star, spent
+        // on the single thing he asked about.
+        if star.hasSpikes || emphasis.selection == .star(star.id) {
             drawSpikes(at: centre, core: core, colour: glow, alpha: alpha, in: &context)
         }
 
@@ -237,7 +283,10 @@ struct Constellation: View {
         at t: TimeInterval,
         moving: Bool
     ) {
-        guard filament.alpha > 0.004 else { return }
+        let alpha = max(
+            min(1, filament.alpha * emphasis.weight(forFilament: filament.id, additive: additive)),
+            emphasis.floor(forFilament: filament.id))
+        guard alpha > PreparedSky.faintestDrawn else { return }
 
         let from = point(
             anchor: filament.from, seed: filament.fromSeed, depth: filament.fromDepth,
@@ -267,7 +316,7 @@ struct Constellation: View {
         for (widthScale, alphaScale) in Self.featherPasses {
             context.stroke(
                 path,
-                with: .color(colour.opacity(min(1, filament.alpha * alphaScale))),
+                with: .color(colour.opacity(min(1, alpha * alphaScale))),
                 style: StrokeStyle(
                     lineWidth: filament.width * widthScale, lineCap: .round, lineJoin: .round)
             )
@@ -275,11 +324,17 @@ struct Constellation: View {
 
         // The core pass, and only for what he actually said. This is the line that makes an
         // observed edge look like it has light *in* it.
-        if filament.species == .observed {
+        //
+        // A **selected** filament gets one too, whichever species it is. That is not the
+        // observed/inferred distinction leaking: the distinction lives in the weight and in
+        // the gossamer, and both survive here. A thread he has picked out and asked about
+        // has to be the brightest line on the screen, and an inferred one drawn only as its
+        // own halo cannot be, however much it is multiplied.
+        if filament.species == .observed || emphasis.selection == .filament(filament.id) {
             context.stroke(
                 path,
                 with: .color(
-                    coreColour(.cool).opacity(min(1, filament.alpha * (additive ? 0.55 : 0.40)))),
+                    coreColour(.cool).opacity(min(1, alpha * (additive ? 0.55 : 0.40)))),
                 style: StrokeStyle(lineWidth: filament.width * 0.5, lineCap: .round)
             )
         }

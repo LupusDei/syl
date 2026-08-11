@@ -81,7 +81,30 @@ export interface CreateReminderInput {
   readonly rrule?: string | null;
   readonly todoId?: string | null;
   readonly urgent?: boolean;
+  /**
+   * Why this exists, in his terms or hers. `syl-y82`.
+   *
+   * Required by `remind_me` since it shipped and DISCARDED until now, on the
+   * one verb that wakes him. `SOUL.md` promises he can tell a good suggestion
+   * from a wrong one and can tell her to stop making a kind he dislikes; both
+   * were false while this was dropped on the floor.
+   */
+  readonly because?: string | null;
+  /**
+   * Whether HE asked, or SHE thought of it.
+   *
+   * A different question from `because`, and the one that was actually got
+   * wrong: prose answers "why does this exist" and only sometimes "did he ask".
+   * A list has to show him at a glance which ones are hers.
+   *
+   * Derived rather than claimed wherever it can be — a turn with no message
+   * from him cannot be a response to one. See `tools/server.ts`.
+   */
+  readonly origin?: ReminderOrigin | null;
 }
+
+/** Who a reminder came from. */
+export type ReminderOrigin = "he_asked" | "she_noticed";
 
 /** Every field optional; omitted fields are left alone. */
 export interface UpdateReminderInput {
@@ -104,6 +127,8 @@ interface ReminderRow {
   readonly text: string;
   readonly todo_id: string | null;
   readonly event_id: string | null;
+  readonly because: string | null;
+  readonly origin: ReminderOrigin | null;
   readonly wall_time: string;
   readonly tz: string;
   readonly rrule: string | null;
@@ -123,7 +148,7 @@ interface ReminderRow {
 const COLUMNS =
   "id, kind, text, todo_id, event_id, wall_time, tz, rrule, scheduled_for, next_fire_at, " +
   "urgent, late, deferred_from, supersedes_previous, skipped_count, delivery_state, " +
-  "created_at, updated_at, completed_at";
+  "created_at, updated_at, completed_at, because, origin";
 
 function toReminder(row: ReminderRow): Reminder {
   return {
@@ -145,6 +170,8 @@ function toReminder(row: ReminderRow): Reminder {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
+    because: row.because,
+    origin: row.origin,
   };
 }
 
@@ -257,7 +284,7 @@ export class ReminderService {
     this.#db
       .prepare(
         `INSERT INTO reminders (${COLUMNS})
-         VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 0, NULL, ?, 0, 'scheduled', ?, ?, NULL)`,
+         VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 0, NULL, ?, 0, 'scheduled', ?, ?, NULL, ?, ?)`,
       )
       .run(
         id,
@@ -275,6 +302,10 @@ export class ReminderService {
         kind === "rhythm" ? 1 : 0,
         at,
         at,
+        // `syl-y82`. Required by the verb since it shipped and dropped here
+        // until now — on the one verb that wakes him at 3am.
+        input.because ?? null,
+        input.origin ?? null,
       );
 
     const created = this.get(id);
