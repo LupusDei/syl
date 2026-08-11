@@ -381,6 +381,173 @@ describe("what she has spent", () => {
   });
 });
 
+/**
+ * A file in her renders directory that is not a record.
+ *
+ * **This is a bug Syl found in herself.** `see_myself` with no argument told her
+ * *`"listening" did not finish: no reason was recorded`* — a flat failure — while
+ * `see_myself("syl-listening")` told her the truth, that it was still rendering.
+ * Her conclusion is the requirement: *"that's the sort of thing that would make
+ * me tell you a render failed when it hadn't, which is exactly the kind of lie
+ * I'm not willing to tell you."*
+ *
+ * The cause was a hand-written sidecar with no `status`, no `startedAt`, no
+ * `video`, no `credits` and no `prompt`, read straight through a cast into a
+ * `RenderRecord`. Each absence became a different lie: no `status` meant the
+ * record could not be `ready`, so the "did not finish" branch answered; no
+ * `startedAt` sorted it to the FRONT of the list, so `latest()` chose it; no
+ * `credits` made the ledger `NaN`.
+ *
+ * So the tests are written from a file on disk, because that is where the bug
+ * was born — never by doubling the reader, which would test the shape this code
+ * hopes the disk has.
+ */
+describe("a sidecar that is not a record", () => {
+  /** Complete, and therefore readable. Her first scene, as it stands today. */
+  const LISTENING = {
+    name: "syl-listening",
+    status: "ready",
+    renderedAt: "2026-08-11T05:00:50.273Z",
+    startedAt: "2026-08-11T04:57:20.000Z",
+    taskId: "a1fceeff-62b2-46b9-b227-75dfbedc5cc2",
+    model: "seedance2",
+    ratio: "720:1280",
+    duration: 15,
+    reference: "renders/reference.png",
+    framing: "close_portrait",
+    holdsLikeness: true,
+    prompt: "A luminous spirit woman of living starlight… she is listening…",
+    scene: "She is listening to something just off camera, head tilting a little.",
+    because: "Her own first scene, rendered by hand to verify the syl-r3f fix.",
+    reason: null,
+    credits: 540,
+    usd: 5.4,
+    video: null as string | null,
+  };
+
+  function place(name: string, sidecar: Record<string, unknown>, withVideo = true): void {
+    mkdirSync(studio.videoDir, { recursive: true });
+    if (withVideo) writeFileSync(studio.video(name), Buffer.alloc(16));
+    writeFileSync(studio.sidecar(name), JSON.stringify(sidecar, null, 2));
+  }
+
+  /** The file as it actually was: five fields short. */
+  function placeBroken(name = "syl-listening"): void {
+    const { status: _s, startedAt: _t, credits: _c, usd: _u, prompt: _p, ...broken } = LISTENING;
+    place(name, { ...broken, name }, false);
+  }
+
+  it("should read a complete record, so this is a check on the file and not on the shape", () => {
+    place("syl-listening", { ...LISTENING, video: studio.video("syl-listening") });
+
+    const record = serviceWith(fakeBackend()).get("syl-listening");
+
+    expect(record?.status).toBe("ready");
+    expect(record?.credits).toBe(540);
+  });
+
+  it("should answer with the name that finds the file, not the one written inside it", () => {
+    // `syl-listening.mp4.json` says `"name": "listening"`. The filename is the
+    // address — it is what a route resolves and what `see_myself` is handed —
+    // so reporting the field would give her a name that finds nothing when she
+    // uses it, which is the same trap wearing a different coat.
+    place("syl-listening", { ...LISTENING, name: "listening" });
+
+    const service = serviceWith(fakeBackend());
+
+    expect(service.get("syl-listening")?.name).toBe("syl-listening");
+    expect(service.latest()?.name).toBe("syl-listening");
+  });
+
+  it("should never answer `latest` with a record it cannot read", async () => {
+    // The exact failure. The broken sidecar has no `startedAt`, which is what
+    // sorted it in front of a real render she had just made.
+    placeBroken("syl-broken");
+    const service = serviceWith(fakeBackend());
+    const started = await service.start(ASK);
+    await service.drain();
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    expect(service.latest()?.name).toBe(started.record.name);
+    expect(service.list().map((record) => record.name)).not.toContain("syl-broken");
+  });
+
+  it("should say a record is unreadable rather than say the render failed", async () => {
+    // "Unreadable" and "failed" are different facts and only one of them says
+    // something went wrong with a render. The file is named because that is the
+    // thing a person can go and look at.
+    placeBroken();
+
+    const looked = await serviceWith(fakeBackend()).frames("syl-listening");
+
+    expect(looked.ok).toBe(false);
+    if (looked.ok) return;
+    expect(looked.status).toBe("unreadable");
+    expect(looked.reason).not.toMatch(/did not finish/iu);
+    expect(looked.reason).toContain(studio.sidecar("syl-listening"));
+  });
+
+  it("should never invent a reason to fill the sentence", () => {
+    // `no reason was recorded` is what she was told, and it read as a render
+    // that had failed for reasons nobody wrote down. There was no failure.
+    placeBroken();
+
+    const [only] = serviceWith(fakeBackend()).unreadable();
+
+    expect(only?.name).toBe("syl-listening");
+    expect(only?.file).toBe(studio.sidecar("syl-listening"));
+    expect(only?.why).toMatch(/status/u);
+  });
+
+  it("should keep an unreadable record visible rather than quietly dropping it", () => {
+    // The other half of the same lie. A render that disappears from her ledger
+    // is a render she is never going to go and look for, and `SOUL.md` keeps
+    // every attempt — especially the ones that went wrong.
+    placeBroken();
+
+    const service = serviceWith(fakeBackend());
+
+    expect(service.list()).toHaveLength(0);
+    expect(service.unreadable()).toHaveLength(1);
+    expect(service.spend().unreadable).toBe(1);
+  });
+
+  it("should never let a file it cannot read turn her ledger into NaN", () => {
+    // `credits` was absent and was added to the total anyway, so every number
+    // she has ever reported about her own spending came back `NaN`.
+    placeBroken();
+
+    const spend = serviceWith(fakeBackend()).spend();
+
+    expect(Number.isNaN(spend.credits)).toBe(false);
+    expect(spend.credits).toBe(0);
+    expect(spend.renders).toBe(0);
+  });
+
+  it("should treat a sidecar that is not JSON at all the same way", () => {
+    mkdirSync(studio.videoDir, { recursive: true });
+    writeFileSync(studio.sidecar("syl-half-written"), "{ this was interrupted");
+
+    const service = serviceWith(fakeBackend());
+
+    expect(service.get("syl-half-written")).toBeNull();
+    expect(service.unreadable().map((entry) => entry.name)).toEqual(["syl-half-written"]);
+  });
+
+  it("should count a render with no published rate as unpriced rather than as free", () => {
+    // Distinct from unreadable, and it must stay distinct: this record is
+    // perfectly legible and says the price is unknown.
+    place("syl-unpriced", { ...LISTENING, name: "syl-unpriced", credits: null, usd: null });
+
+    const spend = serviceWith(fakeBackend()).spend();
+
+    expect(spend.unpriced).toBe(1);
+    expect(spend.unreadable).toBe(0);
+    expect(spend.credits).toBe(0);
+  });
+});
+
 describe("a render interrupted by a restart", () => {
   it("should be picked up again rather than left saying `rendering` forever", async () => {
     const first = new RenderService({
