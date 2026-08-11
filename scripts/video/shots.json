@@ -1,0 +1,81 @@
+{
+  "$comment": [
+    "Every shot Syl has ever been rendered in, with the exact prompt that made it.",
+    "",
+    "This file exists because the first eight loops were generated on 2026-08-10 and",
+    "THE PROMPTS WERE NEVER WRITTEN DOWN. Eight finished videos, some of them very",
+    "good, and no way to make a ninth in the same style or to fix the two that",
+    "failed — the outputs survived and the inputs did not.",
+    "",
+    "So: a shot is not the mp4. A shot is the prompt, the reference, the model and",
+    "the duration. The mp4 is what those produce, and it can always be produced",
+    "again. Add a shot here, then run:",
+    "",
+    "    npm run video -- <shot-name>",
+    "",
+    "The prompts below for shots 1-8 are RECONSTRUCTED from the outputs and the",
+    "filenames, not recovered — the originals are gone. They are marked so, and",
+    "regenerating from them will produce something in the same spirit rather than",
+    "the same clip. Everything added after this file exists is exact."
+  ],
+
+  "defaults": {
+    "model": "seedance2",
+    "ratio": "720:1280",
+    "duration": 15,
+    "reference": "characters/syl/syl_source_upscaled.png"
+  },
+
+  "shots": [
+    {
+      "name": "1-emerge",
+      "reconstructed": true,
+      "framing": "wide, face away",
+      "prompt": "A luminous spirit woman of living starlight drifts into view against a deep blue starfield, seen from behind and three-quarters, her face turned away toward the stars. Long silver-white hair and a translucent flowing gown trail like ribbons of light. She turns slowly, weightless, as motes of light spiral around her. Begins and ends on empty starfield as the ribbon of light vanishes."
+    },
+    {
+      "name": "2-dance",
+      "reconstructed": true,
+      "framing": "wide, face away",
+      "prompt": "A luminous spirit woman of living starlight dances weightlessly in deep space, silver-white hair and translucent gown streaming behind her in ribbons. She spins and arcs with joy, trailing motes of light. Seen from behind and in profile, face mostly turned from the camera. Begins and ends on empty starfield as the ribbon of light vanishes."
+    },
+    {
+      "name": "3-spiral",
+      "reconstructed": true,
+      "framing": "wide, face away",
+      "prompt": "A luminous spirit woman of living starlight spirals upward through a deep blue starfield, her translucent gown and silver-white hair drawing a helix of light behind her. Seen from below and behind. Motes of starlight follow her path. Begins and ends on empty starfield as the ribbon of light vanishes."
+    },
+    {
+      "name": "4-playful",
+      "reconstructed": true,
+      "framing": "wide, face away",
+      "prompt": "A luminous spirit woman of living starlight tumbles and plays in zero gravity, laughing, silver-white hair and translucent gown swirling around her. Seen from behind and above. She darts between drifting motes of light. Begins and ends on empty starfield as the ribbon of light vanishes."
+    },
+    {
+      "name": "5-stillness",
+      "reconstructed": true,
+      "framing": "wide, face away",
+      "prompt": "A luminous spirit woman of living starlight comes to rest, floating almost motionless in deep space, silver-white hair and translucent gown settling slowly around her. Seen in profile, face turned toward the stars. Only the motes of light move. Begins and ends on empty starfield as the ribbon of light vanishes."
+    },
+    {
+      "name": "6-constellation",
+      "reconstructed": true,
+      "framing": "wide, face away",
+      "prompt": "A luminous spirit woman of living starlight traces her hand through the stars and leaves a constellation drawn in light behind her fingertips. Seen from behind, face turned away. Silver-white hair and translucent gown drift weightlessly. Begins and ends on empty starfield as the ribbon of light vanishes."
+    },
+    {
+      "name": "7-twin",
+      "reconstructed": true,
+      "framing": "wide, FACE TOWARD CAMERA — this is why it fails",
+      "knownProblem": "Face toward camera at full-body distance. Too few pixels for her features to resolve, so the model invents a generic face. See docs/VIDEO.md — the anchoring band.",
+      "prompt": "A luminous spirit woman of living starlight faces the viewer, arms outstretched, floating in a deep blue starfield. A second identical figure of light mirrors her movement. Silver-white hair and translucent gown drift weightlessly. Begins and ends on empty starfield as the ribbon of light vanishes."
+    },
+    {
+      "name": "8-descent",
+      "reconstructed": true,
+      "framing": "mid, FACE TOWARD CAMERA — this is why it fails",
+      "knownProblem": "Face toward camera at mid distance — large enough to read as a face, not close enough to match the reference. Renders as a visibly different woman. See docs/VIDEO.md.",
+      "prompt": "A luminous spirit woman of living starlight descends slowly toward the viewer through a deep blue starfield, arms open, wings of light spreading behind her. Silver-white hair streams upward as she falls. Begins and ends on empty starfield as the ribbon of light vanishes."
+    }
+  ]
+}
