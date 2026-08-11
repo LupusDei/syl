@@ -1453,3 +1453,41 @@ exit status tells you it finished, not that it did the thing.*
 There is a happier reading, though. Each failure was louder than the one before: silence,
 then a red step, then a wrong-looking string in a log. That is what designing the failure
 direction buys — the bugs got easier to see even as they got subtler.
+
+### "It never parses" — the chat freeze of 2026-08-11
+
+`MarkdownView`'s doc comment said **"It never parses"**. `MarkdownInline.render`
+did a full `AttributedString(markdown:)` parse plus three passes over the runs,
+from inside a `body`, for every paragraph, every heading, every list row *twice*
+(the VoiceOver label parses again) and every table cell.
+
+Three multipliers stacked on it: `ChatView.body` re-runs on every keystroke and
+every presence frame; `.defaultScrollAnchor(.bottom)` needs the total content
+height, so the `LazyVStack` sizes **every** row in the 200-message window rather
+than the visible ones; and an arriving reply invalidates the lot. A main thread
+that stops answering long enough is a watchdog kill, which is what he saw.
+
+**The two previous fixes to this same symptom both guessed wrong** —
+`ChatSnapshotLoader` moved *block* scanning off the main actor, and `blocksByGroup`
+killed a quadratic compare. Inline parsing was in neither, and the file went on
+claiming it never parsed. A comment agreeing with the code while neither agrees
+with the profiler: consistency, not correspondence, in the most literal form yet.
+
+Three further corrections came out of it, and every one of them was mine:
+
+1. **It was never frozen permanently.** The conversation continues in the
+   database past the moment I called the freeze — a watchdog kill and relaunch,
+   not a deadlock. My evidence was a snapshot that had already moved on, and I
+   read a stale row as a stuck system.
+2. **My single-owner-stream hypothesis was wrong.** One pump fans every event to
+   both models; neither can starve the other. I had reasoned from the symptom to
+   an architecture that does not exist.
+3. **`-scheme Syl` does not run SylKit.** Every "the suite is green" in this
+   session counted 795 of 1094 tests. The count-checking rule I had just written
+   down was itself measuring the wrong thing — a habit built to catch this exact
+   failure, blind in one eye.
+
+And a mutation that survived is worth recording: a faithfulness test compared the
+memo against a fresh parse, so corrupting both produced two wrong answers that
+agreed. **A correspondence check between two things that share an implementation
+is a consistency check.** Only breaking it on purpose showed that.
