@@ -56,14 +56,40 @@ describe("the framings she can ask for", () => {
     }
   });
 
-  it("should pin her face to the closing frame for the one framing whose subject is her face", () => {
+  it("should pin her face at the join for the one framing whose subject is her face", () => {
     // Measured on seedance2, 2026-08-11: `promptImage` accepts an array of
     // `{uri, position}` with position first|last, and the model honours both.
-    // So the ribbon can open the shot while a portrait of her pins the frame it
-    // arrives at — which is what gives `close_portrait` its likeness back.
-    expect(framingNote("close_portrait")?.anchor).toBe("closing_frame");
+    // Probed again on the same day: `first` and `last` are the ENTIRE position
+    // vocabulary — the 400 enumerates them — and seedance2's whole request body
+    // is `model`, `promptImage`, `promptText`, `ratio`, `duration`. There is no
+    // reference image, no character and no seed. Two slots, and nothing else.
+    //
+    // So a clip that opens AND closes on the bare ribbon has both slots spent
+    // and no room left for her face. The likeness moves to the JOIN instead:
+    // two generations, the first ending on her portrait and the second starting
+    // from the same picture, cut together on a frame they were both pinned to.
+    // The Commander's ruling, 2026-08-11: his renders must end on the ribbon.
+    expect(framingNote("close_portrait")?.anchor).toBe("joined_halves");
     expect(framingNote("close_portrait")?.facesCamera).toBe(true);
     expect(framingNote("close_portrait")?.holdsLikeness).toBe(true);
+  });
+
+  it("should leave no framing that ends the clip anywhere but the bare ribbon", () => {
+    // The Commander, 2026-08-11: *"it's no longer ending on the ribbon of light…
+    // the version that you generated a while ago started on the ribbon of light
+    // and ended on the ribbon of light."* Pinning her portrait as the LAST frame
+    // is what took that away, and it was a considered trade rather than an
+    // oversight — which is why the reversal is stated as an invariant here
+    // rather than left to whoever writes the next framing.
+    //
+    // Every anchor this type admits must therefore keep both ends of the clip
+    // free for the ribbon. A `closing_frame` anchor cannot, so there is no such
+    // anchor to reach for.
+    for (const framing of FRAMINGS) {
+      expect(["none", "joined_halves"], `${framing.id} ends somewhere the reel cannot follow`).toContain(
+        framing.anchor,
+      );
+    }
   });
 
   it("should anchor nothing for the reel framing, which needs no anchor to hold", () => {
@@ -133,7 +159,18 @@ describe("the framings she can ask for", () => {
     // What replaces it has to say where the anchor now comes from, or she is
     // being asked to trust a flag with no account behind it.
     expect(guidance).toMatch(/ribbon/iu);
-    expect(guidance).toMatch(/last frame|closing frame|frame it (ends|arrives) (on|at)/iu);
+    expect(guidance).toMatch(/join|halves|between/iu);
+  });
+
+  it("should not promise her a shot that ends on her face, because none of them do", () => {
+    // The guidance told her a close portrait "does not end on the bare ribbon,
+    // so it will not cut against the eight". That was true of the anchor it
+    // described and is false of the one that replaced it — the same shape of
+    // stale claim as `syl-63v`, in the text she actually reads.
+    const guidance = framingGuidance();
+
+    expect(guidance).not.toMatch(/pinned to the last frame/iu);
+    expect(guidance).toMatch(/every clip .*(opens and closes|closes).*ribbon|both ends/iu);
   });
 });
 

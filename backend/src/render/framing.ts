@@ -41,10 +41,22 @@
  *
  * Runway's `promptImage` takes an array of `{uri, position}` with `position` of
  * `first` or `last`, and **seedance2 honours both** — probed and then rendered
- * on 2026-08-11. That is what makes an anchored shot possible at all: the
- * ribbon holds frame one, so the clip still opens the way the reel opens, and a
- * portrait of her holds the frame it ends on, so there is a face the model
- * copies rather than invents.
+ * on 2026-08-11.
+ *
+ * **Two slots is all there is, and there is no other way in.** Probed the same
+ * day: the 400 for a bad `position` enumerates the whole vocabulary as
+ * `"first"|"last"`, and seedance2's request body is `model`, `promptImage`,
+ * `promptText`, `ratio`, `duration` and nothing else — `references`,
+ * `referenceImages`, `characterId`, `subjectReference`, `seed` and a dozen more
+ * all come back as *Unrecognized key* from a validator strict enough to name a
+ * deliberately invented one. Runway's character ids belong to GWM-1 avatars,
+ * whose endpoints 404 on the generation host.
+ *
+ * So the ribbon at both ends spends both slots, and her likeness cannot be a
+ * frame of the clip. It is the frame the clip is **cut on**: an anchored render
+ * is two generations, the first ending on her portrait and the second starting
+ * from the frame the first one ended on. See {@link LikenessAnchor} and
+ * `join.ts`.
  *
  * ## Why the two that fail are still offered
  *
@@ -74,8 +86,22 @@ export type Framing =
 export type LikenessAnchor =
   /** Nothing pins her face, because the shot does not show one worth pinning. */
   | "none"
-  /** Her likeness is sent as the video's last frame, `position: "last"`. */
-  | "closing_frame";
+  /**
+   * Her likeness is pinned at the **join** between two generations.
+   *
+   * The first half runs ribbon to portrait, the second runs that same portrait
+   * frame back to ribbon, and they are cut together on it. Both ends of the
+   * finished clip are therefore the bare ribbon, which is what lets it sit
+   * beside the eight — and her face is held in the middle by a picture rather
+   * than by a sentence.
+   *
+   * **There is deliberately no `closing_frame`.** Pinning her portrait as the
+   * video's last frame is what took the ribbon ending away, and the Commander
+   * reversed it on 2026-08-11: *"the version that you generated a while ago
+   * started on the ribbon of light and ended on the ribbon of light."* An anchor
+   * that ends the clip on her face is not an option this type offers.
+   */
+  | "joined_halves";
 
 /** One framing, what it does to the camera, and what is known about it. */
 export interface FramingNote {
@@ -136,10 +162,9 @@ const SPECS: readonly FramingSpec[] = [
     camera:
       "full body, weightless, face turned away toward the stars — the template, and what every reel clip is",
     facesCamera: false,
-    // Nothing to anchor, and an anchor would cost the loop. These clips cut
-    // against each other because the first and last frames are the same bare
-    // ribbon; pinning her portrait to the last frame ends the clip somewhere
-    // the next one cannot follow.
+    // Nothing to anchor, and anchoring would buy nothing. This is one
+    // generation because it can be: there is no face in it to get wrong, so
+    // there is no reason to pay for two halves and a join.
     anchor: "none",
     evidence:
       "A wide shot holds because there is no face to get wrong: her identity is carried by silhouette, hair and gown, all of which the model reproduces reliably. Reach for this one by default.",
@@ -150,20 +175,20 @@ const SPECS: readonly FramingSpec[] = [
     id: "close_portrait",
     camera: "portrait distance, your face filling the frame — a headshot",
     facesCamera: true,
-    anchor: "closing_frame",
+    anchor: "joined_halves",
     evidence:
-      "Your likeness is sent as the video's last frame, so the shot arrives at a face the model copies rather than one it invents — measured on 2026-08-11, opening on the ribbon and closing on you. It holds, but it produces a headshot rather than a reel clip, and it does not end on the bare ribbon, so it will not cut against the eight. Use it when the face is the subject.",
+      "Rendered in two halves and cut together on your own face: the ribbon gathers into you, and then you unravel back into it. Your likeness is pinned at the join, so the model copies a face rather than inventing one — and both ends of the finished clip are still the bare ribbon, so it cuts against the eight like everything else. Measured on 2026-08-11, in both directions. Use it when the face is the subject.",
     clause: "Close portrait framing, her face filling the frame, camera near.",
   },
   {
     id: "wide_face_visible",
     camera: "your whole body in frame, face toward the camera",
     facesCamera: true,
-    // The closing anchor is a close portrait and this shot is wide. Pinning it
-    // would not anchor the shot, it would end it at a different distance —
-    // `docs/VIDEO.md` option 2: a reference anchors the framing it is framed
-    // like. Anchoring this one needs a full-body portrait of her that does not
-    // exist yet.
+    // The only picture of her is a close portrait and this shot is wide.
+    // Joining halves on it would not anchor the shot, it would cut to a
+    // different distance in the middle of it — `docs/VIDEO.md` option 2: a
+    // reference anchors the framing it is framed like. Anchoring this one needs
+    // a full-body portrait of her that does not exist yet.
     anchor: "none",
     evidence:
       "7-twin. Her face is perhaps forty pixels across — nothing in the reference survives at that scale, so the model invents a generic one. There is no full-body picture of you to pin it with.",
@@ -217,9 +242,10 @@ export function framingNote(raw: unknown): FramingNote | null {
  * The opening sentence used to say *"the only picture of you is a close
  * portrait, so it anchors a close shot"*. That described a `promptImage` that
  * was her headshot, and went on being taught to her for a day after the ribbon
- * replaced it. It says what is sent now, and where the anchor comes from, for
- * the same reason every framing cites a render: a flag she is asked to trust
- * with no account behind it is a flag she cannot check.
+ * replaced it. Its replacement said the close portrait was *"pinned to the last
+ * frame"*, which was true for one day and stopped being true the moment the
+ * ribbon ending came back. Both are the same mistake: a sentence about the
+ * frames, kept beside the frames instead of built from them.
  */
 export function framingGuidance(): string {
   const line = (framing: FramingNote): string =>
@@ -228,10 +254,11 @@ export function framingGuidance(): string {
     }`;
 
   return (
-    "Where the camera is, and whether your face survives there. Every clip opens on the blue " +
-    "ribbon, which carries no face — so a shot holds when there is no face in it to get wrong, " +
-    "or when your likeness is pinned to the last frame. Only the close portrait is pinned that " +
-    `way; the two in between show your face with nothing holding it. ${FRAMINGS.map(line).join("; ")}. ` +
+    "Where the camera is, and whether your face survives there. Every clip opens and closes on " +
+    "the bare blue ribbon, which carries no face — so a shot holds when there is no face in it " +
+    "to get wrong, or when your likeness is pinned in between. The close portrait is rendered in " +
+    "two halves and cut together on your own face, which is how it keeps both ends on the ribbon " +
+    `and still looks like you; the two in between show your face with nothing holding it. ${FRAMINGS.map(line).join("; ")}. ` +
     "Try the drifting two anyway when the idea is worth it — expect a stranger, and say so."
   );
 }

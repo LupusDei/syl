@@ -337,8 +337,10 @@ export function testReadyRenders(): RenderSource {
   const record = (name: string): RenderRecord => ({
     name: name === "latest" ? "syl-20260811t090000z-close" : name,
     status: "ready",
-    // Unanchored: these fixtures predate the closing-frame anchor.
-    anchor: null,
+    // A close portrait, so her likeness is pinned and the record says which
+    // picture pins it. The flag is derived from exactly that pair, so a fixture
+    // that claimed one without the other would be the shape of `syl-63v`.
+    anchor: "renders/reference.png",
     renderedAt: "2026-08-11T09:02:00.000Z",
     taskId: "task-test",
     model: "seedance2",
@@ -347,6 +349,26 @@ export function testReadyRenders(): RenderSource {
     reference: "reference.png",
     framing: "close_portrait",
     prompt: "…",
+    parts: [
+      {
+        taskId: "task-test",
+        prompt: "…",
+        duration: 8,
+        first: "renders/opening-ribbon.png",
+        last: "renders/reference.png",
+        video: "/studio/videos/parts/syl-20260811t090000z-close-1.mp4",
+        credits: 60,
+      },
+      {
+        taskId: "task-test-2",
+        prompt: "…",
+        duration: 7,
+        first: "renders/parts/syl-20260811t090000z-close-1-last.png",
+        last: "renders/opening-ribbon.png",
+        video: "/studio/videos/parts/syl-20260811t090000z-close-2.mp4",
+        credits: 60,
+      },
+    ],
     scene: "…",
     holdsLikeness: true,
     because: "A render the suite can send from.",

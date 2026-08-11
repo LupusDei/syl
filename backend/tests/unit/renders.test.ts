@@ -74,9 +74,12 @@ beforeEach(async () => {
     clock: fixedClock(NOW),
     sleep: async () => undefined,
     // A stand-in for ffmpeg, so the suite does not need it installed and does
-    // not decode a file that is not really a video.
-    extract: async (_file, args) => {
+    // not decode a file that is not really a video. Every ffmpeg this service
+    // runs writes its output last, so one double covers pulling stills,
+    // taking a closing frame and joining halves.
+    ffmpeg: async (_file: string, args: readonly string[]) => {
       const out = args[args.length - 1] ?? "";
+      mkdirSync(dirname(out), { recursive: true });
       writeFileSync(out, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
       return { ok: true, message: "" };
     },
