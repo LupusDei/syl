@@ -1126,3 +1126,43 @@ superseded.
 
 Adjutant project id for syl: `3ba5667d`. Backend runs on port **4201** — read it
 from `.mcp.json`, never assume 3001.
+
+### A concurrent agent's commit silently wiped an in-progress merge (2026-08-11)
+
+I merged `syl-ryp.4` (wander), hit two additive conflicts in `PreparedSky.swift`,
+resolved them, and built. Between the build and the test run another agent
+working in this repo committed its own planning change — and the tree came back
+to `HEAD` with **the merge gone**: no `MERGE_HEAD`, `git status` clean, and none
+of wander's symbols anywhere on disk.
+
+The dangerous part is that **the test suite still passed.** 705 tests, zero
+failures, against a tree that no longer contained the feature I believed I was
+testing. Nothing was red. The count was the only witness — the squad had said
+762, I got 705, and that gap is the entire reason this was caught rather than
+shipped as "wander is merged and green".
+
+Two rules out of it:
+
+1. **Commit a merge before doing anything slow with it.** A resolved-but-
+   uncommitted merge is the most fragile state in a repo shared with other
+   agents, and the window here was one build.
+2. **A test count is evidence and a pass is not.** "Zero failures" cannot
+   distinguish *the feature works* from *the feature is absent*. When a squad
+   reports a number, check the number.
+
+This is the same family as everything in the "consistency is not correspondence"
+entry, with a new source: the tree itself moved. Every check agreed with every
+other check, and none of them agreed with the branch.
+
+### Blind additive conflict resolution produces plausible garbage (2026-08-11)
+
+Resolving the same conflicts a second time, I scripted it: keep ours, then
+theirs, drop the markers. Both hunks were genuinely additive, so this was
+"right" — and it emitted a `PreparedSky(...)` call with a stray closing paren
+followed by another argument, which is not a merge error but a *syntax* error.
+Swift caught it instantly, which is the only reason it cost a minute.
+
+The lesson is not "don't script it". It is that **an additive resolve is safe
+for declarations and unsafe for call sites**: two branches adding a field each
+to the same initialiser produce two complete calls, and concatenating them is
+never what you want. Resolve declarations by union, and call sites by hand.

@@ -260,8 +260,7 @@ struct SkyPreparer: Sendable {
             stars: stars,
             filaments: filaments,
             size: size,
-            unreachable: snapshot.unreachable
-        )
+            unreachable: snapshot.unreachable,
             contentBounds: Self.bounds(of: stars, in: size)
         )
     }
