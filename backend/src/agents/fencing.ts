@@ -40,8 +40,23 @@ export const REPLY_FENCE_CLOSE = "--- END WHAT ANOTHER AGENT SAID ---";
  * A cap rather than a stream: an agent can write pages, and a reply that
  * crowded out her memory of him would be an injection by volume alone — no
  * hostile content required, just length.
+ *
+ * **Halved from 4,000 to 2,000 when `ask_agent` landed, and on character
+ * grounds rather than budget.** At 4,000 another agent's text could occupy half
+ * as much of her turn as everything she knows about the Commander (the working
+ * memory cap is 4,000, and `SOUL.md` is ~8,400). That is too much of somebody
+ * else's voice in her head for a thing she is going to relay in a sentence.
+ *
+ * The budget fell out of it — the surface stopped fitting and the honest levers
+ * were "raise the ceiling a second time in one day" or "ask whether the biggest
+ * reservation is right". Raising a tripwire twice is how it becomes a number
+ * people edit, so this asks the second question. 2,000 bytes is roughly three
+ * hundred words: an answer about his insurance, not a document.
+ *
+ * A longer answer is not lost — it is cut, and she is TOLD it was cut, so she
+ * can ask again for the part she needs.
  */
-export const MAX_REPLY_BYTES = 4_000;
+export const MAX_REPLY_BYTES = 2_000;
 
 /** One answer, as it arrived. */
 export interface AgentReply {

@@ -49,8 +49,9 @@ import { fenceReplies, MAX_REPLY_BYTES, type AgentReply } from "./fencing.js";
  * The most this contributor will ever emit.
  *
  * Sized to hold **one answer at the per-reply cap, fenced, with the omission
- * note** — 4,640 bytes of fenced maximal reply as `fencing.ts` stands, plus
- * room for the note. That is the floor: below it, a single long answer fits
+ * note**. Derived from `MAX_REPLY_BYTES`, which halved to 2,000 when
+ * `ask_agent` landed — on character grounds rather than budget, so that another
+ * agent's voice cannot occupy half the room her memory of him gets. That is the floor: below it, a single long answer fits
  * nowhere and she is shown an omission note instead of the thing she asked
  * for. `tests/unit/reply-contributor.test.ts` asserts the floor still holds, so
  * a preamble that grows in `fencing.ts` fails there rather than in a turn.
@@ -64,7 +65,7 @@ import { fenceReplies, MAX_REPLY_BYTES, type AgentReply } from "./fencing.js";
  * budget working: a loud failure in the test run of whoever adds the verb, not
  * a quiet one in a reply the Commander does not like.
  */
-export const AGENT_REPLIES_MAX_BYTES = 4_800;
+export const AGENT_REPLIES_MAX_BYTES = 2_800;
 
 /** The id this track answers to in every budget report. */
 export const AGENT_REPLIES_CONTRIBUTOR_ID = "agent-replies";
