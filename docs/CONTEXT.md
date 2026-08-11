@@ -1567,3 +1567,37 @@ not sufficient: origin says which number is *free*, and nothing about which
 numbers *your branch can hold*. A branch that is behind cannot satisfy
 contiguity at the number origin calls free. Two questions, and only one of them
 was being asked.
+
+### An ellipse around a rectangle is not the rectangle plus a margin (2026-08-11)
+
+The Commander replaced the home waveform with *"a circular ribbon of light that
+orbits around the message"*. The obvious geometry — `a = halfWidth + margin` —
+survives one short phrase by luck. At `accessibility5` the phrase's box is nearly
+square, the smallest ellipse enclosing a square is √2 larger in **both**
+directions, and the first render came back **437 points tall on an 852-point
+screen**, straight across her face.
+
+The fix is the observation that the phrase is not a box: it is three centred
+lines whose box corners are *empty*. Solving against the lines is what makes the
+large type sizes possible at all. That was found by looking at a picture, not by
+reasoning — and it is the clearest example yet of why renders are this feature's
+acceptance check rather than a supplement to it.
+
+Two more that only a picture could have caught:
+
+- **Overlapping segments do not blend under `plusLighter`, they add.** Tail
+  segments overlapping by 50% made every junction twice as bright: the comet
+  rendered as a row of beads — a dashed arc going round a circle, the one
+  silhouette this component may never have.
+- **The light appearance needed the opposite instruction, not a weaker one.**
+  `SylRibbon`'s rule is that the hot filament is always `plusLighter`. Her core
+  resolves to white, and white *added* to a pale daylight painting is nothing —
+  the day render had a beautiful tail with no source on the end of it. The head
+  is now laid down as pigment. Same principle about contrast, inverted.
+
+And the design rule underneath the Commander's instinct, worth keeping: **the
+waveform is chat's grammar** — a line of speech under the last message, the shape
+of something being *said*. Home has no transcript, so the same shape there merely
+crosses the picture. A ring is a halo rather than an utterance: it encloses
+instead of dividing, and light travelling a closed path reads as attention
+circling a thought. He saw that it was wrong before anyone could say why.
