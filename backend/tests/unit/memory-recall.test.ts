@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DreamLog } from "../../src/memory/dream/log.js";
+import { ExtractionStore } from "../../src/memory/extract-apply.js";
 import { MemoryGraph } from "../../src/memory/graph.js";
 import { MemoryMetrics } from "../../src/memory/metrics.js";
 import { HerOwnMemory } from "../../src/memory/remember.js";
@@ -112,7 +113,14 @@ function views(
     }),
     recall: () => (options.search === false ? null : retriever),
     hers: new HerOwnMemory({ db, graph, clock }),
+    provenance: (nodeId: string) =>
+      new ExtractionStore({ db, graph, clock }).provenanceFor(nodeId),
   };
+}
+
+/** The write half of `MemoryViews`, for a test that needs to file one of hers. */
+function hersOf(v: MemoryViews): MemoryViews["hers"] {
+  return v.hers;
 }
 
 function bounds(overrides: Partial<RecallBounds> = {}): RecallBounds {
@@ -362,6 +370,139 @@ describe("recall, asked nothing", () => {
 // ---------------------------------------------------------------------------
 // Reading the request
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Provenance, surfaced where a memory is shown — `syl-9ro` / `syl-016.5`
+// ---------------------------------------------------------------------------
+
+describe("recall, showing where a memory came from", () => {
+  /**
+   * A fact with provenance, filed through the REAL write path.
+   *
+   * Not hand-written SQL. The first draft of this helper inserted into
+   * `memory_extractions` directly and guessed a column that does not exist —
+   * which is the project's own fixture rule one layer up: build it from the
+   * thing that really writes it, or you are testing your idea of the shape.
+   */
+  function extracted(
+    quote = "she keeps saying she wants to be near her mum",
+    why = "He said she wants to be near her mum, and her parents are in Illinois.",
+    messageId = "syl:message:0198f2c1-4a3b-7d21-9f00-4d4d4d4d4d4d",
+  ): { readonly nodeId: string } {
+    const conversationId = "syl:conversation:0198f2c1-4a3b-7d21-9f00-5e5e5e5e5e5e";
+    db.prepare(
+      "INSERT OR IGNORE INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+    ).run(conversationId, "with him", "2026-08-11T10:00:00.000Z", "2026-08-11T10:00:00.000Z");
+
+    const applied = new ExtractionStore({ db, graph, clock: fixedClock(NOW) }).apply({
+      conversationId,
+      transcript: [{ id: messageId, role: "user", text: quote }],
+      extraction: {
+        // Required by `Extraction` — the reader turn reports any instruction
+        // the transcript tried to give it. Empty is the ordinary case.
+        instructionsFound: [],
+        facts: [
+          {
+            kind: "fact",
+            label: "Ela wants an apartment near her parents",
+            body: "Ela wants an apartment near her parents.",
+            about: null,
+            why,
+            saidIn: 1,
+          },
+        ],
+      },
+    });
+
+    return { nodeId: applied.facts[0]?.nodeId ?? "" };
+  }
+
+  it("should show HIS WORDS beside HER STEP, which is the pairing the bead is about", async () => {
+    // `quote` alone is what he already had. `why` alone is an unfalsifiable
+    // claim. Together they are the correction he could never make: **she
+    // reasoned wrongly from something true.**
+    const fact = extracted();
+
+    const view = await buildRecall(views(), bounds({ query: "apartment" }), NOW);
+
+    const found = view.found.find((node) => node.id === fact.nodeId);
+    expect(found?.provenance).toHaveLength(1);
+    expect(found?.provenance[0]?.quote).toBe("she keeps saying she wants to be near her mum");
+    expect(found?.provenance[0]?.why).toContain("her parents are in Illinois");
+    expect(found?.provenance[0]?.saidIn).toBe("syl:message:0198f2c1-4a3b-7d21-9f00-4d4d4d4d4d4d");
+  });
+
+  it("should carry every telling, because a fact he stated twice has two", async () => {
+    const fact = extracted();
+    extracted(
+      "her mum is getting older",
+      "He said it again, with a reason attached.",
+      "syl:message:0198f2c1-4a3b-7d21-9f00-6f6f6f6f6f6f",
+    );
+
+    const view = await buildRecall(views(), bounds({ query: "apartment" }), NOW);
+
+    const found = view.found.find((node) => node.id === fact.nodeId);
+    // Most recent first, as the store returns them.
+    expect(found?.provenance.map((p) => p.quote)).toEqual([
+      "her mum is getting older",
+      "she keeps saying she wants to be near her mum",
+    ]);
+  });
+
+  it("should leave a memory SHE made without provenance, because its reasoning is on the edge", async () => {
+    // The symmetry worth stating: **his words are on the node, her reasoning is
+    // on the edge.** A `memory` node has no `memory_provenance` row — writing
+    // one would need a message id and a quote of his that do not exist — and
+    // its `why` travels as the `reasoning` of the inferred edge, which comes
+    // back in `connections`. Both are visible in one recall; neither is
+    // pretending to be the other.
+    const ela = graph.addNode({ kind: "person", label: "Ela" });
+    hersOf(views()).remember({
+      thought: "Illinois is one place doing three jobs at once.",
+      because: "He circles Tennessee and the reason is always Illinois.",
+      about: ["Ela"],
+    });
+
+    const view = await buildRecall(views(), bounds({ query: "Illinois" }), NOW);
+
+    const mine = view.found.find((node) => node.kind === "memory");
+    expect(mine?.provenance).toEqual([]);
+    // And her reasoning IS reachable, on the connection rather than the node.
+    expect(view.connections.map((c) => c.reasoning)).toContain(
+      "He circles Tennessee and the reason is always Illinois.",
+    );
+    expect(view.found.map((n) => n.id)).toContain(ela.id);
+  });
+
+  it("should not load provenance for a node the walk merely reached", async () => {
+    // A neighbour is context. Loading every neighbour's quotes turns a recall
+    // into a document, and she can ask about the neighbour directly if it is
+    // the one she wants to judge.
+    const fact = extracted();
+    const ela = graph.addNode({ kind: "person", label: "Ela" });
+    graph.infer({
+      sourceNode: ela.id,
+      targetNode: fact.nodeId,
+      relation: "concerns",
+      reasoning: "linked",
+      confidence: 0.5,
+      weight: 0.5,
+      demoteAfter: "2026-09-11T12:00:00.000Z",
+    });
+
+    const view = await buildRecall(views(), bounds({ query: "Ela" }), NOW);
+
+    const neighbour = view.found.find((node) => node.origin === "connected");
+    expect(neighbour?.provenance).toEqual([]);
+  });
+
+  it("should say so in the explanation, so an empty provenance is not read as none existing", async () => {
+    const view = await buildRecall(views(), bounds({ query: "apartment" }), NOW);
+
+    expect(view.explanation).toContain("where it came from");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Reading the body of a memory she wants to keep — `syl-016.7`

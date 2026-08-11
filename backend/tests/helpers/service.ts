@@ -12,6 +12,7 @@ import { syncResolvers } from "../../src/index.js";
 import { DreamLog } from "../../src/memory/dream/log.js";
 import { MemoryGraph } from "../../src/memory/graph.js";
 import { MemoryMetrics } from "../../src/memory/metrics.js";
+import { ExtractionStore } from "../../src/memory/extract-apply.js";
 import { HerOwnMemory } from "../../src/memory/remember.js";
 import type { Retriever } from "../../src/memory/retrieve.js";
 import { EdgeWeights } from "../../src/memory/weights.js";
@@ -291,6 +292,8 @@ export function testMemory(
     // path a machine without the extension runs.
     recall: options.recall ?? ((): Retriever | null => null),
     hers: new HerOwnMemory({ db: db.handle, graph, clock }),
+    provenance: (nodeId: string) =>
+      new ExtractionStore({ db: db.handle, graph, clock }).provenanceFor(nodeId),
   };
 }
 

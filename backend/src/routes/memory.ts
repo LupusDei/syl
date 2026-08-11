@@ -21,6 +21,7 @@ import {
   type MemoryTier,
 } from "../memory/schema.js";
 import { WeightError, type EdgeWeights } from "../memory/weights.js";
+import type { FactProvenance } from "../memory/extract-apply.js";
 import { RememberError, type HerOwnMemory, type Remembered } from "../memory/remember.js";
 import type { OverflowKindCount, WorkingMemory } from "../memory/working.js";
 import { instant, systemClock, type Clock } from "../services/clock.js";
@@ -164,6 +165,16 @@ export interface MemoryViews {
    * by the route remembering to be careful.
    */
   readonly hers: HerOwnMemory;
+  /**
+   * Where an extracted fact came from — `syl-9ro`, the surfacing half of
+   * `syl-016.5`.
+   *
+   * A thunk over `ExtractionStore.provenanceFor` rather than the store itself,
+   * because this surface needs exactly one read of it and handing the route a
+   * store would hand it the WRITE path as well. Reading provenance and filing
+   * an extraction are not the same authority.
+   */
+  readonly provenance: (nodeId: string) => readonly FactProvenance[];
 }
 
 export interface MemoryRouterOptions {
@@ -333,6 +344,30 @@ export interface MemoryGraphView {
  */
 export type RecallOrigin = "matched" | "connected" | "not_shown";
 
+/**
+ * Where one telling of a fact came from — `syl-9ro`.
+ *
+ * **The pairing is the point, not either column alone.** `quote` is his own
+ * words, copied from the message by the service; `why` is the step the
+ * extraction turn took from those words to this fact. Together they are the
+ * correction he could never make: *she reasoned wrongly from something true.*
+ * `why` alone is an unfalsifiable claim, and `quote` alone is what he already
+ * had.
+ *
+ * `digest` is deliberately not carried. It addresses an extraction run, which
+ * is a fact about the pipeline rather than about his life, and this shape is
+ * read by Syl and rendered to him.
+ */
+export interface RecalledProvenanceView {
+  /** DERIVED: the message that asserted it. */
+  readonly saidIn: string;
+  /** DERIVED: his own words, copied from that message. Never model output. */
+  readonly quote: string;
+  /** DECLARED: the step from those words to this fact. */
+  readonly why: string;
+  readonly at: string;
+}
+
 /** One remembered thing, **with its id**. */
 export interface RecalledNodeView {
   /**
@@ -352,6 +387,20 @@ export interface RecalledNodeView {
   readonly score: number | null;
   /** Which channels spoke for it. Empty for anything the ranker did not score. */
   readonly channels: readonly RetrievalChannel[];
+  /**
+   * Where this came from, most recent telling first. Empty is ordinary.
+   *
+   * Populated only for a node the ranker MATCHED — a neighbour is context, and
+   * loading every neighbour's quotes turns a recall into a document she has to
+   * read rather than an answer she can use.
+   *
+   * Empty on a memory SHE made, and that is the symmetry rather than a gap:
+   * **his words are on the node, her reasoning is on the edge.** A `memory`
+   * node has no `memory_provenance` row — one would need a message id and a
+   * quote of his that do not exist — and its `why` travels as the `reasoning`
+   * of the inferred edge, which comes back in `connections`.
+   */
+  readonly provenance: readonly RecalledProvenanceView[];
 }
 
 /**
@@ -485,6 +534,10 @@ export async function buildRecall(
         origin: "not_shown",
         score: null,
         channels: [],
+        // The overflow answers "what is being kept from me", which is a question
+        // about the projection's ranking rather than about where a fact came
+        // from. She can ask about any of these by id once she can see them.
+        provenance: [],
       })),
       connections: [],
       channels: [],
@@ -540,6 +593,10 @@ export async function buildRecall(
       origin: entry === undefined ? "connected" : "matched",
       score: entry?.score ?? null,
       channels: entry?.channels ?? [],
+      // MATCHED only. A neighbour is context, and loading every neighbour's
+      // quotes turns an answer into a document — she can ask about the
+      // neighbour by id if it is the one she means to judge.
+      provenance: entry === undefined ? [] : memory.provenance(node.id).map(toProvenanceView),
     };
   });
 
@@ -577,8 +634,16 @@ export async function buildRecall(
             blind.includes("holographic") ? ` — name the people or things it is about to add ` +
               `the structural channel` : ``
           }. `) +
-      `Nothing beyond the best few is counted, so this does not say how much more there is.`,
+      `Each match carries where it came from — his words and the step taken from them — when it ` +
+      `was extracted from something he said; a memory you made yourself carries its reasoning on ` +
+      `the connection instead. Nothing beyond the best few is counted, so this does not say how ` +
+      `much more there is.`,
   };
+}
+
+/** One telling, reduced to what she and he need. `digest` stays behind. */
+export function toProvenanceView(row: FactProvenance): RecalledProvenanceView {
+  return { saidIn: row.saidIn, quote: row.quote, why: row.why, at: row.createdAt };
 }
 
 /** One walked edge, with the two species kept apart. See {@link RecalledEdgeView}. */
