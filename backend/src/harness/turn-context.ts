@@ -123,8 +123,34 @@ import { REPLY_FENCE_OPEN } from "../agents/fencing.js";
  * `autoMemoryOff()` unconditionally: a quarantine you have to remember to
  * switch on is not a quarantine. `reports` is not a general slot for outside
  * text — it is the slot for text `fenceReplies` has already been through.
+ *
+ * ## `ledger` — what SHE did, which is neither memory nor a report
+ *
+ * `jobs/unattended-contributor.ts` gives the commander lane the record of her
+ * own unattended turns. It exists because she could not account for her own
+ * work: the hourly turn runs on its own lane and its own session, so a reminder
+ * it filed at 07:04 was something the Syl he talks to had never heard of. She
+ * said so, honestly, and that is constraint 4's spirit failing inwards —
+ * nothing she does is meant to be invisible, and this was invisible to her.
+ *
+ * It gets its own position rather than joining an existing one, and both
+ * alternatives are worse in the same way:
+ *
+ * - **Not `memory`.** That kind is emitted inside `MEMORY_FENCE`, and
+ *   `SOUL.md` says everything past the fence is what she knows about the
+ *   COMMANDER. A log of her own actions annexed into that region stops being a
+ *   record of what she did and becomes a belief about his life.
+ * - **Not `reports`.** That is the slot for another process's words, ranked
+ *   last because a thing she read never moves up. Her own runs are not
+ *   something she read; they are the store's record of what she actually did,
+ *   and ranking them beneath a tool schema would be a lie about their standing.
+ *
+ * So: below memory, because what he says and what she remembers of him both
+ * outrank her own notes — `SOUL.md` rung 3 puts the store above her memory and
+ * this is the store. And above capability, because what she has already done
+ * frames what it means to do more of it.
  */
-export const CONTRIBUTOR_ORDER = ["identity", "memory", "capability", "reports"] as const;
+export const CONTRIBUTOR_ORDER = ["identity", "memory", "ledger", "capability", "reports"] as const;
 
 /** What a contribution is. Derived from the order, so no kind can lack a position. */
 export type ContributorKind = (typeof CONTRIBUTOR_ORDER)[number];
@@ -248,8 +274,31 @@ export const MEMORY_FENCE_END = "--- END OF WHAT YOU REMEMBER ---";
  * contributors is a margin that fires again next week on a paragraph rather
  * than on a runaway. Still nothing against a 200k window; still a tripwire and
  * not a token economy.
+ *
+ * ## 33,000, on 2026-08-11, and the margin above was already gone
+ *
+ * **Measure before trusting the paragraph above.** By the time a fifth
+ * contributor was proposed, the 2,950 bytes it describes had shrunk to about
+ * 600 — `SOUL.md` had reached 11,954 and the tool surface 10,583, both inside
+ * the same day, neither noticed because the test only asks whether the sum
+ * fits. It did fit. It was 29,393 against 30,000, and the file still claimed a
+ * margin an order of magnitude larger. A number in prose beside a number in
+ * code is the drift this whole module exists to make unrepresentable, and it
+ * happened here, in the paragraph explaining the margin.
+ *
+ * | contributor | at the 30,000 raise | now | why |
+ * |---|---|---|---|
+ * | `SOUL.md` | 10,644 | 11,954 | the voice, and being heard rather than read |
+ * | tool schemas | 9,562 | 10,583 | `show_him` — the sending verb |
+ * | her own unattended work | 0 | 1,200 | she could not account for a reminder she filed at 07:04 |
+ *
+ * The fifth contributor is the case this file already names as grounds for
+ * raising: an INTENDED one that does not fit. It is also the smallest of them
+ * by a wide margin, and it is what makes constraint 4's spirit hold inwards —
+ * see `jobs/unattended-contributor.ts`. 33,000 against a declared 30,593
+ * restores roughly the 2,400 bytes the previous raise meant to leave.
  */
-export const DEFAULT_CONTEXT_BUDGET_BYTES = 30_000;
+export const DEFAULT_CONTEXT_BUDGET_BYTES = 33_000;
 
 /** A contributor was wired up wrong. A programming error, not a runtime condition. */
 export class TurnContextError extends Error {

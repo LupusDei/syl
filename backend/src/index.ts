@@ -29,6 +29,11 @@ import {
   describeAgenda,
   ensureMorningAgendaJob,
 } from "./jobs/agenda-job.js";
+import {
+  unattendedContributor,
+  UNATTENDED_KINDS,
+  UNATTENDED_RUN_DEPTH,
+} from "./jobs/unattended-contributor.js";
 import { createDeliveryRuntime, describeRuntime, type DeliveryRuntime } from "./jobs/runtime.js";
 import { AdjutantClient } from "./agents/adjutant-client.js";
 import { loadConfig, type SylConfig } from "./config.js";
@@ -84,6 +89,7 @@ import {
   type Lane,
 } from "./harness/agent.js";
 import { runTurn, type TurnOptions, type TurnRunner } from "./harness/session.js";
+import type { Contributor } from "./harness/turn-context.js";
 import {
   mcpToolName,
   toolConfigPath,
@@ -1107,6 +1113,36 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     // that can be tested.
     autoMemory: autoMemoryOff(),
     ...(soul === undefined ? {} : { soul }),
+    /**
+     * What she did while nobody was watching — on HIS lane, and no other.
+     *
+     * The lanes keep her unattended turns out of his transcript, and until now
+     * that separation was total in both directions: a reminder the hourly turn
+     * filed at 07:04 was something the Syl he talks to had never heard of, and
+     * she said so when he asked. Nothing she does is meant to be invisible;
+     * this was invisible to her.
+     *
+     * Read fresh on every turn, from the runs table rather than from a second
+     * store — `jobs/unattended-contributor.ts` decides what fits and what it
+     * says about the rest.
+     *
+     * **His lane only**, deliberately. The question this answers is one he
+     * asks; the hourly turn already remembers its own day within its own
+     * thread, and handing every lane the same block would spend the same bytes
+     * on a turn nobody is questioning.
+     */
+    contributors: (lane: Lane): readonly Contributor[] => {
+      if (lane !== LANES.commander) return [];
+      const record = unattendedContributor(
+        // Filtered by KIND, not merely paged. Runs are ordered by time across
+        // the whole catalogue and `reminder_delivery` wakes every minute, so an
+        // unfiltered page of this depth is a hundred deliveries and not one
+        // hour of hers.
+        jobs.listRuns({ kinds: UNATTENDED_KINDS, limit: UNATTENDED_RUN_DEPTH }).items,
+        { now: clock(), tz: config.quietHours.tz },
+      );
+      return record === undefined ? [] : [record];
+    },
     // Both halves are load-bearing and neither survives alone: `onEvent` is how
     // the service observes a turn at all, and the index wrapper is what makes a
     // written memory findable again.
