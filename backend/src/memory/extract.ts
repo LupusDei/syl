@@ -113,6 +113,25 @@ import { ENTITY_NODE_KINDS, isEntityNodeKind, type MemoryNodeKind } from "./sche
  * `extract-apply.ts` draws the edge. A person is a person; what she wants is a
  * `fact`, linked to her.
  *
+ * `syl-017.2` is the same defect one kind further out, and Syl found it herself:
+ *
+ * > "Illinois still doesn't exist as a node. The memories say 'the state' and
+ * > 'the old state' and never name it. The single most connective entity in
+ * > your life is a pronoun."
+ *
+ * A place had no kind, so it could only be filed as a `fact` with the word
+ * inside its label — and `about` refuses to point at a `fact`, deliberately.
+ * **Nothing was allowed to point at it, so it could not accumulate edges**, and
+ * the thing he independently describes as doing three jobs at once had a degree
+ * of one. `place` is now an {@link ENTITY_NODE_KINDS} member and a claim can
+ * hang off it like any other.
+ *
+ * The judgment that goes with it is narrow, and it is stated to the turn rather
+ * than validated here: **name a place only when a fact in the same reply is
+ * about it.** Whether that place is worth a NODE is not the turn's decision at
+ * all — `extract-apply.ts` withholds the mint until a second exchange names it,
+ * for reasons that are about over-minting rather than about judgment.
+ *
  *
  * ## The rule for what is worth remembering
  *
@@ -199,6 +218,7 @@ export function assertExtractionIsMemoryless(): void {
  */
 export const EXTRACTABLE_KINDS = [
   "person",
+  "place",
   "fact",
   "goal",
   "decision",
@@ -334,8 +354,14 @@ export interface Extraction {
  * line, and crossing it costs the WHOLE extraction rather than the twelfth
  * entry. A cap that starts refusing real conversations has stopped measuring
  * what it was set to measure.
+ *
+ * **Fourteen after `syl-017.2`, for the third time the same reason.** A place is
+ * now its own entry rather than a word inside a fact's label, so an exchange
+ * about somewhere he lives costs one more entry than it did — and, like a
+ * `person`, the entry it gained is a name and nothing else. The number moves
+ * whenever the UNIT moves; it has never moved because an exchange got richer.
  */
-export const MAX_EXTRACTED_FACTS = 12;
+export const MAX_EXTRACTED_FACTS = 14;
 
 /** Longest a label may be. A name, not a paragraph. */
 export const MAX_LABEL_CHARS = 80;
@@ -410,6 +436,21 @@ export const EXTRACTION_INSTRUCTION = [
   "nothing else; anything she wants, plans or decided is a separate fact, linked",
   "back to her with `about`. The same rule holds for a goal, a decision and an",
   "event: the entry is the thing, and a claim about the thing is its own entry.",
+  "",
+  "A PLACE IS A THING, AND IT IS NAMED ONLY WHEN SOMETHING IS TRUE OF IT. A state,",
+  "a city, a house, an office — somewhere his life happens — is a `place`, filed",
+  "exactly like a person: the place is one entry, and what is true of it is a",
+  "separate `fact` pointed at it with `about`. He says his parents are still in",
+  "Illinois and he has ruled the state out. That is THREE entries:",
+  '  1. { kind: place, label: "Illinois" }',
+  '  2. { kind: fact,  label: "His parents\' home", about: 1, ... }',
+  '  3. { kind: fact,  label: "Ruling out Illinois", about: 1, ... }',
+  "and NOT two facts with the word Illinois inside their labels, which is what",
+  "leaves the place unreachable from either of them.",
+  "",
+  "NEVER name a place that no fact in this same reply is about. Somewhere he",
+  "merely passed through is a word in a sentence; somewhere claims attach to is a",
+  "thing. If you cannot point a fact at it, leave it out.",
   "",
   "Reply with JSON only. The object must have exactly these keys and no others:",
   '  facts              an array of { "kind", "label", "body", "saidIn", "about", "why" }:',

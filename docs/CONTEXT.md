@@ -1768,3 +1768,52 @@ practices follow, and they cost nothing:
   and an agent will act on them differently.
 - **An agent that reads the subsystem and pushes back is doing the job.** Both
   times it happened today the brief was wrong and the pushback was right.
+
+### A schema object restored by NAME is not a schema object restored (2026-08-11)
+
+`syl-017.2` needed one more value in `memory_nodes.kind`'s `CHECK`. SQLite has no
+`ALTER TABLE ... DROP CONSTRAINT`, so that is a table rebuild — four indexes and
+four triggers dropped with the table and re-created after it. Two things went
+wrong, and the pair of them is the entry.
+
+**1. The rebuild recipe SQLite documents does not work here, and the escape
+everyone reaches for is a myth.** The documented recipe needs
+`PRAGMA foreign_keys = OFF`, which is a no-op inside a transaction, and
+`applyMigrations` wraps every migration in `BEGIN IMMEDIATE` — correctly, so a
+half-applied schema is impossible. The usual answer is `PRAGMA
+legacy_alter_table = ON`, on the belief that it stops `ALTER TABLE ... RENAME`
+rewriting other tables' `REFERENCES` clauses. **It does not.** Measured on
+22.23.1 / SQLite 3.51.3: with foreign keys on, the rename fixes up references
+whatever that pragma says. Six references would have followed `memory_nodes`
+onto a scratch table and stayed there, and nothing fails until the next write —
+somewhere else entirely.
+
+What does work is never renaming anything: copy the rows aside, `DROP TABLE
+memory_nodes`, re-create it under the same name, copy the rows back. Two SQLite
+behaviours make it safe and both had to be measured rather than assumed —
+`DROP TABLE`'s implicit `DELETE FROM` fires no triggers (so the FTS index
+survives), and `PRAGMA defer_foreign_keys` works inside a transaction where
+`foreign_keys = OFF` does not. **And the ordering is load-bearing in a way that
+is invisible: the deferred violation counter is decremented by inserts into the
+table the references NAME.** Copying into a scratch table and renaming it
+afterwards puts identical rows in an identically-named table and still fails at
+the commit. That was the first attempt.
+
+**2. The index came back with the right name and the wrong predicate.**
+`memory_nodes_handle_idx` is `UNIQUE (subject_id, kind) WHERE subject_id IS NOT
+NULL AND kind IN ('goal', 'source')`, and the partial clause is the whole point
+— `0019` spends a paragraph on it, because a unique index over `memory`, `fact`
+and `event` would forbid the graph from knowing two things about one goal.
+Re-creating it, I dropped the `kind IN (...)`. Right name, right table, right
+columns, and a silent new law.
+
+The test I had written asserted the NAMES of the restored indexes and triggers,
+and it passed. What caught it was an unrelated test three files away —
+`projectInto should leave room for the graph to know many things about one row`.
+
+So: **when a migration re-creates schema objects, diff the DEFINITIONS across the
+migration, not the names.** It is four lines against `sqlite_schema.sql` on a
+database migrated to `N-1` and one migrated to `N`, it is exactly the assertion
+"this migration changed nothing it did not mean to change", and nothing can
+satisfy it by accident. The name-list version is the same shape of mistake as a
+comment claiming an invariant: it describes the object without checking it.

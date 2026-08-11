@@ -72,6 +72,7 @@ export const MEMORY_NODE_KINDS = [
   "event",
   "goal",
   "decision",
+  "place",
 ] as const;
 
 export type MemoryNodeKind = (typeof MEMORY_NODE_KINDS)[number];
@@ -96,7 +97,7 @@ export type MemoryNodeKind = (typeof MEMORY_NODE_KINDS)[number];
  * So the split, and both halves are load-bearing:
  *
  * - **Entity kinds** name something that exists on its own and can be pointed
- *   at: a person, an event, a goal, a decision.
+ *   at: a person, an event, a goal, a decision, a place.
  * - **`fact`** is a claim, and a claim is always about something. It is the one
  *   extractable kind that is not here, deliberately: `extract.ts` lets a
  *   candidate point at an entity in the same extraction, and refuses to let it
@@ -112,6 +113,16 @@ export const ENTITY_NODE_KINDS = [
   "event",
   "goal",
   "decision",
+  // `syl-017.2`. Illinois appeared twice in his live graph and both times it was
+  // a `fact` with the word inside the label, each with a degree of ONE — because
+  // a `fact` is the only kind a place could be filed under, and `about` refuses
+  // to point at a `fact`. Nothing was allowed to point at the most connective
+  // thing in his life. `place` is here so something can.
+  //
+  // It is the one entity kind whose MINTING is gated on recurrence
+  // (`RECURRENCE_GATED_KINDS` in `extract-apply.ts`), because it is the one
+  // named incidentally: every fact has a where. See `0027_memory_places.sql` §2.
+  "place",
 ] as const satisfies readonly MemoryNodeKind[];
 
 /** A kind that names a thing rather than a claim. See {@link ENTITY_NODE_KINDS}. */

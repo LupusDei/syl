@@ -4,15 +4,18 @@ import {
   ABOUT_RELATION,
   ConversationExtractor,
   DEFAULT_CONVERSATION_LABEL,
+  ENTITY_RECURRENCE_THRESHOLD,
   ExtractionApplyError,
   ExtractionStore,
   FACT_IDENTITY_SQL,
   MAX_QUOTE_CHARS,
   quoteOf,
   QUOTE_TRUNCATED,
+  RECURRENCE_GATED_KINDS,
   STATED_RELATION,
 } from "../../src/memory/extract-apply.js";
 import {
+  EXTRACTABLE_KINDS,
   ExtractionShapeError,
   transcriptDigest,
   type CandidateFact,
@@ -20,6 +23,7 @@ import {
   type TranscriptMessage,
 } from "../../src/memory/extract.js";
 import { MemoryGraph } from "../../src/memory/graph.js";
+import { ENTITY_NODE_KINDS } from "../../src/memory/schema.js";
 import { projectGoal, projectInto } from "../../src/memory/projection.js";
 import { fixedClock } from "../../src/services/clock.js";
 import {
@@ -677,5 +681,451 @@ describe("ConversationExtractor", () => {
 
     expect(outcome.status).toBe("filed");
     expect(lines.join("\n")).toContain("could not be rebuilt");
+  });
+});
+
+/**
+ * `syl-017.2` — Illinois had a degree of one, and the fix has two halves.
+ *
+ * The first is that `place` is a kind at all, so a claim is allowed to point at
+ * one. The second is the half that could quietly make her memory worse: if
+ * every place named becomes a node, the graph fills with entities nobody asked
+ * about and they compete for a 4,000-byte digest against the things that
+ * matter. So the rule is RECURRENCE, and these tests hold the rule rather than
+ * its effects — the count is over exchanges, the deferral loses nothing, and a
+ * promotion arrives with every edge that was waiting for it.
+ */
+
+const SECOND_MESSAGE_A = "syl:message:01991b2f-0000-7000-8000-00000000001a";
+const SECOND_MESSAGE_B = "syl:message:01991b2f-0000-7000-8000-00000000001b";
+
+const ILLINOIS_ONE: readonly TranscriptMessage[] = [
+  { id: MESSAGE_A, role: "user", text: "Both sets of parents are still back in Illinois." },
+  { id: MESSAGE_B, role: "assistant", text: "Noted." },
+];
+
+const ILLINOIS_TWO: readonly TranscriptMessage[] = [
+  { id: SECOND_MESSAGE_A, role: "user", text: "I have ruled Illinois out for the move." },
+  { id: SECOND_MESSAGE_B, role: "assistant", text: "Understood." },
+];
+
+/** The place entry and the claim that hangs off it — the shape the turn is told to produce. */
+function aboutIllinois(claim: {
+  readonly label: string;
+  readonly body: string;
+  readonly why?: string;
+}): Extraction {
+  return {
+    facts: [
+      {
+        kind: "place",
+        label: "Illinois",
+        body: "The state both sets of parents live in.",
+        saidIn: 1,
+        about: null,
+        why: "He named the state outright.",
+      },
+      {
+        kind: "fact",
+        label: claim.label,
+        body: claim.body,
+        saidIn: 1,
+        about: 1,
+        why: claim.why ?? "He stated it directly.",
+      },
+    ],
+    instructionsFound: [],
+  };
+}
+
+function degreeOf(nodeId: string): number {
+  return graph.edgesTouching(nodeId).length;
+}
+
+describe("a place has to earn a node", () => {
+  it("should not mint a place the first time it is named — once is a word, not a hub", () => {
+    const result = apply({
+      transcript: ILLINOIS_ONE,
+      extraction: aboutIllinois({
+        label: "His parents' home",
+        body: "Both sets of parents live in Illinois.",
+      }),
+    });
+
+    expect(result.facts.map((fact) => fact.kind)).toEqual(["fact"]);
+    expect(graph.listNodes({ kind: "place" })).toEqual([]);
+    expect(result.pending).toEqual([
+      { kind: "place", label: "Illinois", heardIn: 1, needed: ENTITY_RECURRENCE_THRESHOLD },
+    ]);
+  });
+
+  it("should record the mention rather than dropping it, so nothing is lost while it waits", () => {
+    apply({
+      transcript: ILLINOIS_ONE,
+      extraction: aboutIllinois({
+        label: "His parents' home",
+        body: "Both sets of parents live in Illinois.",
+      }),
+    });
+
+    const mentions = store.mentionsOf("place", "Illinois");
+    expect(mentions).toHaveLength(1);
+    expect(mentions[0]?.quote).toBe("Both sets of parents are still back in Illinois.");
+    expect(mentions[0]?.saidIn).toBe(MESSAGE_A);
+    expect(mentions[0]?.why).toBe("He stated it directly.");
+    expect(mentions[0]?.nodeId).toBeNull();
+    expect(store.timesHeard("place", "Illinois")).toBe(1);
+  });
+
+  it("should still file the claim itself, which is waiting on a subject and not on a decision", () => {
+    const result = apply({
+      transcript: ILLINOIS_ONE,
+      extraction: aboutIllinois({
+        label: "His parents' home",
+        body: "Both sets of parents live in Illinois.",
+      }),
+    });
+
+    const claim = result.facts[0];
+    expect(claim?.label).toBe("His parents' home");
+    expect(claim?.created).toBe(true);
+    // No edge yet, because there is nothing yet to point at.
+    expect(claim?.aboutNodeId).toBeNull();
+  });
+
+  it("should mint the place when a SECOND exchange names it", () => {
+    apply({
+      transcript: ILLINOIS_ONE,
+      extraction: aboutIllinois({
+        label: "His parents' home",
+        body: "Both sets of parents live in Illinois.",
+      }),
+    });
+    const second = apply({
+      transcript: ILLINOIS_TWO,
+      extraction: aboutIllinois({
+        label: "Ruling out Illinois",
+        body: "He has ruled Illinois out for the move.",
+      }),
+    });
+
+    expect(second.pending).toEqual([]);
+    expect(second.promoted).toHaveLength(1);
+    expect(second.promoted[0]?.heardIn).toBe(2);
+    expect(graph.listNodes({ kind: "place" }).map((node) => node.label)).toEqual(["Illinois"]);
+  });
+
+  it("should give the promoted place EVERY edge that was waiting on it", () => {
+    // The test this bead exists for. Illinois's defect was a degree of one; a
+    // promotion that drew only the promoting exchange's edge would reproduce it
+    // exactly while looking like a fix from every other angle.
+    apply({
+      transcript: ILLINOIS_ONE,
+      extraction: aboutIllinois({
+        label: "His parents' home",
+        body: "Both sets of parents live in Illinois.",
+      }),
+    });
+    const second = apply({
+      transcript: ILLINOIS_TWO,
+      extraction: aboutIllinois({
+        label: "Ruling out Illinois",
+        body: "He has ruled Illinois out for the move.",
+      }),
+    });
+
+    const illinois = second.promoted[0];
+    expect(illinois).toBeDefined();
+    const nodeId = illinois?.nodeId ?? "";
+
+    // Both claims, and the conversation that vouched for them.
+    expect(illinois?.degree).toBe(3);
+    expect(degreeOf(nodeId)).toBe(3);
+
+    const claims = graph
+      .edgesTouching(nodeId)
+      .filter((edge) => edge.relation === ABOUT_RELATION)
+      .map((edge) => graph.getNode(edge.sourceNode)?.label)
+      .sort();
+    expect(claims).toEqual(["His parents' home", "Ruling out Illinois"]);
+  });
+
+  it("should replay the provenance of the exchange that ASSERTED it, not the one that promoted it", () => {
+    apply({
+      transcript: ILLINOIS_ONE,
+      extraction: aboutIllinois({
+        label: "His parents' home",
+        body: "Both sets of parents live in Illinois.",
+        why: "He said both sets of parents are still there.",
+      }),
+    });
+    const second = apply({
+      transcript: ILLINOIS_TWO,
+      extraction: aboutIllinois({
+        label: "Ruling out Illinois",
+        body: "He has ruled Illinois out for the move.",
+        why: "He ruled the state out in as many words.",
+      }),
+    });
+
+    const provenance = store.provenanceFor(second.promoted[0]?.nodeId ?? "");
+    expect(provenance).toHaveLength(2);
+    expect(provenance.map((row) => row.quote).sort()).toEqual([
+      "Both sets of parents are still back in Illinois.",
+      "I have ruled Illinois out for the move.",
+    ]);
+    expect(provenance.map((row) => row.why).sort()).toEqual([
+      "He ruled the state out in as many words.",
+      "He said both sets of parents are still there.",
+    ]);
+  });
+
+  it("should count EXCHANGES and not claims, so one talkative reply cannot promote on its own", () => {
+    // Three claims about Illinois in one message is one telling. Counting rows
+    // rather than digests would be minting on mention with extra steps.
+    const result = apply({
+      transcript: ILLINOIS_ONE,
+      extraction: {
+        facts: [
+          {
+            kind: "place",
+            label: "Illinois",
+            body: "The state his parents live in.",
+            saidIn: 1,
+            about: null,
+            why: "He named it.",
+          },
+          ...["His parents' home", "Where he grew up", "Where Ela is"].map((label) => ({
+            kind: "fact" as const,
+            label,
+            body: `${label}: Illinois.`,
+            saidIn: 1,
+            about: 1,
+            why: "He stated it directly.",
+          })),
+        ],
+        instructionsFound: [],
+      },
+    });
+
+    expect(result.promoted).toEqual([]);
+    expect(result.pending[0]?.heardIn).toBe(1);
+    expect(store.mentionsOf("place", "Illinois")).toHaveLength(3);
+    expect(store.timesHeard("place", "Illinois")).toBe(1);
+  });
+
+  it("should carry all three of those claims across when the second exchange arrives", () => {
+    apply({
+      transcript: ILLINOIS_ONE,
+      extraction: {
+        facts: [
+          {
+            kind: "place",
+            label: "Illinois",
+            body: "The state his parents live in.",
+            saidIn: 1,
+            about: null,
+            why: "He named it.",
+          },
+          ...["His parents' home", "Where he grew up", "Where Ela is"].map((label) => ({
+            kind: "fact" as const,
+            label,
+            body: `${label}: Illinois.`,
+            saidIn: 1,
+            about: 1,
+            why: "He stated it directly.",
+          })),
+        ],
+        instructionsFound: [],
+      },
+    });
+    const second = apply({
+      transcript: ILLINOIS_TWO,
+      extraction: aboutIllinois({
+        label: "Ruling out Illinois",
+        body: "He has ruled Illinois out for the move.",
+      }),
+    });
+
+    // Four claims plus the one conversation that vouched for them all.
+    expect(second.promoted[0]?.degree).toBe(5);
+  });
+
+  it("should not record a place that no claim in its own reply is about", () => {
+    // Somewhere he merely passed through is a word in a sentence. There is
+    // nothing to defer, because there is nothing waiting on it.
+    const result = apply({
+      transcript: ILLINOIS_ONE,
+      extraction: {
+        facts: [
+          {
+            kind: "place",
+            label: "Illinois",
+            body: "A state.",
+            saidIn: 1,
+            about: null,
+            why: "He mentioned it.",
+          },
+        ],
+        instructionsFound: [],
+      },
+    });
+
+    expect(result.pending).toEqual([]);
+    expect(result.facts).toEqual([]);
+    expect(store.mentionsOf("place", "Illinois")).toEqual([]);
+    expect(graph.listNodes({ kind: "place" })).toEqual([]);
+  });
+
+  it("should file a place normally once it exists — recurrence decides EXISTENCE, not use", () => {
+    apply({
+      transcript: ILLINOIS_ONE,
+      extraction: aboutIllinois({
+        label: "His parents' home",
+        body: "Both sets of parents live in Illinois.",
+      }),
+    });
+    apply({
+      transcript: ILLINOIS_TWO,
+      extraction: aboutIllinois({
+        label: "Ruling out Illinois",
+        body: "He has ruled Illinois out for the move.",
+      }),
+    });
+
+    const third: readonly TranscriptMessage[] = [
+      { id: MESSAGE_A, role: "user", text: "Isla's specialist is in Illinois too." },
+      { id: MESSAGE_B, role: "assistant", text: "Noted." },
+    ];
+    const result = apply({
+      transcript: third,
+      extraction: aboutIllinois({
+        label: "Isla's specialist",
+        body: "Isla's CF specialist is in Illinois.",
+      }),
+    });
+
+    expect(result.pending).toEqual([]);
+    expect(result.promoted).toEqual([]);
+    const place = result.facts.find((fact) => fact.kind === "place");
+    expect(place?.created).toBe(false);
+    expect(result.facts.find((fact) => fact.kind === "fact")?.aboutNodeId).toBe(place?.nodeId);
+    expect(graph.listNodes({ kind: "place" })).toHaveLength(1);
+  });
+
+  it("should not gate a PERSON, because the admission tests already make people rare", () => {
+    const result = apply();
+
+    expect(result.pending).toEqual([]);
+    expect(result.facts[0]?.kind).toBe("person");
+    expect(result.facts[0]?.created).toBe(true);
+  });
+
+  it("should fold case when it counts a place, exactly as it does for a fact", () => {
+    apply({
+      transcript: ILLINOIS_ONE,
+      extraction: aboutIllinois({
+        label: "His parents' home",
+        body: "Both sets of parents live in Illinois.",
+      }),
+    });
+    const second = apply({
+      transcript: ILLINOIS_TWO,
+      extraction: {
+        facts: [
+          {
+            kind: "place",
+            label: "ILLINOIS",
+            body: "The state.",
+            saidIn: 1,
+            about: null,
+            why: "He named it.",
+          },
+          {
+            kind: "fact",
+            label: "Ruling out Illinois",
+            body: "He has ruled Illinois out.",
+            saidIn: 1,
+            about: 1,
+            why: "He stated it directly.",
+          },
+        ],
+        instructionsFound: [],
+      },
+    });
+
+    expect(second.promoted).toHaveLength(1);
+    expect(second.promoted[0]?.heardIn).toBe(2);
+  });
+
+  it("should leave no mention behind when the apply is refused partway through", () => {
+    // Same rule as every other write here: all of it lands or none of it does.
+    // A mention row surviving a rolled-back apply would count towards a
+    // promotion for an exchange the ledger says never happened.
+    expect(() =>
+      store.apply({
+        conversationId: INTERACTIVE_CONVERSATION_ID,
+        transcript: ILLINOIS_ONE,
+        extraction: {
+          facts: [
+            {
+              kind: "place",
+              label: "Illinois",
+              body: "The state.",
+              saidIn: 1,
+              about: null,
+              why: "He named it.",
+            },
+            {
+              kind: "fact",
+              label: "His parents' home",
+              body: "They live there.",
+              saidIn: 1,
+              about: 1,
+              why: "He stated it directly.",
+            },
+            // A blank `why`, which `memory_provenance` refuses. `asExtraction`
+            // would have caught it long before here; the store is handed an
+            // unvalidated extraction on purpose, because the failure has to
+            // land AFTER the mention rows are written to prove they roll back.
+            {
+              kind: "fact",
+              label: "Something else",
+              body: "Another claim.",
+              saidIn: 1,
+              about: null,
+              why: "   ",
+            },
+          ],
+          instructionsFound: [],
+        },
+      }),
+    ).toThrow();
+
+    expect(store.mentionsOf("place", "Illinois")).toEqual([]);
+    expect(store.recordFor(transcriptDigest(ILLINOIS_ONE))).toBeNull();
+  });
+});
+
+describe("which kinds are gated", () => {
+  it("should gate only kinds a claim is allowed to point at", () => {
+    // A gated kind exists as a node only after a claim has pointed at it twice,
+    // and `about` refuses to point at anything outside `ENTITY_NODE_KINDS`. Gate
+    // a kind outside that set and it can never accumulate a mention, so it can
+    // never be promoted — a node kind that is unreachable by construction, which
+    // nothing else in the system would fail on.
+    for (const kind of RECURRENCE_GATED_KINDS) {
+      expect(ENTITY_NODE_KINDS as readonly string[]).toContain(kind);
+    }
+  });
+
+  it("should gate only kinds the extraction turn is allowed to propose", () => {
+    for (const kind of RECURRENCE_GATED_KINDS) {
+      expect(EXTRACTABLE_KINDS as readonly string[]).toContain(kind);
+    }
+  });
+
+  it("should need more than one exchange, or the gate is not a gate", () => {
+    expect(ENTITY_RECURRENCE_THRESHOLD).toBeGreaterThan(1);
   });
 });

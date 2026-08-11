@@ -99,6 +99,10 @@ describe("the partition vocabulary", () => {
       "event",
       "goal",
       "decision",
+      // `syl-017.2`. The most connective entity in his life was a word inside a
+      // fact's label, and it had a degree of one because `about` may not point
+      // at a `fact`. See `0027_memory_places.sql`.
+      "place",
     ]);
   });
 

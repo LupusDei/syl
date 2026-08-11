@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  MEMORY_NODE_KINDS,
   newMemoryEdgeId,
   newMemoryNodeId,
   type MemoryEdgeSpecies,
@@ -184,10 +185,17 @@ describe("0012_memory_core — the tables exist and are STRICT", () => {
 
 describe("memory_nodes", () => {
   it("should accept a well-formed node of every kind it covers", () => {
-    for (const kind of ["fact", "memory", "person", "source", "event", "goal", "decision"]) {
+    // Driven by `MEMORY_NODE_KINDS` rather than a hand-kept list. The two must
+    // agree — a kind TypeScript admits and the CHECK refuses is a write that
+    // fails at runtime only, and a kind the CHECK admits and TypeScript does not
+    // is a row nothing ever queries. `0027` added one to both, and a literal
+    // list here would have gone on passing while covering six of seven.
+    for (const kind of MEMORY_NODE_KINDS) {
       expect(() => addNode({ kind, label: `a ${kind}` })).not.toThrow();
     }
-    expect(db.prepare("SELECT count(*) AS n FROM memory_nodes").get()).toEqual({ n: 7 });
+    expect(db.prepare("SELECT count(*) AS n FROM memory_nodes").get()).toEqual({
+      n: MEMORY_NODE_KINDS.length,
+    });
   });
 
   it("should refuse a node id from another namespace", () => {
@@ -568,5 +576,224 @@ describe("nothing inferred is ever deleted", () => {
     addEdge({ sourceNode: a, targetNode: b });
 
     expect(() => db.prepare("DELETE FROM memory_nodes WHERE id = ?").run(a)).toThrow();
+  });
+});
+
+/**
+ * `0027_memory_places.sql` widens `memory_nodes.kind`, and SQLite has no way to
+ * widen a CHECK. So the table is dropped and re-created under the same name,
+ * inside the runner's own transaction, with foreign keys deferred to the commit.
+ *
+ * That is the most dangerous shape of migration this project has: five other
+ * tables point at `memory_nodes`, an FTS index shadows it, and every failure
+ * mode is silent. A rebuild that loses the FTS rows still passes a row count; a
+ * rebuild that leaves the references naming a scratch table still passes
+ * `foreign_key_check` at that moment. So the assertions below are about the
+ * things that would NOT announce themselves.
+ */
+describe("0027_memory_places — the rebuild kept everything it was standing on", () => {
+  /** A database migrated to `before`, seeded, then carried the rest of the way. */
+  function acrossTheRebuild(): Database {
+    const scoped = new DatabaseSync(IN_MEMORY);
+    applyPragmas(scoped, { busyTimeoutMs: 100, requireWal: false });
+    const all = readMigrations(MIGRATIONS_DIR);
+
+    applyMigrations(
+      scoped,
+      all.filter((migration) => migration.version < 27),
+    );
+
+    const source = newMemoryNodeId();
+    const fact = newMemoryNodeId();
+    for (const [id, kind, label] of [
+      [source, "source", "a conversation"],
+      [fact, "fact", "Illinois — parents' home and birthplace"],
+    ] as const) {
+      scoped
+        .prepare(
+          "INSERT INTO memory_nodes (id, tier, kind, label, body, created_at, updated_at) " +
+            "VALUES (?, 'hot', ?, ?, 'a body', ?, ?)",
+        )
+        .run(id, kind, label, NOW, NOW);
+    }
+    scoped
+      .prepare(
+        "INSERT INTO memory_edges (id, tier, kind, source_node, target_node, relation, weight, " +
+          "asserted_by, last_touched_at, created_at, updated_at) " +
+          "VALUES (?, 'hot', 'observed', ?, ?, 'stated', 1.0, ?, ?, ?, ?)",
+      )
+      .run(newMemoryEdgeId(), source, fact, source, NOW, NOW, NOW);
+
+    applyMigrations(scoped, all);
+    return scoped;
+  }
+
+  it("should carry every node and edge across", () => {
+    const scoped = acrossTheRebuild();
+    expect(scoped.prepare("SELECT count(*) AS n FROM memory_nodes").get()).toEqual({ n: 2 });
+    expect(scoped.prepare("SELECT count(*) AS n FROM memory_edges").get()).toEqual({ n: 1 });
+    scoped.close();
+  });
+
+  it("should leave the foreign keys naming memory_nodes, not a scratch table", () => {
+    // The failure this catches is invisible: `ALTER TABLE ... RENAME` rewrites
+    // every REFERENCES clause when foreign keys are on — `legacy_alter_table`
+    // does NOT stop it, measured — so a rebuild done by renaming leaves the
+    // edges pointing at a table that no longer exists. Nothing fails until the
+    // next write, and then it fails somewhere else entirely.
+    const scoped = acrossTheRebuild();
+    const sql = String(
+      (
+        scoped
+          .prepare("SELECT sql FROM sqlite_schema WHERE name = 'memory_edges'")
+          .get() as { sql: string }
+      ).sql,
+    );
+    expect(sql).toContain("REFERENCES memory_nodes");
+    expect(sql).not.toContain("memory_nodes_rebuild");
+    expect(scoped.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    scoped.close();
+  });
+
+  it("should not empty the search index on the way through", () => {
+    // `DROP TABLE` runs an implicit `DELETE FROM` under foreign keys. If that
+    // fired `memory_nodes_fts_ad` — it does not, and this is the assertion that
+    // says so — every node would survive with nothing findable by keyword, and
+    // no count of nodes or edges would notice.
+    const scoped = acrossTheRebuild();
+    expect(scoped.prepare("SELECT count(*) AS n FROM memory_nodes_fts").get()).toEqual({ n: 2 });
+    expect(
+      scoped
+        .prepare("SELECT count(*) AS n FROM memory_nodes_fts WHERE memory_nodes_fts MATCH ?")
+        .get("Illinois"),
+    ).toEqual({ n: 1 });
+    scoped.close();
+  });
+
+  it("should not index every row twice, either", () => {
+    // The other half of the same trap: re-creating the insert trigger BEFORE
+    // copying the rows back would index each node a second time. A duplicated
+    // FTS row is not an error and does not change a node count; it just makes
+    // keyword search rank one memory as two.
+    const scoped = acrossTheRebuild();
+    expect(
+      scoped.prepare("SELECT count(*) AS n FROM memory_nodes_fts WHERE node_id IS NOT NULL").get(),
+    ).toEqual({ n: 2 });
+    scoped.close();
+  });
+
+  it("should put back every index and trigger the table had, DEFINITION and all", () => {
+    // Names are not enough, and this is not a hypothetical: the first draft of
+    // `0027` re-created `memory_nodes_handle_idx` without its `kind IN ('goal',
+    // 'source')` predicate. Right name, right columns, right table — and a
+    // unique index that forbade the graph from knowing two things about one
+    // goal. So the comparison is between the DEFINITIONS on either side of the
+    // rebuild, normalised for whitespace and nothing else, which is a claim
+    // nothing can satisfy by accident.
+    const all = readMigrations(MIGRATIONS_DIR);
+    const definitions = (upTo: number): Map<string, string> => {
+      const scoped = new DatabaseSync(IN_MEMORY);
+      applyPragmas(scoped, { busyTimeoutMs: 100, requireWal: false });
+      applyMigrations(
+        scoped,
+        all.filter((migration) => migration.version <= upTo),
+      );
+      const rows = scoped
+        .prepare(
+          "SELECT name, type, sql FROM sqlite_schema WHERE tbl_name = 'memory_nodes' " +
+            "AND type IN ('index', 'trigger') AND sql IS NOT NULL",
+        )
+        .all()
+        .map((row) => row as { name: string; type: string; sql: string });
+      scoped.close();
+      return new Map(
+        rows.map((row) => [`${row.type} ${row.name}`, row.sql.replace(/\s+/gu, " ").trim()]),
+      );
+    };
+
+    const before = definitions(26);
+    const after = definitions(27);
+
+    expect(before.size).toBeGreaterThan(0);
+    expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
+    for (const [name, sql] of before) expect(after.get(name)).toBe(sql);
+  });
+
+  it("should keep the trust column and its bounds", () => {
+    const scoped = acrossTheRebuild();
+    expect(scoped.prepare("SELECT count(*) AS n FROM memory_nodes WHERE trust = 0.8").get()).toEqual(
+      { n: 2 },
+    );
+    expect(() =>
+      scoped.prepare("UPDATE memory_nodes SET trust = 0.0").run(),
+    ).toThrow();
+    scoped.close();
+  });
+
+  it("should admit a place and still refuse a kind nobody declared", () => {
+    const scoped = acrossTheRebuild();
+    const insert = (kind: string): void => {
+      scoped
+        .prepare(
+          "INSERT INTO memory_nodes (id, tier, kind, label, created_at, updated_at) " +
+            "VALUES (?, 'hot', ?, 'Illinois', ?, ?)",
+        )
+        .run(newMemoryNodeId(), kind, NOW, NOW);
+    };
+    expect(() => { insert("place"); }).not.toThrow();
+    expect(() => { insert("pizzeria"); }).toThrow();
+    scoped.close();
+  });
+});
+
+describe("memory_entity_mentions", () => {
+  it("should refuse a mention with no claim waiting on it", () => {
+    // `from_node NOT NULL` is the rule and not a convenience: a place nothing is
+    // about is a word in a sentence, and every row hanging off a node is also
+    // what lets the Commander's "forget this" reach the residue by CASCADE.
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO memory_entity_mentions (kind, label, digest, from_node, said_in, quote, " +
+            "why, body, created_at) VALUES ('place', 'Illinois', ?, NULL, ?, 'q', 'w', 'b', ?)",
+        )
+        .run("f".repeat(64), "syl:message:01991b2f-0000-7000-8000-0000000000ab", NOW),
+    ).toThrow();
+  });
+
+  it("should refuse a promotion that cannot say when it happened", () => {
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO memory_entity_mentions (kind, label, digest, from_node, said_in, quote, " +
+            "why, body, node_id, promoted_at, created_at) " +
+            "VALUES ('place', 'Illinois', ?, ?, ?, 'q', 'w', 'b', ?, NULL, ?)",
+        )
+        .run(
+          "f".repeat(64),
+          newMemoryNodeId(),
+          "syl:message:01991b2f-0000-7000-8000-0000000000ab",
+          newMemoryNodeId(),
+          NOW,
+        ),
+    ).toThrow();
+  });
+
+  it("should refuse a mention of a kind that is not an entity", () => {
+    // A `fact` is a claim. There is nothing here for one to be — a mention is
+    // deferred evidence of a THING, and `about` refuses to point at a claim.
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO memory_entity_mentions (kind, label, digest, from_node, said_in, quote, " +
+            "why, body, created_at) VALUES ('fact', 'Illinois', ?, ?, ?, 'q', 'w', 'b', ?)",
+        )
+        .run(
+          "f".repeat(64),
+          newMemoryNodeId(),
+          "syl:message:01991b2f-0000-7000-8000-0000000000ab",
+          NOW,
+        ),
+    ).toThrow();
   });
 });

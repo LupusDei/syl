@@ -170,12 +170,18 @@ export const WORKING_MEMORY_EMPTY =
  * decided, which comes before loose facts. Sources come last: a handle to an
  * article is the least useful thing to carry into every turn, and it is the
  * easiest thing to go and look up.
+ *
+ * Places sit next to people because they are the same sort of thing — a hub
+ * several facts hang off rather than a claim. A `place` only ever reaches this
+ * list after a second exchange has named it (`syl-017.2`), so a section here is
+ * evidence that somewhere recurred, never that somewhere was mentioned.
  */
 export const WORKING_MEMORY_SECTIONS: readonly {
   readonly kind: MemoryNodeKind;
   readonly heading: string;
 }[] = [
   { kind: "person", heading: "## People" },
+  { kind: "place", heading: "## Places" },
   { kind: "goal", heading: "## Goals" },
   { kind: "decision", heading: "## Decisions" },
   { kind: "fact", heading: "## Facts" },
@@ -197,6 +203,7 @@ const SECTION_RANK = new Map<MemoryNodeKind, number>(
  */
 const KIND_NOUNS: Readonly<Record<MemoryNodeKind, readonly [one: string, many: string]>> = {
   person: ["person", "people"],
+  place: ["place", "places"],
   goal: ["goal", "goals"],
   decision: ["decision", "decisions"],
   fact: ["fact", "facts"],

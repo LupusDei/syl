@@ -18,7 +18,12 @@ import {
   type ObservedEdge,
 } from "./graph.js";
 import { handle, projectInto } from "./projection.js";
-import { SCANNED_TIER, type MemoryNodeKind } from "./schema.js";
+import {
+  isEntityNodeKind,
+  SCANNED_TIER,
+  type EntityNodeKind,
+  type MemoryNodeKind,
+} from "./schema.js";
 
 /**
  * The write half: the model judged, and this files it.
@@ -128,6 +133,56 @@ import { SCANNED_TIER, type MemoryNodeKind } from "./schema.js";
  * inferred edges alone — that is what makes an edge an inference, and widening
  * it would let the cheap frequent path look like the speculative one. A node
  * column would hold only the first assertion, when a fact stated twice has two.
+ *
+ *
+ * ## A place has to EARN a node, and the earning is a count of exchanges
+ *
+ * `syl-017.2`. Illinois — "one place doing three jobs at once", the
+ * contradiction every Tennessee conversation is downstream of — appeared in his
+ * live graph as two `fact` nodes with the word inside their labels, each with a
+ * degree of ONE. `place` being a kind (`0027_memory_places.sql`) is what lets a
+ * claim point at it. It is not what stops the graph filling with everywhere he
+ * has ever driven past, and that second problem is this module's.
+ *
+ * **Over-minting is a cleanup that looks like enrichment.** It is the same
+ * family as the measurement in `supersede.ts` §1 — near-duplicate merging taking
+ * accuracy from 0.82 to 0.62 — and it lands in the same place: the working-
+ * memory projection has a 4,000-byte budget and the least salient entries fall
+ * off the end, so a node nobody asked for does not sit harmlessly beside a good
+ * one. It evicts it.
+ *
+ * So two gates, and neither of them is a threshold anybody has to tune:
+ *
+ * 1. **A place nothing is about is not recorded at all.** The turn is told to
+ *    name a place only when a fact in the same reply is about it; here that
+ *    becomes structural, because the mention row's `from_node` is `NOT NULL` and
+ *    a mention with nothing pointing at it has nothing to write.
+ * 2. **A place is not minted the first time it is named.** The mention is
+ *    recorded in `memory_entity_mentions` — his words, the step, the claim that
+ *    was waiting on it — and the node arrives when a SECOND, DIFFERENT exchange
+ *    names it. On arrival every recorded mention is replayed, so it comes in
+ *    with the degree it earned rather than the degree of the exchange that
+ *    happened to promote it.
+ *
+ * **The unit is the exchange and not the fact**, and that is a deliberate
+ * departure from "a place three facts point at is a hub". Three facts can all
+ * come out of one telling, and then the number measures how the extraction turn
+ * chose to phrase itself rather than anything about his life. A second separate
+ * exchange is the first evidence that came from the world instead of from one
+ * sentence. {@link ENTITY_RECURRENCE_THRESHOLD} says so in one number, and
+ * {@link RECURRENCE_GATED_KINDS} says which kinds it applies to.
+ *
+ * Only `place` is gated, and the asymmetry is the argument rather than an
+ * oversight: a person, a goal, a decision and an event are named because he is
+ * DOING something about them, and the four admission tests already make them
+ * rare. A place is named incidentally — every fact has a where — so for places
+ * alone, being mentioned is not evidence of mattering.
+ *
+ * Nothing is discarded to make this work, which is what lets the threshold be
+ * as low as two. A place heard once keeps its row, his words and the claim that
+ * pointed at it; if it never returns it has cost one row and never a byte of
+ * the digest. That is CLAUDE.md constraint 6's instinct one table over: **the
+ * deferral is a demotion, not a refusal.**
  */
 
 /** What went wrong when an extraction could not be filed. */
@@ -164,6 +219,44 @@ export const STATED_RELATION = "stated";
  * is noise with headings.
  */
 export const ABOUT_RELATION = "about";
+
+/**
+ * The entity kinds whose MINTING waits for a second exchange.
+ *
+ * One member, and the module header carries the argument for why it is one:
+ * a person, a goal, a decision and an event are named because he is doing
+ * something about them. A place is named incidentally, because every fact has a
+ * where — so `place` is the one kind where being mentioned is not evidence of
+ * mattering.
+ *
+ * `satisfies readonly EntityNodeKind[]` is the half that cannot drift: a kind
+ * cannot be gated here unless something is allowed to point at it, and a gated
+ * kind nothing can point at would be a node that never arrives.
+ */
+export const RECURRENCE_GATED_KINDS = ["place"] as const satisfies readonly EntityNodeKind[];
+
+/** A kind whose minting waits for recurrence. See {@link RECURRENCE_GATED_KINDS}. */
+export type RecurrenceGatedKind = (typeof RECURRENCE_GATED_KINDS)[number];
+
+/** Whether a kind has to be named twice before it becomes a node. */
+export function isRecurrenceGated(kind: unknown): kind is RecurrenceGatedKind {
+  return typeof kind === "string" && (RECURRENCE_GATED_KINDS as readonly string[]).includes(kind);
+}
+
+/**
+ * How many DISTINCT EXCHANGES must name a gated entity before it becomes a node.
+ *
+ * Two, and the number is small because nothing is lost while it waits. A place
+ * heard once keeps its row, his words and the claim that was pointing at it, so
+ * the cost of being wrong in the strict direction is one deferred node and the
+ * cost of being wrong in the loose direction is a permanent competitor for a
+ * 4,000-byte budget. Those are not comparable, which is what decides the
+ * direction; the size of the number then only has to be the smallest one that
+ * means "it came back".
+ *
+ * The unit is exchanges rather than facts on purpose — see the module header.
+ */
+export const ENTITY_RECURRENCE_THRESHOLD = 2;
 
 /** How a conversation's source node is labelled when nobody says otherwise. */
 export const DEFAULT_CONVERSATION_LABEL = "Conversation with the Commander";
@@ -211,6 +304,61 @@ export interface FactProvenance {
   readonly createdAt: string;
 }
 
+/**
+ * One mention of a gated entity, waiting to become a node — or the record of
+ * one that already did. See `0027_memory_places.sql` §2.
+ */
+export interface EntityMention {
+  readonly kind: EntityNodeKind;
+  /** Canonicalised, and compared `COLLATE NOCASE`, like a fact's identity. */
+  readonly label: string;
+  /** The exchange that named it. The recurrence unit. */
+  readonly digest: string;
+  /** The claim that was waiting on it — the `fact` node whose `about` pointed here. */
+  readonly fromNode: string;
+  /** DERIVED: the message that named it. */
+  readonly saidIn: string;
+  /** DERIVED: his words in that message. */
+  readonly quote: string;
+  /** DECLARED: the step from those words to this. */
+  readonly why: string;
+  /** What the entity's node body should say when it earns one. */
+  readonly body: string;
+  /** The node this became, or `null` while it is still waiting. */
+  readonly nodeId: string | null;
+  readonly promotedAt: string | null;
+  readonly createdAt: string;
+}
+
+/** A gated entity that has been named but has not yet earned a node. */
+export interface PendingEntity {
+  readonly kind: EntityNodeKind;
+  readonly label: string;
+  /** Distinct exchanges that have named it, this one included. */
+  readonly heardIn: number;
+  /** How many it needs. {@link ENTITY_RECURRENCE_THRESHOLD}. */
+  readonly needed: number;
+}
+
+/** A gated entity that crossed the threshold during this apply. */
+export interface PromotedEntity {
+  readonly nodeId: string;
+  readonly kind: EntityNodeKind;
+  readonly label: string;
+  /** Distinct exchanges that had named it by the time it arrived. */
+  readonly heardIn: number;
+  /**
+   * Edges drawn as it arrived: every claim that ever pointed at it, plus every
+   * conversation that named it.
+   *
+   * The number that says the replay worked. A promotion that drew one edge
+   * would mean the deferral had thrown away everything it deferred, which is
+   * the exact failure this design exists to avoid — and it would look like
+   * success from every other angle.
+   */
+  readonly degree: number;
+}
+
 /** What one apply did. */
 export interface ApplyResult {
   /** `false` when this exact transcript had already been extracted from. */
@@ -220,6 +368,14 @@ export interface ApplyResult {
   readonly facts: readonly AppliedFact[];
   readonly created: number;
   readonly reused: number;
+  /**
+   * Gated entities this exchange named that did not earn a node. Not an error
+   * and not a loss — the mention is on record and the next exchange that names
+   * one of these mints it with everything it deferred.
+   */
+  readonly pending: readonly PendingEntity[];
+  /** Gated entities that earned a node during this apply, and the degree they arrived with. */
+  readonly promoted: readonly PromotedEntity[];
   /** `true` when the graph moved, which is when the projection needs rebuilding. */
   readonly changed: boolean;
 }
@@ -274,6 +430,86 @@ interface ProvenanceRow {
   readonly created_at: string;
 }
 
+interface MentionRow {
+  readonly kind: string;
+  readonly label: string;
+  readonly digest: string;
+  readonly from_node: string;
+  readonly said_in: string;
+  readonly quote: string;
+  readonly why: string;
+  readonly body: string;
+  readonly node_id: string | null;
+  readonly promoted_at: string | null;
+  readonly created_at: string;
+}
+
+function toMention(row: MentionRow): EntityMention {
+  // The CHECK on `memory_entity_mentions.kind` is the narrower of the two and
+  // it is the one that wrote the row, so a value here that is not an entity
+  // kind means the migration and this module have parted company.
+  if (!isEntityNodeKind(row.kind)) {
+    throw new ExtractionApplyError(
+      "graph_write",
+      `memory_entity_mentions holds a row of kind ${JSON.stringify(row.kind)}, which is not an ` +
+        `entity kind. The table's CHECK and ENTITY_NODE_KINDS have drifted apart.`,
+    );
+  }
+  return {
+    kind: row.kind,
+    label: row.label,
+    digest: row.digest,
+    fromNode: row.from_node,
+    saidIn: row.said_in,
+    quote: row.quote,
+    why: row.why,
+    body: row.body,
+    nodeId: row.node_id,
+    promotedAt: row.promoted_at,
+    createdAt: row.created_at,
+  };
+}
+
+/**
+ * What one candidate turned into: a node, or a mention still waiting for one.
+ *
+ * The two passes over an extraction — file, then link — used to be able to
+ * assume every candidate had a node by the end of the first. A gated entity
+ * breaks that, so the passes carry this instead of an {@link AppliedFact} and
+ * the difference is checked rather than assumed.
+ */
+type Slot =
+  | { readonly state: "filed"; readonly fact: AppliedFact }
+  | { readonly state: "pending"; readonly kind: EntityNodeKind; readonly label: string };
+
+/** A mention this reply wants to record, once the ledger row exists to hang it on. */
+interface DeferredMention {
+  readonly kind: EntityNodeKind;
+  readonly label: string;
+  readonly body: string;
+  readonly fromNode: string;
+  readonly saidIn: string;
+  readonly quote: string;
+  readonly why: string;
+}
+
+/**
+ * One pending entity, weighed.
+ *
+ * A union rather than a record with nullable fields, so "this verdict minted a
+ * node" is checked by the compiler at every use instead of asserted at one.
+ * `key` is the kind and the folded label — the identity the count is taken over.
+ */
+type PendingVerdict =
+  | { readonly state: "waiting"; readonly key: string; readonly pending: PendingEntity }
+  | {
+      readonly state: "minted";
+      readonly key: string;
+      readonly pending: PendingEntity;
+      readonly node: MemoryNode;
+      readonly fact: AppliedFact;
+    };
+
 /**
  * The identity lookup for a fact, pinned as text.
  *
@@ -314,6 +550,31 @@ interface ProvenanceRow {
 export const FACT_IDENTITY_SQL =
   "SELECT id FROM memory_nodes WHERE kind = ? AND label = ? COLLATE NOCASE AND tier = ? " +
   "ORDER BY created_at DESC, id DESC LIMIT 1";
+
+const MENTION_COLUMNS =
+  "kind, label, digest, from_node, said_in, quote, why, body, node_id, promoted_at, created_at";
+
+/**
+ * "How many exchanges have named this place?" — the promotion decision, once
+ * per gated candidate.
+ *
+ * `count(DISTINCT digest)` and not `count(*)`, and that IS the rule rather than
+ * an optimisation: one exchange in which three claims point at Illinois writes
+ * three rows and is still one telling. Counting rows would let a single
+ * talkative reply promote whatever it liked, which is minting on mention with
+ * extra steps.
+ *
+ * The same folded comparison as {@link FACT_IDENTITY_SQL}, for the same reason
+ * and at the same cost: `memory_entity_mentions_label_idx` is a `BINARY` index,
+ * so this seeks on `kind` and filters the rest.
+ */
+export const ENTITY_RECURRENCE_SQL =
+  "SELECT count(DISTINCT digest) AS heard FROM memory_entity_mentions " +
+  "WHERE kind = ? AND label = ? COLLATE NOCASE";
+
+const MENTIONS_FOR_ENTITY_SQL =
+  `SELECT ${MENTION_COLUMNS} FROM memory_entity_mentions ` +
+  "WHERE kind = ? AND label = ? COLLATE NOCASE ORDER BY created_at, digest, from_node";
 
 /**
  * The service side of extraction: the ledger, and the write into the graph.
@@ -378,6 +639,31 @@ export class ExtractionStore {
       });
   }
 
+  /**
+   * Every time a gated entity has been named, oldest first — pending and
+   * promoted alike.
+   *
+   * The rule made inspectable. "Which places has she heard once?" is the
+   * question this design has to be able to answer out loud, because a deferral
+   * nobody can see is indistinguishable from a drop, and CLAUDE.md constraint 6
+   * turns on exactly that difference.
+   */
+  mentionsOf(kind: EntityNodeKind, label: string): readonly EntityMention[] {
+    return this.#db
+      .prepare(MENTIONS_FOR_ENTITY_SQL)
+      .all(kind, canonicalLabel(label))
+      .map((row) => toMention(row as unknown as MentionRow));
+  }
+
+  /**
+   * How many DISTINCT exchanges have named a gated entity. The promotion
+   * decision, exposed so a test can hold the rule rather than its effects.
+   */
+  timesHeard(kind: EntityNodeKind, label: string): number {
+    const row = this.#db.prepare(ENTITY_RECURRENCE_SQL).get(kind, canonicalLabel(label));
+    return Number((row as unknown as { heard: number } | undefined)?.heard ?? 0);
+  }
+
   /** Everything filed from one conversation, most recent first. */
   recordsFor(conversationId: string): readonly ExtractionRecord[] {
     return this.#db
@@ -429,6 +715,8 @@ export class ExtractionStore {
         facts: [],
         created: 0,
         reused: 0,
+        pending: [],
+        promoted: [],
         changed: false,
       };
     }
@@ -471,22 +759,50 @@ export class ExtractionStore {
     );
     const sourceNodeId = source.projection.id;
 
-    // Nodes and provenance edges first, so every candidate has an id before
-    // anything tries to link one to another.
-    const filed = input.extraction.facts.map((fact) => this.#file(fact, sourceNodeId));
-    const facts = filed.map((entry, index) =>
-      this.#link(entry, index, filed, input.extraction.facts, sourceNodeId),
+    const candidates = input.extraction.facts;
+
+    // Pass 1. Nodes and provenance edges, so every candidate that gets one has
+    // an id before anything tries to link to it. A gated entity nothing has
+    // named twice yet gets no node and no edge — only a slot saying so.
+    const slots = candidates.map((fact) => this.#file(fact, sourceNodeId));
+
+    // Pass 2. The links. A claim whose subject is still pending has nowhere to
+    // point, so instead of an edge it produces a mention: the same claim, the
+    // same words, held until the subject earns a node.
+    const deferred: DeferredMention[] = [];
+    const linked = slots.map((slot, index) =>
+      this.#link(slot, index, slots, candidates, input.transcript, sourceNodeId, deferred),
     );
 
+    // Pass 3. Which of those pending entities just crossed the line. Decided
+    // BEFORE this exchange's mentions are written, because the count is over
+    // distinct digests and this exchange contributes exactly one however many
+    // claims in it point at the same place.
+    const verdicts = this.#weighPending(deferred);
+    const promotions = verdicts.flatMap((verdict) =>
+      verdict.state === "minted" ? [verdict] : [],
+    );
+
+    const facts = [
+      ...linked.flatMap((slot) => (slot.state === "filed" ? [slot.fact] : [])),
+      ...promotions.map((verdict) => verdict.fact),
+    ];
     const created = facts.filter((fact) => fact.created).length;
+
+    // The ledger row, and everything that references it comes after. `facts`
+    // counts what reached the graph: a promoted place is in it, a deferred
+    // mention is not, because a mention is evidence and not yet a memory.
     const now = instant(this.#clock());
     this.#db
       .prepare(`INSERT INTO memory_extractions (${LEDGER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)`)
       .run(digest, input.conversationId, sourceNodeId, facts.length, created, now);
 
-    // After the ledger row, because `memory_provenance.digest` references it.
-    // Same savepoint, so the ordering is an ordering and not a window.
-    this.#recordProvenance(digest, input.extraction.facts, facts, input.transcript, now);
+    // After the ledger row, because `memory_entity_mentions.digest` and
+    // `memory_provenance.digest` both reference it. Same savepoint, so the
+    // ordering is an ordering and not a window.
+    this.#recordMentions(digest, deferred, verdicts, now);
+    const promoted = promotions.map((verdict) => this.#promote(verdict, now));
+    this.#recordProvenance(digest, candidates, linked, input.transcript, now);
 
     return {
       applied: true,
@@ -494,26 +810,44 @@ export class ExtractionStore {
       facts,
       created,
       reused: facts.length - created,
+      pending: verdicts.flatMap((verdict) =>
+        verdict.state === "waiting" ? [verdict.pending] : [],
+      ),
+      promoted,
       changed:
         source.outcome !== "unchanged" ||
-        facts.some(
-          (fact) => fact.created || fact.edgeId !== null || fact.aboutEdgeId !== null,
-        ),
+        deferred.length > 0 ||
+        facts.some((fact) => fact.created || fact.edgeId !== null || fact.aboutEdgeId !== null),
     };
   }
 
-  /** One fact: find or mint the node, then attach provenance to it. */
-  #file(fact: CandidateFact, sourceNodeId: string): AppliedFact {
+  /**
+   * One candidate: find or mint the node, then attach provenance to it — unless
+   * it is a gated entity that has not earned one.
+   *
+   * The gate is only reached when NO hot node already carries this `(kind,
+   * label)`. A place that was promoted last week is found by
+   * {@link FACT_IDENTITY_SQL} like anything else and files normally; recurrence
+   * decides whether a node EXISTS, never how an existing one is used.
+   */
+  #file(fact: CandidateFact, sourceNodeId: string): Slot {
+    if (isRecurrenceGated(fact.kind) && this.#existingNode(fact) === null) {
+      return { state: "pending", kind: fact.kind, label: canonicalLabel(fact.label) };
+    }
+
     const { node, created } = this.#nodeFor(fact);
     const edge = this.#provenance(sourceNodeId, node.id);
     return {
-      nodeId: node.id,
-      kind: node.kind,
-      label: node.label,
-      created,
-      edgeId: edge?.id ?? null,
-      aboutNodeId: null,
-      aboutEdgeId: null,
+      state: "filed",
+      fact: {
+        nodeId: node.id,
+        kind: node.kind,
+        label: node.label,
+        created,
+        edgeId: edge?.id ?? null,
+        aboutNodeId: null,
+        aboutEdgeId: null,
+      },
     };
   }
 
@@ -530,37 +864,277 @@ export class ExtractionStore {
    * self-edge and that refusal would discard the whole apply, so the link is
    * skipped instead: there is nothing to say, and a duplicate entry is not
    * worth losing the exchange over.
+   *
+   * **When the subject is still pending there is no edge to draw, and the claim
+   * is not thrown away — it is DEFERRED.** That is the whole of the recurrence
+   * gate seen from this side: the claim reaches the graph now, and the edge to
+   * its subject is written down and drawn the moment the subject earns a node.
+   * A gate that discarded the link would mean a promoted place arriving with a
+   * degree of one, which is the defect this bead exists to fix.
    */
   #link(
-    filed: AppliedFact,
+    slot: Slot,
     index: number,
-    all: readonly AppliedFact[],
+    all: readonly Slot[],
     candidates: readonly CandidateFact[],
+    transcript: readonly TranscriptMessage[],
     sourceNodeId: string,
-  ): AppliedFact {
-    const about = candidates[index]?.about ?? null;
-    if (about === null) return filed;
+    deferred: DeferredMention[],
+  ): Slot {
+    const candidate = candidates[index];
+    const about = candidate?.about ?? null;
+    if (candidate === undefined || about === null) return slot;
 
     const target = all[about - 1];
     // Unreachable: `asExtraction` checked the ordinal against this same reply.
     // Present because the alternative is a non-null assertion on model output.
-    if (target === undefined || target.nodeId === filed.nodeId) return filed;
+    if (target === undefined) return slot;
 
-    const existing = this.#graph.findEdge(filed.nodeId, target.nodeId, ABOUT_RELATION);
+    if (target.state === "pending") {
+      // A pending entity can only be the SUBJECT of a claim, never the claimant:
+      // it has no node, so there is nothing for an edge to leave from. That is
+      // also why the target candidate's own `about` is dropped rather than
+      // deferred — `about` on a `place` is legal and vanishingly rare, and a
+      // second deferral mechanism for it would be machinery with no defect
+      // behind it.
+      if (slot.state !== "filed") return slot;
+      const message = transcript[candidate.saidIn - 1];
+      // Unreachable — `asExtraction` checked the ordinal against this very
+      // transcript. A mention with no message would be one with no provenance
+      // to replay, so it is skipped rather than invented.
+      if (message === undefined) return slot;
+
+      const subject = candidates[about - 1];
+      if (subject === undefined) return slot;
+
+      deferred.push({
+        kind: target.kind,
+        label: target.label,
+        body: subject.body,
+        fromNode: slot.fact.nodeId,
+        saidIn: message.id,
+        quote: quoteOf(message.text),
+        why: candidate.why,
+      });
+      return slot;
+    }
+
+    if (slot.state !== "filed" || target.fact.nodeId === slot.fact.nodeId) return slot;
+    const filed = slot.fact;
+
+    const existing = this.#graph.findEdge(filed.nodeId, target.fact.nodeId, ABOUT_RELATION);
     const edge =
       existing ??
       this.#graph.observe({
         sourceNode: filed.nodeId,
-        targetNode: target.nodeId,
+        targetNode: target.fact.nodeId,
         relation: ABOUT_RELATION,
         assertedBy: sourceNodeId,
       });
 
     return {
-      ...filed,
-      aboutNodeId: target.nodeId,
-      aboutEdgeId: existing === null ? edge.id : null,
+      state: "filed",
+      fact: {
+        ...filed,
+        aboutNodeId: target.fact.nodeId,
+        aboutEdgeId: existing === null ? edge.id : null,
+      },
     };
+  }
+
+  /**
+   * For each gated entity this reply named: has it now been named often enough?
+   *
+   * Counted BEFORE this exchange's mentions are written, and this exchange adds
+   * exactly one to the count however many claims in it point at the same place.
+   * That is the rule the module header argues for, and it is one line of
+   * arithmetic rather than a policy anybody has to remember: `heardIn` is
+   * `count(DISTINCT digest)` over what is already recorded, plus this one.
+   *
+   * The node is minted here rather than at promotion time so that the ledger
+   * row written next can count it, and so that a graph refusal happens before
+   * anything referencing the node is written.
+   */
+  #weighPending(deferred: readonly DeferredMention[]): readonly PendingVerdict[] {
+    const recurrence = this.#db.prepare(ENTITY_RECURRENCE_SQL);
+    const verdicts = new Map<string, PendingVerdict>();
+
+    for (const mention of deferred) {
+      const key = `${mention.kind}\u0000${mention.label.toLowerCase()}`;
+      if (verdicts.has(key)) continue;
+
+      const row = recurrence.get(mention.kind, mention.label);
+      const heard = Number((row as unknown as { heard: number } | undefined)?.heard ?? 0) + 1;
+      const pending: PendingEntity = {
+        kind: mention.kind,
+        label: mention.label,
+        heardIn: heard,
+        needed: ENTITY_RECURRENCE_THRESHOLD,
+      };
+
+      if (heard < ENTITY_RECURRENCE_THRESHOLD) {
+        verdicts.set(key, { state: "waiting", key, pending });
+        continue;
+      }
+
+      const node = this.#graph.addNode({
+        kind: mention.kind,
+        label: mention.label,
+        body: mention.body,
+        // Deliberately no `subjectId`, for the same reason a conversational
+        // fact carries none: a place is not a handle for an operational row.
+      });
+      verdicts.set(key, {
+        state: "minted",
+        key,
+        pending,
+        node,
+        fact: {
+          nodeId: node.id,
+          kind: node.kind,
+          label: node.label,
+          created: true,
+          edgeId: null,
+          aboutNodeId: null,
+          aboutEdgeId: null,
+        },
+      });
+    }
+
+    return [...verdicts.values()];
+  }
+
+  /**
+   * Write this exchange's mentions, stamped with the node if one was minted.
+   *
+   * After the ledger row: `memory_entity_mentions.digest` references it, which
+   * is what makes "this mention came out of that exchange" a fact the schema
+   * holds rather than a convention this module follows.
+   */
+  #recordMentions(
+    digest: string,
+    deferred: readonly DeferredMention[],
+    verdicts: readonly PendingVerdict[],
+    now: string,
+  ): void {
+    const nodeFor = new Map(
+      verdicts.map(
+        (verdict) => [verdict.key, verdict.state === "minted" ? verdict.node.id : null] as const,
+      ),
+    );
+    const insert = this.#db.prepare(
+      `INSERT INTO memory_entity_mentions (${MENTION_COLUMNS}) ` +
+        `VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    // Deduplicated on the primary key's own terms. One claim cannot name one
+    // place twice in one exchange, and a repeated candidate that collapses onto
+    // the same `(kind, label, from_node)` is the same statement said twice.
+    const written = new Set<string>();
+    for (const mention of deferred) {
+      const key = `${mention.kind}\u0000${mention.label.toLowerCase()}`;
+      const row = `${key}\u0000${mention.fromNode}`;
+      if (written.has(row)) continue;
+      written.add(row);
+
+      const nodeId = nodeFor.get(key) ?? null;
+      insert.run(
+        mention.kind,
+        mention.label,
+        digest,
+        mention.fromNode,
+        mention.saidIn,
+        mention.quote,
+        mention.why,
+        mention.body,
+        nodeId,
+        nodeId === null ? null : now,
+        now,
+      );
+    }
+  }
+
+  /**
+   * A place has earned a node. Give it everything that was waiting for it.
+   *
+   * Every mention ever recorded — this exchange's and every earlier one's — is
+   * replayed into the shape a normally-filed node would have had:
+   *
+   * - one `memory_provenance` row per EXCHANGE, so his words and the step from
+   *   them are attached to the assertion that carried them rather than to the
+   *   moment the threshold happened to be crossed;
+   * - one `stated` edge from each exchange's own source node, so the place is
+   *   attributable to every conversation that named it;
+   * - one `about` edge from every claim that ever pointed at it.
+   *
+   * The last is the one that matters. Illinois's defect was a degree of one; a
+   * promotion that drew a single edge would reproduce it exactly, while looking
+   * like a fix from every other angle. {@link PromotedEntity.degree} is
+   * therefore returned rather than merely achieved, so a test can hold the
+   * number.
+   */
+  #promote(verdict: PendingVerdict & { readonly state: "minted" }, now: string): PromotedEntity {
+    const node = verdict.node;
+
+    this.#db
+      .prepare(
+        "UPDATE memory_entity_mentions SET node_id = ?, promoted_at = ? " +
+          "WHERE kind = ? AND label = ? COLLATE NOCASE AND node_id IS NULL",
+      )
+      .run(node.id, now, verdict.pending.kind, verdict.pending.label);
+
+    const mentions = this.#db
+      .prepare(MENTIONS_FOR_ENTITY_SQL)
+      .all(verdict.pending.kind, verdict.pending.label)
+      .map((row) => toMention(row as unknown as MentionRow));
+
+    const provenance = this.#db.prepare(
+      `INSERT INTO memory_provenance (${PROVENANCE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+
+    const exchanges = new Set<string>();
+    let degree = 0;
+    for (const mention of mentions) {
+      // The exchange that made the claim is what vouches for it, exactly as it
+      // would have at the time. Looked up per mention rather than taken from
+      // the promoting exchange: a link the wrong conversation vouches for is a
+      // rumour about a relationship.
+      const assertedBy = this.#sourceNodeFor(mention.digest);
+
+      if (!exchanges.has(mention.digest)) {
+        exchanges.add(mention.digest);
+        provenance.run(node.id, mention.digest, mention.saidIn, mention.quote, mention.why, now);
+        // `assertedBy` is unreachably null — `memory_entity_mentions.digest` is
+        // a foreign key into `memory_extractions`. Skipped rather than
+        // asserted, because a missing source costs one attribution and never
+        // the exchange.
+        if (assertedBy !== null && this.#provenance(assertedBy, node.id) !== null) degree += 1;
+      }
+
+      if (mention.fromNode === node.id || assertedBy === null) continue;
+      if (this.#graph.findEdge(mention.fromNode, node.id, ABOUT_RELATION) !== null) continue;
+      this.#graph.observe({
+        sourceNode: mention.fromNode,
+        targetNode: node.id,
+        relation: ABOUT_RELATION,
+        assertedBy,
+      });
+      degree += 1;
+    }
+
+    return {
+      nodeId: node.id,
+      kind: verdict.pending.kind,
+      label: node.label,
+      heardIn: exchanges.size,
+      degree,
+    };
+  }
+
+  #sourceNodeFor(digest: string): string | null {
+    const row = this.#db
+      .prepare("SELECT source_node FROM memory_extractions WHERE digest = ?")
+      .get(digest) as unknown as { source_node: string } | undefined;
+    return row?.source_node ?? null;
   }
 
   /**
@@ -570,11 +1144,18 @@ export class ExtractionStore {
    * time in a different exchange is a second assertion, with its own message,
    * its own words and its own reasoning; keeping only the first would lose the
    * one he most recently stood behind.
+   *
+   * A pending entity is skipped, and so is one promoted during this apply: the
+   * first has no node to attach a row to, and the second had its provenance
+   * written by {@link #promote} from the mention ledger — which holds the
+   * exchange that actually asserted it, not the one that happened to promote
+   * it. Writing it here as well would collide on `(node_id, digest)` and, if it
+   * did not, would file the right words against the wrong assertion.
    */
   #recordProvenance(
     digest: string,
     candidates: readonly CandidateFact[],
-    facts: readonly AppliedFact[],
+    slots: readonly Slot[],
     transcript: readonly TranscriptMessage[],
     now: string,
   ): void {
@@ -591,13 +1172,14 @@ export class ExtractionStore {
     );
     const written = new Set<string>();
     candidates.forEach((candidate, index) => {
-      const filed = facts[index];
+      const slot = slots[index];
+      if (slot === undefined || slot.state !== "filed") return;
+      const filed = slot.fact;
       const message = transcript[candidate.saidIn - 1];
-      // Both unreachable — `asExtraction` checked the ordinal against this very
-      // transcript, and `facts` is a map over `candidates`. A fact with no
-      // message would be a fact with no provenance, so it is skipped rather
-      // than invented.
-      if (filed === undefined || message === undefined) return;
+      // Unreachable — `asExtraction` checked the ordinal against this very
+      // transcript. A fact with no message would be a fact with no provenance,
+      // so it is skipped rather than invented.
+      if (message === undefined) return;
       // The duplicate-entry case. The first assertion stands; the same reply
       // saying it twice is not a second source.
       if (written.has(filed.nodeId)) return;
@@ -629,13 +1211,8 @@ export class ExtractionStore {
    * here to stop.
    */
   #nodeFor(fact: CandidateFact): { readonly node: MemoryNode; readonly created: boolean } {
-    const row = this.#db
-      .prepare(FACT_IDENTITY_SQL)
-      .get(fact.kind, canonicalLabel(fact.label), SCANNED_TIER);
-    if (row !== undefined) {
-      const existing = this.#graph.getNode((row as unknown as { id: string }).id);
-      if (existing !== null) return { node: existing, created: false };
-    }
+    const existing = this.#existingNode(fact);
+    if (existing !== null) return { node: existing, created: false };
 
     return {
       node: this.#graph.addNode({
@@ -652,6 +1229,22 @@ export class ExtractionStore {
       }),
       created: true,
     };
+  }
+
+  /**
+   * The hot node already saying this, or `null`.
+   *
+   * Its own method because the recurrence gate has to ask the question WITHOUT
+   * minting: "is there already a place called Illinois?" decides whether this
+   * candidate is filed or deferred, and a lookup that mints on a miss cannot
+   * answer it.
+   */
+  #existingNode(fact: CandidateFact): MemoryNode | null {
+    const row = this.#db
+      .prepare(FACT_IDENTITY_SQL)
+      .get(fact.kind, canonicalLabel(fact.label), SCANNED_TIER);
+    if (row === undefined) return null;
+    return this.#graph.getNode((row as unknown as { id: string }).id);
   }
 
   /**
@@ -796,6 +1389,8 @@ export class ConversationExtractor {
             facts: [],
             created: 0,
             reused: 0,
+            pending: [],
+            promoted: [],
             changed: false,
           },
           error: null,
@@ -824,9 +1419,13 @@ export class ConversationExtractor {
       }
 
       const status = result.facts.length === 0 ? "declined" : "filed";
+      // Pending and promoted are logged even at zero. A deferral that is
+      // invisible in the log is indistinguishable from a drop, and the whole
+      // claim of the recurrence gate is that it is the first and not the second.
       this.#log(
         `extraction ${status}: ${String(result.facts.length)} fact(s), ` +
-          `${String(result.created)} new, from ${input.conversationId}`,
+          `${String(result.created)} new, ${String(result.pending.length)} entity mention(s) ` +
+          `held, ${String(result.promoted.length)} promoted, from ${input.conversationId}`,
       );
       return { status, result, error: null };
     } catch (error) {

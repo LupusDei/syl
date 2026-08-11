@@ -397,6 +397,24 @@ describe("the instruction handed to the turn", () => {
     expect(EXTRACTION_INSTRUCTION).toContain("may not point at a fact");
   });
 
+  it("should show the place case Syl reported, with the state she said was missing", () => {
+    // Her words: "Illinois still doesn't exist as a node. The memories say 'the
+    // state' and 'the old state' and never name it." The defect was that a
+    // place could only be filed as a fact with the word inside its label, so
+    // the instruction has to show the shape that replaces it — the place, and
+    // the claims pointed at it.
+    expect(EXTRACTION_INSTRUCTION).toContain("A PLACE IS A THING");
+    expect(EXTRACTION_INSTRUCTION).toContain("Illinois");
+    expect(EXTRACTION_INSTRUCTION).toContain("kind: place");
+  });
+
+  it("should forbid naming a place nothing in the reply is about", () => {
+    // The judgment half of the over-minting guard. The structural half is in
+    // `extract-apply.ts`, which records nothing for a place with no claim
+    // waiting on it; this is the half that stops it being proposed at all.
+    expect(EXTRACTION_INSTRUCTION).toContain("NEVER name a place");
+  });
+
   it("should ask for the STEP from his words, and say what to do when there is none", () => {
     // A required field that is never used is what syl-y82 was; a required field
     // with no standing order about the empty case is how it becomes a
