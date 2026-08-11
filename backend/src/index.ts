@@ -19,6 +19,11 @@ import {
   ensureNightlyDreamJob,
   type NightDreamer,
 } from "./jobs/dream-job.js";
+import {
+  createHeartbeatHandler,
+  describeHeartbeat,
+  ensureHeartbeatJob,
+} from "./jobs/heartbeat-job.js";
 import { createDeliveryRuntime, describeRuntime, type DeliveryRuntime } from "./jobs/runtime.js";
 import { AdjutantClient } from "./agents/adjutant-client.js";
 import { loadConfig, type SylConfig } from "./config.js";
@@ -64,7 +69,14 @@ import { createReminderRouter } from "./routes/reminders.js";
 import { createRenderRouter } from "./routes/renders.js";
 import { createSyncRouter } from "./routes/sync.js";
 import { createTodoRouter } from "./routes/todos.js";
-import { fileSessionStore, LANES, memorySessionStore, SylAgent, type Lane } from "./harness/agent.js";
+import {
+  fileSessionStore,
+  LANES,
+  LANES_WITH_HANDS,
+  memorySessionStore,
+  SylAgent,
+  type Lane,
+} from "./harness/agent.js";
 import { runTurn, type TurnOptions, type TurnRunner } from "./harness/session.js";
 import {
   mcpToolName,
@@ -982,9 +994,16 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   const { mcpConfig: overriddenHands, ...turnOverrides } = options.turn ?? {};
   const commanderHands = overriddenHands ?? handsPath;
 
-  /** The declaration a lane is given by name, or nothing at all. */
+  /**
+   * The declaration a lane is given by name, or nothing at all.
+   *
+   * The list lives in `harness/agent.ts`, beside the lanes it names, so that
+   * this wiring and the boot notice in `ops/container.ts` cannot disagree about
+   * which lanes can act. Widening it is a one-line edit there with the argument
+   * attached, and two canaries go red until it is made deliberately.
+   */
   const handsFor = (lane: Lane): string | undefined =>
-    lane === LANES.commander ? commanderHands : undefined;
+    LANES_WITH_HANDS.includes(lane) ? commanderHands : undefined;
 
   /**
    * Write down what he said, for the one check that cannot be made without it.
@@ -998,11 +1017,30 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
    *
    * Only for a turn carrying a declaration, so no lane without hands leaves a
    * trace of his messages on disk for a reader that does not exist.
+   *
+   * **And only for HIS lane**, which used to be the same statement and is not
+   * any more. `mcpConfig !== undefined` meant "the commander lane" while the
+   * commander lane was the only tooled one; since the hourly self-ping was given
+   * hands it would also be true of a heartbeat, and writing a heartbeat's prompt
+   * here would be two failures at once. She could quote the prompt she was woken
+   * with to satisfy `harness/urgency.ts` and wake him at 03:00 with words he
+   * never said — and an hourly write would clobber his real message, so an
+   * urgent reminder he genuinely asked for could be refused because a background
+   * turn landed in the same second.
+   *
+   * So a heartbeat leaves this file alone, and the tool server therefore reads
+   * whatever he last actually said. That is the *safe* direction and it is what
+   * makes "she cannot reach him during quiet hours" structural rather than
+   * instructed: the Outbox already holds every non-urgent notification until the
+   * window ends, and urgency is the only way past it.
    */
   const recordHisWords =
     (runner: TurnRunner): TurnRunner =>
     async (prompt, turnOptions) => {
-      if (home !== undefined && turnOptions.mcpConfig !== undefined) {
+      // Identified by the LANE rather than by "has any declaration at all" —
+      // the property this was always about. The two lanes with hands share one
+      // declaration, so the path cannot tell them apart and only the name can.
+      if (home !== undefined && turnOptions.lane === LANES.commander) {
         writeTurnMessage(home, prompt);
       }
       return runner(prompt, turnOptions);
@@ -1518,7 +1556,7 @@ export async function startSyl(
   config: SylConfig,
   options: StartSylOptions = {},
 ): Promise<RunningSyl> {
-  const { database, deps: bootstrapped, agentKey, hands } = bootstrap(config, options);
+  const { database, deps: bootstrapped, agent, agentKey, hands } = bootstrap(config, options);
   const delivery = options.delivery ?? {};
   const clock = delivery.clock ?? options.clock ?? systemClock;
 
@@ -1596,6 +1634,11 @@ export async function startSyl(
   // next gap rather than spending turns at breakfast.
   const dreamSchedule = { tz: config.quietHours.tz, quiet: config.quietHours.quiet };
   const dreamJob = ensureNightlyDreamJob(deps.jobs, dreamSchedule, clock());
+  // The hourly self-ping, which `LANES.heartbeat` has been waiting for since the
+  // harness was written. An interval rather than a wall clock, so it never
+  // becomes a third fixed slot beside the morning agenda and the evening review.
+  const heartbeatSchedule = { tz: config.quietHours.tz, quiet: config.quietHours.quiet };
+  const heartbeatJob = ensureHeartbeatJob(deps.jobs, heartbeatSchedule, clock());
 
   const runtime = createDeliveryRuntime({
     jobs: deps.jobs,
@@ -1618,6 +1661,22 @@ export async function startSyl(
           log: deps.memory.dreams,
           ...dreamSchedule,
           judge: () => buildDreamJudge(config, deps, clock, options),
+        }),
+      ],
+      [
+        "heartbeat",
+        createHeartbeatHandler({
+          // The lane, bound once. It carries the same MCP declaration the
+          // commander lane does — see `LANES_WITH_HANDS` — because an hour that
+          // could not act would be an hour that could only report to nobody.
+          voice: agent.forLane(LANES.heartbeat),
+          // The ledger is the runs table: how often she has reached him today
+          // is a query over runs of this very job, in his zone, resetting with
+          // the local day for free. No new store, and nothing to migrate.
+          jobs: deps.jobs,
+          ...heartbeatSchedule,
+          // A failed hour is silent to him and loud here.
+          ...(options.logger === undefined ? {} : { log: options.logger }),
         }),
       ],
     ]),
@@ -1661,6 +1720,9 @@ export async function startSyl(
       // Re-read: `ensureNightlyDreamJob` returns the row as it was found, and
       // the runner's first tick has already run since then.
       ...describeDream(deps.jobs.get(dreamJob.id) ?? dreamJob, dreamSchedule),
+      // Re-read for the same reason the dream is: the runner's first tick has
+      // already run since `ensureHeartbeatJob` returned the row.
+      ...describeHeartbeat(deps.jobs.get(heartbeatJob.id) ?? heartbeatJob, heartbeatSchedule),
       ...describePushEnvironment(push, { pushConfigured: runtime.pushEnabled }),
       ...describePower(power),
       ...describeAdmin(admin),

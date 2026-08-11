@@ -1,6 +1,8 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
+import { LANES_WITH_HANDS } from "../harness/agent.js";
+
 /**
  * The room Syl thinks in, checked before she is allowed to speak from it.
  *
@@ -328,14 +330,16 @@ function isUnder(home: string, candidate: string): boolean {
  * quietly omitted at the call site and would print "no MCP" again, which is the
  * bug wearing a signature change as a hat.
  *
- * The claim that it is ONE lane is the one thing here that is still prose, since
- * this module does not know what a lane is. `INTENDED_MCP` in
- * `tests/unit/container-boot.test.ts` is what holds it true: every lane but
- * `commander` is asserted to reach no MCP surface at all, and adding a lane does
- * not compile until somebody states its entry.
+ * **Which lanes** is no longer prose either. It was, and it went stale the day
+ * the heartbeat was given hands: the line said "on the commander lane ONLY and
+ * no other" while two lanes carried a surface. So the notice reads
+ * {@link LANES_WITH_HANDS}, the same list `bootstrap` gates on, and the two
+ * cannot disagree. `INTENDED_MCP` in `tests/unit/container-boot.test.ts` holds
+ * the other end: every lane states its entry, and adding a lane does not
+ * compile until somebody states one for it.
  *
  * @param home Where her turns run, or `undefined` when nothing is configured.
- * @param hands The MCP declaration the commander lane was actually given, or
+ * @param hands The MCP declaration the tooled lanes were actually given, or
  *   `undefined` when no lane was given one.
  */
 export function describeContainer(
@@ -353,9 +357,11 @@ export function describeContainer(
     return [`[syl] turns run in ${home} — no built-in tools, no MCP, no ambient hooks or plugins`];
   }
 
+  const lanes = LANES_WITH_HANDS.join(" and ");
   return [
     `[syl] turns run in ${home} — no built-in tools, no ambient hooks or plugins; ` +
-      `MCP from ${hands}, on the commander lane ONLY and no other`,
+      `MCP from ${hands}, on the ${lanes} ${LANES_WITH_HANDS.length === 1 ? "lane" : "lanes"} ` +
+      `ONLY and no other`,
   ];
 }
 
