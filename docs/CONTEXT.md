@@ -921,6 +921,12 @@ service writes frames to /tmp", "every planning commit exists twice on main" —
 and each one had a tidy mechanism attached. All three were withdrawn. **Before
 reporting a cause, name the one command that would disprove it, and run that.**
 
+**Relaying is not verifying.** A claim does not become checked by passing
+through another agent, and it does not become checked by being detailed. Every
+one of those three reached the Commander because somebody competent had said it
+first and said it well — which is the only reason it got past anyone. When you
+pass on a finding you did not verify, say so in the same sentence, or verify it.
+
 Two specific forms of it, both bought the same night:
 
 - **A merge-status claim has a shelf life of minutes in a shared checkout.**
