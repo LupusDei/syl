@@ -490,7 +490,30 @@ so that search needs him, and he has said not now.
       never push a sending over the 10MB ceiling. It looks like a bug and is not.
       **No job is needed either** — `#makeVideo` already runs detached, so `speak()`'s
       ~50s await fits inside it. The one rule the whole feature rests on: **`speak()` is
-      never awaited inside `compose()`.** Phases: **write failing tests first** in
+      never awaited inside `compose()`.**
+      **And this task must close a bug it creates.** `renderName: "latest"` will start
+      resolving to a *voiced derivative* rather than a render. Every link verified:
+      `NAME_PATTERN` (`studio.ts:90`) is permissive enough that
+      `…-close-voiced` matches; the scan at `render-service.ts:665` therefore admits the
+      voiced sidecar into `list()`; `list()` sorts by `startedAt` (`:673`); `latest()` is
+      `list()[0]` (`:372`); and `sending-service.ts:314` resolves `"latest"` through it.
+      So a sending composed with `"latest"` would record `render_name` = the **voiced**
+      name — the same provenance break the trigger exists to prevent, through a
+      different door, and **the trigger will not catch it**, because it refuses
+      re-*pointing* an existing record, not recording the wrong one at creation.
+      **Fix it locally: resolve `"latest"` to the newest non-derivative render inside
+      `sending-service.ts`.** Not inside `RenderService.list()` — that is conceptually
+      cleaner but reaches into `backend/src/render/`, and the voice port is deliberately
+      `{ get(name) }` only *because* `latest()` is now ambiguous. Add the case: a sending
+      composed with `"latest"` while a newer voiced derivative exists records the
+      original render's name. **Known residual, contained rather than fixed**:
+      `latest()` stays ambiguous for `#loadLatest` (`render-service.ts:618`), which
+      serves her own `see_myself latest`. That is the price of keeping the fix local, and
+      it is recorded rather than silently widened. The general statement, worth keeping
+      because it will recur: *once a voiced clip is itself a record, `latest()` stops
+      meaning "the last thing she rendered" and starts meaning "the last record
+      written", and those diverge the moment she speaks over an old shot.*
+      Phases: **write failing tests first** in
       `backend/tests/unit/sending-service.test.ts` — the attached video carries audio;
       a speech failure does not retract the assistant message or the push; the original
       render is byte-identical afterwards — **confirm RED** → implement → **confirm
