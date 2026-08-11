@@ -212,6 +212,69 @@ describe("the fact node", () => {
   });
 });
 
+// --------------------------- syl-016.3: nothing compared a candidate to what ---
+// --------------------------- was already there                               ---
+
+describe("comparing a candidate against what the graph already holds", () => {
+  /**
+   * Syl's diagnosis, and the half of it a machine can settle on its own:
+   *
+   * > "Nothing merged them, because nothing compares a new memory to what's
+   * > already there."
+   *
+   * Only the EXACT cases are automatic. A synonym is a judgement and
+   * `supersede.ts` §1 measures what happens when a threshold makes it — 0.82
+   * accuracy down to 0.62 — so `tidy.ts` nominates those and Syl merges them.
+   */
+
+  it("should reuse a node whose label differs only in case", () => {
+    const first = apply({ extraction: extraction({ facts: [candidate({ label: "Vivenna" })] }) });
+    const second = apply({
+      transcript: OTHER_TRANSCRIPT,
+      extraction: extraction({ facts: [candidate({ label: "vivenna" })] }),
+    });
+
+    expect(second.facts[0]?.created).toBe(false);
+    expect(second.facts[0]?.nodeId).toBe(first.facts[0]?.nodeId);
+    expect(graph.listNodes({ kind: "person" })).toHaveLength(1);
+  });
+
+  it("should reuse a node whose label differs only in spacing", () => {
+    const first = apply({
+      extraction: extraction({ facts: [candidate({ label: "Family compound" })] }),
+    });
+    const second = apply({
+      transcript: OTHER_TRANSCRIPT,
+      extraction: extraction({ facts: [candidate({ label: " Family   compound\n" })] }),
+    });
+
+    expect(second.facts[0]?.created).toBe(false);
+    expect(second.facts[0]?.nodeId).toBe(first.facts[0]?.nodeId);
+  });
+
+  it("should keep the wording he used, rather than folding the stored label too", () => {
+    const result = apply({ extraction: extraction({ facts: [candidate({ label: "Ela" })] }) });
+    expect(graph.getNode(result.facts[0]?.nodeId ?? "")?.label).toBe("Ela");
+  });
+
+  it("should still mint a second node for a label that is genuinely different", () => {
+    apply({ extraction: extraction({ facts: [candidate({ label: "Tennessee possibility" })] }) });
+    const second = apply({
+      transcript: OTHER_TRANSCRIPT,
+      extraction: extraction({ facts: [candidate({ label: "Building in Tennessee" })] }),
+    });
+
+    // Not a regression: this is the case a distance function must not decide.
+    // It is `tidy.duplicates()` that nominates it and Syl who merges it.
+    expect(second.facts[0]?.created).toBe(true);
+    expect(graph.listNodes({ kind: "person" })).toHaveLength(2);
+  });
+
+  it("should fold case in the comparison and nowhere else", () => {
+    expect(FACT_IDENTITY_SQL).toContain("label = ? COLLATE NOCASE");
+  });
+});
+
 // ------------------------------------------------- syl-016.4: what a kind is ---
 
 /** Her example, filed correctly: Ela is a person, what she wants is a fact. */

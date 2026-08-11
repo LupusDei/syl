@@ -10,7 +10,13 @@ import {
   type ExtractionTurnOptions,
   type TranscriptMessage,
 } from "./extract.js";
-import { GraphError, type MemoryGraph, type MemoryNode, type ObservedEdge } from "./graph.js";
+import {
+  canonicalLabel,
+  GraphError,
+  type MemoryGraph,
+  type MemoryNode,
+  type ObservedEdge,
+} from "./graph.js";
 import { handle, projectInto } from "./projection.js";
 import { SCANNED_TIER, type MemoryNodeKind } from "./schema.js";
 
@@ -277,9 +283,29 @@ interface ProvenanceRow {
  * (`memory_nodes_label_idx`, `(kind, label)`, tier-free) stays the tier-free
  * identity index `0018` says it is, and so a future policy change is one
  * binding rather than a rewrite.
+ *
+ * **`COLLATE NOCASE`, and the caller passes a {@link canonicalLabel}.** That
+ * pair is the write half of `syl-016.3`, in her words: *"nothing compares a new
+ * memory to what's already there."* Byte equality made `Family compound`,
+ * `family  compound` and `Family Compound` three nodes, and her digest then
+ * carried the same fact three times — crowding out the items she could not see.
+ * Whitespace is canonicalised at the door by `MemoryGraph.addNode`, so the
+ * stored side needs no folding; case is folded here, because the stored form is
+ * what she reads back to him and `Ela` is not `ela` on a screen.
+ *
+ * **It is exactness, not similarity, and that distinction is load-bearing.**
+ * `supersede.ts` §1 measures what near-duplicate merging costs — 0.82 accuracy
+ * down to 0.62 — and a contradiction is on average *more* cosine-similar to a
+ * fact than a genuine duplicate is. So the automatic path collapses only what is
+ * the same characters, and everything that merely looks alike is nominated to
+ * Syl by `tidy.ts` and merged by a judgement rather than by a threshold.
+ *
+ * The cost is that `memory_nodes_label_idx` is a `BINARY` index, so the folded
+ * comparison seeks on `kind` and filters the rest. That is one kind's worth of
+ * hot nodes; `remember.ts` already made the same trade for the same reason.
  */
 export const FACT_IDENTITY_SQL =
-  "SELECT id FROM memory_nodes WHERE kind = ? AND label = ? AND tier = ? " +
+  "SELECT id FROM memory_nodes WHERE kind = ? AND label = ? COLLATE NOCASE AND tier = ? " +
   "ORDER BY created_at DESC, id DESC LIMIT 1";
 
 /**
@@ -588,9 +614,17 @@ export class ExtractionStore {
    * handle that happens to share a kind and a label (a `goal` handle and an
    * extracted goal, say) therefore gains a provenance edge and stays a handle,
    * so nothing here can push mutable state into the four-field contract.
+   *
+   * The candidate's label is canonicalised before it is compared, because the
+   * stored side already is — see {@link FACT_IDENTITY_SQL}. Comparing a raw
+   * model-supplied label against a canonicalised store would miss every match
+   * whose only difference was a doubled space, which is the duplicate this is
+   * here to stop.
    */
   #nodeFor(fact: CandidateFact): { readonly node: MemoryNode; readonly created: boolean } {
-    const row = this.#db.prepare(FACT_IDENTITY_SQL).get(fact.kind, fact.label, SCANNED_TIER);
+    const row = this.#db
+      .prepare(FACT_IDENTITY_SQL)
+      .get(fact.kind, canonicalLabel(fact.label), SCANNED_TIER);
     if (row !== undefined) {
       const existing = this.#graph.getNode((row as unknown as { id: string }).id);
       if (existing !== null) return { node: existing, created: false };
