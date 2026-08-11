@@ -747,6 +747,25 @@ deliberate regression, one run, one revert.
 So: break it on purpose, watch it go red, put it back. If you cannot make it fail,
 you have not written the check you think you wrote.
 
+### A worktree with no `node_modules` verifies the WRONG contract
+
+An agent working in a `.claude/worktrees/` checkout changed `shared/openapi.yaml` and the
+generated types, ran the suite, and was checking the **main checkout's** copy the whole
+time. Node resolution walks *up* the tree, so an absent `node_modules` in the worktree
+silently resolves `@syl/shared` to the repository above it.
+
+It surfaced as a false red — a test naming the agent's own brand-new route as undeclared,
+because the shared package it compiled against did not have it. **The reverse direction is
+the dangerous one**: a contract change that verifies clean in a worktree while no suite
+ever checked it, and then merges.
+
+`npm install` in the worktree fixes it, and the repo's own `check-deps` guard catches it
+once you look. **Any agent touching `shared/` from a worktree must install first.**
+
+This is the same shape as everything else in this section — every part agreed with itself,
+nothing agreed with reality — with the twist that the "system" in question was the module
+resolver.
+
 ### A green TestFlight workflow did not mean a build he could install
 
 `ITSAppUsesNonExemptEncryption` was never set on the app. So every upload landed
