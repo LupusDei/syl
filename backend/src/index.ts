@@ -1230,8 +1230,12 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // nothing filled the graph and the nightly dream swept an empty one. The
   // answer is not to give the hands back; it is the split this project uses
   // everywhere else: the model judges what matters, the service writes it.
+  // Hoisted so `MemoryViews` can read provenance from the SAME store the
+  // extractor writes it to (`syl-9ro`). Two stores over one table would be two
+  // answers to "where did this come from".
+  const extractionStore = new ExtractionStore({ db: database.handle, graph: memoryGraph, clock });
   const extractor = new ConversationExtractor({
-    store: new ExtractionStore({ db: database.handle, graph: memoryGraph, clock }),
+    store: extractionStore,
     // The extraction turn is a READER turn — no tools, no MCP, no
     // pre-authorisation, auto-memory off, session never resumed — because a
     // conversation contains whatever he pasted into it. It needs the same
@@ -1345,6 +1349,9 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     // let her keep a thought — losing search is bad, losing the thought is what
     // she was already working around by hiding insights in goals.
     hers: new HerOwnMemory({ db: database.handle, graph: memoryGraph, clock }),
+    // Read-only by construction: a thunk over the one method, so this surface
+    // cannot reach the write path that files an extraction.
+    provenance: (nodeId: string) => extractionStore.provenanceFor(nodeId),
   };
 
   // The fleet, if he has turned it on. `config.adjutant` is `null` unless
