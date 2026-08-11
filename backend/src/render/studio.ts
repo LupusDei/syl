@@ -18,28 +18,24 @@ import { fileURLToPath } from "node:url";
 /**
  * The still everything hangs on. See `docs/VIDEO.md`.
  *
- * **NOT the upscaled one, and the difference is a hard API limit rather than a
- * preference.** `syl-r3f`: her first two renders both died at Runway's
- * validator before reaching the renderer, and the reason was here.
+ * **Do not switch this to `syl_source_upscaled.png`.** It cannot be sent:
  *
  *     syl_source.png            1120x832    1.7MB  ->  2.3MB as a data URI
  *     syl_source_upscaled.png   2240x1664   6.8MB  ->  9.1MB as a data URI
  *
- * Runway caps a base64 image at **5MB** (`RUNWAY_API_INDEX.md` §5.2), and
- * base64 adds a third on top of the file. So the upscaled reference cannot be
- * sent at all — the request is rejected as malformed before a single credit is
- * spent, which is why it failed identically twice and read as configuration
- * rather than a blip. She diagnosed that correctly from the error text.
+ * Runway caps a base64 image at **5MB** (`RUNWAY_API_INDEX.md` §5.2) and base64
+ * adds a third on top of the file, so the upscaled still is rejected as a
+ * malformed request before any credit is spent. The failure arrives as a union
+ * error listing every accepted form, which reads as a URL problem rather than a
+ * size one — the giveaway is that it is identical on every retry.
  *
- * The plain still is what produced all eight existing loops, so this is not a
- * downgrade to fit a limit; it is the reference that was always working. And
- * the upscale buys nothing here regardless: §5.4 says a reference outside
- * 640x640-4K is resized anyway, so the extra pixels were being paid for in
- * payload and discarded on arrival.
+ * The upscale would buy nothing even if it fitted: §5.4 resizes any reference
+ * outside 640x640-4K on arrival, so the extra pixels are paid for in payload and
+ * discarded.
  *
- * If a larger reference is ever genuinely needed, the route is the ephemeral
- * upload (`POST /v1/uploads` -> a `runway://` URI, 200MB, reusable for 24h),
- * not a bigger data URI.
+ * For a genuinely larger reference, use the ephemeral upload
+ * (`POST /v1/uploads` -> a `runway://` URI, 200MB, reusable for 24h) rather than
+ * a bigger data URI.
  */
 export const DEFAULT_REFERENCE = "characters/syl/syl_source.png";
 
