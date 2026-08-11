@@ -1411,3 +1411,31 @@ and no clusters at all. `ConstellationSnapshot.hubAndSpokes` is that shape, meas
 This is the standing fixture rule — *build fixtures from captured reality, never from our own
 types* — arriving on a screen rather than on a wire format. A fixture that is prettier than
 production is a consistency check with good art direction.
+
+### The build number in the project file is not the build number that ships (2026-08-11)
+
+The gate I had just rewritten to key on `CURRENT_PROJECT_VERSION` shipped 0.9.7 and then
+logged **"Tagged build 24 as uploaded"** for a commit whose project file said **18**.
+
+`fastlane beta` calls `increment_build_number(latest_testflight_build_number + 1)`. App
+Store Connect's own counter decides the build number; the repository's copy is read by
+nobody. So every "bump the build number" commit in this project's history was theatre —
+the *marketing version* is the only part of that ritual that does anything.
+
+The tag was therefore keyed on a value the gate could never look up again: next push
+reads 18 from the project, finds no `testflight/18`, and ships — restoring the
+build-per-commit the job exists to avoid, on a 10x-billed runner. Now keyed on
+`MARKETING_VERSION` as `testflight/v0.9.7`, which is what the repository actually
+controls and what "a build per version bump" always meant. Tags backfilled for v0.9.5,
+v0.9.6 and v0.9.7; the three build-numbered ones deleted so there is one scheme.
+
+**Three consecutive fixes to this one gate in one morning, each revealing the next.** The
+`HEAD~1` comparison dropped a release silently; its replacement could not push its own tag
+(`403`, read-only token); and that fixed version tagged the wrong identifier. Every one of
+them was found by reading the run log rather than the conclusion — and the conclusion was
+**green** for the first and third. The rule this file keeps re-learning: *a workflow's
+exit status tells you it finished, not that it did the thing.*
+
+There is a happier reading, though. Each failure was louder than the one before: silence,
+then a red step, then a wrong-looking string in a log. That is what designing the failure
+direction buys — the bugs got easier to see even as they got subtler.

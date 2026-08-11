@@ -68,22 +68,31 @@ jobs:
           # to appear first in the pbxproj — which changes when Xcode rewrites the file.
           extract() { grep "$1" | sed 's/.*= *//;s/;.*//' | sort -u | tr -d '\n '; }
           VERSION=$(extract MARKETING_VERSION < ios/Syl.xcodeproj/project.pbxproj)
-          BUILD=$(extract CURRENT_PROJECT_VERSION < ios/Syl.xcodeproj/project.pbxproj)
-          echo "version=$VERSION build=$BUILD"
+          echo "version=$VERSION"
 
-          if [ -z "$BUILD" ]; then
-            echo "::error::Could not read CURRENT_PROJECT_VERSION from the project."
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not read MARKETING_VERSION from the project."
             exit 1
           fi
 
-          # The build number is the identity App Store Connect enforces uniqueness on,
-          # so it is what the tag is named for.
-          if git ls-remote --exit-code --tags origin "refs/tags/testflight/$BUILD" >/dev/null 2>&1; then
+          # **Keyed on the MARKETING_VERSION, and never on CURRENT_PROJECT_VERSION.**
+          #
+          # The build number in the project file is not the build number that ships:
+          # `fastlane beta` calls `increment_build_number(latest_testflight_build_number
+          # + 1)`, so App Store Connect's own counter decides it and the repository's
+          # copy is ignored at build time. The first version of this gate keyed on it
+          # and tagged `testflight/24` for a commit whose project file said 18 — a tag
+          # that could never match what the gate would look up next time, which would
+          # have quietly restored the build-per-commit this job exists to avoid.
+          #
+          # The marketing version is the one the repository actually controls, and "a
+          # build per version bump" was always the intent.
+          if git ls-remote --exit-code --tags origin "refs/tags/testflight/v$VERSION" >/dev/null 2>&1; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Build $BUILD ($VERSION) is already on TestFlight — nothing to do."
+            echo "$VERSION is already on TestFlight — nothing to do."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Build $BUILD ($VERSION) has never been uploaded — shipping it."
+            echo "$VERSION has never been uploaded — shipping it."
           fi
 
   deploy:
@@ -209,10 +218,10 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           extract() { grep "$1" | sed 's/.*= *//;s/;.*//' | sort -u | tr -d '\n '; }
-          BUILD=$(extract CURRENT_PROJECT_VERSION < ios/Syl.xcodeproj/project.pbxproj)
-          git tag "testflight/$BUILD"
-          git push origin "testflight/$BUILD"
-          echo "Tagged build $BUILD as uploaded."
+          VERSION=$(extract MARKETING_VERSION < ios/Syl.xcodeproj/project.pbxproj)
+          git tag "testflight/v$VERSION"
+          git push origin "testflight/v$VERSION"
+          echo "Tagged $VERSION as uploaded."
 
       - name: Remove the credentials
         # `always()`: a failed build must not leave a decoded signing key on the
