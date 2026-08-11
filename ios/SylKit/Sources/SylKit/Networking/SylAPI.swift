@@ -237,6 +237,27 @@ public enum SylAPI {
         try .write(.post, "/goals", body: body, idempotencyKey: idempotencyKey)
     }
 
+    // MARK: - Sendings
+
+    /// What she has sent him, newest first — the From Syl surface.
+    ///
+    /// A read, so no idempotency key: `Endpoint.init` traps on a write without one, and
+    /// this is the one endpoint of the sendings trio the phone calls. `POST /sendings` is
+    /// hers, performed by her tool server against the same door, and has no client here
+    /// because the phone never composes a sending.
+    ///
+    /// The response is a page of complete rows whatever happened to the videos. A
+    /// `pending` or `failed` sending still carries her words and its date, and a client
+    /// that filters those out throws away the half of the feature that is guaranteed to
+    /// have arrived.
+    public static func sendings(cursor: String? = nil, limit: Int? = nil) -> Endpoint<SendingPage> {
+        .get("/sendings", query: page(cursor: cursor, limit: limit))
+    }
+
+    public static func sending(_ id: SylID) -> Endpoint<Sending> {
+        .get("/sendings/\(id)")
+    }
+
     // MARK: - Devices
 
     public static func devices(cursor: String? = nil, limit: Int? = nil) -> Endpoint<DevicePage> {
