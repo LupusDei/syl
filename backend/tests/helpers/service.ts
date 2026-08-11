@@ -106,6 +106,9 @@ export function testConfig(overrides: Partial<SylConfig> = {}): SylConfig {
     // blobs into the repo's `.syl/`, which is where the running service keeps
     // the Commander's own. `testDeps` points the store at its own directory.
     attachmentDir: join(tmpdir(), `syl-test-attachments-${String(process.pid)}`),
+    // Off, as it is for every machine that has not asked for it. A test that
+    // wants the fleet builds its own `AdjutantClient` with an injected transport.
+    adjutant: null,
     ...overrides,
   };
 }

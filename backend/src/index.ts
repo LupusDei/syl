@@ -20,6 +20,7 @@ import {
   type NightDreamer,
 } from "./jobs/dream-job.js";
 import { createDeliveryRuntime, describeRuntime, type DeliveryRuntime } from "./jobs/runtime.js";
+import { AdjutantClient } from "./agents/adjutant-client.js";
 import { loadConfig, type SylConfig } from "./config.js";
 import {
   createContentIngestionHandler,
@@ -580,6 +581,17 @@ export function describeStartup(
     );
   }
 
+  // Stated on every boot rather than only when it is on, for the same reason
+  // the credential source is: "she cannot reach anyone" is a fact about what
+  // she can do today, and a line that only appears in one of the two states is
+  // a line nobody reads as an answer.
+  lines.push(
+    config.adjutant === null
+      ? "[syl] fleet: off. She cannot reach other agents. Set SYL_ADJUTANT_URL to change that."
+      : `[syl] fleet: ${config.adjutant.baseUrl} as "${config.adjutant.agentId}" — ` +
+          `never as the Commander.`,
+  );
+
   if (options.pairingCode !== undefined) {
     lines.push(
       `[syl] No device is paired. Pairing code: ${options.pairingCode} ` +
@@ -770,6 +782,21 @@ export interface Bootstrapped {
    * is not a route's business.
    */
   readonly hands: string | undefined;
+  /**
+   * How she reaches the rest of the fleet, or `undefined` because she may not.
+   *
+   * **`undefined` is the default**, and nothing here waits on Adjutant or asks
+   * whether it is running: constructing this opens no connection. She is the
+   * Commander's assistant first and a fleet client second, so a machine with no
+   * Adjutant boots exactly as it did before this existed.
+   *
+   * Returned beside the dependencies rather than in them, for now, because
+   * `ServiceDependencies` is destructured straight into routers and nothing
+   * routes here yet. `syl-014.2` gives it its first consumer and can move it
+   * then — an unused field in that bag would be a capability every route could
+   * reach for no reason.
+   */
+  readonly adjutant: AdjutantClient | undefined;
 }
 
 /** Open the store and build the services the app needs. */
@@ -1170,6 +1197,24 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
         }),
   });
 
+  // The fleet, if he has turned it on. `config.adjutant` is `null` unless
+  // `SYL_ADJUTANT_URL` is set, so this is `undefined` on every machine that has
+  // not asked for it — and a set-but-unusable value never reaches here, because
+  // `loadConfig` refused the start. Nothing is connected, probed or awaited:
+  // the client is stateless until its first call, which is what makes "Adjutant
+  // is down" a sentence she says rather than a boot that fails.
+  const adjutant =
+    config.adjutant === null
+      ? undefined
+      : new AdjutantClient({
+          baseUrl: config.adjutant.baseUrl,
+          agentId: config.adjutant.agentId,
+          clock,
+          ...(config.adjutant.projectRoot === undefined
+            ? {}
+            : { projectRoot: config.adjutant.projectRoot }),
+        });
+
   const intakeQueue = new IntakeQueue();
   const intakeStore = new IntakeStore({ db: database.handle, clock });
   const intake = new ArticleIntake({ store: intakeStore, clock, scheduler: intakeQueue });
@@ -1184,6 +1229,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     // What was decided, not what was intended — the boot notice is derived from
     // this and from nothing else. See `Bootstrapped.hands` and `syl-009.9`.
     hands: commanderHands,
+    adjutant,
     deps: {
       keys,
       messages,

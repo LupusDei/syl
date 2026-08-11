@@ -63,6 +63,9 @@ function config(overrides: Partial<SylConfig> = {}): SylConfig {
     // Not built, on purpose — see the note in `tests/helpers/service.ts`.
     adminDir: join(directory, "admin-not-built"),
     attachmentDir: join(directory, "attachments"),
+    // Off, as it is for every machine that has not asked for it. A test that
+    // wants the fleet builds its own `AdjutantClient` with an injected transport.
+    adjutant: null,
     ...overrides,
   };
 }

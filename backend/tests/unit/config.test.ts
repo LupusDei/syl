@@ -8,6 +8,7 @@ import {
 } from "../../src/memory/auto-memory.js";
 import {
   ConfigError,
+  DEFAULT_ADJUTANT_AGENT_ID,
   DEFAULT_ATTACHMENT_DIR,
   DEFAULT_DATABASE_PATH,
   DEFAULT_HOST,
@@ -86,6 +87,10 @@ describe("loadConfig", () => {
         // checkout, not a deployment setting.
         adminDir: DEFAULT_ADMIN_DIR,
         attachmentDir: DEFAULT_ATTACHMENT_DIR,
+        // Off. She is the Commander's assistant first and a fleet client
+        // second, so an empty environment is a machine that boots without ever
+        // looking for Adjutant.
+        adjutant: null,
       });
     });
 
@@ -400,5 +405,75 @@ describe("quiet hours", () => {
 
       expect((thrown as ConfigError).problems).toHaveLength(3);
     });
+  });
+});
+
+/**
+ * Whether she may reach the rest of the fleet at all.
+ *
+ * Two states matter and they are not "on" and "broken". **Absent is off**, and
+ * off must be silent — a machine without Adjutant is not misconfigured, and she
+ * is the Commander's assistant first and a fleet client second. **Present and
+ * unusable refuses the start**, which is this module's contract for every other
+ * setting and matters more here: `SYL_ADJUTANT_AGENT_ID=user` is a
+ * configuration that would have her speak to the treasurer in his voice.
+ */
+describe("reaching the fleet", () => {
+  it("should be off when nothing says otherwise", () => {
+    expect(loadConfig({}).adjutant).toBeNull();
+  });
+
+  it("should stay off without complaining when only the identity is set", () => {
+    // Half a configuration is not a broken one. Nobody has asked for the fleet.
+    expect(loadConfig({ SYL_ADJUTANT_AGENT_ID: "syl" }).adjutant).toBeNull();
+  });
+
+  it("should call her syl when the URL is set and nobody says who she is", () => {
+    const config = loadConfig({ SYL_ADJUTANT_URL: "http://127.0.0.1:4201" });
+
+    expect(config.adjutant).toEqual({
+      baseUrl: "http://127.0.0.1:4201",
+      agentId: DEFAULT_ADJUTANT_AGENT_ID,
+      projectRoot: undefined,
+    });
+  });
+
+  it("should carry the project root Adjutant scopes an agent by", () => {
+    const config = loadConfig({
+      SYL_ADJUTANT_URL: "http://127.0.0.1:4201",
+      SYL_ADJUTANT_PROJECT_ROOT: "/Users/Reason/code/ai/syl",
+    });
+
+    expect(config.adjutant?.projectRoot).toBe("/Users/Reason/code/ai/syl");
+  });
+
+  it("should refuse to start as the Commander rather than quietly turning off", () => {
+    // The whole epic is shaped around this identity. Degrading it to "off"
+    // would hide the one mistake most worth shouting about.
+    expect(() =>
+      loadConfig({ SYL_ADJUTANT_URL: "http://127.0.0.1:4201", SYL_ADJUTANT_AGENT_ID: "User" }),
+    ).toThrow(/SYL_ADJUTANT_AGENT_ID/u);
+  });
+
+  it("should refuse an Adjutant that is not on this machine", () => {
+    // What she asks the treasurer is a question about the Commander's money.
+    expect(() => loadConfig({ SYL_ADJUTANT_URL: "https://adjutant.example.com" })).toThrow(
+      /loopback/iu,
+    );
+  });
+
+  it("should refuse a URL that is not a URL", () => {
+    expect(() => loadConfig({ SYL_ADJUTANT_URL: "127.0.0.1:4201" })).toThrow(/SYL_ADJUTANT_URL/u);
+  });
+
+  it("should report a bad fleet setting alongside every other problem", () => {
+    let thrown: unknown;
+    try {
+      loadConfig({ SYL_PORT: "nope", SYL_ADJUTANT_URL: "https://elsewhere.example.com" });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as ConfigError).problems).toHaveLength(2);
   });
 });

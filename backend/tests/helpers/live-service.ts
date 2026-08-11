@@ -280,6 +280,9 @@ export async function startLiveService(
     // Beside the store, as production has it — a live-service test that wrote
     // blobs into the repo would leak between runs.
     attachmentDir: join(directory ?? tmpdir(), "attachments"),
+    // Off, as it is for every machine that has not asked for it. A test that
+    // wants the fleet builds its own `AdjutantClient` with an injected transport.
+    adjutant: null,
   };
 
   // When a fake `claude` is asked for it is a real executable replaying a real

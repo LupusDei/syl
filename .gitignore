@@ -19,7 +19,11 @@ worktrees/
 *.db
 .beads-credential-key
 .beads/proxieddb/
-tests/.vitest-results.json
+# A leading path segment anchors a pattern to the repo root, so this only ever
+# matched a run started from here — and `npm run verify` writes the file into
+# whichever WORKSPACE it ran in. `backend/tests/.vitest-results.json` therefore
+# showed up as untracked for anyone who ran the gate the documented way.
+**/tests/.vitest-results.json
 
 # Apple signing and push keys. NEVER commit these.
 #

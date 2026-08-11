@@ -10,6 +10,7 @@ import {
   DEFAULT_AUTO_MEMORY_PATH,
 } from "./memory/auto-memory.js";
 import { defaultAdminDir } from "./ops/admin-bundle.js";
+import { isLoopbackUrl } from "./tools/client.js";
 import { defaultLogDirectory } from "./ops/logging.js";
 import { defaultCertStatusPath } from "./ops/tailnet-cert.js";
 
@@ -136,6 +137,26 @@ export const QUIET_HOURS_ENV_VARS = ["SYL_QUIET_START", "SYL_QUIET_END", "SYL_TZ
 /** 24-hour `HH:MM`. The same grammar `harness/schedule.ts` parses. */
 const WALL_TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
+/**
+ * How Syl reaches the rest of the Commander's fleet, when she may at all.
+ *
+ * `null` on `SylConfig.adjutant` means **she simply cannot ask**, and that is
+ * the default. She is the Commander's assistant first and a fleet client
+ * second: a machine with no Adjutant, or one where he has not turned this on,
+ * must boot exactly as it does today. See `agents/adjutant-client.ts`.
+ */
+export interface AdjutantSetting {
+  /** Adjutant's origin, e.g. `http://127.0.0.1:4201`. Loopback only. */
+  readonly baseUrl: string;
+  /** Who she is on the fleet. Never `user` — the client refuses that too. */
+  readonly agentId: string;
+  /** `X-Project-Root`, which is how Adjutant scopes an agent to a project. */
+  readonly projectRoot: string | undefined;
+}
+
+/** What she is called on the fleet when nobody says otherwise. */
+export const DEFAULT_ADJUTANT_AGENT_ID = "syl";
+
 export interface SylConfig {
   /** Interface to bind. Loopback unless deliberately widened. */
   readonly host: string;
@@ -222,6 +243,19 @@ export interface SylConfig {
    * migration.
    */
   readonly attachmentDir: string;
+  /**
+   * Whether she may reach the fleet at all, and as whom.
+   *
+   * **Defaults to `null` — off.** Nothing about her boot depends on Adjutant
+   * being installed, running, or reachable.
+   *
+   * A value that is *present and unusable* still refuses the start, which is
+   * this module's contract for every other setting and matters more here than
+   * most: `SYL_ADJUTANT_AGENT_ID=user` is a configuration that would have her
+   * speak to the treasurer in the Commander's voice, and degrading it to "off"
+   * would hide exactly the mistake worth shouting about.
+   */
+  readonly adjutant: AdjutantSetting | null;
 }
 
 /** Thrown when the environment cannot produce a usable configuration. */
@@ -251,6 +285,44 @@ function read(env: NodeJS.ProcessEnv, name: string): string | undefined {
   if (raw === undefined) return undefined;
   const trimmed = raw.trim();
   return trimmed === "" ? undefined : trimmed;
+}
+
+/**
+ * Whether she may reach the fleet, and as whom. `null` means she may not.
+ *
+ * Absent `SYL_ADJUTANT_URL` is the ordinary case and says nothing — a machine
+ * without Adjutant is not misconfigured. Everything else is checked, because
+ * the two ways this setting can be wrong are the two the whole epic is shaped
+ * around: an identity that impersonates the Commander, and an origin that puts
+ * his questions about his own money onto a network.
+ */
+function readAdjutant(env: NodeJS.ProcessEnv, problems: string[]): AdjutantSetting | null {
+  const baseUrl = read(env, "SYL_ADJUTANT_URL");
+  if (baseUrl === undefined) return null;
+
+  let origin: URL | undefined;
+  try {
+    origin = new URL(baseUrl);
+  } catch {
+    problems.push(`SYL_ADJUTANT_URL is not a URL: "${baseUrl}". Unset it to leave the fleet alone.`);
+  }
+  if (origin !== undefined && !isLoopbackUrl(origin)) {
+    problems.push(
+      `SYL_ADJUTANT_URL must be loopback, got "${origin.origin}". What Syl asks the treasurer is ` +
+        `a question about the Commander's money, and this would put it on a network.`,
+    );
+  }
+
+  const agentId = read(env, "SYL_ADJUTANT_AGENT_ID") ?? DEFAULT_ADJUTANT_AGENT_ID;
+  if (agentId.toLowerCase() === "user") {
+    problems.push(
+      `SYL_ADJUTANT_AGENT_ID must not be "user". That is the Commander himself: Syl would ask ` +
+        `the treasurer about his money in his voice, and it would land in his own history as ` +
+        `something he said.`,
+    );
+  }
+
+  return { baseUrl, agentId, projectRoot: read(env, "SYL_ADJUTANT_PROJECT_ROOT") };
 }
 
 /**
@@ -438,6 +510,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SylConfig {
   const quietHours = readQuietHours(env);
   problems.push(...quietHoursProblems(quietHours));
 
+  // Collected like everything else. Absent means off, and off is the default.
+  const adjutant = readAdjutant(env, problems);
+
   // Validated here and carried as the declared value. The *consequences* of a
   // wrong environment belong to `ops/apns-environment.ts`, which knows whether
   // APNs is configured at all; what belongs here is refusing a value that is
@@ -486,5 +561,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SylConfig {
     certStatusPath: defaultCertStatusPath(env),
     adminDir: defaultAdminDir(env),
     attachmentDir: read(env, "SYL_ATTACHMENT_DIR") ?? DEFAULT_ATTACHMENT_DIR,
+    adjutant,
   };
 }
