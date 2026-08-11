@@ -103,6 +103,7 @@ import { DreamLog } from "./memory/dream/log.js";
 import { DreamSweep } from "./memory/dream/sweep.js";
 import { ConversationExtractor, ExtractionStore } from "./memory/extract-apply.js";
 import { MemoryGraph } from "./memory/graph.js";
+import { HerOwnMemory } from "./memory/remember.js";
 import { WorkingMemory } from "./memory/working.js";
 import { MemoryMetrics } from "./memory/metrics.js";
 import { EdgeWeights } from "./memory/weights.js";
@@ -1338,6 +1339,12 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     // the binary — starts working without a restart, because the failure is not
     // memoised.
     recall: () => memoryRuntime.trySearchable()?.retriever ?? null,
+    // Her one write into her own memory (`syl-016.7`). Eager and unconditional:
+    // it is prepared statements over a handle that already exists, needs no
+    // `vec0` and no model, and a machine that cannot SEARCH memory must still
+    // let her keep a thought — losing search is bad, losing the thought is what
+    // she was already working around by hiding insights in goals.
+    hers: new HerOwnMemory({ db: database.handle, graph: memoryGraph, clock }),
   };
 
   // The fleet, if he has turned it on. `config.adjutant` is `null` unless

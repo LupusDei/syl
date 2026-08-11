@@ -337,6 +337,28 @@ export const AGENT_SURFACES: readonly AgentSurface[] = [
   // own renders" into a list nobody can parse. The derivation exposed it — the
   // hand-written sentence never had to survive being joined to anything.
   { path: "/memory/recall", says: "her own memory" },
+  // HER FIRST WRITE INTO HER OWN MEMORY — `syl-016.7`, and the only entry on
+  // this list that is not a read.
+  //
+  // The Commander: *"She's definitely gonna need a way to make her own
+  // memories. That's kind of a ridiculous limitation."* Without it the only
+  // durable text she controlled was goals and reminders, and she used a GOAL to
+  // smuggle an insight past the night rather than lose it.
+  //
+  // **The bound is the object behind the route, not this list.** `HerOwnMemory`
+  // creates a `memory` node and `inferred` links to entities that already
+  // exist. It has no method that deletes, supersedes, relabels, moves a weight
+  // or mints a person — so "she cannot invent people" and "she cannot groom her
+  // own recall" are held by the type rather than by a handler remembering to be
+  // careful. `POST /memory/edges/{id}/feedback` is one route away and stays out
+  // of reach, which is the line that matters: **she may add what she concluded,
+  // and she may not adjust what she will be shown for concluding it.**
+  //
+  // Nothing written through it can claim he said anything. The node is `memory`
+  // and never `fact`; every link is `inferred` and never `observed`, and
+  // `observed` is the species carrying `assertedBy`. Extraction's criterion 3
+  // is untouched and she still cannot fabricate a fact about him.
+  { path: "/memory/remember", says: "her own memory, to add what she works out" },
   { path: "/renders", says: "her own renders" },
   { path: "/sendings", says: "the things she has sent him" },
 ];

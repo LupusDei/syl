@@ -87,7 +87,49 @@ describe("the tool surface", () => {
       surfaceBytes() +
       AGENT_REPLIES_MAX_BYTES;
 
-    expect(DEFAULT_CONTEXT_BUDGET_BYTES - declared).toBeGreaterThanOrEqual(2_000);
+    // THE MARGIN IS A FRACTION, NOT A CONSTANT — and it used to be 2,000.
+    //
+    // 2,000 was 8% of a 24,000 ceiling. At 40,000 it is 5%, and at whatever
+    // comes next it is less again: a margin that does not scale with the thing
+    // it protects stops being a margin without anybody changing it. That is the
+    // same defect this file exists to catch — a constant that is really a
+    // derived value — sitting inside the guard against it.
+    //
+    // A floor as well as a fraction, because on a small ceiling a percentage is
+    // not enough room to write a sentence in.
+    const margin = Math.max(2_000, Math.floor(DEFAULT_CONTEXT_BUDGET_BYTES / 10));
+
+    // AND IT INSTRUCTS RATHER THAN MERELY REFUSING. artanis's point, and the
+    // reason is measured: this constant has been set five times in two days,
+    // and four of the five people who did the subtraction by hand got a number
+    // that was stale before they finished. The next person should be handed the
+    // answer, itemised, at the only moment anyone reads this — which is also
+    // the only moment its derived nature is visible.
+    //
+    // Deliberately NOT auto-derived. A ceiling that grows to fit whatever is
+    // put under it is not a budget. The test says what the number would have to
+    // be; a person still has to decide to accept it.
+    const shortfall = DEFAULT_CONTEXT_BUDGET_BYTES - declared - margin;
+    expect(
+      shortfall,
+      shortfall >= 0
+        ? "fits"
+        : [
+            `The turn does not fit. Set DEFAULT_CONTEXT_BUDGET_BYTES to at least ${String(declared + margin)}.`,
+            `  SOUL.md            ${String(soulBytes)}`,
+            `  working memory     ${String(WORKING_MEMORY_MAX_BYTES)}`,
+            `  unattended         ${String(UNATTENDED_MAX_BYTES)}`,
+            `  tool surface       ${String(surfaceBytes())}`,
+            `  agent replies      ${String(AGENT_REPLIES_MAX_BYTES)}`,
+            `  declared total     ${String(declared)}`,
+            `  margin (10%)       ${String(margin)}`,
+            `  ceiling now        ${String(DEFAULT_CONTEXT_BUDGET_BYTES)}`,
+            `  short by           ${String(-shortfall)}`,
+            "",
+            "Raise it in the channel before the file — it has been set by five",
+            "people in two days and collided twice.",
+          ].join("\n"),
+    ).toBeGreaterThanOrEqual(0);
   });
 
   it("should require a reason on every verb that changes something", () => {

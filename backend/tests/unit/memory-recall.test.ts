@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DreamLog } from "../../src/memory/dream/log.js";
 import { MemoryGraph } from "../../src/memory/graph.js";
 import { MemoryMetrics } from "../../src/memory/metrics.js";
+import { HerOwnMemory } from "../../src/memory/remember.js";
 import { Retriever } from "../../src/memory/retrieve.js";
 import { MemoryStore, loadSqliteVec } from "../../src/memory/store.js";
 import { EdgeWeights } from "../../src/memory/weights.js";
@@ -14,7 +15,9 @@ import {
   MAX_RECALL_ENTITIES,
   MAX_RECALL_LIMIT,
   MAX_RECALL_QUERY_CHARS,
+  MAX_THOUGHT_CHARS,
   recallBounds,
+  rememberBody,
   type MemoryViews,
   type RecallBounds,
 } from "../../src/routes/memory.js";
@@ -108,6 +111,7 @@ function views(
       ...(options.maxLines === undefined ? {} : { maxLines: options.maxLines }),
     }),
     recall: () => (options.search === false ? null : retriever),
+    hers: new HerOwnMemory({ db, graph, clock }),
   };
 }
 
@@ -358,6 +362,42 @@ describe("recall, asked nothing", () => {
 // ---------------------------------------------------------------------------
 // Reading the request
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Reading the body of a memory she wants to keep — `syl-016.7`
+// ---------------------------------------------------------------------------
+
+describe("rememberBody", () => {
+  it("should refuse a memory with no reason rather than file one nobody can judge", () => {
+    // The residue the bead exists to remove. A memory with no reasoning is a
+    // conclusion he can only accept or reject wholesale, and the correction
+    // that matters — she reasoned wrongly from something true — is unavailable.
+    expect(() => rememberBody({ thought: "a thought" })).toThrow(ApiFailure);
+    expect(() => rememberBody({ thought: "a thought", because: "   " })).toThrow(ApiFailure);
+  });
+
+  it("should refuse an empty thought", () => {
+    expect(() => rememberBody({ thought: "  ", because: "why" })).toThrow(ApiFailure);
+    expect(() => rememberBody({ because: "why" })).toThrow(ApiFailure);
+  });
+
+  it("should take a paragraph, because the insight this exists for is one", () => {
+    // She was compressing thoughts to smuggle them through a goal. A limit that
+    // forced her to keep compressing would rebuild the defect.
+    const paragraph = "x".repeat(MAX_THOUGHT_CHARS);
+
+    expect(rememberBody({ thought: paragraph, because: "why" }).thought).toHaveLength(
+      MAX_THOUGHT_CHARS,
+    );
+    expect(() => rememberBody({ thought: `${paragraph}x`, because: "why" })).toThrow(ApiFailure);
+  });
+
+  it("should drop names that are only whitespace rather than report them unknown", () => {
+    expect(rememberBody({ thought: "t", because: "w", about: ["Ela", "  ", 7] }).about).toEqual([
+      "Ela",
+    ]);
+  });
+});
 
 describe("recallBounds", () => {
   it("should treat an absent question and a blank one as the same intent", () => {

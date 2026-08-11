@@ -312,14 +312,32 @@ describe("the tool surface she is offered", () => {
   });
 
   it("should not offer a verb it has nowhere to perform", () => {
-    // `remember` is declared in `schemas.ts` and there is still no route that
-    // WRITES a memory. `syl-016.1` opened `/memory/recall` on her credential
-    // and deliberately nothing else under `/memory`, so the read landed and
-    // the write did not. Offering `remember` anyway would tell her she can keep
-    // what he said about his life and answer 403 every time, which is the
-    // defect this epic exists to fix, one layer along.
-    expect(TOOLS.map((tool) => tool.name)).toContain("remember");
-    expect(advertisedToolNames()).not.toContain("remember");
+    // GUARDED BY SHAPE, not by naming a verb — and this test had to be
+    // rewritten to get there, which is the lesson in it.
+    //
+    // It used to assert `advertisedToolNames()` does NOT contain `remember`.
+    // That was correct behaviour for two months: the schema existed, no handler
+    // did, and offering it would have told her she could keep what he said and
+    // answered 403 every time. `syl-016.7` built the handler and the route, so
+    // the assertion inverted — and an assertion that names one verb has to be
+    // rewritten every time the answer for that verb changes.
+    //
+    // The PROPERTY was never about `remember`. It is that she is offered
+    // exactly what she can perform: nothing advertised without a handler, and
+    // nothing implemented that she is not told about. Stated that way it needs
+    // no maintenance and covers the verb nobody has written yet.
+    expect(advertisedToolNames()).toEqual(
+      TOOLS.filter((tool) => Object.hasOwn(HANDLERS, tool.name)).map((tool) => tool.name),
+    );
+    for (const name of advertisedToolNames()) {
+      expect(HANDLERS, `${name} is offered with nowhere to perform it`).toHaveProperty(name);
+    }
+    for (const name of Object.keys(HANDLERS)) {
+      expect(
+        TOOLS.map((tool) => tool.name),
+        `${name} is implemented and she is never told it exists`,
+      ).toContain(name);
+    }
   });
 
   it("should refuse EVERY write that arrives without its reason, whatever the verb", async () => {
@@ -520,6 +538,93 @@ describe("recall", () => {
     expect(envelope.ok).toBe(true);
     if (!envelope.ok) return;
     expect(envelope.at).toBe(new Date(NOW).toISOString());
+  });
+});
+
+/**
+ * `remember` — `syl-016.7`, the verb that had a schema and no handler.
+ *
+ * She never saw it, because `advertisedTools()` derives the list from the
+ * handler map. So the only durable text she controlled was goals and reminders,
+ * and she used a goal to smuggle an insight past the nightly pass.
+ */
+describe("remember", () => {
+  const THOUGHT = "Illinois is one place doing three jobs at once.";
+
+  function keptApi(over: Record<string, unknown> = {}): FakeApi {
+    return fakeApi({
+      "/memory/remember": () =>
+        ok(
+          {
+            nodeId: "syl:memory_node:0198f2c1-4a3b-7d21-9f00-3c3c3c3c3c3c",
+            created: true,
+            links: [{ name: "Ela", nodeId: "syl:memory_node:ela", edgeId: "syl:memory_edge:1" }],
+            unknown: [],
+            at: new Date(NOW).toISOString(),
+            ...over,
+          },
+          201,
+        ),
+    });
+  }
+
+  it("should keep what she worked out, and say when", async () => {
+    const api = keptApi();
+
+    const { envelope } = await call(contextFor(api), "remember", {
+      fact: THOUGHT,
+      because: "He circles Tennessee and the reason is always Illinois.",
+    });
+
+    expect(envelope.ok).toBe(true);
+    if (!envelope.ok) return;
+    expect(api.calls[0]?.method).toBe("POST");
+    expect(api.calls[0]?.body).toMatchObject({ thought: THOUGHT });
+    expect(envelope.at).toBe(new Date(NOW).toISOString());
+  });
+
+  it("should refuse a memory with no reason, because an inference nobody can judge is noise", async () => {
+    // `because` does more work on this verb than on any other: it becomes the
+    // `reasoning` on an inferred edge, which is what he reads when deciding
+    // whether she thought correctly. It is also the correction he could never
+    // make before — that she reasoned wrongly from something true.
+    const api = keptApi();
+
+    const { envelope, isError } = await call(contextFor(api), "remember", { fact: THOUGHT });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (envelope.ok) return;
+    expect(envelope.reason).toContain("because");
+    // And nothing was written on the way to refusing.
+    expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+  });
+
+  it("should tell her which people it did not know, rather than swallowing it", async () => {
+    // The silent half of this feature. She would believe she had connected a
+    // thought to Ela and it would sit unreachable from Ela forever. Told, she
+    // can ask him — which is the whole point of her.
+    const api = keptApi({ links: [], unknown: ["Ela"] });
+
+    const { envelope } = await call(contextFor(api), "remember", {
+      fact: THOUGHT,
+      because: "Both of her options run through the same state.",
+      about: ["Ela", "  "],
+    });
+
+    expect(envelope.ok).toBe(true);
+    if (!envelope.ok) return;
+    expect((envelope.subject as { unknown: string[] }).unknown).toEqual(["Ela"]);
+    // The blank was dropped rather than sent — a name that is whitespace is not
+    // a name, and the route would only have reported it back as unknown.
+    expect(api.calls[0]?.body).toMatchObject({ about: ["Ela"] });
+  });
+
+  it("should be offered to her at all, which is the entire bug", async () => {
+    // It carried a schema for two months and no handler, so `advertisedTools()`
+    // filtered it out and she never saw it. This is the assertion that would
+    // have failed for that whole period.
+    expect(advertisedToolNames()).toContain("remember");
   });
 });
 

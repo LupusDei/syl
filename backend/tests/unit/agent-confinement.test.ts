@@ -208,6 +208,32 @@ describe("the agent scope, over HTTP", () => {
       expect(response.status).toBe(200);
     });
 
+    it("should let her keep something she worked out", async () => {
+      // `syl-016.7`, and the only write on her credential. Her own account of
+      // life without it: "I can't write to my memory directly. The only durable
+      // text I control is goals and reminders. So I've put the connection where
+      // it will survive" — an assistant hiding an insight in a GOAL so the
+      // nightly pass would not lose it.
+      const response = await call("POST", "/memory/remember", {
+        token: agentToken(),
+        body: { thought: "Illinois is one place doing three jobs at once.", because: "He circles it every time." },
+      });
+
+      expect(response.status).toBe(201);
+    });
+
+    it("should still refuse her the surface that grades her own memories", async () => {
+      // The line the write does NOT cross, asserted next to the write itself so
+      // the two are read together: she may add what she concluded, and she may
+      // not adjust what she will be shown for concluding it.
+      const response = await call("POST", "/memory/edges/syl:memory_edge:nothing/feedback", {
+        token: agentToken(),
+        body: { verdict: "confirm" },
+      });
+
+      expect(response.status).toBe(403);
+    });
+
     it("should let her reach a single reminder by id, not merely the collection", async () => {
       const created = await call("POST", "/reminders", {
         token: agentToken(),
@@ -343,6 +369,10 @@ describe("everything the agent scope cannot reach, swept from the router", () =>
     "/renders",
     "/sendings",
     "/memory/recall",
+    // The one WRITE (`syl-016.7`). Spelled out to the route, like the read
+    // beside it: `/memory` here would make this sweep agree that the verdict
+    // endpoint — which moves the weight of her own memories — is hers too.
+    "/memory/remember",
   ];
 
   /**
@@ -563,9 +593,15 @@ describe("AGENT_SURFACE", () => {
     // `/renders` and `/sendings` joined on 2026-08-11 from the render epic, and
     // this line is being widened by hand for the second time — which is the
     // point of it. Two lists, two deliberate edits, no side effects.
+    // `syl-016.7` added `/memory/remember`, and it is the FIRST WRITE ever put
+    // on her credential — so this canary is the place that has to notice. Every
+    // other entry is a read of his own data or of hers; this one lets her add
+    // to her own memory, bounded by `HerOwnMemory` having no method that
+    // deletes, supersedes or moves a weight.
     expect([...AGENT_SURFACE].sort()).toEqual([
       "/goals",
       "/memory/recall",
+      "/memory/remember",
       "/reminders",
       "/renders",
       "/sendings",
@@ -581,6 +617,7 @@ describe("AGENT_SURFACE", () => {
     expect(AGENT_SURFACE).not.toContain("/memory");
     expect(AGENT_SURFACE.filter((path) => path.startsWith("/memory"))).toEqual([
       "/memory/recall",
+      "/memory/remember",
     ]);
     // `/renders` joined the three on 2026-08-11. It is not one of his nouns —
     // it is the first surface she reaches for HERSELF — and it was added with

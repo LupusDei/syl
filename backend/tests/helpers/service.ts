@@ -12,6 +12,7 @@ import { syncResolvers } from "../../src/index.js";
 import { DreamLog } from "../../src/memory/dream/log.js";
 import { MemoryGraph } from "../../src/memory/graph.js";
 import { MemoryMetrics } from "../../src/memory/metrics.js";
+import { HerOwnMemory } from "../../src/memory/remember.js";
 import type { Retriever } from "../../src/memory/retrieve.js";
 import { EdgeWeights } from "../../src/memory/weights.js";
 import { WorkingMemory } from "../../src/memory/working.js";
@@ -288,6 +289,7 @@ export function testMemory(
     // default keeps every OTHER test on the degraded path, which is exactly the
     // path a machine without the extension runs.
     recall: options.recall ?? ((): Retriever | null => null),
+    hers: new HerOwnMemory({ db: db.handle, graph, clock }),
   };
 }
 

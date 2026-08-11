@@ -75,6 +75,10 @@ const UNDECLARED: readonly string[] = [
   // acquire a second caller, and `shared/openapi.yaml` is where that caller
   // would look first.
   "GET /memory/recall",
+  // `syl-016.7` — and the one that most needs the spec to catch up, for the
+  // same reason the feedback write does: it is a WRITE, so a second client
+  // would have to guess at the body.
+  "POST /memory/remember",
   // `/renders` joins them, and with the smallest debt of the three: nothing
   // else consumes this surface. Her tool server is the only client, it lives in
   // this repository, and its request and response shapes are pinned by

@@ -999,13 +999,42 @@ cannot search her own memory — a fluent, confident sentence, wrong in exactly
 the way nothing fails on. Each surface now carries the words it goes by, and the
 refusal is a function of the list.
 
-**Her memory read is one ROUTE, never the router.** `/memory` would have carried
-`POST /memory/edges/{id}/feedback` with it, and an assistant that can confirm and
-reject her own inferences can groom what she will be shown tomorrow — the `/logs`
-argument, one layer in. `withinAgentSurface` matches on segment boundaries, which
-is what makes a single-route entry a real boundary rather than a naming
-convention. She can now read her own memory and still cannot write it, and that
-asymmetry is the decision, not an unfinished half.
+**Her memory surface is two ROUTES, never the router.** `/memory` would have
+carried `POST /memory/edges/{id}/feedback` with it, and an assistant that can
+confirm and reject her own inferences can groom what she will be shown tomorrow
+— the `/logs` argument, one layer in. `withinAgentSurface` matches on segment
+boundaries, which is what makes a single-route entry a real boundary rather than
+a naming convention.
+
+`syl-016.1` opened the read. **`syl-016.7` opened the write** — `/memory/remember`,
+the only entry on `AGENT_SURFACES` that is not a read — and the gap between them
+is the point: she could read her own memory for exactly as long as it took to
+decide the write on its own terms, rather than have it arrive as a side effect.
+The line that survives is not read-versus-write, it is this: **she may add what
+she concluded, and she may not adjust what she will be shown for concluding it.**
+
+What bounds the write is the object behind the route, not the allowlist.
+`HerOwnMemory` creates a `memory` node and `inferred` links to entities that
+already exist, and has no method that deletes, supersedes, relabels, moves a
+weight, or mints a person — so *she cannot invent people* and *she cannot groom
+her own recall* are held by the type. And nothing written through it can claim he
+said anything: the node is `memory` and never `fact`, every link is `inferred`
+and never `observed`, and `observed` is the species carrying `assertedBy`.
+Extraction's criterion 3 — *"HE asserted it"* — is untouched.
+
+Two things that decided the shape, both discovered rather than designed:
+
+- **Authorship is marked twice because the two marks fail differently.** The
+  species is an EDGE property, so a memory naming no entity has no edges and
+  nothing to carry it; `kind: "memory"` is on the row and survives that. The
+  kind had been sitting unwritten with a `## Memories` section already rendering
+  for it.
+- **`memory_provenance` cannot hold her memories, and that is correct.** It
+  requires a `digest` referencing an extraction, a `said_in` message id, and a
+  non-blank `quote` copied from that message. She has none of the three. Its
+  `quote` is DERIVED precisely so it is evidence rather than a claim, and a
+  derived field with nothing to derive from is a lie with a schema. Her
+  reasoning travels on the edge, where an inference's reasoning already lives.
 
 The repair is the same every time: make the claim a function of the thing it is
 about. `advertisedTools()` from the handler map; `origin` from whether he spoke;

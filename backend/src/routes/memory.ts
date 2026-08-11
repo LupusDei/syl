@@ -21,6 +21,7 @@ import {
   type MemoryTier,
 } from "../memory/schema.js";
 import { WeightError, type EdgeWeights } from "../memory/weights.js";
+import { RememberError, type HerOwnMemory, type Remembered } from "../memory/remember.js";
 import type { OverflowKindCount, WorkingMemory } from "../memory/working.js";
 import { instant, systemClock, type Clock } from "../services/clock.js";
 import type { IdempotencyStore } from "../services/idempotency.js";
@@ -152,6 +153,17 @@ export interface MemoryViews {
    *   epic exists to fix.
    */
   readonly recall: () => Retriever | null;
+  /**
+   * The one write she has into her own memory — `syl-016.7`.
+   *
+   * Deliberately a narrow object rather than the graph: `HerOwnMemory` can
+   * create a `memory` node and `inferred` links to entities that already
+   * exist, and it has no method that deletes, supersedes, relabels, moves a
+   * weight or mints a person. That is the whole security argument for putting
+   * a write on her credential at all, and it is held by the type rather than
+   * by the route remembering to be careful.
+   */
+  readonly hers: HerOwnMemory;
 }
 
 export interface MemoryRouterOptions {
@@ -402,6 +414,15 @@ export const MAX_RECALL_LIMIT = 50;
 export const MAX_RECALL_QUERY_CHARS = 500;
 /** The most entity names the holographic channel is given. */
 export const MAX_RECALL_ENTITIES = 8;
+
+/**
+ * The longest thought she may keep in one memory.
+ *
+ * Generous on purpose — the insight this verb exists for is a three-clause
+ * paragraph, and a limit that forced her to compress it would recreate the
+ * defect: she was already compressing thoughts to smuggle them through a goal.
+ */
+export const MAX_THOUGHT_CHARS = 2_000;
 
 /** What a recall was asked for, already parsed. */
 export interface RecallBounds {
@@ -746,6 +767,52 @@ export function recallBounds(request: Request): RecallBounds {
   };
 }
 
+/**
+ * Read a memory she wants to keep off a JSON body.
+ *
+ * Refused rather than coerced, the same rule the rest of this file follows. A
+ * blank `because` quietly accepted would file an inference nobody can judge,
+ * which is the residue `syl-016.7` exists to remove.
+ */
+export function rememberBody(bodyValue: unknown): {
+  readonly thought: string;
+  readonly because: string;
+  readonly about: readonly string[];
+} {
+  const body =
+    typeof bodyValue === "object" && bodyValue !== null && !Array.isArray(bodyValue)
+      ? (bodyValue as Record<string, unknown>)
+      : {};
+
+  const thought = typeof body["thought"] === "string" ? body["thought"].trim() : "";
+  if (thought === "") {
+    throw new ApiFailure("VALIDATION_FAILED", "There is nothing here to remember.", {
+      details: { field: "thought", reason: "required" },
+    });
+  }
+  if (thought.length > MAX_THOUGHT_CHARS) {
+    throw new ApiFailure("VALIDATION_FAILED", "That is longer than one thought.", {
+      details: { field: "thought", reason: `at most ${String(MAX_THOUGHT_CHARS)} characters` },
+    });
+  }
+
+  const because = typeof body["because"] === "string" ? body["because"].trim() : "";
+  if (because === "") {
+    throw new ApiFailure("VALIDATION_FAILED", "A memory she made has to say why she believes it.", {
+      details: { field: "because", reason: "required" },
+    });
+  }
+
+  const named = body["about"];
+  const about = (Array.isArray(named) ? named : [])
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value !== "")
+    .slice(0, MAX_RECALL_ENTITIES);
+
+  return { thought, because, about };
+}
+
 /** Read the verdict off a JSON body. */
 export function verdictOf(bodyValue: unknown): Verdict {
   const raw =
@@ -1004,6 +1071,51 @@ export function createMemoryRouter(options: MemoryRouterOptions): Router {
    */
   router.get("/memory/recall", async (request, response) => {
     sendOk(response, await buildRecall(memory, recallBounds(request), clock()));
+  });
+
+  /**
+   * **Her one write.** `syl-016.7`.
+   *
+   * She could read her own memory since `syl-016.1` and could not add to it,
+   * so the only durable text she controlled was goals and reminders — and she
+   * used a goal to smuggle an insight through the night rather than lose it.
+   *
+   * What this can do is bounded by `HerOwnMemory`, not by this handler being
+   * careful: it creates a `memory` node and `inferred` links to entities that
+   * already exist, and there is no method on that object which deletes,
+   * supersedes, relabels, moves a weight or mints a person. The verdict write
+   * one route down stays out of her reach.
+   *
+   * Idempotent like every other write in the contract. She will retry a turn
+   * that timed out, and a retried thought must not become two memories — which
+   * the node reuse also guards, one layer down.
+   */
+  router.post("/memory/remember", (request, response) => {
+    // Parsed before the ledger is touched, so a malformed body does not consume
+    // a key and strand the corrected retry.
+    const kept = rememberBody(request.body);
+
+    const outcome = runIdempotent<Remembered>(idempotency, request, () => {
+      try {
+        return {
+          status: 201,
+          data: memory.hers.remember({
+            thought: kept.thought,
+            because: kept.because,
+            ...(kept.about.length === 0 ? {} : { about: kept.about }),
+          }),
+        };
+      } catch (error) {
+        if (error instanceof RememberError) {
+          throw new ApiFailure("VALIDATION_FAILED", error.message, {
+            details: { reason: error.kind },
+          });
+        }
+        throw asFailure(error);
+      }
+    });
+
+    sendIdempotent(response, outcome);
   });
 
   router.get("/memory/graph", (request, response) => {

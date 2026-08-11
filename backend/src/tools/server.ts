@@ -52,15 +52,18 @@ import { reminderInputFrom, resolveTime } from "./time.js";
  * A verb reaches this surface only if it has a handler here, and a handler
  * exists only where the API has a door for it. `research` is absent from
  * `schemas.ts` already, because the sealed fetch path does not exist.
- * `remember` is declared there and is absent **here**, for the same reason one
- * step later: her credential reaches `/memory/recall` and nothing else under
- * `/memory`, so there is still no route that WRITES a memory.
+ * `remember` was declared there and absent **here** for two months, for the same
+ * reason one step later: there was no route that wrote a memory. `syl-016.7`
+ * built one, and it is the only WRITE on her credential — so the asymmetry this
+ * paragraph used to record is closed, deliberately and in that order. She could
+ * read her own memory for exactly as long as it took to decide the write
+ * separately, which is how a decision like that should arrive.
  *
- * That asymmetry is deliberate and worth stating, because `syl-016.1` moved
- * exactly one side of it: **she can now read her own memory and still cannot
- * write it.** `middleware/auth.ts` argues the read at length; the write is a
- * separate decision and has to be made as one rather than arrive as a side
- * effect of this having landed.
+ * What still bounds it is not this file: `HerOwnMemory` has no method that
+ * deletes, supersedes, relabels, moves a weight or mints a person, and
+ * `POST /memory/edges/{id}/feedback` remains out of her reach. **She may add
+ * what she concluded; she may not adjust what she will be shown for concluding
+ * it.**
  *
  * Advertising it anyway would tell her she can keep what he told her about his
  * life, and every attempt would come back `403`. That is exactly the defect
@@ -806,6 +809,61 @@ const recall: ToolHandler = async (input, context) => {
   };
 };
 
+/**
+ * Keep something she worked out — `syl-016.7`.
+ *
+ * The verb that had a schema and no handler, which is why she never saw it. Her
+ * account of what she did instead is the clearest statement of the defect:
+ *
+ * > "I can't write to my memory directly. The only durable text I control is
+ * > goals and reminders. So I've put the connection where it will survive."
+ *
+ * She put an insight in a **goal** and wrote a paragraph at the nightly
+ * extractor hoping it would land. That is an assistant gaming its own memory
+ * pipeline to keep a thought.
+ *
+ * ## What comes back matters as much as what goes in
+ *
+ * `unknown` names every person she mentioned that the graph does not know, and
+ * this handler passes it through rather than swallowing it. A memory kept about
+ * nobody is the silent half of this feature: she would believe she had
+ * connected a thought to Ela and it would sit unreachable from Ela forever.
+ * Told, she can say "I do not know an Ela yet" — and that is a question for him,
+ * which is the whole point of her.
+ */
+const remember: ToolHandler = async (input, context) => {
+  const thought = text(input, "fact");
+  if (thought === null) {
+    return missing("remember", "fact", "I did not catch what to remember.");
+  }
+  // Required here as it is on every verb that writes. It is doing more work on
+  // this one than on any other: it becomes the `reasoning` on an inferred edge,
+  // which is what he reads when he decides whether she thought correctly.
+  const because = text(input, "because");
+  if (because === null) {
+    return missing(
+      "remember",
+      "because",
+      "A memory you made carries why you believe it — that is what lets him tell a good read of him from a wrong one.",
+    );
+  }
+
+  const named = input["about"];
+  const about = (Array.isArray(named) ? named : [])
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value !== "");
+
+  const kept = await context.client.post<{ readonly at: string }>("/memory/remember", {
+    thought,
+    because,
+    ...(about.length === 0 ? {} : { about }),
+  });
+  if (!kept.ok) return refused("remember", kept.failure);
+
+  return { ok: true, action: "remember", subject: kept.data, at: kept.data.at };
+};
+
 /** How much of each list she is shown. Enough to talk about, not a data dump. */
 const OUTSTANDING_LIMIT = 50;
 
@@ -1229,6 +1287,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   remind_me: remindMe,
   cancel_reminder: cancelReminder,
   change_reminder: changeReminder,
+  remember,
   add_todo: addTodo,
   finish_todo: finishTodo,
   drop_todo: dropTodo,
