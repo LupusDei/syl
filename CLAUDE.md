@@ -251,6 +251,14 @@ to add is about *additional* surfaces and blocks nothing.
   local view into a namespace someone else was actively extending. A colliding
   create can also wire itself into another epic's dependency graph, which is
   invisible unless you look for the edges rather than the rows.
+  **Re-check the number immediately before you COMMIT, not only before you
+  write.** Twice now a number was correct when it was chosen and stale by the
+  time the work landed, because origin gained migrations while the agent was
+  still working. Checking origin is necessary and not sufficient: it answers
+  which number is free *now*, and cannot tell you origin will move before you
+  finish. The check costs one command
+  (`git ls-tree --name-only origin/main backend/src/migrations/`) and the
+  failure costs everyone's test suite.
 - **Any command carrying PROSE takes a quoted heredoc, never a `-m`/`--flag=`
   string.** `git commit -m`, `bd create --description`, `bd update --notes`,
   `bd close --reason` — all of them. A double-quoted argument is expanded by the

@@ -1867,3 +1867,43 @@ captured somebody's unpublished work" from "I completed a routine integration",
 and I sent two messages before running it. A commit's SUBJECT names the branch
 it was made on, not where it lives now — `aeb2559` says "into agent/fenix" and
 is plain shared history.
+
+### The escape hatch must be as honest as the judgement (2026-08-11)
+
+Reconciling two relation vocabularies exposed a gap neither half had. The
+dream needed a fallback for *"these are connected and nothing more precise is
+warranted"*, and the obvious candidate was `about`. **But `about` is
+directional** — a claim is about a person, not the reverse — so using it as the
+escape would have asserted a direction nobody had claimed.
+
+That is the same defect as guessing an edge's direction, arriving through the
+**fallback** rather than through the judgement, where nobody was looking for it.
+`resembles` was added as an explicitly *symmetric* escape, distinct from
+`about`. **A vague answer must be vague in the same shape as the uncertainty**;
+one that quietly carries a claim is worse than the precise answer it replaced,
+because it looks like caution.
+
+`parent_of` pointing the wrong way is not a vaguer answer. It is a false one
+wearing a true one's clothes.
+
+### The instinct to loosen a guard when it fires IS the guard working (2026-08-11)
+
+A new test forbidding a second relation vocabulary failed on its first run
+against `entities.ts`, which names four relations in a lookup table. The first
+impulse was to loosen the threshold until it passed.
+
+**That is how a guard stops guarding**, and this codebase watched it happen the
+same afternoon: a flat 2,000-byte margin, correct when written, became
+meaningless as the ceiling it protected grew — and nothing had to be edited for
+it to stop protecting anything.
+
+The false positive was worth more than the guard, because it forced the property
+to be stated precisely instead of approximately: **a module may NAME relations
+if it IMPORTS the type that constrains them; a module that names them while
+importing nothing from the vocabulary is declaring its own.** `entities.ts` is a
+consumer — its values are typed, so an invented name is already a compile error.
+
+When a guard fires on something that looks legitimate, the answer is almost
+never a wider threshold. It is that the guard is testing a proxy for the
+property you actually care about, and the firing has just told you what the real
+property is.
