@@ -1358,6 +1358,11 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     renders,
     workDir: join(config.attachmentDir, "sendings"),
   });
+  // A sending the last process was mid-video on. The promise chasing the clip
+  // lived in that process's memory, so without this the row says `pending`
+  // forever while her words have already told him something is coming —
+  // constraint 4, one noun along from `renders.resume()` above.
+  composer.resume();
 
   const intakeQueue = new IntakeQueue();
   const intakeStore = new IntakeStore({ db: database.handle, clock });
