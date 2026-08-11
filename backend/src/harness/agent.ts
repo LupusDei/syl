@@ -31,7 +31,13 @@ export const LANES = {
    * `jobs/heartbeat-job.ts`.
    */
   heartbeat: "heartbeat",
-  /** The morning agenda. */
+  /**
+   * The morning brief.
+   *
+   * One turn a day, before the note at 07:00 that announces it, assembling his
+   * reminders, to-dos and goals into something he can read on waking. It acts;
+   * see {@link LANES_WITH_HANDS} and `jobs/agenda-job.ts`.
+   */
   agenda: "agenda",
   /** The nightly review and memory consolidation pass. */
   consolidation: "consolidation",
@@ -68,12 +74,21 @@ export const LANES = {
  * words as HIS — so `harness/urgency.ts` has nothing to verify a claim against
  * and the Outbox holds everything until morning.
  *
+ * **`agenda`** is the second widening, and the least surprising of the three.
+ * The morning brief exists to be *put in front of him* before the 07:00 note
+ * announces it; a brief she could only think would live in a run record nobody
+ * reads, which is exactly the state `jobs/agenda-job.ts` was written to end.
+ * What keeps it narrow is the shape of the slot rather than the absence of
+ * hands: one turn, once a day, in a fifteen-minute window before the
+ * announcement, and it cannot pierce quiet hours for the same structural reason
+ * the heartbeat cannot — no unattended turn ever records words as HIS.
+ *
  * **Every other lane has nothing, and that is not an oversight.** The dream
- * must not be able to write a reminder while judging what matters; the agenda
- * reads rather than acts; and the extraction turn is a sealed reader over text
- * he may have pasted from anywhere, which must never hold a capability at all.
+ * must not be able to write a reminder while judging what matters, and the
+ * extraction turn is a sealed reader over text he may have pasted from
+ * anywhere, which must never hold a capability at all.
  */
-export const LANES_WITH_HANDS: readonly Lane[] = [LANES.commander, LANES.heartbeat];
+export const LANES_WITH_HANDS: readonly Lane[] = [LANES.commander, LANES.heartbeat, LANES.agenda];
 
 /**
  * Lanes that must never write into Claude Code's auto-memory.
@@ -243,11 +258,11 @@ export interface SylAgentOptions {
    *
    * A function form for the same reason {@link contributors} has one, and under
    * `syl-009` it is no longer a nicety: **the tool surface is lane-dependent.**
-   * The commander lane is handed an MCP configuration and the other three are
-   * not — the dream must not be able to write a reminder while judging, and the
-   * heartbeat and agenda read rather than act. One shared options object cannot
-   * express that, and the version of this that could was "give every lane hands
-   * and hope none of them use them".
+   * The lanes named in {@link LANES_WITH_HANDS} are handed an MCP configuration
+   * and the rest are not — the dream must not be able to write a reminder while
+   * judging what matters, and the extraction turn is a sealed reader. One
+   * shared options object cannot express that, and the version of this that
+   * could was "give every lane hands and hope none of them use them".
    */
   readonly turnOptions?: TurnOptions | ((lane: Lane) => TurnOptions);
   /**
