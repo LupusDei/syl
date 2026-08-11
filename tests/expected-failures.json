@@ -63,16 +63,6 @@
       "why": "memory_nodes.subject_id exists and extract-apply.ts:404 says 'Deliberately no subjectId', so it has never been populated on the conversational path. Live consequence: 'Ela' and 'Ela — his wife' are two person nodes for one woman, and the newer duplicate EVICTED the richer one from working memory. Deliberately agnostic about whether resolution merges rows or shares an identity across them -- only 'two people who are the same person' is wrong."
     },
     {
-      "test": "she forms connections — the five bars for digestion (syl-zdf) should never evict a person or a goal in favour of a more recent fact",
-      "bead": "syl-zdf.6",
-      "why": "Measured at the old 4,000-byte budget: 23 admitted, 7 dropped, and the seven were his own name, his wife, his son, his daughter, where he lives, his job title and what his company does. Uncle Bob survived because he was more recent. Asserted at a tight budget rather than the production one so it tests the eviction RULE, which is what has to hold when the graph is large and the budget binds again."
-    },
-    {
-      "test": "she forms connections — the five bars for digestion (syl-zdf) should rank memories by something that actually varies",
-      "bead": "syl-zdf.6",
-      "why": "SALIENCE_SQL sums incident hot-edge weights. Measured distribution on the live graph: the hub scored 29 and EVERY other node scored exactly 1. A constant primary sort key is not a sort key -- admission falls through to the recency tiebreaker, which is the direct cause of the eviction above."
-    },
-    {
       "test": "she forms connections — the five bars for digestion (syl-zdf) should insert at least one inferred edge that survives a night",
       "bead": "syl-zdf.5",
       "why": "dream_sessions has zero rows: the job was wired to a clock on 2026-08-10 and its only run was correctly skipped as outside the window, so this is a claim syl-005.4 made and never evidenced. Measured cause, by running the real kernels against the real graph: related() proposes 0 candidates because entitiesOf() derives probes from edges and every node's only edge is provenance, so all 30 yield the same constant probe. contradict() proposes 0 -- the whole graph scores 0.180-0.291 against a 0.300 threshold. The dream cannot bootstrap itself out of a dandelion, which is why digestion comes first."

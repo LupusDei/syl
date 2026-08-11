@@ -345,7 +345,8 @@ describe("toCandidate", () => {
       kind: "person",
       label: "the Commander",
       body: "he is busy",
-      salience: 0,
+      // A `person` scores its kind floor with no edges at all (`syl-zdf.6`).
+      salience: 3,
       updatedAt: NOW_ISO,
     });
   });

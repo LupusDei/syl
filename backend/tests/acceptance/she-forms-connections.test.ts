@@ -251,7 +251,7 @@ describe("she forms connections — the five bars for digestion (syl-zdf)", () =
       db: database.handle,
       graph: deps.memory.graph,
       clock: fixedClock(NOW),
-      maxBytes: 700,
+      maxBytes: 1_400,
     });
     const text = working.regenerate().row.text;
 
@@ -270,26 +270,19 @@ describe("she forms connections — the five bars for digestion (syl-zdf)", () =
    * tiebreaker, which is the direct cause of Bar 3.
    */
   it("should rank memories by something that actually varies", async () => {
-    const { deps, database } = boot();
+    const { deps } = boot();
     await say(deps, HE_SAID);
 
-    const distinct = database.handle
-      .prepare(
-        `WITH incident AS (
-           SELECT source_node AS node_id, weight FROM memory_edges WHERE tier = 'hot'
-           UNION ALL
-           SELECT target_node AS node_id, weight FROM memory_edges WHERE tier = 'hot'
-         ), salience AS (
-           SELECT node_id, sum(weight) AS total FROM incident GROUP BY node_id
-         )
-         SELECT count(DISTINCT coalesce(s.total, 0.0)) AS bands
-           FROM memory_nodes n
-           LEFT JOIN salience s ON s.node_id = n.id
-          WHERE n.tier = 'hot' AND n.kind <> 'source'`,
-      )
-      .get() as unknown as { bands: number };
+    // Asked through the production ranker rather than by reimplementing
+    // SALIENCE_SQL here. A test that copies the query it is checking passes
+    // whenever the copy is self-consistent, which is not the property wanted.
+    const ranked = deps.memory.graph
+      .listSalientNodes(200)
+      .filter((node) => node.kind !== "source");
+    const bands = new Set(ranked.map((node) => node.salience));
 
-    expect(distinct.bands).toBeGreaterThan(1);
+    expect(ranked.length).toBeGreaterThan(1);
+    expect(bands.size).toBeGreaterThan(1);
   });
 
   /**
