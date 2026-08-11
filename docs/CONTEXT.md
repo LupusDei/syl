@@ -927,6 +927,16 @@ one of those three reached the Commander because somebody competent had said it
 first and said it well — which is the only reason it got past anyone. When you
 pass on a finding you did not verify, say so in the same sentence, or verify it.
 
+**And the remedy is not more diligence.** Two agents produced false claims the
+same night by opposite routes: one invented a mechanism it had never run, the
+other ran `git branch --show-current`, got the right answer, and reported the
+session header instead. Checking harder does not save you from discarding a
+value you already had. What does is that **a claim about a mutable fact should
+carry the command that produced it** — cheap for branch names, paths and merge
+status, not worth it for everything. A claim carries no evidence of how it was
+obtained, so two claims of identical confidence can differ entirely in whether
+anyone looked.
+
 Two specific forms of it, both bought the same night:
 
 - **A merge-status claim has a shelf life of minutes in a shared checkout.**
