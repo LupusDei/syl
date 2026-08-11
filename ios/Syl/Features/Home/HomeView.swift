@@ -57,11 +57,18 @@ struct HomeView: View {
     /// Where an orb goes.
     ///
     /// `Hashable` since `syl-011.5.3`, because it is now a navigation path value:
-    /// `HomeScreen` pushes `.goals` onto a `NavigationStack`. Goals is wired; `memory`
-    /// belongs to `syl-010` and `today` is already this screen.
+    /// `HomeScreen` pushes `.goals` onto a `NavigationStack`. Goals, Memory and From Syl
+    /// all lead somewhere; `today` is already this screen and scrolls instead.
+    ///
+    /// **Adding a case here breaks every exhaustive switch over it**, which is exactly
+    /// why `onCapture` above is a closure rather than a fourth case. That is a feature:
+    /// the compiler finds each site and each one gets a decision, which is why none of
+    /// them has a `default`.
     enum Destination: Hashable, Sendable {
         case goals
         case memory
+        /// What she has sent him. `syl-015.4.7`.
+        case fromSyl
         case today
     }
 
@@ -293,14 +300,28 @@ struct HomeView: View {
 
         // One *visible* screen, not one raw geometry height.
         //
+    /// **Even slots rather than fixed spacing**, since From Syl made this a fourth door.
+    ///
+    /// Four 82-point spheres separated by `chapter` need 448 points and the narrowest
+    /// phone this app runs on has 375. A smaller constant would have fixed today's count
+    /// and broken on the next one; distributing the width means the row breathes at three
+    /// doors and still fits at four, on every device, with no number to revisit.
     private var orbs: some View {
-        HStack(alignment: .top, spacing: SylTheme.Metric.chapter) {
+        HStack(alignment: .top, spacing: 0) {
             SylOrb(title: "Goals", symbol: "sparkle") { onOpen(.goals) }
+                .frame(maxWidth: .infinity)
             // Open since `syl-ryp.2`. It was dimmed because an orb identical to the two
             // beside it that does nothing when tapped is worse than one visibly not
             // ready — he tapped it and reasonably concluded the app was broken. It now
             // leads to the constellation, so the dimming would be the lie instead.
             SylOrb(title: "Memory", symbol: "cloud") { onOpen(.memory) }
+                .frame(maxWidth: .infinity)
+            // An envelope rather than a play triangle, and that is the same ruling the
+            // screen's title carries: what arrives there is not a video, it is her. A
+            // file-format glyph would name the wrong thing on the one door where the
+            // sender is the point.
+            SylOrb(title: "From Syl", symbol: "envelope") { onOpen(.fromSyl) }
+                .frame(maxWidth: .infinity)
             SylOrb(
                 title: "Today",
                 symbol: "sun.horizon",
@@ -309,6 +330,7 @@ struct HomeView: View {
                 // absent entirely when there are none.
                 detail: snapshot.isClear ? nil : "\(snapshot.remaining) left"
             ) { scrollToDay &+= 1 }
+            .frame(maxWidth: .infinity)
         }
     }
 

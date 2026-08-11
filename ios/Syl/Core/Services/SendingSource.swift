@@ -37,6 +37,19 @@ struct SendingGateway: Sendable {
     /// One sending by name, for a row whose video had not landed yet.
     var one: @Sendable (_ id: SylID) async throws -> Sending
 
+    /// A gateway that reaches nothing.
+    ///
+    /// The default for a preview, an offscreen render, or a screen opened before the
+    /// object graph exists — the same role `AttachmentContext.unwired` plays. It
+    /// degrades to *the disk and nothing else*, which is a real state of this app rather
+    /// than a stub: the surface still opens on whatever it was last given.
+    static var offline: SendingGateway {
+        SendingGateway(
+            page: { _, _ in throw AttachmentFetchError.offline },
+            one: { _ in throw AttachmentFetchError.offline }
+        )
+    }
+
     static func live(backend: SylBackend) -> SendingGateway {
         SendingGateway(
             page: { cursor, limit in

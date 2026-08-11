@@ -203,7 +203,7 @@ final class FromSylViewModelTests: XCTestCase {
 
     func testShouldStartWithNoSnapshotAtAll() throws {
         let store = try makeStore()
-        let model = FromSylViewModel(source: SendingSource(store: store, gateway: .unreachable))
+        let model = FromSylViewModel(source: SendingSource(store: store, gateway: .offline))
 
         XCTAssertNil(model.snapshot, "nil is 'not asked yet' and renders as the bare veil")
     }
@@ -223,7 +223,7 @@ final class FromSylViewModelTests: XCTestCase {
     /// empty list would be the app inventing an answer out of its own failure to ask.
     func testShouldStayUnaskedWhenTheFirstFetchFails() async throws {
         let store = try makeStore()
-        let model = FromSylViewModel(source: SendingSource(store: store, gateway: .unreachable))
+        let model = FromSylViewModel(source: SendingSource(store: store, gateway: .offline))
 
         await model.refresh()
 
@@ -251,7 +251,7 @@ final class FromSylViewModelTests: XCTestCase {
             source: SendingSource(store: store, gateway: .stub(page: SendingFixtures.page())))
         await model.refresh()
 
-        let broken = FromSylViewModel(source: SendingSource(store: store, gateway: .unreachable))
+        let broken = FromSylViewModel(source: SendingSource(store: store, gateway: .offline))
         await broken.refresh()
 
         XCTAssertEqual(
@@ -263,7 +263,7 @@ final class FromSylViewModelTests: XCTestCase {
     func testShouldShowTheStoredSendingsBeforeTheNetworkAnswers() async throws {
         let store = try makeStore()
         try store.replaceSendings(SendingFixtures.page())
-        let model = FromSylViewModel(source: SendingSource(store: store, gateway: .unreachable))
+        let model = FromSylViewModel(source: SendingSource(store: store, gateway: .offline))
 
         await model.refresh()
 
@@ -272,6 +272,6 @@ final class FromSylViewModelTests: XCTestCase {
 
     func testShouldBuildTheScreenWithoutBootingTheObjectGraph() throws {
         let store = try makeStore()
-        XCTAssertNotNil(FromSylScreen(source: SendingSource(store: store, gateway: .unreachable)).body)
+        XCTAssertNotNil(FromSylScreen(source: SendingSource(store: store, gateway: .offline)).body)
     }
 }

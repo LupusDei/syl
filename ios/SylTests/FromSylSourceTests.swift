@@ -39,7 +39,7 @@ final class FromSylSourceTests: XCTestCase {
         let source = SendingSource(store: store, gateway: .stub(page: SendingFixtures.page()))
         _ = try await source.refresh()
 
-        let offline = SendingSource(store: store, gateway: .unreachable)
+        let offline = SendingSource(store: store, gateway: .offline)
 
         XCTAssertEqual(try offline.cached().count, 3, "the surface opens from disk")
     }
@@ -55,7 +55,7 @@ final class FromSylSourceTests: XCTestCase {
         let source = SendingSource(store: store, gateway: .stub(page: SendingFixtures.page()))
         _ = try await source.refresh()
 
-        let broken = SendingSource(store: store, gateway: .unreachable)
+        let broken = SendingSource(store: store, gateway: .offline)
         do {
             _ = try await broken.refresh()
             XCTFail("a failed fetch must be reported, not swallowed")
@@ -166,14 +166,6 @@ extension SendingGateway {
                 guard let found = byID[id] else { throw AttachmentFetchError.offline }
                 return found
             }
-        )
-    }
-
-    /// No route to the Mac, on both calls.
-    static var unreachable: SendingGateway {
-        SendingGateway(
-            page: { _, _ in throw AttachmentFetchError.offline },
-            one: { _ in throw AttachmentFetchError.offline }
         )
     }
 }
