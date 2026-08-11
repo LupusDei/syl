@@ -121,7 +121,7 @@ export const ENTITY_NODE_KINDS = [
   //
   // It is the one entity kind whose MINTING is gated on recurrence
   // (`RECURRENCE_GATED_KINDS` in `extract-apply.ts`), because it is the one
-  // named incidentally: every fact has a where. See `0027_memory_places.sql` §2.
+  // named incidentally: every fact has a where. See `0029_memory_places.sql` §2.
   "place",
 ] as const satisfies readonly MemoryNodeKind[];
 

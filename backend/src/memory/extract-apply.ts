@@ -140,7 +140,7 @@ import {
  * `syl-017.2`. Illinois — "one place doing three jobs at once", the
  * contradiction every Tennessee conversation is downstream of — appeared in his
  * live graph as two `fact` nodes with the word inside their labels, each with a
- * degree of ONE. `place` being a kind (`0027_memory_places.sql`) is what lets a
+ * degree of ONE. `place` being a kind (`0029_memory_places.sql`) is what lets a
  * claim point at it. It is not what stops the graph filling with everywhere he
  * has ever driven past, and that second problem is this module's.
  *
@@ -318,7 +318,7 @@ export interface FactProvenance {
 
 /**
  * One mention of a gated entity, waiting to become a node — or the record of
- * one that already did. See `0027_memory_places.sql` §2.
+ * one that already did. See `0029_memory_places.sql` §2.
  */
 export interface EntityMention {
   readonly kind: EntityNodeKind;
