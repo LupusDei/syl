@@ -95,6 +95,14 @@ jobs:
     # build and a successful sign, so the failure arrives at the end of the slowest
     # step in the pipeline with nothing before it having complained.
     runs-on: macos-26
+
+    # For the `testflight/<build>` tag, and for nothing else. The default token is
+    # read-only, and the tag push failed `403` on the first real run — *after* a
+    # successful upload, which is the whole design working: the gate now fails toward
+    # a duplicate upload App Store Connect will reject loudly, never toward silence.
+    permissions:
+      contents: write
+
     defaults:
       run:
         working-directory: ios

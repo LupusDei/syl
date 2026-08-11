@@ -1269,3 +1269,12 @@ project's single most common failure shape.
 version for a new app release?"* — a question about the outcome, not about my actions. I
 had said "pushed as 0.9.6" and that was true and irrelevant. Verifying the outcome he
 asked about took one log read. **Report what shipped, not what you did.**
+
+**Postscript, same day.** The new gate's first live run uploaded build 17 successfully and
+then failed `403` pushing its own tag — the default `GITHUB_TOKEN` is read-only, so the
+job needs `permissions: contents: write`. Fixed, and the tag backfilled by hand.
+
+It is worth being clear about what that failure demonstrated. **The design worked.** A
+missing tag means the next push re-uploads and App Store Connect rejects a duplicate
+build: loud, harmless, obvious. The old gate's equivalent slip lost a release in silence.
+When choosing where a check is allowed to break, choose the side that makes noise.
