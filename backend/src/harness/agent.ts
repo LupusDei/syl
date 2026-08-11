@@ -36,6 +36,16 @@ export const LANES = {
    * separate turn can be given a narrow output contract. See `memory/extract.ts`.
    */
   extraction: "extraction",
+  /**
+   * Reading the recent neighbourhood back to decide what CONNECTS to what.
+   *
+   * Extraction's sibling and its successor in the same pass: extraction says
+   * what is worth remembering, digestion says how the things remembered relate.
+   * Its own lane for extraction's three reasons unchanged — his answer must not
+   * wait on it, a failed digestion must not fail his reply, and only a separate
+   * turn can be given a narrow output contract. See `memory/digest.ts`.
+   */
+  digestion: "digestion",
 } as const;
 
 /**
@@ -69,10 +79,18 @@ export const LANES = {
  * unconditionally and cannot be told otherwise — this entry is what keeps the
  * guarantee if extraction is ever moved onto `SylAgent` for continuity, and
  * `assertExtractionIsMemoryless` fails loudly if it is removed.
+ *
+ * `digestion` is the third, and it inherits BOTH arguments rather than one.
+ * Like the dream it produces speculation about the corpus — typed edges nobody
+ * asserted — and like extraction it reads node bodies that were written from a
+ * transcript the Commander may have pasted an article into. A turn that is both
+ * downstream of untrusted text and upstream of the graph is the one that must
+ * least of all hold a writable store loaded at the start of every later session.
  */
 export const MEMORYLESS_LANES: ReadonlySet<string> = new Set<string>([
   LANES.consolidation,
   LANES.extraction,
+  LANES.digestion,
 ]);
 
 /** The auto-memory a lane may use — off for {@link MEMORYLESS_LANES}. */

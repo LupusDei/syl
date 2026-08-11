@@ -73,6 +73,7 @@ import { autoMemoryOff } from "./memory/auto-memory.js";
 import { DreamJudge } from "./memory/dream/judge.js";
 import { DreamLog } from "./memory/dream/log.js";
 import { DreamSweep } from "./memory/dream/sweep.js";
+import { ConversationDigester, DigestionStore } from "./memory/digest-apply.js";
 import { ConversationExtractor, ExtractionStore } from "./memory/extract-apply.js";
 import { MemoryGraph } from "./memory/graph.js";
 import { WorkingMemory } from "./memory/working.js";
@@ -1126,6 +1127,44 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
         }),
   });
 
+  // What she noticed becomes what she CONNECTED.
+  //
+  // Extraction files nodes and one provenance edge each, which is why the live
+  // graph on 2026-08-11 was a dandelion: thirty nodes, twenty-nine edges, every
+  // one of them `stated` from a single hub, and zero edges between two real
+  // memories. Digestion is the pass that answers the two questions extraction
+  // deliberately does not — who is who, and what connects to what — and it
+  // writes the OTHER species of edge, `inferred`, with reasoning and a
+  // scheduled fading, so a conclusion of hers can never be mistaken for
+  // something he said.
+  //
+  // Its deterministic half needs no turn at all: five of six `person` nodes
+  // carried the relationship in the label text (`"Ela — his wife"`), so most of
+  // the work is moving prose into a column that can be queried. The model turn
+  // is for the rest, and a failed one costs a logged miss rather than the
+  // connections that were already written down.
+  const digester = new ConversationDigester({
+    store: new DigestionStore({ db: database.handle, graph: memoryGraph, clock }),
+    graph: memoryGraph,
+    // A reader turn, for extraction's reasons exactly: node bodies are written
+    // from transcripts, and a transcript contains whatever he pasted into it.
+    turnOptions: {
+      ...(options.turn?.model === undefined ? {} : { model: options.turn.model }),
+      ...(options.turn?.claudeBin === undefined ? {} : { claudeBin: options.turn.claudeBin }),
+    },
+    onGraphChanged: () => {
+      workingMemory.regenerate();
+    },
+    ...(log === undefined
+      ? {}
+      : {
+          log: (line: string, detail?: unknown) => {
+            if (detail === undefined) log.info("memory", { message: line });
+            else log.error("memory", { message: line, error: String(detail) });
+          },
+        }),
+  });
+
   const chat = new ConversationService({
     messages,
     agent,
@@ -1142,6 +1181,13 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
             { id: exchange.reply.id, role: "assistant", text: exchange.reply.text },
           ],
         })
+        // AFTER extraction, never beside it: digestion reads the graph, so it
+        // has to run once the nodes this exchange produced are actually in it.
+        // Sequential rather than concurrent for the same reason — and because
+        // two writers to one SQLite handle interleaving at an `await` is the
+        // one concurrency hazard this path has (see `digest-apply.ts`).
+        // `ConversationDigester.digest` never rejects either.
+        .then(() => digester.digest({ conversationId: exchange.conversationId }))
         .then(() => undefined),
     // Was omitted entirely, so the only thing that ever reached a file was a
     // failure — and only via a default that writes to stderr.
