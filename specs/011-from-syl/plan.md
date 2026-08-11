@@ -280,9 +280,10 @@ reminders worked.
 
 - `.2` and `.3` are independent of each other except at two seams: T003 and T004 need
   the verb from T007b.
-- `.4` cannot start before `.3` publishes the contract — which it now has, so `.4` is
-  unblocked in practice; the bead-level dependency stays because `.4`'s DONE WHEN
-  needs a *live* sending to look at.
+- `.4` could not start before `.3` published the contract. It has, the epic-level edge
+  from `.4` to `.3` has since been cut, and **the iOS track is open now** — T011, T012
+  and T014a are all unblocked. The thing that edge was protecting is still protected:
+  T018, which needs a *live* sending to look at, sits behind the whole Phase 4 chain.
 - `.5` is independent of `.4` and can run beside it. Only T024 crosses into `.3`.
 - `.6` needs `.4` and `.5` and cannot be started early.
 

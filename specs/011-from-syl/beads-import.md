@@ -130,8 +130,8 @@ Cross-phase task edges deliberately added:
 
 `bd dep cycles` → **no cycles**.
 
-`bd ready` returns exactly seven task beads under `syl-015`, and they are exactly the
-seven this plan believes are independent:
+`bd ready` returns ten task beads under `syl-015`, and they are exactly the ten with no
+open blocker:
 
 | Ready now | |
 |---|---|
@@ -139,27 +139,33 @@ seven this plan believes are independent:
 | `syl-015.2.2` | T002 `npm run when` |
 | `syl-015.3.1` | T007a failing tests for the verb — **start here** |
 | `syl-015.3.3` | T008a failing tests for the stranded `pending` row |
-| `syl-015.3.5` | T009 the `0024` collision |
+| `syl-015.3.5` | T009 the duplicate-migration check |
+| `syl-015.4.1` | T011 the contract on the phone |
+| `syl-015.4.2` | T012 sendings on disk |
+| `syl-015.4.4` | T014a failing tests for the list and its snapshot |
 | `syl-015.5.1` | T019 crack `voice.type` |
 | `syl-015.5.2` | T020 the voice id in her home |
 
-### One thing a reader will otherwise trip over
+### The Phase 4 edge, and why the iOS track is open
 
-**`syl-015.4.1` and `syl-015.4.2` do not appear in `bd ready`, and that is a parent
-dependency hiding them, not a task-level one.** `syl-015.4` depends on `syl-015.3`,
-which blocks every descendant regardless of the descendant's own edges — and
-`bd dep cycles` says nothing about it.
+As first wired, `syl-015.4` depended on `syl-015.3`, and **a dependency on a parent epic
+hides every descendant regardless of the descendant's own edges** — `bd dep cycles` says
+nothing about it, so it is worth knowing as a general trap in this tree. That edge left
+`syl-015.4.1` and `.4.2` invisible to `bd ready` even though both were startable.
 
-In practice T011 and T012 are startable now: `.3` has already published `Sending`,
-`SendingPage`, `SendingState` and `GET /sendings` in `shared/openapi.yaml` and
-`shared/src/types.ts`, which is exactly the "contract exists" condition `syl-015.4`'s
-description names as its reason for being held. The epic-level edge was **deliberately
-left in place** rather than removed by this plan, because `syl-015.4`'s DONE WHEN also
-needs a live sending to look at, and the edge is not this agent's to cut. If the
-coordinator wants the iOS track started in parallel, the change is
-`bd dep remove syl-015.4 syl-015.3` — a decision, not an oversight.
+**It has since been removed, and Phase 4 is now open.** That was the right call: `.3`
+has published `Sending`, `SendingPage`, `SendingState` and `GET /sendings` in
+`shared/openapi.yaml` and `shared/src/types.ts`, which is exactly the "contract exists"
+condition `syl-015.4`'s own description names as its reason for being held. The iOS
+track can run beside the backend one.
 
-`syl-015.6.1` is likewise hidden, correctly: the proof cannot start early.
+What the removed edge was also carrying is still true and is now enforced at task level
+rather than at epic level: `syl-015.4.9` (T018, open it on his phone) needs a real
+sending to look at, and it sits behind the whole Phase 4 chain, so it cannot be reached
+early by accident.
+
+`syl-015.6.1` remains hidden, correctly: the proof cannot start before Phases 4 and 5
+finish.
 
 ## Audit
 
