@@ -80,6 +80,22 @@ export const HER_VOICE: VoiceSetting = {
 export const MAX_REFERENCE_SECONDS = 30;
 
 /**
+ * How long the clip is actually trimmed to.
+ *
+ * **Deliberately under the cap, and it has to be.** `ffmpeg -t 30 -c copy` on
+ * an mp3 cannot cut mid-frame, so it rounds up to the next frame boundary and
+ * writes 30.027755 seconds — which Runway refuses, because
+ * {@link MAX_REFERENCE_SECONDS} is inclusive. Measured on 2026-08-11; the
+ * failure arrives as `too_big` on `voice.audioUri` and reads like a file-size
+ * problem rather than a rounding one.
+ *
+ * Re-encoding to hit exactly thirty would degrade the very clip that carries
+ * the voice. Two seconds of headroom is cheaper and the model does not need
+ * them.
+ */
+export const REFERENCE_SECONDS = 28;
+
+/**
  * The longest thing `seed_audio` will say in one go, in UTF-16 code units.
  *
  * From the published schema's `maxLength` on `promptText`. Checked here so that

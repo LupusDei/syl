@@ -365,7 +365,9 @@ describe("VoiceService.ensureSample", () => {
     expect(placed.ok && placed.placement).toBe("fetched");
     const trim = run.calls.find((call) => call.file === "ffmpeg");
     expect(trim?.args).toContain("-t");
-    expect(trim?.args).toContain("30");
+    // Under Runway's inclusive 30-second cap, not at it: `-c copy` cannot cut
+    // mid-frame and rounds a `-t 30` up to 30.027755, which is refused.
+    expect(trim?.args[trim.args.indexOf("-t") + 1]).toBe("28");
   });
 
   it("should refuse rather than leave half a clip when the trim fails", async () => {

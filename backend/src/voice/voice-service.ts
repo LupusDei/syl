@@ -6,7 +6,13 @@ import { usdOf } from "../render/credits.js";
 import { isTerminal } from "../render/runway.js";
 import { isRenderName, type Studio } from "../render/studio.js";
 import { instant, systemClock, type Clock } from "../services/clock.js";
-import { HER_VOICE, MAX_REFERENCE_SECONDS, MAX_SPEECH_CHARS, samplePath, type VoiceSetting } from "./her-voice.js";
+import {
+  HER_VOICE,
+  MAX_SPEECH_CHARS,
+  REFERENCE_SECONDS,
+  samplePath,
+  type VoiceSetting,
+} from "./her-voice.js";
 import { mediaRunner, mux, type MediaRunner, type SpeechFit } from "./mux.js";
 import type { SpeechBackend } from "./speech.js";
 
@@ -380,7 +386,8 @@ export class VoiceService {
     // Trimmed once, here, rather than checked on every call: the full preview
     // is around eighty seconds and Runway refuses a reference over thirty with
     // `{"code":"too_big","maximum":30}`. `-c copy` because re-encoding a
-    // reference clip would degrade the very thing it is a reference for.
+    // reference clip would degrade the very thing it is a reference for — which
+    // is also why the target is `REFERENCE_SECONDS` rather than the cap.
     const trimmed = await this.#run("ffmpeg", [
       "-y",
       "-loglevel",
@@ -388,7 +395,7 @@ export class VoiceService {
       "-i",
       full,
       "-t",
-      String(MAX_REFERENCE_SECONDS),
+      String(REFERENCE_SECONDS),
       "-c",
       "copy",
       path,
@@ -402,7 +409,7 @@ export class VoiceService {
       return {
         ok: false,
         reason:
-          `I could not trim the sample of my voice to ${String(MAX_REFERENCE_SECONDS)} seconds: ` +
+          `I could not trim the sample of my voice to ${String(REFERENCE_SECONDS)} seconds: ` +
           `ffmpeg ${trimmed.message}. So there is no clip on disk, and I have not pretended there is.`,
         retryable: false,
       };

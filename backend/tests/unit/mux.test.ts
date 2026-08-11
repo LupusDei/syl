@@ -53,6 +53,17 @@ describe("planMux", () => {
     expect(plan.args).not.toContain("apad");
   });
 
+  it("should cut a looped video at the last word rather than at the end of a lap", () => {
+    const plan = planMux({ video: "/v/a.mp4", audio: "/v/a.mp3", out: "/v/b.mp4", videoSeconds: 15, speechSeconds: 34 });
+
+    // `-shortest` does not do this job: measured against a real render on
+    // 2026-08-11, a looped `-c:v copy` overran 36.65s of speech to a 42.6s
+    // file — six seconds of silent video after she stopped talking.
+    expect(plan.args).toContain("-t");
+    expect(plan.args[plan.args.indexOf("-t") + 1]).toBe("34");
+    expect(plan.args).not.toContain("-shortest");
+  });
+
   it("should pad rather than loop when the two lengths agree within the tolerance", () => {
     const plan = planMux({ video: "/v/a.mp4", audio: "/v/a.mp3", out: "/v/b.mp4", videoSeconds: 15, speechSeconds: 15.1 });
 

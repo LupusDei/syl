@@ -4,6 +4,7 @@ import {
   HER_VOICE,
   MAX_REFERENCE_SECONDS,
   MAX_SPEECH_CHARS,
+  REFERENCE_SECONDS,
   samplePath,
   voiceFrom,
 } from "../../src/voice/her-voice.js";
@@ -55,5 +56,12 @@ describe("her voice", () => {
   it("should carry Runway's own limits so a refusal happens before a credit is spent", () => {
     expect(MAX_REFERENCE_SECONDS).toBe(30);
     expect(MAX_SPEECH_CHARS).toBe(2048);
+  });
+
+  it("should trim the reference clip under the cap rather than at it", () => {
+    // `-t 30 -c copy` on an mp3 rounds up to the next frame and writes
+    // 30.027755 seconds, which Runway refuses — the cap is inclusive. Measured
+    // 2026-08-11, and the 400 reads as a size problem rather than a rounding one.
+    expect(REFERENCE_SECONDS).toBeLessThan(MAX_REFERENCE_SECONDS);
   });
 });

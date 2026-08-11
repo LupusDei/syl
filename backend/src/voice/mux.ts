@@ -165,9 +165,6 @@ export function planMux(spec: MuxSpec): MuxPlan {
     "aac",
     "-b:a",
     "192k",
-    // With exactly one infinite stream on each branch below, this is what ends
-    // the file at the right instant instead of at the wrong one.
-    "-shortest",
     // So the clip can start playing before it has finished downloading, which
     // is what the From Syl surface needs.
     "-movflags",
@@ -194,6 +191,15 @@ export function planMux(spec: MuxSpec): MuxPlan {
         spec.video,
         "-i",
         spec.audio,
+        // **Not `-shortest`.** It does not end a looping `-c:v copy` at the
+        // right instant: measured against a real render on 2026-08-11, 36.65
+        // seconds of speech over a 15-second shot produced a 42.6-second file —
+        // the video ran on to the end of its third lap, six seconds of her
+        // saying nothing. `-shortest` decides per encoder and there is no video
+        // encoder here to decide for. An explicit output duration does end it
+        // on the last word.
+        "-t",
+        String(spec.speechSeconds),
         ...common,
       ],
     };
@@ -214,9 +220,12 @@ export function planMux(spec: MuxSpec): MuxPlan {
       spec.audio,
       // `apad` with no length makes the audio infinite, so `-shortest` ends the
       // file at the video's last frame. Padding to an explicit length would
-      // have to trust a duration measured a moment earlier.
+      // have to trust a duration measured a moment earlier — and here there IS
+      // an audio encoder for `-shortest` to decide for, which is the difference
+      // from the looped branch above.
       "-af",
       "apad",
+      "-shortest",
       ...common,
     ],
   };
