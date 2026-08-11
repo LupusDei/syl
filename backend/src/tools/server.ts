@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
-import type { Goal, HealthStatus, Reminder, ReminderOrigin, Todo } from "@syl/shared";
+import type { Goal, HealthStatus, Reminder, ReminderOrigin, Sending, Todo } from "@syl/shared";
 
 import { AdjutantClient } from "../agents/adjutant-client.js";
 import { mayReach, notOnTheRoster } from "../agents/roster.js";
@@ -1033,6 +1033,120 @@ const seeMyself: ToolHandler = async (input, context) => {
   };
 };
 
+/**
+ * The refusal for a sending with no render chosen, in the right words.
+ *
+ * Two situations wearing one shape, and they need different sentences because
+ * they have different next steps: she has renders and picked none, or she has
+ * never made one. "Name the one you meant" is useless advice to somebody with
+ * nothing to name — the same distinction `routes/renders.ts` makes between a
+ * framing she got wrong and a machine with no secret.
+ *
+ * The read decides which sentence, never whether to refuse. A studio that
+ * cannot be listed falls back to the general sentence rather than becoming a
+ * path into composing without a face.
+ */
+async function chooseARender(context: ToolContext): Promise<ToolEnvelope> {
+  const mine = await context.client.get<{ items: readonly { name: string }[] }>("/renders");
+  const nothingRendered = mine.ok && mine.data.items.length === 0;
+
+  return {
+    ok: false,
+    action: "show_him",
+    reason: nothingRendered
+      ? "A sending is you saying something in your own face, and you have not made a render yet — " +
+        "so there is no face for this to arrive in. Make one with render_me first, then send the " +
+        "one that is you. (`renderName` was missing.)"
+      : "A sending is you saying something in your own face, so name the one you mean in " +
+        "`renderName` — the render you looked at and thought was you. Not `latest`: that means " +
+        "whatever was made most recently, which is not the same as the one you chose, and a " +
+        "sending keeps the name it was made with forever. Look with see_myself and name it.",
+    // She can render herself, or name one she already made, and call again.
+    // That is a materially different instruction from "this cannot work".
+    retryable: true,
+  };
+}
+
+/**
+ * Say something to him, in her own face.
+ *
+ * The only verb on this surface she **starts**. Everything else answers
+ * something he said; this one is her deciding there is something he should
+ * have, which is what acceptance 3 and 4 rest on and what nothing could do
+ * before it existed.
+ *
+ * ## It composes; it does not render
+ *
+ * Nothing here can start a render or spend a credit — `SendingService` is
+ * handed two readers rather than `RenderService`, deliberately, and this verb
+ * is the caller that keeps that true from above. She renders with `render_me`,
+ * looks with `see_myself`, and sends what she already made.
+ *
+ * ## A render that is missing is still a success, and that is the feature
+ *
+ * By the time anything looks at the video her words are already in his
+ * conversation and already carried the notification. So a name she
+ * half-remembered comes back `201`, with `state: "failed"` and a reason on the
+ * row — not as a refusal. Reporting it as a failure would have her apologising
+ * for a message he has read. The only refusals here are about the WORDS, and
+ * every one of them happens before anything is written.
+ *
+ * ## Why it will not go without a face, and will not take `latest`
+ *
+ * `renderName` is required. A sending is her saying something in her own face;
+ * words with no face is an ordinary message, and she already has a
+ * conversation for those. The refusal says exactly that, because she has to
+ * turn it into a sentence and "renderName is required" is not one.
+ *
+ * **`latest` is refused too**, which is the one place this verb is stricter
+ * than the route beneath it. `latest` resolves at creation to whatever record
+ * was written most recently, and the voice track writes voiced clips as their
+ * own records with names that pass `isRenderName` — so `latest` will begin
+ * answering with derivatives rather than originals, silently, with nothing
+ * failing at the moment it changes. **A sending refuses `UPDATE`**, so a wrong
+ * `renderName` is permanent from the first write and the immutability trigger
+ * cannot help: it refuses re-pointing an existing row, not recording the wrong
+ * value at creation. An immutable record of the wrong thing is worse than a
+ * mutable one, because the usual remedy is closed.
+ *
+ * It is also the better behaviour on its own terms. She has `see_myself` and
+ * is told to judge her renders in her own terms; a sending is one of the small
+ * number she *chose*, and "whatever was most recent" is the one path that
+ * involves no choosing.
+ */
+const showHim: ToolHandler = async (input, context) => {
+  const words = text(input, "words");
+  if (words === null) {
+    return missing("show_him", "words", "I did not catch what you wanted to say to him.");
+  }
+  const because = text(input, "because");
+  if (because === null) {
+    return missing(
+      "show_him",
+      "because",
+      "This reaches him unprompted, so it has to say why — that is the difference between a gift and a machine acting on his behalf.",
+    );
+  }
+
+  const named = text(input, "renderName");
+  const renderName = named === null || named.toLowerCase() === "latest" ? null : named;
+  if (renderName === null) return chooseARender(context);
+
+  const created = await context.client.post<Sending>("/sendings", { words, because, renderName });
+  if (!created.ok) return refused("show_him", created.failure);
+
+  // Read back, like every other write — `syl-009.3.4`, and it earns its place
+  // here: what comes back says `pending` rather than `ready`, because the
+  // video is still being made. Reporting the write's own optimism would have
+  // her describing a clip that does not exist yet.
+  return readBack(
+    "show_him",
+    context,
+    `/sendings/${encodeURIComponent(created.data.id)}`,
+    (row: Sending) => row.updatedAt,
+  );
+};
+
 export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   // Order matches `TOOLS`, and a test asserts it. Not cosmetic: `tools/list` is
   // built from the schemas and this is what she is told she has, so a mismatch
@@ -1048,6 +1162,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   change_goal: changeGoal,
   render_me: renderMe,
   see_myself: seeMyself,
+  show_him: showHim,
   whats_outstanding: whatsOutstanding,
 };
 

@@ -318,7 +318,56 @@ export const anyAuthenticatedDevice: RequestHandler = (_request, _response, next
  * absent she cannot render at all, and if he wants it stopped, removing that
  * variable stops it — without touching her hands on anything else.
  */
-export const AGENT_SURFACE: readonly string[] = ["/reminders", "/todos", "/goals", "/renders"];
+/**
+ * `/sendings` — the fifth entry, and the only one that REACHES HIM.
+ *
+ * The same deliberate addition as `/renders` above, and it deserves a harder
+ * look than that one did, because the difference is not a matter of degree.
+ * Every other surface on this list ends in a row. This one ends on his phone:
+ * composing a sending puts a message in his conversation and a notification on
+ * his lock screen, unprompted.
+ *
+ * **What it is.** Acceptance 3 of `syl-015` — a sending reaches him as one
+ * thing, her words in chat and her video in the From Syl surface — and
+ * acceptance 7, that she does it on her own initiative. `POST /sendings` was
+ * built and finished with no way for her to call it, which made both of those
+ * unreachable however good the service was. This is the line that closes that.
+ *
+ * **Why it is safe to open, stated as what it can actually do.** Reaching
+ * `/sendings` grants exactly two things: compose a sending, and read the ones
+ * she has already made. Three bounds hold it, and none of them is this list:
+ *
+ * - **She still cannot speak in his voice.** The words go through
+ *   `ConversationService`, which decides whose message it is and stamps
+ *   `role: "assistant"`. `/conversations` stays off this list precisely
+ *   because a credential that can post into a conversation could put words in
+ *   the Commander's mouth — see the note on that route in
+ *   `tests/unit/agent-confinement.test.ts`. Nothing here changes that.
+ * - **Nothing she writes here can be unwritten, by her or by anything else.**
+ *   `0024_sendings.sql` refuses DELETE and refuses every UPDATE that reaches
+ *   the words. A sending is a thing she gave him; the failure mode of this
+ *   surface is an unwanted sending, never a rewritten history.
+ * - **How OFTEN she may reach him is not this list's business.** The rate — at
+ *   most two sendings a day, quiet hours held — belongs to the hourly turn,
+ *   and it is enforced there rather than by a route allowlist. An allowlist
+ *   that tried to count would be an allowlist that answers a question it
+ *   cannot see the state for.
+ *
+ * It touches no row of his, and there is no path from here to `/auth`.
+ *
+ * **What it costs, since that is the honest objection.** His attention. That
+ * is the thing this surface spends, and it is spent unprompted — which is why
+ * `because` is required on the write and kept forever beside the words: he can
+ * tell a good instinct from a wrong one, and tell her to stop making a kind he
+ * dislikes, only if every one of them says why it exists.
+ */
+export const AGENT_SURFACE: readonly string[] = [
+  "/reminders",
+  "/todos",
+  "/goals",
+  "/renders",
+  "/sendings",
+];
 
 /**
  * The refusal Syl gets for reaching outside her own nouns.
@@ -333,9 +382,10 @@ export const AGENT_SURFACE: readonly string[] = ["/reminders", "/todos", "/goals
 export function beyondAgentReach(path: string): ApiFailure {
   return new ApiFailure(
     "FORBIDDEN",
-    "Syl's own credential reaches reminders, to-dos and goals, and her own renders, and nothing " +
-      `else on this API. ${path} is outside that, deliberately — she cannot pair a device, read ` +
-      "the log of what she has done, or change where a notification goes.",
+    "Syl's own credential reaches reminders, to-dos and goals, her own renders, and the things " +
+      `she has sent him, and nothing else on this API. ${path} is outside that, deliberately — ` +
+      "she cannot pair a device, read the log of what she has done, or change where a " +
+      "notification goes.",
     { details: { reach: AGENT_SURFACE } },
   );
 }
