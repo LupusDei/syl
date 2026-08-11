@@ -329,12 +329,18 @@ const KIND_FLOOR_SQL =
 /**
  * Hot nodes ranked by how much hot edge weight touches them, pinned as text.
  *
- * **Provenance edges do not count.** Each half joins the OPPOSITE endpoint and
- * excludes edges whose other end is a `source`. Every memory has exactly one
- * such edge — the conversation it came from — so it contributed a constant to
- * every node and therefore zero information, while handing the hub itself a
- * salience of 29 that made it the most important thing Syl knew. Excluding it
- * costs nothing and removes noise in both directions.
+ * **Provenance edges do not count, at either end.** Both halves join BOTH
+ * endpoints and drop the edge if either is a `source`. Every memory has exactly
+ * one such edge — the conversation it came from — so it contributed a constant
+ * to every node and therefore zero information.
+ *
+ * Excluding it only on the far side is not enough, and the difference is
+ * visible on the live graph: the hub's own edges all point at non-sources, so a
+ * one-sided exclusion still let it accumulate **32**, leaving the conversation
+ * container ranked as the single most salient thing Syl knew — ahead of his
+ * children. A source is a handle, not knowledge; it should score its floor of
+ * zero and sit at the bottom, which is what dropping the edge at both ends
+ * gives.
  *
  * Written as a `UNION ALL` over the two endpoint columns and then aggregated,
  * rather than as a correlated `SUM(...) WHERE source = n.id OR target = n.id`.
@@ -349,12 +355,14 @@ const KIND_FLOOR_SQL =
 export const SALIENCE_SQL =
   `WITH incident AS ( ` +
   `SELECT e.source_node AS node_id, e.weight FROM memory_edges e ` +
-  `JOIN memory_nodes o ON o.id = e.target_node ` +
-  `WHERE e.tier = 'hot' AND o.kind <> 'source' ` +
+  `JOIN memory_nodes a ON a.id = e.source_node ` +
+  `JOIN memory_nodes b ON b.id = e.target_node ` +
+  `WHERE e.tier = 'hot' AND a.kind <> 'source' AND b.kind <> 'source' ` +
   `UNION ALL ` +
   `SELECT e.target_node AS node_id, e.weight FROM memory_edges e ` +
-  `JOIN memory_nodes o ON o.id = e.source_node ` +
-  `WHERE e.tier = 'hot' AND o.kind <> 'source' ` +
+  `JOIN memory_nodes a ON a.id = e.source_node ` +
+  `JOIN memory_nodes b ON b.id = e.target_node ` +
+  `WHERE e.tier = 'hot' AND a.kind <> 'source' AND b.kind <> 'source' ` +
   `), salience AS ( ` +
   `SELECT node_id, sum(weight) AS total FROM incident GROUP BY node_id ` +
   `) ` +
