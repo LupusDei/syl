@@ -93,6 +93,35 @@ import { SCANNED_TIER, type MemoryNodeKind } from "./schema.js";
  *
  * The two are complementary: the first makes replay free, the second stops the
  * graph growing a duplicate every time he mentions his daughter.
+ *
+ *
+ * ## The provenance the graph could not hold, and the asymmetry that shapes it
+ *
+ * `syl-016.5`, in Syl's words: *"the reasoning is gone and only the residue is
+ * filed."* What used to reach the graph was the fact's sentence with
+ * `(said in syl:message:…)` glued onto the end of it — plumbing smeared through
+ * the fact's own text, and nothing else. He could tell her a fact was wrong. He
+ * could never tell her she had reasoned wrongly from something true.
+ *
+ * `memory_provenance` (`0025`) holds it, one row per (fact, extraction), and
+ * the three columns are split the way `syl-y82` split `origin`:
+ *
+ * | | |
+ * | --- | --- |
+ * | `said_in` | **DERIVED.** Read out of the transcript by ordinal, which `asExtraction` has already checked. |
+ * | `quote` | **DERIVED.** His own words, copied from that message. Never asked for, so never fabricated. |
+ * | `why` | **DECLARED.** The step from those words to this fact. Nothing can check a step of reasoning. |
+ *
+ * Deriving the quote is the load-bearing half. A quote a model hands back is a
+ * claim, and a claim is what the provenance was supposed to let him check; a
+ * quote the service copies is evidence, and it sits beside the declared step so
+ * the two can be compared. **The body goes back to being just the fact**, which
+ * is the other half of what she was complaining about.
+ *
+ * Not on the edge, and not on the node. `0012`'s CHECK gives `reasoning` to
+ * inferred edges alone — that is what makes an edge an inference, and widening
+ * it would let the cheap frequent path look like the speculative one. A node
+ * column would hold only the first assertion, when a fact stated twice has two.
  */
 
 /** What went wrong when an extraction could not be filed. */
@@ -118,8 +147,34 @@ export class ExtractionApplyError extends Error {
  */
 export const STATED_RELATION = "stated";
 
+/**
+ * The relation a claim hangs off the thing it is about by.
+ *
+ * Also fixed here, and for a reason `syl-016.4` makes concrete: the turn may
+ * say THAT one candidate is about another, never by what relation. "Ela wants
+ * an apartment" is a `fact` linked to the `person` — the link is what stops the
+ * fact from being filed as the person, and the projection groups by kind, so
+ * that is the difference between a People bucket that means people and one that
+ * is noise with headings.
+ */
+export const ABOUT_RELATION = "about";
+
 /** How a conversation's source node is labelled when nobody says otherwise. */
 export const DEFAULT_CONVERSATION_LABEL = "Conversation with the Commander";
+
+/**
+ * The most of his own words one provenance row keeps.
+ *
+ * A quote is evidence, not a second copy of the conversation — and a pasted
+ * article is a legitimate message. Beyond this the quote is cut and MARKED with
+ * {@link QUOTE_TRUNCATED}, because an unmarked cut reads as a finished sentence
+ * and a finished sentence is exactly what somebody would check the reasoning
+ * against.
+ */
+export const MAX_QUOTE_CHARS = 500;
+
+/** What a shortened quote ends with, so the cut is visible. */
+export const QUOTE_TRUNCATED = " […]";
 
 /** One filed fact. */
 export interface AppliedFact {
@@ -130,6 +185,24 @@ export interface AppliedFact {
   readonly created: boolean;
   /** The provenance edge, or `null` when this conversation had already asserted it. */
   readonly edgeId: string | null;
+  /** The entity this claim was filed as being about, or `null`. */
+  readonly aboutNodeId: string | null;
+  /** The edge to that entity, or `null` when there was none to draw or it already existed. */
+  readonly aboutEdgeId: string | null;
+}
+
+/** Where one remembered fact came from. See `0025_memory_provenance.sql`. */
+export interface FactProvenance {
+  readonly nodeId: string;
+  /** The extraction it came out of. */
+  readonly digest: string;
+  /** DERIVED: the message that asserted it. */
+  readonly saidIn: string;
+  /** DERIVED: his words in that message. */
+  readonly quote: string;
+  /** DECLARED: the step from those words to this fact. */
+  readonly why: string;
+  readonly createdAt: string;
 }
 
 /** What one apply did. */
@@ -184,6 +257,17 @@ export interface ExtractionRecord {
 
 const LEDGER_COLUMNS = "digest, conversation_id, source_node, facts, created_nodes, created_at";
 
+const PROVENANCE_COLUMNS = "node_id, digest, said_in, quote, why, created_at";
+
+interface ProvenanceRow {
+  readonly node_id: string;
+  readonly digest: string;
+  readonly said_in: string;
+  readonly quote: string;
+  readonly why: string;
+  readonly created_at: string;
+}
+
 /**
  * The identity lookup for a fact, pinned as text.
  *
@@ -233,6 +317,34 @@ export class ExtractionStore {
     };
   }
 
+  /**
+   * Where one remembered fact came from, most recent first.
+   *
+   * The read half of `syl-016.5`: his words, and the step the turn claims took
+   * it from those words to this. More than one row when he has said the same
+   * thing in more than one exchange, which is why the provenance is per
+   * assertion rather than per node.
+   */
+  provenanceFor(nodeId: string): readonly FactProvenance[] {
+    return this.#db
+      .prepare(
+        `SELECT ${PROVENANCE_COLUMNS} FROM memory_provenance WHERE node_id = ? ` +
+          `ORDER BY created_at DESC, digest`,
+      )
+      .all(nodeId)
+      .map((row) => {
+        const typed = row as unknown as ProvenanceRow;
+        return {
+          nodeId: typed.node_id,
+          digest: typed.digest,
+          saidIn: typed.said_in,
+          quote: typed.quote,
+          why: typed.why,
+          createdAt: typed.created_at,
+        };
+      });
+  }
+
   /** Everything filed from one conversation, most recent first. */
   recordsFor(conversationId: string): readonly ExtractionRecord[] {
     return this.#db
@@ -257,10 +369,10 @@ export class ExtractionStore {
   /**
    * File a validated extraction, or do nothing because it has been filed before.
    *
-   * All-or-nothing: the ledger row, the source handle and every fact land in
-   * one savepoint. A crash halfway would otherwise leave facts in the graph
-   * with no ledger row, so the retry would file them a second time — the exact
-   * duplication the ledger exists to prevent.
+   * All-or-nothing: the ledger row, the source handle, every fact and every
+   * provenance row land in one savepoint. A crash halfway would otherwise leave
+   * facts in the graph with no ledger row, so the retry would file them a
+   * second time — the exact duplication the ledger exists to prevent.
    *
    * @throws {ExtractionApplyError} `bad_conversation` if the id does not
    * address a conversation row, `graph_write` if the graph refused a write.
@@ -326,21 +438,22 @@ export class ExtractionStore {
     );
     const sourceNodeId = source.projection.id;
 
-    const facts = input.extraction.facts.map((fact) =>
-      this.#file(fact, sourceNodeId, input.transcript),
+    // Nodes and provenance edges first, so every candidate has an id before
+    // anything tries to link one to another.
+    const filed = input.extraction.facts.map((fact) => this.#file(fact, sourceNodeId));
+    const facts = filed.map((entry, index) =>
+      this.#link(entry, index, filed, input.extraction.facts, sourceNodeId),
     );
 
     const created = facts.filter((fact) => fact.created).length;
+    const now = instant(this.#clock());
     this.#db
       .prepare(`INSERT INTO memory_extractions (${LEDGER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(
-        digest,
-        input.conversationId,
-        sourceNodeId,
-        facts.length,
-        created,
-        instant(this.#clock()),
-      );
+      .run(digest, input.conversationId, sourceNodeId, facts.length, created, now);
+
+    // After the ledger row, because `memory_provenance.digest` references it.
+    // Same savepoint, so the ordering is an ordering and not a window.
+    this.#recordProvenance(digest, input.extraction.facts, facts, input.transcript, now);
 
     return {
       applied: true,
@@ -350,17 +463,15 @@ export class ExtractionStore {
       reused: facts.length - created,
       changed:
         source.outcome !== "unchanged" ||
-        facts.some((fact) => fact.created || fact.edgeId !== null),
+        facts.some(
+          (fact) => fact.created || fact.edgeId !== null || fact.aboutEdgeId !== null,
+        ),
     };
   }
 
   /** One fact: find or mint the node, then attach provenance to it. */
-  #file(
-    fact: CandidateFact,
-    sourceNodeId: string,
-    transcript: readonly TranscriptMessage[],
-  ): AppliedFact {
-    const { node, created } = this.#nodeFor(fact, transcript);
+  #file(fact: CandidateFact, sourceNodeId: string): AppliedFact {
+    const { node, created } = this.#nodeFor(fact);
     const edge = this.#provenance(sourceNodeId, node.id);
     return {
       nodeId: node.id,
@@ -368,7 +479,99 @@ export class ExtractionStore {
       label: node.label,
       created,
       edgeId: edge?.id ?? null,
+      aboutNodeId: null,
+      aboutEdgeId: null,
     };
+  }
+
+  /**
+   * Hang a claim off the thing it is about.
+   *
+   * The turn named an ordinal into its own reply; the relation, the species and
+   * the provenance are all decided here. The conversation vouches for the link
+   * exactly as it vouches for the fact, so `assertedBy` is the source node
+   * again — a link nobody asserted would be a rumour about a relationship.
+   *
+   * Two candidates can resolve to ONE node, when the turn listed the same thing
+   * twice and `(kind, label)` reuse collapsed them. The graph refuses a
+   * self-edge and that refusal would discard the whole apply, so the link is
+   * skipped instead: there is nothing to say, and a duplicate entry is not
+   * worth losing the exchange over.
+   */
+  #link(
+    filed: AppliedFact,
+    index: number,
+    all: readonly AppliedFact[],
+    candidates: readonly CandidateFact[],
+    sourceNodeId: string,
+  ): AppliedFact {
+    const about = candidates[index]?.about ?? null;
+    if (about === null) return filed;
+
+    const target = all[about - 1];
+    // Unreachable: `asExtraction` checked the ordinal against this same reply.
+    // Present because the alternative is a non-null assertion on model output.
+    if (target === undefined || target.nodeId === filed.nodeId) return filed;
+
+    const existing = this.#graph.findEdge(filed.nodeId, target.nodeId, ABOUT_RELATION);
+    const edge =
+      existing ??
+      this.#graph.observe({
+        sourceNode: filed.nodeId,
+        targetNode: target.nodeId,
+        relation: ABOUT_RELATION,
+        assertedBy: sourceNodeId,
+      });
+
+    return {
+      ...filed,
+      aboutNodeId: target.nodeId,
+      aboutEdgeId: existing === null ? edge.id : null,
+    };
+  }
+
+  /**
+   * His words, and the step from them to the fact, one row per fact.
+   *
+   * Written for a REUSED node as well as a new one. A fact he states a second
+   * time in a different exchange is a second assertion, with its own message,
+   * its own words and its own reasoning; keeping only the first would lose the
+   * one he most recently stood behind.
+   */
+  #recordProvenance(
+    digest: string,
+    candidates: readonly CandidateFact[],
+    facts: readonly AppliedFact[],
+    transcript: readonly TranscriptMessage[],
+    now: string,
+  ): void {
+    // A plain INSERT, deliberately. `INSERT OR IGNORE` would also cover the one
+    // collision this can actually hit — two entries in a reply that
+    // `(kind, label)` reuse collapsed onto one node, colliding on the primary
+    // key — and it would cover every CHECK in the migration as well, silently.
+    // A provenance row dropped without a word is a fact filed with no record of
+    // where it came from, which is the exact state this table exists to make
+    // impossible. So the collision is handled by name and everything else is
+    // left to fail loudly inside the savepoint.
+    const insert = this.#db.prepare(
+      `INSERT INTO memory_provenance (${PROVENANCE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const written = new Set<string>();
+    candidates.forEach((candidate, index) => {
+      const filed = facts[index];
+      const message = transcript[candidate.saidIn - 1];
+      // Both unreachable — `asExtraction` checked the ordinal against this very
+      // transcript, and `facts` is a map over `candidates`. A fact with no
+      // message would be a fact with no provenance, so it is skipped rather
+      // than invented.
+      if (filed === undefined || message === undefined) return;
+      // The duplicate-entry case. The first assertion stands; the same reply
+      // saying it twice is not a second source.
+      if (written.has(filed.nodeId)) return;
+      written.add(filed.nodeId);
+
+      insert.run(filed.nodeId, digest, message.id, quoteOf(message.text), candidate.why, now);
+    });
   }
 
   /**
@@ -386,10 +589,7 @@ export class ExtractionStore {
    * extracted goal, say) therefore gains a provenance edge and stays a handle,
    * so nothing here can push mutable state into the four-field contract.
    */
-  #nodeFor(
-    fact: CandidateFact,
-    transcript: readonly TranscriptMessage[],
-  ): { readonly node: MemoryNode; readonly created: boolean } {
+  #nodeFor(fact: CandidateFact): { readonly node: MemoryNode; readonly created: boolean } {
     const row = this.#db.prepare(FACT_IDENTITY_SQL).get(fact.kind, fact.label, SCANNED_TIER);
     if (row !== undefined) {
       const existing = this.#graph.getNode((row as unknown as { id: string }).id);
@@ -400,29 +600,17 @@ export class ExtractionStore {
       node: this.#graph.addNode({
         kind: fact.kind,
         label: fact.label,
-        body: this.#body(fact, transcript),
+        // Just the fact. Provenance used to be appended here as
+        // `(said in syl:message:…)`, which put plumbing inside the sentence
+        // she reads back and was still not the reasoning. It lives in
+        // `memory_provenance` now — see the module header.
+        body: fact.body,
         // Deliberately no `subjectId`. A conversational fact is not a handle
         // for an operational row, and letting the turn point one at a row
         // would be the single field it needs to attach itself to a goal.
       }),
       created: true,
     };
-  }
-
-  /**
-   * The stored body: the fact, and the message that asserted it.
-   *
-   * The message id rather than the ordinal, because an ordinal is only
-   * meaningful against the transcript window it was rendered from, and that
-   * window is not stored. This line is what turns "where did she get that?"
-   * into a row in `messages`.
-   */
-  #body(fact: CandidateFact, transcript: readonly TranscriptMessage[]): string {
-    const message = transcript[fact.saidIn - 1];
-    // `asExtraction` has already checked the ordinal against this very
-    // transcript, so the fallback is unreachable; it exists because the
-    // alternative is a non-null assertion on a value derived from model output.
-    return message === undefined ? fact.body : `${fact.body} (said in ${message.id})`;
   }
 
   /**
@@ -445,6 +633,27 @@ export class ExtractionStore {
       assertedBy: sourceNodeId,
     });
   }
+}
+
+/**
+ * His words as a provenance row keeps them: verbatim, trimmed, bounded, and
+ * marked when they were cut.
+ *
+ * **Copied, never asked for.** That is the whole difference between this and a
+ * quote a model hands back, and it is the same asymmetry `syl-y82` settled: a
+ * property that can be DERIVED must not be STATED, because a stated one has a
+ * shelf life and nothing announces its expiry. Here the expiry would be silent
+ * and specific — a plausible near-miss of what he actually said, filed as the
+ * evidence he is supposed to check the reasoning against.
+ *
+ * `renderTranscript` has already refused a blank message by the time this runs,
+ * so there is no empty-quote case to handle: the digest is taken over the
+ * rendered transcript and `apply` computes it first.
+ */
+export function quoteOf(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= MAX_QUOTE_CHARS) return trimmed;
+  return `${trimmed.slice(0, MAX_QUOTE_CHARS).trimEnd()}${QUOTE_TRUNCATED}`;
 }
 
 /** Where an extraction's outcome is reported. Defaults to stderr in the service. */

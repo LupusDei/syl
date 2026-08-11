@@ -77,6 +77,52 @@ export const MEMORY_NODE_KINDS = [
 export type MemoryNodeKind = (typeof MEMORY_NODE_KINDS)[number];
 
 /**
+ * The kinds that name a THING, as opposed to a claim about one.
+ *
+ * **A kind is a claim about what a row IS, not about what it is ABOUT.** That
+ * sentence is the whole of `syl-016.4`, and it needed a vocabulary before it
+ * could be a rule. Syl found the defect herself:
+ *
+ * > "Ela's entry isn't *who she is*, it's the fact that she wants an apartment
+ * > near her parents. So even the People bucket is storing facts with a
+ * > person's name in them rather than people."
+ *
+ * The projection groups by kind. A `person` node whose body is a fact about
+ * that person makes the grouping carry no information at all — her digest
+ * becomes noise with headings, which is exactly what she reported seeing. The
+ * repair is that a person is a person, and what she wants is a `fact` LINKED to
+ * her.
+ *
+ * So the split, and both halves are load-bearing:
+ *
+ * - **Entity kinds** name something that exists on its own and can be pointed
+ *   at: a person, an event, a goal, a decision.
+ * - **`fact`** is a claim, and a claim is always about something. It is the one
+ *   extractable kind that is not here, deliberately: `extract.ts` lets a
+ *   candidate point at an entity in the same extraction, and refuses to let it
+ *   point at another claim, because a claim about a claim is not what that
+ *   mechanism is for.
+ *
+ * `source` and `memory` are absent for a different reason — they are
+ * provenance and intake plumbing, not things the Commander's world contains,
+ * and neither is extractable in the first place.
+ */
+export const ENTITY_NODE_KINDS = [
+  "person",
+  "event",
+  "goal",
+  "decision",
+] as const satisfies readonly MemoryNodeKind[];
+
+/** A kind that names a thing rather than a claim. See {@link ENTITY_NODE_KINDS}. */
+export type EntityNodeKind = (typeof ENTITY_NODE_KINDS)[number];
+
+/** Whether a value names a thing rather than a claim about one. */
+export function isEntityNodeKind(value: unknown): value is EntityNodeKind {
+  return typeof value === "string" && (ENTITY_NODE_KINDS as readonly string[]).includes(value);
+}
+
+/**
  * The two species of edge, which are also the edge table's secondary partition
  * axis.
  *
