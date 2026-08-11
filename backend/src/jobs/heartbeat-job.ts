@@ -1,4 +1,4 @@
-import type { Job } from "@syl/shared";
+import type { Job, JobKind } from "@syl/shared";
 
 import type { SylAgent } from "../harness/agent.js";
 import type { SylEvent } from "../harness/protocol.js";
@@ -15,6 +15,7 @@ import type { JobHandler, JobResult } from "../services/job-runner.js";
 import type { JobStore } from "../services/job-store.js";
 import { mcpToolName } from "../tools/config.js";
 import { advertisedToolNames } from "../tools/server.js";
+import { COMPOSE_LEAD_MS } from "./agenda-job.js";
 
 /**
  * The hourly self-ping: an hour that is hers, and mostly ends in nothing.
@@ -22,9 +23,17 @@ import { advertisedToolNames } from "../tools/server.js";
  * > *"She also needs an hourly self-ping that wakes her up and lets her decide
  * > what to do, so she might generate one of these videos."* — the Commander
  *
- * `LANES.heartbeat` has existed since the harness was written and nothing has
- * ever fired it. This is the thing that fires it, and it is the first time Syl
- * takes a turn with nobody watching and hands she can use.
+ * This is the first turn Syl takes with nobody watching and hands she can use.
+ *
+ * ## Whose thread the hour happens in
+ *
+ * His. It ran on a lane of its own until the Commander ruled otherwise on
+ * 2026-08-11 — *"there will be things in the chat session that might invoke a
+ * reason to send a message and how it should appear — a new lane invalidates
+ * that entirely"* — and the argument is kept beside `LANES` in
+ * `harness/agent.ts`. Two consequences land in this file: the hour reads what
+ * he has been saying, and **nothing here may reset the thread**, because on his
+ * lane that is his conversation being deleted.
  *
  * ## Everything here is a bound
  *
@@ -42,10 +51,22 @@ import { advertisedToolNames } from "../tools/server.js";
  *    holds every non-urgent notification until the window ends; nothing is
  *    reimplemented here. What this file adds is that a heartbeat turn is never
  *    recorded as having said something *he* said, so a reminder created on this
- *    lane can never satisfy `harness/urgency.ts` and can never pierce the
- *    window. See `recordHisWords` in `index.ts`, which is the other half.
+ *    hour can never satisfy `harness/urgency.ts` and can never pierce the
+ *    window. That is `AskOptions.hisWords`, which the hour does not set and
+ *    cannot; see `recordHisWords` in `index.ts`, which is the other half.
+ *    **It is not keyed on the lane** — it was, until the hour moved onto his,
+ *    and a protection resting on a lane name would have been repealed by that
+ *    move without a word about sleep anywhere in it.
+ *  - **Not a reason not to run.** Quiet hours bound what may *reach* him, never
+ *    what may happen. The hour still takes its turn at 03:00 and is told he is
+ *    asleep; the dream and the morning brief also run inside the window by
+ *    design. Anything that starts treating the window as "do not run" takes
+ *    those with it.
  *  - **Not a firehose.** {@link SENDINGS_PER_DAY} bounds how often the hour may
  *    put something in front of him, counted per LOCAL day and never banked.
+ *  - **Not in anybody's way.** It stands aside for his own turns and for the
+ *    scheduled ones that outrank it, at zero cost and without failing. See
+ *    {@link OUTRANKS_THE_HOUR}.
  *
  * ## The ledger is the runs table
  *
@@ -126,6 +147,54 @@ export const REACHES_HIM: readonly string[] = ["remind_me", "show_him"];
  */
 export const REACHING_KINDS: readonly string[] = ["heartbeat", "maintenance"];
 
+/**
+ * The scheduled turns the hour stands aside for.
+ *
+ * > *"I think she should be able to file things over night. I just suspect the
+ * > hourly heartbeat at night won't have much value and might even conflict
+ * > with the dreaming or morning routines."*
+ * >                                        — the Commander, 2026-08-11
+ *
+ * **Yielding, not skipping.** He asked to keep the overnight hours — she may
+ * still file at 02:00 — so nothing here refuses an hour for being at night. It
+ * refuses an hour that would get in the way of a turn that matters more, at any
+ * time of day, and the ordering is the one already written into
+ * `JobPriority`: the hour is the only `background` job that takes a turn.
+ *
+ * **`morning_agenda` is the collision that is real.** The brief must exist
+ * before the 07:00 note announces it, `agendaWallTime()` starts it
+ * {@link COMPOSE_LEAD_MS} ahead for exactly that reason, and an hour still in
+ * flight at 06:45 spends that lead on itself. `JobRunner` runs one job at a
+ * time, so this was already true before the lanes merged; the merge sharpened
+ * it, because both turns now resume one session and the queue in `SylAgent`
+ * makes them exclusive on that too.
+ *
+ * **`nightly_consolidation` is the collision that is not.** Measured from the
+ * code rather than guarded against by reflex: the dream is `scheduled` priority
+ * and the hour is `background`, `JobStore.due` sorts on that, and `JobRunner`
+ * never runs two handlers at once — so when both are due the dream goes first
+ * and they cannot overlap. It also keeps its own lane (`LANES.consolidation`,
+ * memoryless), so the lane merge did not bring it any nearer to the hour. What
+ * remains is the same one-sided cost the agenda has: a dream that is due at
+ * 03:00 waits for an hour that started at 02:59. That is worth avoiding for the
+ * same reason and by the same rule, so it is listed — but it is a delay, not
+ * a contention, and the entry above is the one carrying the weight.
+ */
+export const OUTRANKS_THE_HOUR: readonly JobKind[] = ["morning_agenda", "nightly_consolidation"];
+
+/**
+ * How near a higher-ranked turn has to be before the hour stands aside.
+ *
+ * Derived, not typed: {@link COMPOSE_LEAD_MS} is the morning brief's own
+ * statement of how long composing may take, and it is longer than the longest
+ * the hour can hold anything — one turn, `maxWallClockMs` of five minutes, and
+ * `DEFAULT_TURN_TIMEOUT_MS` of ten behind that. So an hour that starts outside
+ * this window has finished before the thing it was making way for is due, and
+ * an hour inside it stands aside. Move the announcement and both numbers move
+ * together, which is the property a literal here would lose.
+ */
+export const YIELD_WINDOW_MS = COMPOSE_LEAD_MS;
+
 /** How far back the ledger looks. Two and a half days of hourly runs. */
 const LEDGER_DEPTH = 64;
 
@@ -178,7 +247,7 @@ export function defineHeartbeatJob(
       maxWallClockMs: 5 * 60_000,
       // Derived from the server rather than written out beside it, so the
       // catalogue cannot claim a verb she does not have — or miss one she does.
-      // The heartbeat lane carries an MCP surface; saying `[]` here would be
+      // This turn carries an MCP surface; saying `[]` here would be
       // the same false security claim `syl-009.9` was about.
       allowedTools: advertisedToolNames().map(mcpToolName),
     },
@@ -315,17 +384,31 @@ function allowanceClause(moment: HeartbeatMoment): string {
  * What the handler needs of Syl.
  *
  * A `Pick` of the real class rather than a hand-written interface, so a change
- * to either method's signature is a type error here rather than a double that
- * has drifted from the thing it stands in for. `reset` is on it because the
- * thread is deliberately a day long — see the handler.
+ * to its signature is a type error here rather than a double that has drifted
+ * from the thing it stands in for.
+ *
+ * **No `reset`.** It used to have one, because the hour ran on a thread of its
+ * own that was deliberately a day long. That thread is now his (see
+ * `harness/agent.ts`), and `reset` on it deletes the conversation the Commander
+ * is having — so the handler is not given the method rather than being trusted
+ * not to call it.
+ *
+ * **`busy` instead**, which is the same merge seen from the other side: the
+ * hour now shares a thread with him and has to be able to notice he is using
+ * it. See {@link OUTRANKS_THE_HOUR}.
  */
-export type HeartbeatVoice = Pick<SylAgent, "ask" | "reset">;
+export type HeartbeatVoice = Pick<SylAgent, "ask" | "busy">;
 
 export interface HeartbeatDeps {
-  /** The heartbeat lane, already bound. `SylAgent.forLane` produces one. */
+  /** Syl on the commander lane: the thread he talks to, resumed. */
   readonly voice: HeartbeatVoice;
-  /** The ledger. Her own runs are the record of what she has already spent. */
-  readonly jobs: Pick<JobStore, "listRuns">;
+  /**
+   * The ledger, and the catalogue.
+   *
+   * `listRuns` is what she has already spent today. `list` is what else is
+   * about to want the thread — see {@link OUTRANKS_THE_HOUR}.
+   */
+  readonly jobs: Pick<JobStore, "listRuns" | "list">;
   /** IANA, never a fixed offset. The day is counted in it. */
   readonly tz: string;
   readonly quiet: QuietHours;
@@ -342,14 +425,6 @@ export interface HeartbeatDeps {
   // No clock. Every instant this handler needs is `context.now` — the instant
   // the runner leased the job at, and the one the run record and the lateness
   // are measured from. A second clock here could disagree with it.
-}
-
-/** What today's ledger says, read from the runs this job has already had. */
-interface Ledger {
-  /** Times she has reached him since local midnight, excluding this pass. */
-  readonly spentToday: number;
-  /** The local day the previous pass ran on, or `null` on the first ever. */
-  readonly lastDay: string | null;
 }
 
 /** The local day a run started on, or `null` for an instant that will not parse. */
@@ -393,25 +468,69 @@ export function reachedHimToday(
   return spent;
 }
 
-function readLedger(
-  jobs: Pick<JobStore, "listRuns">,
-  jobId: string,
-  exceptRunId: string,
+/**
+ * What the hour should stand aside for right now, or `null` to go ahead.
+ *
+ * Returns the reason in words because it becomes the run record's summary, and
+ * "yielded" without a subject is a line nobody can act on.
+ *
+ * Exported so the reasoning can be tested without a handler, a store or a
+ * clock — it is the whole of the decision, and the handler around it is four
+ * lines of plumbing.
+ */
+export function whatOutranksTheHour(
+  deps: Pick<HeartbeatDeps, "voice" | "jobs">,
   now: number,
-  tz: string,
-): Ledger {
-  // The previous HOUR, from this job's own runs. Deliberately not read from
-  // the widened ledger above: `lastDay` decides whether the day's thread is
-  // reset, and that is a question about this lane's continuity rather than
-  // about how often she has spoken.
-  const previous = jobs
-    .listRuns({ jobId, limit: 2 })
-    .items.find((run) => run.id !== exceptRunId);
+  kinds: readonly JobKind[] = OUTRANKS_THE_HOUR,
+): string | null {
+  // HIM FIRST. He outranks everything, and unlike the jobs below there is no
+  // schedule to read: the only evidence that he is mid-conversation is that a
+  // turn is on the lane. Without this the hour joins the queue behind him and
+  // his next message waits for a turn nobody asked for.
+  if (deps.voice.busy()) {
+    return "the Commander was mid-turn on the same thread";
+  }
 
-  return {
-    spentToday: reachedHimToday(jobs, { exceptRunId, now, tz }),
-    lastDay: previous === undefined ? null : dayOf(previous.startedAt, tz),
-  };
+  for (const kind of kinds) {
+    for (const job of deps.jobs.list({ kind, limit: 4 }).items) {
+      // Already holding it. `JobRunner` runs one job at a time so this should
+      // not be reachable in a single-process service — it is checked anyway,
+      // because "should not be reachable" is a claim about today's runner and
+      // this is a claim about the hour.
+      if (job.state === "leased" || job.state === "running") {
+        return `${kind} was already running`;
+      }
+
+      // ABOUT to want it, and strictly about to. `nextRunAt` is the instant the
+      // trigger computed, so this asks the schedule rather than re-deriving a
+      // wall time here — the one place that could drift from what is actually
+      // going to happen.
+      //
+      // A job that is due NOW or overdue is deliberately not a reason to stand
+      // aside, and that is load-bearing rather than a rounding decision.
+      // `JobStore.due` sorts `background` last and `JobRunner` runs one job per
+      // pass, so the hour being picked at all already means nothing that
+      // outranks it is due — the runner has made that decision and this would
+      // only be re-making it. Worse, it would re-make it wrongly: a job stuck
+      // due in the past (a circuit breaker open, a handler that keeps failing)
+      // would silence the hour permanently, and an hour that never runs again
+      // while every signal stays green is the failure shape this project keeps
+      // finding. So this window covers exactly the case the runner cannot see:
+      // the brief that becomes due while an hour started a minute ago is still
+      // talking.
+      const due = job.nextRunAt === null ? null : parseInstant(job.nextRunAt);
+      if (due !== null && due > now && due - now <= YIELD_WINDOW_MS) {
+        return `${kind} was due within ${describeMinutes(YIELD_WINDOW_MS)}`;
+      }
+    }
+  }
+
+  return null;
+}
+
+/** "fifteen minutes", roughly, for a duration in milliseconds. */
+function describeMinutes(ms: number): string {
+  return `${String(Math.round(ms / 60_000))} minutes`;
 }
 
 /** Whether a turn reached for something that puts a thing in front of him. */
@@ -447,15 +566,41 @@ export function createHeartbeatHandler(deps: HeartbeatDeps): JobHandler {
 
   return async (context): Promise<JobResult> => {
     const now = context.now;
-    const today = localDate(new Date(now), deps.tz);
-    const ledger = readLedger(deps.jobs, context.job.id, context.run.id, now, deps.tz);
 
-    // A day's thread, and no longer. Continuity within the day is what makes
-    // "I noticed this at 03:00" still true at 09:00 — the lane resumes, so the
-    // hours are one conversation. Continuity across months is 24 turns a day of
-    // transcript that every later turn pays to re-read, on the one rate-limit
-    // pool she shares with him.
-    if (ledger.lastDay !== null && ledger.lastDay !== today) deps.voice.reset();
+    // STAND ASIDE, BEFORE ANYTHING IS SPENT. The hour is the lowest-priority
+    // thing on his thread and behaves like it: no turn, no cost, and a
+    // `success` — a yielded hour is not a failed one and must not walk the
+    // circuit breaker towards taking the hour away altogether.
+    //
+    // No `nextRunAt`, deliberately, exactly as the failure branch below: the
+    // interval trigger computes the next hour, which is strictly later. `null`
+    // would write `next_run_at = NULL` and take the job out of `due` forever —
+    // the silent drop constraint 4 forbids, arriving through the polite path.
+    const yielded = whatOutranksTheHour(deps, now);
+    if (yielded !== null) {
+      return {
+        outcome: "success",
+        spoke: false,
+        turns: 0,
+        costUsd: 0,
+        summary: `Stood aside: ${yielded}. The next hour is at most an hour away.`,
+        error: null,
+      };
+    }
+
+    const spentToday = reachedHimToday(deps.jobs, {
+      exceptRunId: context.run.id,
+      now,
+      tz: deps.tz,
+    });
+
+    // NOTHING IS RESET HERE, and the absence is the decision. The hour used to
+    // start a fresh thread each local day, because a lane of its own carrying
+    // 24 turns a day forever is a transcript every later turn pays to re-read.
+    // The thread is his now, and starting a fresh one would delete the
+    // conversation the Commander is having — so the bound has to be found
+    // somewhere other than the scissors. He has taken that trade explicitly:
+    // *"if it causes bloat on that thread we can solve it later."*
 
     const inQuietHours = isWithinQuietHours(new Date(now), deps.quiet, deps.tz);
     const prompt = heartbeatPrompt({
@@ -463,7 +608,7 @@ export function createHeartbeatHandler(deps: HeartbeatDeps): JobHandler {
       tz: deps.tz,
       quiet: deps.quiet,
       inQuietHours,
-      spentToday: ledger.spentToday,
+      spentToday: spentToday,
       allowance,
     });
 
@@ -491,12 +636,12 @@ export function createHeartbeatHandler(deps: HeartbeatDeps): JobHandler {
     }
 
     const spoke = reachedHim(result.events);
-    const overspent = spoke && ledger.spentToday >= allowance;
+    const overspent = spoke && spentToday >= allowance;
 
     if (spoke) {
       deps.log?.log("info", "heartbeat.reached", {
         at: instant(now),
-        spentToday: ledger.spentToday + 1,
+        spentToday: spentToday + 1,
         allowance,
       });
     }
@@ -513,7 +658,7 @@ export function createHeartbeatHandler(deps: HeartbeatDeps): JobHandler {
       costUsd: result.costUsd,
       summary: summarise(result),
       error: overspent
-        ? `She reached him on an hour with nothing left to spend: ${String(ledger.spentToday)} ` +
+        ? `She reached him on an hour with nothing left to spend: ${String(spentToday)} ` +
           `of ${String(allowance)} were already gone today. The ceiling is a rate, not a ` +
           `suggestion; five of these in a row will take the hour away.`
         : null,

@@ -121,7 +121,7 @@ describe("the heartbeat, as scheduled by the running service", () => {
     for (const run of runs) expect(run.error ?? "").not.toContain("No handler is registered");
   });
 
-  it("should take one turn, on the heartbeat lane, and record that it reached nobody", async () => {
+  it("should take one turn and record that it reached nobody", async () => {
     const { service, turns } = await boot();
     const job = service.deps.jobs.list({ kind: "heartbeat", limit: 1 }).items[0];
     service.deps.jobs.release(job?.id ?? "", "success", null, instant(MORNING - 1_000));
@@ -129,7 +129,6 @@ describe("the heartbeat, as scheduled by the running service", () => {
     for (let i = 0; i < 5; i += 1) await service.runtime.runner.tick();
 
     expect(turns).toHaveLength(1);
-    // Her own thread, resumed per lane — not his conversation.
     expect(service.deps.jobs.listRuns({ jobId: job?.id ?? "", limit: 5 }).items[0]?.spoke).toBe(
       false,
     );
@@ -160,6 +159,12 @@ describe("the heartbeat, as scheduled by the running service", () => {
     // holds every non-urgent notification until the window ends — so if a
     // heartbeat's own prompt landed in that file, she could quote the words she
     // was woken with and wake him at 03:00 with a sentence he never wrote.
+    //
+    // It used to hold because the hour ran on a lane of its own. It runs on HIS
+    // LANE now, so the lane says nothing about who spoke and this holds because
+    // of `AskOptions.hisWords`, which the hour does not set. See
+    // `tests/acceptance/an-unattended-turn-cannot-wake-him.test.ts` for the
+    // same property driven all the way to the `urgent` column.
     const { service, turns } = await boot();
     const job = service.deps.jobs.list({ kind: "heartbeat", limit: 1 }).items[0];
     service.deps.jobs.release(job?.id ?? "", "success", null, instant(MORNING - 1_000));
@@ -223,20 +228,50 @@ describe("the heartbeat, as scheduled by the running service", () => {
     expect(service.deps.outbox.list({ limit: 50 }).items).toHaveLength(0);
   });
 
-  it("should take its turns on the heartbeat lane's own thread", async () => {
-    // Lanes are what keep her inner monologue out of his transcript. A
-    // heartbeat resuming the commander session would interleave 24 turns a day
-    // of "nothing today" with what he actually said.
+  it("should take its turns on the thread the Commander talks to", async () => {
+    // The Commander's ruling, 2026-08-11: *"running the hourly checkin on a
+    // different thread is wrong for now — resume the same session… much of her
+    // personality lives in that thread."* The hour used to have a lane of its
+    // own, and the cost of that was the hour deciding whether to say something
+    // to him with no sight of how he had been spoken to.
     const { service, turns } = await boot();
     const job = service.deps.jobs.list({ kind: "heartbeat", limit: 1 }).items[0];
     service.deps.jobs.release(job?.id ?? "", "success", null, instant(MORNING - 1_000));
 
     for (let i = 0; i < 10; i += 1) await service.runtime.runner.tick();
 
-    // Two passes, one session: the lane resumes, so the hours of a day are one
-    // conversation rather than 24 strangers.
-    const sessions = new Set(turns.map(([, options]) => options.sessionId ?? options.resume));
     expect(turns.length).toBeGreaterThan(0);
+    for (const [, options] of turns) expect(options.lane).toBe("commander");
+    // One session across the passes: the lane resumes, so the hours are one
+    // conversation — his — rather than a stranger every hour.
+    const sessions = new Set(turns.map(([, options]) => options.sessionId ?? options.resume));
     expect(sessions.size).toBe(1);
+  });
+
+  it("should stand aside rather than hold his thread through the morning brief", async () => {
+    // *"I just suspect the hourly heartbeat at night won't have much value and
+    // might even conflict with the dreaming or morning routines."* — the
+    // Commander, 2026-08-11. He asked for the collision to go, not for the
+    // overnight hours to go: she may still file things at 03:00.
+    //
+    // The collision that is real is the brief. It must exist before the 07:00
+    // note announces it and it starts `COMPOSE_LEAD_MS` ahead for exactly that
+    // reason, so an hour still talking at 06:45 spends that lead on itself —
+    // and now holds the same session the brief has to resume.
+    const justBeforeTheBrief = Date.UTC(2026, 7, 12, 11, 40); // 06:40 CDT
+    const { service, turns } = await boot(justBeforeTheBrief);
+    const job = service.deps.jobs.list({ kind: "heartbeat", limit: 1 }).items[0];
+    service.deps.jobs.release(job?.id ?? "", "success", null, instant(justBeforeTheBrief - 1_000));
+
+    for (let i = 0; i < 5; i += 1) await service.runtime.runner.tick();
+
+    expect(turns).toHaveLength(0);
+    const run = service.deps.jobs.listRuns({ jobId: job?.id ?? "", limit: 5 }).items[0];
+    // A yielded hour is a success and costs nothing. Recorded as a failure it
+    // would walk the job's circuit breaker towards taking the hour away
+    // altogether, which is a punishment for good manners.
+    expect(run?.outcome).toBe("success");
+    expect(run?.summary ?? "").toContain("morning_agenda");
+    expect(run?.error).toBeNull();
   });
 });

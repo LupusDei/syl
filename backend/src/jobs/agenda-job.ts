@@ -17,7 +17,7 @@ import { RHYTHM_GRACE_MS } from "./deliver-reminders.js";
  *
  * ## The defect this exists for
  *
- * `LANES.agenda` had been declared since the harness was written, the job
+ * A lane for it had been declared since the harness was written, the job
  * catalogue has carried `morning_agenda` since `0007_jobs.sql`, and at least
  * three files' comments described the morning brief as a working part of her
  * rhythm. **Nothing defined the job and nothing scheduled it.** The only thing
@@ -50,7 +50,8 @@ import { RHYTHM_GRACE_MS } from "./deliver-reminders.js";
  *
  * ## What it does with the hour
  *
- * It wakes her on `LANES.agenda` with her hands attached and points her at
+ * It wakes her on `LANES.commander` — his own thread, on his ruling of
+ * 2026-08-11; see `harness/agent.ts` — with her hands attached, and points her at
  * `whats_outstanding` — the verb she already has, which returns his open
  * reminders, to-dos and goals. It does not stuff his data into the prompt. A
  * turn that looks sees what is true when it looks; a turn that is told sees what
@@ -157,7 +158,7 @@ export function defineMorningAgendaJob(
       maxWallClockMs: COMPOSE_LEAD_MS,
       // Derived from the server rather than written out beside it, so the
       // catalogue cannot claim a verb she does not have — or miss one she does.
-      // The agenda lane carries an MCP surface; saying `[]` here would be the
+      // This turn carries an MCP surface; saying `[]` here would be the
       // same false security claim `syl-009.9` was about.
       allowedTools: advertisedToolNames().map(mcpToolName),
     },
@@ -286,13 +287,20 @@ function lateClause(moment: AgendaMoment): string {
  * What the handler needs of Syl.
  *
  * A `Pick` of the real class rather than a hand-written interface, so a change
- * to either method's signature is a type error here rather than a double that
- * has drifted from the thing it stands in for.
+ * to its signature is a type error here rather than a double that has drifted
+ * from the thing it stands in for.
+ *
+ * **`ask` and nothing else.** It used to include `reset`, and the brief called
+ * it every morning, because a lane of its own left to resume would carry every
+ * previous morning's assembly into the next one. On the Commander's lane —
+ * *"the morning routine update should also be on the same lane for now"*,
+ * 2026-08-11 — that call deletes his conversation, so the method is withheld
+ * rather than the call merely being removed.
  */
-export type AgendaVoice = Pick<SylAgent, "ask" | "reset">;
+export type AgendaVoice = Pick<SylAgent, "ask">;
 
 export interface MorningAgendaDeps {
-  /** The agenda lane, already bound. `SylAgent.forLane` produces one. */
+  /** Syl on the commander lane: the thread he talks to, resumed. */
   readonly voice: AgendaVoice;
   /** IANA, never a fixed offset. */
   readonly tz: string;
@@ -342,13 +350,12 @@ export function createMorningAgendaHandler(deps: MorningAgendaDeps): JobHandler 
   return async (context): Promise<JobResult> => {
     const now = context.now;
 
-    // A fresh thread every morning. Unlike the heartbeat, whose hours are one
-    // conversation within a day, a brief is a day's work and the days are not
-    // one conversation: left to resume, this lane would carry every previous
-    // morning's transcript into every later one, on the one rate-limit pool she
-    // shares with him. What has to survive between mornings is in the store she
-    // reads and in her memory, not in a transcript.
-    deps.voice.reset();
+    // NOTHING IS RESET HERE. The brief used to start a fresh thread each
+    // morning, so that a day's assembly never carried every previous morning's
+    // into it. It runs in his conversation now, where that call would delete
+    // what he has been saying — and what has to survive between mornings was
+    // never in the transcript anyway: it is in the stores she reads and in her
+    // memory. The bloat is real and the Commander has taken it knowingly.
 
     const prompt = agendaPrompt({
       now,

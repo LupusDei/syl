@@ -47,21 +47,36 @@ export interface TurnOptions {
   /** Path to an MCP config JSON file. Plugin MCP servers load regardless. */
   readonly mcpConfig?: string;
   /**
-   * Which of Syl's lanes this turn belongs to. **Never becomes argv.**
+   * Which of Syl's lanes — which transcript — this turn belongs to. **Never
+   * becomes argv.**
    *
    * Here for the wrappers a caller puts around a runner, which see a prompt and
-   * an options object and nothing else. `index.ts` has one that records what
-   * the Commander said so the tool server can check an urgency claim against
-   * his actual words — and it must write for his lane and no other, or a
-   * background turn's own prompt becomes evidence of something he said.
+   * an options object and nothing else. `SylAgent` sets it after the caller's
+   * overrides, so a turn cannot claim to be a lane it is not.
    *
-   * It used to infer that from `mcpConfig !== undefined`, which was exactly
-   * true while one lane had hands and silently wrong the moment a second one
-   * did. A lane is what that wrapper was always asking about, so it is the
-   * thing the options carry. `SylAgent` sets it after the caller's overrides,
-   * so a turn cannot claim to be a lane it is not.
+   * **It does not say who spoke.** It used to, as an accident worth knowing
+   * about: her unattended turns each had a lane of their own, so "the commander
+   * lane" and "the Commander said this" were the same set of turns, and
+   * `index.ts` keyed the urgency evidence on it. The Commander merged those
+   * lanes onto his (2026-08-11), and the accident ended. See {@link hisWords},
+   * which is that question asked directly.
    */
   readonly lane?: string;
+  /**
+   * Whether the prompt is text the **Commander himself sent**. Defaults to
+   * false and **never becomes argv**.
+   *
+   * The one input to `harness/urgency.ts` that cannot be derived from anything
+   * else in this object: a prompt is just a string, and nothing about it says
+   * whether a person wrote it. `index.ts` records his words for the tool server
+   * only when this is set, and the tool server is what decides whether a
+   * reminder may pierce his quiet hours.
+   *
+   * Set by `SylAgent` from `AskOptions.hisWords`, after the caller's overrides,
+   * so a turn cannot award itself the bypass. The full argument is on
+   * `AskOptions.hisWords` in `harness/agent.ts`.
+   */
+  readonly hisWords?: boolean;
   /** Prior session id, to continue an existing conversation. */
   readonly resume?: string;
   /**
