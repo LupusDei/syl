@@ -73,6 +73,13 @@ const INTENDED_MCP: Readonly<
   // lanes: a reader's output is consumed once, but an extracted fact becomes
   // preamble on every later turn. This entry must never become a path.
   extraction: undefined,
+  // Digestion is extraction's sibling and reads the same untrusted prose one
+  // remove further on — node bodies written from a transcript he may have
+  // pasted into. It is a READER turn for the same reason, and it has a stronger
+  // claim on staying one than extraction does: a wrong fact is one attributable
+  // node, while a wrong EDGE changes how every later retrieval traverses the
+  // graph. This entry must never become a path either.
+  digestion: undefined,
 };
 
 describe("bootstrap — the container", () => {

@@ -101,6 +101,7 @@ export type MemoryEdgeSpecies = (typeof MEMORY_EDGE_SPECIES)[number];
 export const MEMORY_NODE_ID_PREFIX = "syl:memory_node:";
 export const MEMORY_EDGE_ID_PREFIX = "syl:memory_edge:";
 export const MEMORY_ASSERTION_ID_PREFIX = "syl:memory_assertion:";
+export const MEMORY_SUBJECT_ID_PREFIX = "syl:memory_subject:";
 
 /** The canonical UUID text form, either hex case, as the shared `Id` allows. */
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -133,6 +134,26 @@ export function newMemoryEdgeId(generate: () => string = uuidv7): string {
  */
 export function newMemoryAssertionId(generate: () => string = uuidv7): string {
   return newId("memory_assertion", generate);
+}
+
+/**
+ * Mint an ENTITY id — the thing two nodes are both about.
+ *
+ * Its own namespace, and the argument is the one this module already makes for
+ * the node kind not being in the node id: `syl:memory_node:<uuid>` addresses a
+ * ROW, and an identity is not a row. `memory_nodes.subject_id` holding a node
+ * id would mean "this node is a handle for that node" — which is what
+ * `projection.ts` uses the column for on `goal` and `source` kinds — and one
+ * column meaning two different things is how a convention drifts with nothing
+ * failing.
+ */
+export function newMemorySubjectId(generate: () => string = uuidv7): string {
+  return newId("memory_subject", generate);
+}
+
+/** Whether a string addresses an entity. */
+export function isMemorySubjectId(value: string): boolean {
+  return hasNamespace(value, MEMORY_SUBJECT_ID_PREFIX);
 }
 
 /** Whether a string addresses a ledger assertion. */

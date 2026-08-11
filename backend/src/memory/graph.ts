@@ -689,6 +689,57 @@ export class MemoryGraph {
     return this.#nodeOrThrow(node.id);
   }
 
+  /**
+   * Claim an identity for a node — "these two rows are the same person".
+   *
+   * `subject_id` is the identity column. It has been there since
+   * `0012_memory_core.sql` and, until `syl-zdf.3`, nothing on the conversational
+   * path had ever written it: `extract-apply.ts` says *"Deliberately no
+   * `subjectId`"*, correctly, because a turn that could point one at an
+   * operational row would have exactly the one field it needs to attach itself
+   * to a goal. The service may write it; the model still may not.
+   *
+   * **Never overwrites a different identity.** A node already claiming one has
+   * been resolved before — or is a projection handle, where `subject_id` means
+   * "the row this is a handle for" and re-pointing it would silently detach a
+   * goal from its own node. Re-stamping the SAME identity is a no-op, statement
+   * and all: the `WHERE` carries `subject_id IS NULL`, so a second identical
+   * pass writes nothing and does not bump `updated_at`. That is what lets an
+   * idempotence test assert on `updatedAt` rather than merely on a row count.
+   *
+   * Nothing is merged and nothing is deleted. Two rows keep their bodies, their
+   * provenance and their edges, and gain a shared answer to "who is this?" —
+   * which is the reading of constraint 6 that applies here: the system does not
+   * get to silently discard things, so identity is something rows SHARE rather
+   * than something one row survives.
+   *
+   * @throws {GraphError} `bad_subject` on a malformed id or on a node that
+   * already claims a different one; `unknown_node` if the row is gone.
+   */
+  setSubject(node: MemoryNode, subjectId: string): MemoryNode {
+    const subject = requireSubject(subjectId);
+    const current = this.#nodeOrThrow(node.id);
+
+    if (current.subjectId !== null && current.subjectId !== subject) {
+      throw new GraphError(
+        "bad_subject",
+        `Node ${current.id} already claims identity ${current.subjectId}, so it will not be ` +
+          `re-pointed at ${subject}. Reconciling two identities is a merge of merges: it is ` +
+          `proposed and surfaced, never applied, because a wrong merge collapses two things ` +
+          `into one and no amount of decay makes that less wrong.`,
+      );
+    }
+
+    const at = instant(this.#clock());
+    this.#db
+      .prepare(
+        "UPDATE memory_nodes SET subject_id = ?, updated_at = ? WHERE id = ? AND subject_id IS NULL",
+      )
+      .run(subject, at, current.id);
+
+    return this.#nodeOrThrow(current.id);
+  }
+
   // ── Edges: the two species ───────────────────────────────────────────────
 
   /**

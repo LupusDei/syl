@@ -334,6 +334,13 @@ describe("US4 — untrusted content cannot act", () => {
     expect(readerImporters.map((file) => file.slice(BACKEND_SRC.length)).sort()).toEqual([
       // The read step of the intake ladder: an article, an email, a page.
       "connections/intake.ts",
+      // The digestion turn: node bodies, which were written from transcripts,
+      // which contain whatever he pasted into them. It is one remove further
+      // from the source than extraction and has the STRONGEST claim of the
+      // three to be inside the quarantine — a forged fact is one attributable
+      // node, while a forged EDGE changes how every later retrieval traverses
+      // the graph, which is closer to rewriting the index than to adding a row.
+      "memory/digest.ts",
       // The extraction turn: a transcript, which contains whatever he pasted
       // into it, and whose output outlives the turn by becoming memory.
       "memory/extract.ts",
@@ -346,7 +353,9 @@ describe("US4 — untrusted content cannot act", () => {
     // untrusted text.
     const toolBearing = sourceFiles(BACKEND_SRC).filter(
       (file) =>
-        (file.includes("/connections/") || file.endsWith("memory/extract.ts")) &&
+        (file.includes("/connections/") ||
+          file.endsWith("memory/extract.ts") ||
+          file.endsWith("memory/digest.ts")) &&
         /from "[^"]*session\.js"/u.test(readFileSync(file, "utf8")),
     );
     expect(toolBearing).toEqual([]);
