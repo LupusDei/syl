@@ -86,6 +86,7 @@ function render(overrides: Partial<RenderRecord> = {}): RenderRecord {
   return {
     name: RENDER,
     status: "ready",
+    anchor: null,
     renderedAt: instant(AFTERNOON),
     taskId: "task-1",
     model: "seedance2",

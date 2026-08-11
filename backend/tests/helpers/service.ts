@@ -336,6 +336,8 @@ export function testReadyRenders(): RenderSource {
   const record = (name: string): RenderRecord => ({
     name: name === "latest" ? "syl-20260811t090000z-close" : name,
     status: "ready",
+    // Unanchored: these fixtures predate the closing-frame anchor.
+    anchor: null,
     renderedAt: "2026-08-11T09:02:00.000Z",
     taskId: "task-test",
     model: "seedance2",
