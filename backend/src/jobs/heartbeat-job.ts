@@ -90,13 +90,17 @@ export const SENDINGS_PER_DAY = 4;
  * looking at herself (`render_me`) are not speech, and counting them would
  * spend a day's allowance on an hour in which she said nothing to him at all.
  *
- * `remind_me` is the one that exists today: a reminder she creates unprompted
- * becomes a notification on his phone, which is the whole definition of
- * reaching him. **When the sending verb from `specs/008` lands it belongs in
- * here**, and the test that every name is an advertised tool is what stops this
- * list from quietly naming a verb that no longer exists.
+ * Both of these land on his phone unprompted, which is the whole definition of
+ * reaching him: `remind_me` as a notification, `show_him` as a sending in From
+ * Syl. Any future verb that arrives at him without his asking belongs here too,
+ * and the test that every name is an advertised tool is what stops this list
+ * from quietly naming a verb that no longer exists.
+ *
+ * A verb missing from this list is not a small error: the hour it is used in
+ * is counted as an hour that reached nobody, so `SENDINGS_PER_DAY` bounds
+ * nothing and she may speak every hour of the day.
  */
-export const REACHES_HIM: readonly string[] = ["remind_me"];
+export const REACHES_HIM: readonly string[] = ["remind_me", "show_him"];
 
 /** How far back the ledger looks. Two and a half days of hourly runs. */
 const LEDGER_DEPTH = 64;
