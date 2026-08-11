@@ -221,25 +221,25 @@
       "file": "http/reminder.commitment.json",
       "schema": "Reminder",
       "envelope": "ok",
-      "summary": "A one-shot commitment. Fires late rather than vanishing."
+      "summary": "A one-shot commitment. Fires late rather than vanishing. origin he_asked: he knows why it exists, so delivery adds nothing."
     },
     {
       "file": "http/reminder.deferred.json",
       "schema": "Reminder",
       "envelope": "ok",
-      "summary": "Pushed out of quiet hours. deferredFrom keeps the chain visible; nextFireAt is strictly later."
+      "summary": "Pushed out of quiet hours. deferredFrom keeps the chain visible; nextFireAt is strictly later. origin she_noticed, so the reason rides the notification: he never asked for this one."
     },
     {
       "file": "http/reminder.rhythm.json",
       "schema": "Reminder",
       "envelope": "ok",
-      "summary": "Recurring; supersedesPrevious, so yesterday's does not pile up."
+      "summary": "Recurring; supersedesPrevious, so yesterday's does not pile up. because and origin are BOTH null on purpose: written before the record existed and deliberately not backfilled. Nothing may render this as Syl having failed to explain herself."
     },
     {
       "file": "http/reminders.page.json",
       "schema": "ReminderPage",
       "envelope": "ok",
-      "summary": "A page of reminders across states."
+      "summary": "A page of reminders across states, and across all three provenances: he_asked, she_noticed, and the null pair that means the row predates the record."
     },
     {
       "file": "http/run.late.json",

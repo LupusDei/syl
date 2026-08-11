@@ -43,10 +43,13 @@ final class HomeTests: XCTestCase {
         urgent: Bool = false,
         late: Bool = false,
         state: ReminderDeliveryState = .scheduled,
-        completedAt: Date? = nil
+        completedAt: Date? = nil,
+        because: String? = nil,
+        origin: ReminderOrigin? = nil
     ) -> Reminder {
         Reminder(
-            id: id, kind: .commitment, text: text, todoId: nil, eventId: nil,
+            id: id, kind: .commitment, text: text, because: because, origin: origin,
+            todoId: nil, eventId: nil,
             wallTime: "09:00", tz: "America/Chicago", rrule: nil,
             scheduledFor: fireAt, nextFireAt: fireAt,
             urgent: urgent, late: late, deferredFrom: nil, supersedesPrevious: false,
@@ -389,5 +392,97 @@ final class HomeTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(value, 0)
             XCTAssertLessThan(value, 1)
         }
+    }
+
+    // MARK: - Why a reminder is on the spine at all (`syl-y82`)
+
+    func testShouldCarryTheReasonAReminderExistsOntoTheSpine() {
+        let snapshot = HomeSnapshot.build(
+            reminders: [
+                reminder(
+                    id: "syl:reminder:1",
+                    fireAt: at(9),
+                    because: "you mentioned him in March",
+                    origin: .sheNoticed
+                )
+            ],
+            todos: [],
+            now: at(8),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(snapshot.moments.first?.reason, "you mentioned him in March")
+    }
+
+    func testShouldMarkAReminderSheThoughtOfHerself() {
+        // `SOUL.md` promises he can tell her to stop making a kind of suggestion
+        // he dislikes. He cannot do that without being able to see which ones
+        // are hers, which is what this flag is for.
+        let snapshot = HomeSnapshot.build(
+            reminders: [
+                reminder(id: "syl:reminder:1", fireAt: at(9), because: "she saw it", origin: .sheNoticed)
+            ],
+            todos: [],
+            now: at(8),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(snapshot.moments.first?.sheNoticed, true)
+    }
+
+    func testShouldNotMarkAReminderHeAskedForAsOneSheThoughtOf() {
+        let snapshot = HomeSnapshot.build(
+            reminders: [
+                reminder(id: "syl:reminder:1", fireAt: at(9), because: "you asked", origin: .heAsked)
+            ],
+            todos: [],
+            now: at(8),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(snapshot.moments.first?.sheNoticed, false)
+        XCTAssertEqual(snapshot.moments.first?.reason, "you asked")
+    }
+
+    func testShouldNotClaimAnUnattributedReminderAsHers() {
+        // Null origin means the row predates the record. Reading it as hers
+        // would credit her with noticing things she never noticed — the exact
+        // claim-beyond-the-evidence the columns were added to stop.
+        let snapshot = HomeSnapshot.build(
+            reminders: [reminder(id: "syl:reminder:1", fireAt: at(9))],
+            todos: [],
+            now: at(8),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(snapshot.moments.first?.sheNoticed, false)
+        XCTAssertNil(snapshot.moments.first?.reason)
+    }
+
+    func testShouldTreatABlankReasonAsNoReasonRatherThanAnEmptyLine() {
+        let snapshot = HomeSnapshot.build(
+            reminders: [
+                reminder(id: "syl:reminder:1", fireAt: at(9), because: "   ", origin: .sheNoticed)
+            ],
+            todos: [],
+            now: at(8),
+            calendar: calendar
+        )
+
+        XCTAssertNil(snapshot.moments.first?.reason, "a blank line is not a reason")
+    }
+
+    func testShouldLeaveATodoWithNoReasonAndNoAttribution() {
+        // A to-do is not a reminder and has no provenance of this kind. Rows must
+        // not acquire one by sharing a type.
+        let snapshot = HomeSnapshot.build(
+            reminders: [],
+            todos: [todo(id: "syl:todo:1", dueAt: at(9))],
+            now: at(8),
+            calendar: calendar
+        )
+
+        XCTAssertNil(snapshot.moments.first?.reason)
+        XCTAssertEqual(snapshot.moments.first?.sheNoticed, false)
     }
 }

@@ -38,6 +38,32 @@ import type { ReminderService } from "../services/reminder-service.js";
 export const LATE_THRESHOLD_MS = 60_000;
 
 /**
+ * How long a notification body may get before this file stops adding to it.
+ *
+ * Not an APNs limit — the payload cap is 4KB and no reason approaches it. It
+ * is a *reading* limit: a lock screen shows a couple of lines, and past that
+ * the tail is not shortened, it is invisible. 180 characters is about what
+ * survives on a locked phone with the banner collapsed.
+ *
+ * Only the reason is ever measured against it. Her reminder text is never
+ * touched however long it is: cutting the thing he has to do in order to fit
+ * the explanation of it would be exactly the wrong trade.
+ */
+export const NOTIFICATION_BODY_BUDGET = 180;
+
+/**
+ * The shortest reason worth putting on a lock screen.
+ *
+ * Below this the reason is dropped rather than stubbed. A three-word fragment
+ * is not a short reason, it is a different reason — "not because you asked"
+ * cut to "not because you…" reads as its own opposite. `syl-y82` exists to
+ * stop her claiming more than the evidence supports, and a mangled reason is
+ * precisely that claim with the evidence removed. The whole thing is in the
+ * app; silence here is honest, a stub is not.
+ */
+export const MIN_REASON_CHARS = 24;
+
+/**
  * How late a rhythm message may be and still be worth saying.
  *
  * Three hours: a morning agenda that arrives at 10:00 is still a morning
@@ -121,9 +147,11 @@ export function payloadFor(reminder: Reminder, skipped: number): DeliveryPayload
   const skippedNote =
     skipped > 0 ? ` (${countWord(skipped)} went unsaid while I was away.)` : "";
 
+  const said = `${reminder.text}${skippedNote}`;
+
   return {
     title: "Syl",
-    body: `${reminder.text}${skippedNote}`,
+    body: `${said}${reasonLine(reminder, said.length)}`,
     // A commitment breaks through Focus and the Scheduled Summary: it is a
     // thing he undertook to do at a time, and a reminder that waits for the
     // next Scheduled Summary is not a reminder. A rhythm message is ordinary
@@ -133,6 +161,73 @@ export function payloadFor(reminder: Reminder, skipped: number): DeliveryPayload
     categoryIdentifier: REMINDER_CATEGORY,
     threadIdentifier: REMINDER_THREAD,
   };
+}
+
+/**
+ * The second line of a notification: why she thought of this at all.
+ *
+ * `syl-y82`. `SOUL.md` is explicit about the shape — "Not 'I've made you a
+ * reminder' but 'Dave's birthday is Thursday — you mentioned him in March.' He
+ * needs to know why it exists, or he cannot tell a good suggestion from a
+ * wrong one" — and about why it has to be *here*: an anticipated reminder
+ * arrives on a lock screen, and a reason kept inside the app is a reason he
+ * has to go and fetch. He will not. The promise is kept in the notification or
+ * it is not kept.
+ *
+ * Three cases, and only one of them adds anything:
+ *
+ * **`she_noticed`** — the reason travels. This is the case the column exists
+ * for and the only one where he has no way to know.
+ *
+ * **`he_asked`** — nothing. He asked; telling him why is noise, and an
+ * assistant that speaks more than it needs to gets muted, which is the one
+ * failure mode from which none of the rest of this matters.
+ *
+ * **`null`** — nothing, byte for byte as before. Null means the row predates
+ * the record, NOT that she failed to give a reason, and a notification that
+ * grew a "no reason recorded" line would be the app narrating its own gap at
+ * him in the middle of the night.
+ *
+ * A newline rather than an em dash, deliberately. Joining with punctuation
+ * means either repunctuating her sentence ("Morning agenda. — because…") or
+ * amputating its full stop; both edit words she composed. A second line leaves
+ * the text byte-for-byte intact, reads as subordinate to it, and puts the
+ * reason where a truncating lock screen eats it first — which is the correct
+ * order of loss.
+ */
+export function reasonLine(reminder: Reminder, taken: number): string {
+  // Derived, not claimed. Anything but `she_noticed` — including the null that
+  // means "from before we recorded this" — leaves the body exactly as it was.
+  if (reminder.origin !== "she_noticed") return "";
+
+  const because = reminder.because?.trim() ?? "";
+  // `remind_me` refuses a call without a reason, so this pair should not
+  // exist. If it ever does, saying nothing beats printing an empty dash.
+  if (because === "") return "";
+
+  // The newline is part of the cost, so it is part of the sum.
+  const room = NOTIFICATION_BODY_BUDGET - taken - 1;
+  if (room < MIN_REASON_CHARS) return "";
+
+  return `\n${elide(because, room)}`;
+}
+
+/**
+ * Shorten to `room` characters at a word boundary, marking the cut.
+ *
+ * The ellipsis is the honest part: it says the sentence continues, so a reason
+ * he reads half of is not mistaken for a reason he read all of.
+ */
+function elide(text: string, room: number): string {
+  if (text.length <= room) return text;
+
+  // One character back for the ellipsis itself.
+  const cut = text.slice(0, room - 1);
+  const lastSpace = cut.lastIndexOf(" ");
+  // A single word longer than the whole budget has no boundary to cut on, so
+  // it is cut where it is; anything else loses its final partial word.
+  const kept = lastSpace > 0 ? cut.slice(0, lastSpace) : cut;
+  return `${kept.trimEnd()}…`;
 }
 
 /** The body of the single notification standing in for a held batch. */

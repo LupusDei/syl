@@ -191,6 +191,55 @@ describe("GET /api/v1/reminders/{reminderId}", () => {
   });
 });
 
+/**
+ * `syl-y82`, the read half.
+ *
+ * The columns landed and the write path fills them. None of that reaches him
+ * unless every route that hands back a reminder hands back its provenance
+ * too — the phone's list, the admin, and the notification all read this and
+ * nothing else.
+ */
+describe("the reason and the origin on the way out", () => {
+  it("should carry both on the reminder it just created", async () => {
+    const reminder = await create({
+      because: "Priya asked for them on Friday and the quarter closes tomorrow",
+      origin: "she_noticed",
+    });
+    expect(reminder.because).toBe("Priya asked for them on Friday and the quarter closes tomorrow");
+    expect(reminder.origin).toBe("she_noticed");
+  });
+
+  it("should carry both when read back by id", async () => {
+    const created = await create({ because: "you asked me to chase it", origin: "he_asked" });
+    const body = (await (await api(`/reminders/${created.id}`)).json()) as Envelope<Reminder>;
+    expect(body.data?.because).toBe("you asked me to chase it");
+    expect(body.data?.origin).toBe("he_asked");
+  });
+
+  it("should carry both in the list, which is the surface he actually scans", async () => {
+    await create({ because: "you mentioned him in March", origin: "she_noticed" });
+    const page = (await (await api("/reminders")).json()) as Envelope<ReminderPage>;
+    const [first] = page.data?.items ?? [];
+    expect(first?.because).toBe("you mentioned him in March");
+    expect(first?.origin).toBe("she_noticed");
+  });
+
+  it("should send both keys as an explicit null rather than omitting them", async () => {
+    // The distinction the whole bead turns on. A row with no recorded reason
+    // must say so — `null` is a statement ("written before we kept this") and
+    // an ABSENT key is a bug. A client that cannot tell them apart is exactly
+    // the careful reader who got this wrong in the first place.
+    const created = await create();
+    const response = await api(`/reminders/${created.id}`);
+    const raw = (await response.json()) as { data: Record<string, unknown> };
+
+    expect(Object.hasOwn(raw.data, "because")).toBe(true);
+    expect(Object.hasOwn(raw.data, "origin")).toBe(true);
+    expect(raw.data["because"]).toBeNull();
+    expect(raw.data["origin"]).toBeNull();
+  });
+});
+
 describe("PATCH /api/v1/reminders/{reminderId}", () => {
   it("should change the text without moving the reminder", async () => {
     const reminder = await create();

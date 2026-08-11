@@ -318,6 +318,13 @@ export class MockStore {
       id: mockId("reminder"),
       kind: (body["kind"] as Reminder["kind"]) ?? "commitment",
       text: String(body["text"] ?? "(mock) untitled reminder"),
+      // `syl-y82`. Echoed rather than invented: a mock that answers with a
+      // reason the caller never gave would let a client ship against a
+      // provenance the real server cannot produce. Absent stays null, which
+      // is the same thing the store says about a row written before the
+      // column existed.
+      because: (body["because"] as string | null) ?? null,
+      origin: (body["origin"] as Reminder["origin"]) ?? null,
       todoId: (body["todoId"] as string | null) ?? null,
       eventId: null,
       wallTime: String(body["wallTime"] ?? "09:00"),
