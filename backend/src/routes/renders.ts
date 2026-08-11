@@ -90,7 +90,15 @@ export function createRenderRouter(options: RenderRouterOptions): Router {
   router.use("/renders", authenticate);
 
   router.get("/renders", (_request, response) => {
-    sendOk(response, { items: renders.list(), spend: renders.spend() });
+    // `unreadable` rides along beside the records for the same reason `spend`
+    // does: a list that silently omitted a file it could not parse would be a
+    // ledger with a hole in it, and `SOUL.md` keeps every attempt. It is empty
+    // on every ordinary machine, so it costs her nothing to carry.
+    sendOk(response, {
+      items: renders.list(),
+      unreadable: renders.unreadable(),
+      spend: renders.spend(),
+    });
   });
 
   router.post("/renders", (request, response, next) => {

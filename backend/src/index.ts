@@ -54,7 +54,7 @@ import { installShutdownHandlers } from "./ops/shutdown.js";
 import { tailnetCertProbe } from "./ops/tailnet-cert.js";
 import { RenderService } from "./render/render-service.js";
 import { RunwayClient } from "./render/runway.js";
-import { studioAt, studioRootFrom } from "./render/studio.js";
+import { ensureReference, studioAt, studioRootFrom } from "./render/studio.js";
 import { createGoalRouter } from "./routes/goals.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
 import { createJobRouter } from "./routes/jobs.js";
@@ -1252,8 +1252,26 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // this degrades to a service that refuses with a sentence rather than to a
   // boot that fails. Same decision as a missing Adjutant.
   const runwaySecret = (options.env ?? process.env)["RUNWAYML_API_SECRET"]?.trim() ?? "";
+  // Her renders go in HER home — `sylHome`, the same answer her turns and her
+  // hands are given, rather than a second one computed here. The Commander's
+  // ruling of 2026-08-11: *"her videos should be generated and placed within
+  // her context I think. certainly not in temp or in the runway project."*
+  // `render/studio.ts` has the rest of why.
+  const studio = studioAt(studioRootFrom(options.env ?? process.env, home));
+  if (home !== undefined) {
+    // Her likeness, placed on first boot and never overwritten after. It is the
+    // only thing holding her face still between shots, and it must not live in
+    // a checkout that belongs to a different project.
+    const placed = ensureReference(studio);
+    if (placed === "unplaced") {
+      console.warn(
+        `[syl] WARNING: there is no reference picture at ${studio.reference()} and none could ` +
+          `be placed — she will refuse to render rather than render somebody else.`,
+      );
+    }
+  }
   const renders = new RenderService({
-    studio: studioAt(studioRootFrom(options.env ?? process.env)),
+    studio,
     backend: runwaySecret === "" ? null : new RunwayClient({ secret: runwaySecret }),
     clock,
   });

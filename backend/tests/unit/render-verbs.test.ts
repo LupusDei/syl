@@ -54,14 +54,14 @@ const RECORD = {
   model: "seedance2",
   ratio: "720:1280",
   duration: 15,
-  reference: "characters/syl/syl_source_upscaled.png",
+  reference: "renders/reference.png",
   taskId: "task-1",
   startedAt: NOW,
   renderedAt: NOW,
   reason: null,
   credits: 540,
   usd: 5.4,
-  video: "/studio/characters/syl/video/syl-20260811t153000z-close-portrait.mp4",
+  video: "/home/syl/renders/syl-20260811t153000z-close-portrait.mp4",
 };
 
 const SPEND = { renders: 3, ready: 2, failed: 1, rendering: 0, seconds: 45, credits: 1620, usd: 16.2 };

@@ -86,6 +86,23 @@ export interface RenderRecord {
   readonly video: string | null;
 }
 
+/**
+ * A sidecar the service cannot read as a record.
+ *
+ * **Its own state, and neither of the two it used to be mistaken for.** It is
+ * not a failed render — nothing here says how the render went — and it is not
+ * an absent one, because the file is right there and may have cost credits.
+ * Both mistakes were live at once: see {@link recordFrom}.
+ */
+export interface UnreadableRender {
+  /** The render's name, as the filename spells it. */
+  readonly name: string;
+  /** The sidecar, absolute, so a person can go and look at it. */
+  readonly file: string;
+  /** What is wrong with it, in a sentence. Never a code. */
+  readonly why: string;
+}
+
 /** What she has spent, derived from the records and from nothing else. */
 export interface Spend {
   readonly renders: number;
@@ -97,6 +114,14 @@ export interface Spend {
   readonly usd: number;
   /** Renders with no published rate, so the total is legible as a floor. */
   readonly unpriced: number;
+  /**
+   * Sidecars that are not records, so the total says what it could not count.
+   *
+   * Zero on every ordinary machine. Anything else means a file in her renders
+   * directory needs a person to look at it — and until one does, the credits it
+   * may have cost are not in the number beside this one.
+   */
+  readonly unreadable: number;
 }
 
 export type StartResult =
@@ -309,34 +334,41 @@ export class RenderService {
     return { ok: true, record };
   }
 
-  /** One render, or `null` for a name that is not one. */
+  /** One render, or `null` for a name that is not one, or a record she cannot read. */
   get(name: string): RenderRecord | null {
     if (!isRenderName(name)) return null;
     return this.#read(name);
   }
 
-  /** Every render she has made, newest first. */
+  /** Every render she has made, newest first. Readable ones only. */
   list(): readonly RenderRecord[] {
-    if (!existsSync(this.#studio.videoDir)) return [];
-
-    const records: RenderRecord[] = [];
-    for (const entry of readdirSync(this.#studio.videoDir)) {
-      if (!entry.endsWith(".mp4.json")) continue;
-      const name = basename(entry, ".mp4.json");
-      // The eight loops have no sidecar and are therefore invisible here, which
-      // is right: they are not hers, and there is no honest number to attach to
-      // what they cost.
-      if (!isRenderName(name)) continue;
-      const record = this.#read(name);
-      if (record !== null) records.push(record);
-    }
-
-    return records.sort((a, b) =>
-      a.startedAt === b.startedAt ? b.name.localeCompare(a.name) : b.startedAt.localeCompare(a.startedAt),
-    );
+    return this.#scan().records;
   }
 
-  /** The most recent render, so `latest` means something. */
+  /**
+   * The sidecars that are not records, so nothing of hers goes missing quietly.
+   *
+   * The other half of refusing to guess. A file the service cannot parse must
+   * not be reported as a failed render — but it must not vanish from her ledger
+   * either, because `SOUL.md` says every attempt is kept and a render she is
+   * never told about is one she cannot go and look for.
+   */
+  unreadable(): readonly UnreadableRender[] {
+    return this.#scan().unreadable;
+  }
+
+  /**
+   * The most recent render, so `latest` means something.
+   *
+   * **Never a record she cannot read.** This is the failure `see_myself` told
+   * her about: a hand-written sidecar with no `startedAt` sorted to the front of
+   * the list and no `status`, so asking to look at her latest render answered
+   * *"did not finish: no reason was recorded"* about a render that was still in
+   * flight. Her own words: *"that's the sort of thing that would make me tell
+   * you a render failed when it hadn't, which is exactly the kind of lie I'm
+   * not willing to tell you."* `list()` now holds records only, so the question
+   * "which is most recent" is asked of things that have an answer.
+   */
   latest(): RenderRecord | null {
     return this.list()[0] ?? null;
   }
@@ -350,7 +382,7 @@ export class RenderService {
    * direction an honest one must not err in.
    */
   spend(): Spend {
-    const records = this.list();
+    const { records, unreadable } = this.#scan();
     let credits = 0;
     let seconds = 0;
     let unpriced = 0;
@@ -370,6 +402,10 @@ export class RenderService {
       credits,
       usd: usdOf(credits),
       unpriced,
+      // Counted rather than dropped, and for the same reason as `unpriced`: a
+      // total is only honest if what it could not account for is visible beside
+      // it. A sidecar that cannot be read may well have cost credits.
+      unreadable: unreadable.length,
     };
   }
 
@@ -381,12 +417,28 @@ export class RenderService {
    * facts about her own face, and only one of them means wait.
    */
   async frames(name: string, at?: number): Promise<
-    { readonly ok: true; readonly record: RenderRecord; readonly frames: ExtractResult } | { readonly ok: false; readonly reason: string; readonly status: "missing" | "unfinished" }
+    { readonly ok: true; readonly record: RenderRecord; readonly frames: ExtractResult } | { readonly ok: false; readonly reason: string; readonly status: "missing" | "unfinished" | "unreadable" }
   > {
-    const record = name === "latest" ? this.latest() : this.get(name);
-    if (record === null) {
+    const loaded = name === "latest" ? this.#loadLatest() : this.#load(name);
+    if (loaded === null) {
       return { ok: false, reason: "There is no render by that name.", status: "missing" };
     }
+    if (!loaded.ok) {
+      // **Not "did not finish".** A record the service cannot read says nothing
+      // at all about how the render went, and inventing a reason to fill the
+      // sentence is how she came to report a render in flight as a failure. The
+      // file is named because that is the thing a person can go and look at.
+      return {
+        ok: false,
+        status: "unreadable",
+        reason:
+          `I cannot read the record for "${loaded.unreadable.name}" — ${loaded.unreadable.why}. ` +
+          `The file is ${loaded.unreadable.file}. So I do not know how that render went, and I ` +
+          "am not going to guess: it may still be in flight.",
+      };
+    }
+
+    const record = loaded.record;
     if (record.status !== "ready" || record.video === null) {
       return {
         ok: false,
@@ -557,15 +609,216 @@ export class RenderService {
   }
 
   #read(name: string): RenderRecord | null {
-    const path = this.#studio.sidecar(name);
-    if (!existsSync(path)) return null;
-    try {
-      const parsed = JSON.parse(readFileSync(path, "utf8")) as RenderRecord;
-      return typeof parsed.name === "string" ? parsed : null;
-    } catch {
-      // A sidecar somebody edited by hand into invalid JSON is a record that
-      // cannot be read, not a service that stops answering.
-      return null;
-    }
+    const loaded = this.#load(name);
+    return loaded !== null && loaded.ok ? loaded.record : null;
   }
+
+  /** The most recent render, as a load, so `latest` can refuse the same way. */
+  #loadLatest(): Loaded | null {
+    const record = this.latest();
+    return record === null ? null : { ok: true, record };
+  }
+
+  /**
+   * One sidecar: a record, or the reason it is not one.
+   *
+   * `null` only when there is no file. Everything else answers, because the
+   * three outcomes here are three different facts — no such render, a render,
+   * and a file that is not a record — and collapsing any two of them is how
+   * this layer tells its lies.
+   */
+  #load(name: string): Loaded | null {
+    const file = this.#studio.sidecar(name);
+    if (!existsSync(file)) return null;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(file, "utf8"));
+    } catch (error) {
+      return unreadable(name, file, `it is not valid JSON (${message(error)})`);
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return unreadable(name, file, "it does not hold a record at all");
+    }
+
+    return recordFrom(name, file, parsed as Record<string, unknown>);
+  }
+
+  /**
+   * Everything in the renders directory, sorted, in one pass.
+   *
+   * One walk rather than three: `list`, `unreadable` and `spend` are three
+   * views of the same directory, and a directory read separately per view is a
+   * directory that can answer them inconsistently.
+   */
+  #scan(): { readonly records: readonly RenderRecord[]; readonly unreadable: readonly UnreadableRender[] } {
+    if (!existsSync(this.#studio.videoDir)) return { records: [], unreadable: [] };
+
+    const records: RenderRecord[] = [];
+    const broken: UnreadableRender[] = [];
+    for (const entry of readdirSync(this.#studio.videoDir)) {
+      if (!entry.endsWith(".mp4.json")) continue;
+      const name = basename(entry, ".mp4.json");
+      // The eight loops have no sidecar and are therefore invisible here, which
+      // is right: they are not hers, and there is no honest number to attach to
+      // what they cost.
+      if (!isRenderName(name)) continue;
+      const loaded = this.#load(name);
+      if (loaded === null) continue;
+      if (loaded.ok) records.push(loaded.record);
+      else broken.push(loaded.unreadable);
+    }
+
+    records.sort((a, b) =>
+      a.startedAt === b.startedAt ? b.name.localeCompare(a.name) : b.startedAt.localeCompare(a.startedAt),
+    );
+    broken.sort((a, b) => a.name.localeCompare(b.name));
+    return { records, unreadable: broken };
+  }
+}
+
+type Loaded =
+  | { readonly ok: true; readonly record: RenderRecord }
+  | { readonly ok: false; readonly unreadable: UnreadableRender };
+
+function unreadable(name: string, file: string, why: string): Loaded {
+  return { ok: false, unreadable: { name, file, why } };
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * A sidecar as a record, or as the reason it is not one.
+ *
+ * **Validated rather than cast.** It used to be `JSON.parse(...) as
+ * RenderRecord` with one check on `name`, which is not a check — it is a
+ * promise to the compiler that the file on disk matches a type. It did not. A
+ * sidecar hand-written into her video directory was missing `status`,
+ * `startedAt`, `video`, `credits` and `prompt`, and every one of those absences
+ * became a lie somewhere downstream:
+ *
+ * - no `status` meant the record could not be `ready`, so `frames()` fell to
+ *   its else branch and reported *"did not finish: no reason was recorded"*
+ *   about a render that was still in flight;
+ * - no `startedAt` sorted it to the FRONT of `list()`, so `latest()` handed
+ *   that answer back to her when she asked to look at her newest render;
+ * - no `credits` made `spend()` add `undefined`, turning every total she has
+ *   ever reported into `NaN`.
+ *
+ * She caught it herself, and her conclusion is the requirement: *"that's the
+ * sort of thing that would make me tell you a render failed when it hadn't,
+ * which is exactly the kind of lie I'm not willing to tell you."*
+ *
+ * So a file that is not a record is **unreadable**, which is its own state and
+ * not a failed render — and it is surfaced rather than skipped, because a
+ * render that quietly disappears from her ledger is the same lie facing the
+ * other way.
+ */
+function recordFrom(name: string, file: string, sidecar: Record<string, unknown>): Loaded {
+  const missing: string[] = [];
+
+  const text = (field: string): string => {
+    const value = sidecar[field];
+    if (typeof value === "string" && value !== "") return value;
+    missing.push(field);
+    return "";
+  };
+  /**
+   * A field that may honestly be absent.
+   *
+   * `scene` and `because` are hers: a shot rendered from `shots.json` has a
+   * prompt and no separate sentence behind it. Their absence cannot make the
+   * service say anything false, which is the line between this and `text`.
+   */
+  const optionalText = (field: string): string => {
+    const value = sidecar[field];
+    return typeof value === "string" ? value : "";
+  };
+  const nullableText = (field: string): string | null => {
+    const value = sidecar[field];
+    if (value === null || value === undefined) return null;
+    if (typeof value === "string") return value;
+    missing.push(field);
+    return null;
+  };
+  const nullableNumber = (field: string): number | null => {
+    const value = sidecar[field];
+    if (value === null || value === undefined) return null;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    missing.push(field);
+    return null;
+  };
+
+  // Present, but not authoritative. The FILENAME is the address — it is what a
+  // route resolves, what `see_myself` is given, and what `frames()` opens — so
+  // a record whose `name` field disagreed with its own file would hand her back
+  // a name that finds nothing when she uses it. `syl-listening.mp4.json` says
+  // `"name": "listening"`, and that is exactly the shape of the trap.
+  if (typeof sidecar["name"] !== "string") missing.push("name");
+
+  const declared = sidecar["status"];
+  const status =
+    declared === "rendering" || declared === "ready" || declared === "failed" ? declared : null;
+  if (status === null) missing.push("status");
+
+  const declaredDuration = sidecar["duration"];
+  const duration =
+    typeof declaredDuration === "number" && Number.isFinite(declaredDuration)
+      ? declaredDuration
+      : null;
+  if (duration === null) missing.push("duration");
+
+  // `framing.ts` owns whether a framing can hold her likeness and cites the
+  // render that proved it, so the record is read through it rather than
+  // trusting a boolean somebody wrote beside it.
+  const framing = framingNote(sidecar["framing"]);
+  if (framing === null) missing.push("framing");
+
+  const startedAt = text("startedAt");
+  const model = text("model");
+  const ratio = text("ratio");
+  const reference = text("reference");
+  const prompt = text("prompt");
+  const scene = optionalText("scene");
+  const because = optionalText("because");
+  const renderedAt = nullableText("renderedAt");
+  const taskId = nullableText("taskId");
+  const reason = nullableText("reason");
+  const video = nullableText("video");
+  const credits = nullableNumber("credits");
+  const usd = nullableNumber("usd");
+
+  if (missing.length > 0 || framing === null || status === null || duration === null) {
+    return unreadable(
+      name,
+      file,
+      `the record is missing or malformed in ${missing.length === 1 ? "one field" : `${String(missing.length)} fields`}: ${missing.join(", ")}`,
+    );
+  }
+
+  return {
+    ok: true,
+    record: {
+      name,
+      status,
+      renderedAt,
+      taskId,
+      model,
+      ratio,
+      duration,
+      reference,
+      framing: framing.id,
+      prompt,
+      scene,
+      holdsLikeness: framing.holdsLikeness,
+      because,
+      startedAt,
+      reason,
+      credits,
+      usd,
+      video,
+    },
+  };
 }

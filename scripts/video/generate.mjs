@@ -38,14 +38,30 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
 /**
- * Where the character reference and the rendered videos live.
+ * Where the reference and the rendered videos live: **Syl's home.**
  *
- * Deliberately OUTSIDE this repository. A 15s render is 12-15MB and eight of
- * them is over 100MB; `assets/*.mp4` is gitignored here for the same reason.
- * The toolkit repo owns the media, this repo owns the *recipe* — which is the
- * part worth versioning, and the part that was missing.
+ * The Commander's ruling, 2026-08-11: *"her videos should be generated and
+ * placed within her context I think. certainly not in temp or in the runway
+ * project."* This used to resolve `../runwayml`, a separate toolkit checkout,
+ * and `backend/src/render/studio.ts` has the whole of why that was wrong.
+ *
+ * Still outside the repository, which was the original and correct reason for
+ * not putting it in `assets/`: a 15s render is 12-15MB. Her home is not a
+ * repository — it is where her database, her sessions and her memory already
+ * live.
+ *
+ * **The same rule the service uses, in the same order**, so a render she made
+ * and a render this script made land in the same directory under the same
+ * naming rule and either can find the other: `SYL_VIDEO_STUDIO`, then her home
+ * (the directory holding `SYL_DB_PATH`), then `.syl/` beside the source, which
+ * is where the default configuration puts the database.
  */
-const STUDIO = process.env.SYL_VIDEO_STUDIO ?? resolve(repoRoot, "..", "runwayml");
+const STUDIO =
+  process.env.SYL_VIDEO_STUDIO ??
+  (process.env.SYL_DB_PATH ? dirname(resolve(process.env.SYL_DB_PATH)) : resolve(repoRoot, ".syl"));
+
+/** Her renders, flat, exactly as `studioAt` lays them out. */
+const RENDER_DIR = join(STUDIO, "renders");
 
 const API_BASE = "https://api.dev.runwayml.com/v1";
 const API_VERSION = "2024-11-06";
@@ -65,7 +81,8 @@ function auth() {
         "  Renders are billed to the Runway account, not to the Claude subscription —\n" +
         "  this is the one place in the project that spends metered money, which is why\n" +
         "  it is a separate key and a separate script.\n\n" +
-        `  The toolkit keeps one in ${join(STUDIO, ".env")}.`,
+        "  Export it, or put it in the environment the service is started with — the\n" +
+        "  same secret `RunwayClient` reads. It is never written into her home.",
     );
   }
   return {
@@ -123,9 +140,9 @@ async function download(url, to) {
  * accept if a render needs chasing up later.
  */
 async function render(shot, defaults, { force }) {
-  const outDir = join(STUDIO, "characters", "syl", "video");
-  mkdirSync(outDir, { recursive: true });
-  const out = join(outDir, `syl-loop-${shot.name}.mp4`);
+  mkdirSync(RENDER_DIR, { recursive: true });
+  const out = join(RENDER_DIR, `syl-loop-${shot.name}.mp4`);
+  const startedAt = new Date().toISOString();
 
   if (existsSync(out) && !force) {
     console.log(`  ${shot.name}: already rendered — pass --force to spend credits again`);
@@ -149,23 +166,40 @@ async function render(shot, defaults, { force }) {
   if (!url) die(`${shot.name} succeeded with no output.`);
   await download(url, out);
 
-  // The record, written beside the thing it explains. `promptImage` is omitted
-  // deliberately — it is a multi-megabyte data URI, and the PATH is the useful
-  // fact. Keeping the base64 would make this file unreadable, which is the one
-  // thing it must not be.
+  // The record, written beside the thing it explains, in the SHAPE THE SERVICE
+  // READS — `backend/src/render/render-service.ts`, `RenderRecord`. A sidecar
+  // that is missing a field is not a record there; it is `unreadable`, which is
+  // its own state and deliberately not "failed". That distinction was bought
+  // with a real lie: a hand-written sidecar with no `status` had her report a
+  // render still in flight as one that had failed.
+  //
+  // `credits` and `usd` are `null` rather than a guess. This script does not
+  // price a render, and "nobody wrote down what this cost" and "this was free"
+  // are different facts.
+  //
+  // `promptImage` is omitted deliberately — it is a multi-megabyte data URI,
+  // and the PATH is the useful fact. Keeping the base64 would make this file
+  // unreadable to a person, which is the one thing it must not be.
   writeFileSync(
     `${out}.json`,
     `${JSON.stringify(
       {
-        name: shot.name,
+        name: `syl-loop-${shot.name}`,
+        status: "ready",
+        startedAt,
         renderedAt: new Date().toISOString(),
         taskId: created.id,
         model: spec.model,
         ratio: spec.ratio,
         duration: spec.duration,
         reference: shot.reference ?? defaults.reference,
-        framing: shot.framing ?? null,
+        framing: shot.framing,
         prompt: shot.prompt,
+        because: `A shot from scripts/video/shots.json, rendered with \`npm run video -- ${shot.name}\`.`,
+        reason: null,
+        credits: null,
+        usd: null,
+        video: out,
       },
       null,
       2,
@@ -183,8 +217,8 @@ async function render(shot, defaults, { force }) {
  * the same ratio, so the streams are already compatible and re-encoding would
  * cost quality for nothing.
  */
-function concat(names, outName, studio) {
-  const dir = join(studio, "characters", "syl", "video");
+function concat(names, outName) {
+  const dir = RENDER_DIR;
   const files = names.map((n) => join(dir, `syl-loop-${n}.mp4`));
   const missing = files.filter((f) => !existsSync(f));
   if (missing.length > 0) die(`Cannot concatenate — not rendered yet:\n\n  ${missing.join("\n  ")}`);
@@ -219,7 +253,7 @@ async function main() {
 
   if (args.includes("--concat")) {
     const label = named[0] ?? "all";
-    concat(shots.map((s) => s.name), `syl-loop-${label}`, STUDIO);
+    concat(shots.map((s) => s.name), `syl-loop-${label}`);
     return;
   }
 
