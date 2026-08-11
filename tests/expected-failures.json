@@ -51,21 +51,6 @@
       "test": "deploy — a rollback after a migration should restore the schema the restored build expects",
       "bead": "syl-dep1.7",
       "why": "A health-gated rollback restores the CODE and leaves the SCHEMA forward. Migrations run on the way up and there is no down path, so after a failed deploy the restored build runs against a database it has never seen. Additive migrations usually survive that and a destructive one does not, and nothing today tells the two apart. The deploy reports the migrations involved and reports schemaRestored: false rather than pretending — but 'the code is back' and 'the system is back' are different claims, and only the first is true. Fixing it needs either down-migrations or a snapshot of the SQLite file taken before the deploy."
-    },
-    {
-      "test": "she forms connections — the five bars for digestion (syl-zdf) should connect a person to another person by a typed relation",
-      "bead": "syl-zdf.4",
-      "why": "The dandelion, stated as a test. Measured on the live graph 2026-08-11: 30 nodes, 29 edges, every one relation='stated' provenance from a single hub, and ZERO edges between two real memories. Not 'an edge exists' -- 29 of those exist and they are all the same edge. This asks for a TYPED edge between two real memories, which nothing has ever written."
-    },
-    {
-      "test": "she forms connections — the five bars for digestion (syl-zdf) should resolve two mentions of one person to one identity, without merging two people",
-      "bead": "syl-zdf.3",
-      "why": "memory_nodes.subject_id exists and extract-apply.ts:404 says 'Deliberately no subjectId', so it has never been populated on the conversational path. Live consequence: 'Ela' and 'Ela — his wife' are two person nodes for one woman, and the newer duplicate EVICTED the richer one from working memory. Deliberately agnostic about whether resolution merges rows or shares an identity across them -- only 'two people who are the same person' is wrong."
-    },
-    {
-      "test": "she forms connections — the five bars for digestion (syl-zdf) should insert at least one inferred edge that survives a night",
-      "bead": "syl-zdf.5",
-      "why": "dream_sessions has zero rows: the job was wired to a clock on 2026-08-10 and its only run was correctly skipped as outside the window, so this is a claim syl-005.4 made and never evidenced. Measured cause, by running the real kernels against the real graph: related() proposes 0 candidates because entitiesOf() derives probes from edges and every node's only edge is provenance, so all 30 yield the same constant probe. contradict() proposes 0 -- the whole graph scores 0.180-0.291 against a 0.300 threshold. The dream cannot bootstrap itself out of a dandelion, which is why digestion comes first."
     }
   ]
 }
