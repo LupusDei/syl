@@ -66,6 +66,12 @@ struct ConstellationNode: Equatable, Sendable, Identifiable {
     var anchorId: String?
     /// When she learned it. Depth is age, so nil reads as brand new.
     var learnedAt: Date?
+    /// Her longer words, when there are any. The label is the sentence; this is the
+    /// paragraph.
+    var body: String?
+    /// Where it came from. **The answer to the only question that matters about a memory**,
+    /// and the whole content of the card the star opens.
+    var provenance: ConstellationProvenance = .unattested
 
     /// Whether this node holds a position of its own rather than orbiting one.
     ///
@@ -83,6 +89,46 @@ struct ConstellationEdge: Equatable, Sendable, Identifiable {
     /// `0...1`, decaying asymptotically toward zero. It never arrives, which is why a
     /// filament fades rather than vanishing.
     var confidence: Double
+    /// What this connection *is*, in the graph's own word. Kept verbatim: a client that
+    /// rewrote her vocabulary would be describing a different graph from the one she
+    /// reasons over.
+    var relation: String = ""
+    /// Why she drew it, in her words. Nil on an observation.
+    ///
+    /// **The most interesting field in the graph.** It is the only place the inference
+    /// engine ever explains itself to him, and it is why edges are selectable at all.
+    var reasoning: String?
+    /// When it was last touched.
+    var touchedAt: Date?
+}
+
+/// How a star came to be known, **including the case where nothing says**.
+///
+/// Not ``ConstellationSpecies`` with a third case bolted on: an edge is always one or the
+/// other, and a star with no filaments in this region is neither. Folding them together
+/// would force a `nil` and lose the difference between *she has no idea where this came
+/// from* and *this is not connected to anything*.
+enum ConstellationStarSpecies: String, Equatable, Sendable, CaseIterable {
+    case observed
+    case inferred
+    /// A star nothing connects to. Present, drawn, and honest about it.
+    case unattested
+}
+
+/// Where a star came from.
+struct ConstellationProvenance: Equatable, Sendable {
+    var species: ConstellationStarSpecies = .unattested
+    /// Who said so, by name rather than by id. Nil unless `observed`.
+    var assertedBy: String?
+    /// Why she believes it, in her words. Nil unless `inferred`.
+    var reasoning: String?
+    /// When the belief behind it was last touched. Nil when `unattested`, which is why
+    /// depth is taken from the node's own `learnedAt` and never from this.
+    var learnedAt: Date?
+
+    /// Nothing says. The honest default, and the state of every star the read has not
+    /// found a filament for.
+    static let unattested = ConstellationProvenance()
 }
 
 /// The seven kinds in the graph.
