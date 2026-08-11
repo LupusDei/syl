@@ -187,7 +187,8 @@ export function ensureMorningAgendaJob(
 ): Job {
   const existing = jobs.list({ kind: "morning_agenda", limit: 1 }).items[0];
   if (existing !== undefined) return existing;
-  return defineMorningAgendaJob(jobs, schedule, nextRunAtFor(agendaTrigger(schedule), now) ?? undefined);
+  const first = nextRunAtFor(agendaTrigger(schedule), now);
+  return defineMorningAgendaJob(jobs, schedule, first ?? undefined);
 }
 
 // ---------------------------------------------------------------------------

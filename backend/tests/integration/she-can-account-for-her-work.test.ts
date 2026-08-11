@@ -14,7 +14,7 @@ import type { JobStore } from "../../src/services/job-store.js";
 import { silentRunner, testConfig } from "../helpers/service.js";
 
 /**
- * She can account for her own work (`syl-agd.3`).
+ * She can account for her own work (`syl-agd.2`).
  *
  * The Commander found a reminder at 07:04 he had not asked for, asked Syl about
  * it, and she said honestly that she had no memory of writing it. She was right:

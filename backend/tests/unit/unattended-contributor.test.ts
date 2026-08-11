@@ -13,7 +13,7 @@ import {
 import { instant } from "../../src/services/clock.js";
 
 /**
- * She could not account for her own work (`syl-agd.3`).
+ * She could not account for her own work (`syl-agd.2`).
  *
  * The Commander found a reminder at 07:04 that he had not asked for. Syl, asked
  * about it, said plainly that she had no memory of writing it — which was true:
@@ -54,7 +54,10 @@ function run(options: {
     costUsd: 0.01,
     // `in` rather than `??`, so a test can ask for a run that kept NO note —
     // which `??` would quietly replace with the default.
-    summary: "summary" in options ? options.summary ?? null : "Filed a reminder about Dave's birthday.",
+    summary:
+      "summary" in options
+        ? options.summary ?? null
+        : "Filed a reminder about Dave's birthday.",
     error: null,
     attempts: 1,
     startedAt: at,
