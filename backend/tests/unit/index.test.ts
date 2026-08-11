@@ -308,7 +308,8 @@ describe("describeStartup", () => {
   it("should announce version, address and environment on a clean start", () => {
     const lines = describeStartup({ ...config, port: 4201, version: "1.2.3" });
 
-    expect(lines).toHaveLength(4);
+    // Five: address, websocket, credentials, fleet, how to pair another device.
+    expect(lines).toHaveLength(5);
     expect(lines[0]).toContain("v1.2.3");
     expect(lines[0]).toContain("http://127.0.0.1:4201");
     expect(lines[0]).toContain("test");
@@ -332,7 +333,8 @@ describe("describeStartup", () => {
       subscriptionRails: false,
     });
 
-    expect(lines).toHaveLength(5);
+    // Six: the five above, plus the metered-key warning.
+    expect(lines).toHaveLength(6);
     expect(lines.join("\n")).toContain("WARNING");
     expect(lines.join("\n")).toContain("ANTHROPIC_API_KEY");
     expect(lines.join("\n")).toContain("METERED API");
@@ -346,6 +348,70 @@ describe("describeStartup", () => {
     });
 
     expect(lines.join("\n")).not.toMatch(/sk-ant/);
+  });
+
+  it("should say she cannot reach the fleet when nobody has turned it on", () => {
+    // Stated on every boot rather than only when it is on, for the same reason
+    // the credential source is: "she cannot reach anyone" is a fact about what
+    // she can do today, and a line that appears in only one of the two states
+    // is a line nobody reads as an answer.
+    expect(describeStartup({ ...config, adjutant: null }).join("\n")).toMatch(/fleet: off/u);
+  });
+
+  it("should name who she reaches the fleet AS, which is the whole security argument", () => {
+    const lines = describeStartup({
+      ...config,
+      adjutant: { baseUrl: "http://127.0.0.1:4201", agentId: "syl", projectRoot: undefined },
+    });
+
+    expect(lines.join("\n")).toContain('as "syl"');
+    expect(lines.join("\n")).toContain("never as the Commander");
+  });
+});
+
+/**
+ * `syl-014.1.3`. A missing or unreachable Adjutant must never break her boot:
+ * she is the Commander's assistant first and a fleet client second.
+ */
+describe("reaching the fleet", () => {
+  it("should hand back no client at all when the fleet is off", () => {
+    const built = bootstrap(testConfig({ databasePath: ":memory:", adjutant: null }));
+    try {
+      expect(built.adjutant).toBeUndefined();
+    } finally {
+      built.database.close();
+    }
+  });
+
+  it("should build a client that knows who she is when the fleet is on", () => {
+    const built = bootstrap(
+      testConfig({
+        databasePath: ":memory:",
+        adjutant: { baseUrl: "http://127.0.0.1:4201", agentId: "syl", projectRoot: undefined },
+      }),
+    );
+    try {
+      expect(built.adjutant?.agentId).toBe("syl");
+    } finally {
+      built.database.close();
+    }
+  });
+
+  it("should boot with the fleet configured even when nothing is listening there", () => {
+    // The client is stateless until its first call — constructing it opens no
+    // connection and probes nothing. That is what makes "Adjutant is down" a
+    // sentence she says rather than a boot that fails. Port 1 has nothing on it.
+    const built = bootstrap(
+      testConfig({
+        databasePath: ":memory:",
+        adjutant: { baseUrl: "http://127.0.0.1:1", agentId: "syl", projectRoot: undefined },
+      }),
+    );
+    try {
+      expect(built.adjutant).toBeDefined();
+    } finally {
+      built.database.close();
+    }
   });
 });
 

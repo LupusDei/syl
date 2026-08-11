@@ -912,6 +912,29 @@ Constitution Rule 1 and it has already paid for itself.
 **Fail loudly on auth and billing.** These are the failures that would quietly
 change what the Commander is paying, or quietly stop the assistant working.
 
+**If a property can be STATED, it can be forgotten. If it can be DERIVED, it
+cannot.** artanis's line, and the through-line under most of what follows —
+worth reading before the individual cases, because we rediscovered it about
+once an hour on 2026-08-10 and treated each instance as its own lesson.
+
+Every one of these was a guarantee held by somebody remembering, rather than by
+the structure:
+
+| the guarantee | how it was held | what it became |
+|---|---|---|
+| "this turn has no MCP" | a boot line asserting it | derived from the config it actually passes |
+| "three workers is right" | a measurement frozen as a constant | derived from the machine it runs on |
+| "this reminder is time-sensitive" | a payload claiming it | checked against what the binary is signed for |
+| "the signal stays covered" | a comment claiming an order the code did not have | cover before uncovering |
+| "every write says why" | required at the door, dropped at the store | carried to the row |
+| "outside text is fenced" | a fence you had to remember to apply | `validate` refuses the slot without the marker |
+| "she can act" | a sentence in `SOUL.md` | computed from `TurnOptions.tools` |
+
+The repair is the same every time: make the claim a function of the thing it is
+about. `advertisedTools()` from the handler map; `origin` from whether he spoke;
+the capability sentence from the surface. **A stated property has a shelf life
+and nothing announces its expiry.**
+
 **An instruction and the capability it assumes are ONE decision, and the failure
 is always prose.** Hit three times on 2026-08-10, in both directions:
 
@@ -957,6 +980,24 @@ and the manifest will not tell you. Declare the seam for real instead: a module
 that exports the true signature and throws a named `NotImplementedError` is
 better than a string in someone else's test file, because it hands the next
 person a typed contract and puts the warning where they will be standing.
+
+**A fix to a race is done when the old failure is unrepresentable AND a new
+failure at that site names itself.** artanis's standard, adopted for `syl-g4u`
+after we had both watched green runs lie under load. Two questions, and a run
+count is not one of them:
+
+1. **Can the original symptom still occur?** Unrepresentable, not unlikely.
+2. **If this site fails again, does the message say which bug it is** — or does
+   it repeat the old sentence and send the next person down a path already
+   closed?
+
+`us2` passes both: each spawn writes its own record, and the test filters to his
+own lane by permission mode, so a reader turn cannot be read as a commander turn
+even by accident. A future failure there says *"the second turn never spawned"*
+rather than *"missing --resume"*. **That is worth more than the eight green runs
+it also has**, because green runs under load are exactly what we already know
+can lie. Record the new failure sentence in the bead, so the next person knows
+what a genuine recurrence looks like.
 
 **Where the rule CANNOT be applied, the defence is a loud failure and nothing
 else.** artanis's observation, and it is the exception that proves the rule

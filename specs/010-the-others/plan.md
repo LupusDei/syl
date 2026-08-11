@@ -33,10 +33,33 @@ client is new code, but the protocol is understood and the fixtures exist.
 
 ## Reading replies
 
-`GET /api/messages?agentId=syl` returns everything addressed to her, newest
-first, in the `{success, data:{items:[…]}}` envelope. Reading needs no identity,
-so the client is asymmetric: **MCP to send, REST to read.** Stated here because
-it looks like an inconsistency and is not.
+**CORRECTED 2026-08-11 by `reach`, against a live Adjutant. The paragraph below
+this one was wrong, and wrong in the worst available way.**
+
+The plan said `GET /api/messages?agentId=syl` "returns everything addressed to
+her". It does not. Adjutant's store filters on
+
+    agent_id = ? OR (role = 'user' AND recipient = ?)
+
+— what SHE sent, plus what the COMMANDER sent her. An agent's answer to her is
+`role = 'agent'` with `recipient = 'syl'`, **which matches neither branch.**
+Measured: that query returns 0 replies where one exists; querying the SENDER and
+keeping the rows addressed to her returns it.
+
+So a poller built on the planned read would have run perfectly, delivered
+nothing, and raised no error anywhere — the failure mode this project keeps
+meeting, where *nothing to show* and *failed to show* are indistinguishable.
+Phase 3 would have hunted it for a day with the cursor and the fence both
+working correctly.
+
+The client therefore queries **the sender** and drops what is not addressed to
+her before anything is stored or shown. `limit` defaults to Adjutant's
+server-side maximum, because the window is applied BEFORE our filter: a chatty
+agent's traffic with the Commander can otherwise push her answer out of a narrow
+one, which is the same bug arriving by volume.
+
+Reading needs no identity, so the client stays asymmetric: **MCP to send, REST
+to read.** Stated here because it looks like an inconsistency and is not.
 
 A cursor (last seen message id) lives in the store, so a reply is delivered once.
 
