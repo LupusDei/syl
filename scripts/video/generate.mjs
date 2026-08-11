@@ -103,14 +103,24 @@ async function api(method, path, body) {
   return text === "" ? {} : JSON.parse(text);
 }
 
-/** A local image as a data URI, which is how Runway takes a reference. */
+/**
+ * A local image as a data URI, which is how Runway takes a `promptImage`.
+ *
+ * **`promptImage` is the video's first frame**, not a style hint, and it also
+ * decides the video's shape — see `backend/src/render/studio.ts`. The default
+ * is therefore the bare ribbon every loop opens on, and handing over her
+ * smiling headshot instead is exactly the defect that made the service's
+ * renders open on her face, in landscape.
+ */
 function asDataUri(path) {
   const full = resolve(STUDIO, path);
   if (!existsSync(full)) {
     die(
-      `Reference image not found: ${full}\n\n` +
-        "  The reference is what holds her face still between shots. Without the\n" +
-        "  right one you get a different woman — see docs/VIDEO.md.",
+      `Opening image not found: ${full}\n\n` +
+        "  It is the first frame of the clip, and its shape is the clip's shape.\n" +
+        "  The service places it on boot from `assets/syl_opening_ribbon.png`;\n" +
+        "  copy that there by hand if you are running this on a machine that has\n" +
+        "  never booted her — see docs/VIDEO.md.",
     );
   }
   const kind = full.endsWith(".png") ? "png" : "jpeg";

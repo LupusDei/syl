@@ -19,18 +19,82 @@ separate script, and why it refuses to overwrite an existing render without
 
 ## The method
 
-Every clip is **image-to-video**: a still of her is handed to the model as
-`promptImage`, and a sentence describes what she does. The still is the only
-thing holding her appearance still between clips. There is no character model,
-no LoRA, no fine-tune — just one picture, re-used.
+Every clip is **image-to-video**: a still is handed to the model as
+`promptImage`, and a sentence describes what happens. There is no character
+model, no LoRA, no fine-tune.
+
+**`promptImage` is the video's first frame.** Runway starts the clip *from* the
+picture, so whatever goes in that field is literally frame one — and seedance2
+also takes the video's **aspect ratio** from it, overruling the `ratio` field
+without saying so. Both of those are measured below.
 
 ```
-~/.syl/renders/reference.png      the reference. everything hangs on this.
+~/.syl/renders/opening-ribbon.png   the bare ribbon. frame one, and the shape.
         │
         ├── promptImage ──┐
-        │                 ├──> seedance2, 15s, 720:1280 ──> syl-loop-<name>.mp4
+        │                 ├──> seedance2, 15s, 834:1112 ──> syl-loop-<name>.mp4
    prompt text ───────────┘                                 syl-loop-<name>.mp4.json
+
+~/.syl/renders/reference.png        her likeness, 1120x832. NOT sent today.
 ```
+
+### The first frame, and the day this page was wrong
+
+This section used to say the still handed over was *her* — "the only thing
+holding her appearance still between clips" — and the service was built on it.
+It is not what the eight loops did, and following it produced videos the
+Commander could tell apart at a glance:
+
+> *"right now the videos that are being created look like they're landscape mode
+> and that the template smiling still frame is the first frame of the video…
+> the eight loop videos which were portrait mode and the first frame was the
+> blue ribbon."*
+
+Both halves have the same cause. Measured on the artifacts, 2026-08-11:
+
+| | dimensions | first frame | `ratio` asked for |
+|---|---|---|---|
+| `syl-loop-*.mp4` (all eight) | **834 x 1112**, portrait | the bare blue ribbon | — |
+| a service render | **1112 x 834**, landscape | `reference.png`, smiling | `720:1280` |
+
+The same pixels, transposed. The service asked for a portrait ratio and got
+landscape, because `reference.png` is 1120x832 landscape and **the picture wins**.
+And frame one was her face because frame one is *always* the picture.
+
+The eight loops all open on **one** image, which is why the reel cuts cleanly:
+PSNR between the first frames of any two of them is ~35dB — a single picture
+through two h264 encodes, not two independent generations. Ten to fifteen dB is
+what two generations of the same prompt look like. That image is portrait, and
+it is the ribbon.
+
+So there are two pictures doing two jobs, and collapsing them into one is the
+whole defect:
+
+    opening-ribbon.png    WHERE it starts, and what shape it is    (sent)
+    reference.png         WHO she is                               (not sent)
+
+**No wording fixes this.** `LOOP_CLAUSE` was rewritten to say the clip opens on
+a bare ribbon with no figure present; it was necessary and it could not have
+worked, because a sentence cannot move a frame an image input has pinned. The
+same trap is waiting for anyone who reads a landscape video as a wrong constant:
+`DEFAULTS.ratio` said `720:1280` the entire time.
+
+`assets/syl_opening_ribbon.png` is that frame at native resolution, recovered
+from `syl-loop-1-emerge.mp4` — the only place it survives — and seeded into her
+home on boot exactly as the reference is. Re-cut it with:
+
+```sh
+ffmpeg -y -ss 0 -i ~/.syl/renders/syl-loop-1-emerge.mp4 -frames:v 1 \
+  -pix_fmt rgb24 assets/syl_opening_ribbon.png
+```
+
+**What this costs.** Nothing anchors her face any more, because nothing anchored
+it in the eight either — which is the anchoring-band finding below arriving from
+the other direction: those loops work by *never showing a face the model could
+get wrong*. `framing.ts` still says `close_portrait` holds her likeness, and
+that claim was true of a headshot `promptImage` and is not true of this one. It
+is left standing deliberately: fixing it properly means a second picture at the
+right framing (option 2 below), not deleting the sentence. `syl-63v`.
 
 The sidecar `.json` is written beside every render and holds the model, the
 prompt, the reference, the duration and the task id. It exists because **the
@@ -50,7 +114,8 @@ The video can always be made again; the sentence cannot be recovered once lost.
 ```
 ~/.syl/renders/<name>.mp4          the render
 ~/.syl/renders/<name>.mp4.json     what made it
-~/.syl/renders/reference.png       her likeness, what they all anchor on
+~/.syl/renders/opening-ribbon.png  frame one of every clip, and its shape
+~/.syl/renders/reference.png       her likeness
 ~/.syl/renders/frames/<name>/      the stills she looked at
 ```
 
@@ -74,11 +139,17 @@ are the only way she can look at a video at all.
 Keeping the media out of git, which is the reason it was ever outside the repo,
 is untouched: a 15s render is 12–15MB, and her home is not a repository.
 
-**`assets/syl_source.png` is in this repository as the seed**, and the service
-copies it to `~/.syl/renders/reference.png` on first boot if nothing is there —
-never overwriting one that is. That is the same 1120×832 still all eight loops
-were rendered against, byte for byte. It is checked in so that her likeness does
-not depend on another project existing.
+**Both pictures are in this repository as seeds**, and the service copies each
+into her home on first boot if nothing is there — never overwriting one that is.
+
+| seed | placed as | what it is |
+|---|---|---|
+| `assets/syl_opening_ribbon.png` | `renders/opening-ribbon.png` | the 834×1112 ribbon, frame one of every clip. **This is what is sent.** |
+| `assets/syl_source.png` | `renders/reference.png` | the 1120×832 close portrait, her likeness |
+
+They are checked in so that neither depends on another project existing. Losing
+the ribbon does not fail loudly — it renders the wrong opening in the wrong
+shape, at full price, which is precisely what happened.
 
 **The script writes there too.** `scripts/video/generate.mjs` resolves the
 studio by the same rule and in the same order as the service —
@@ -178,8 +249,23 @@ available via the same endpoint:
 and a prompt that puts her face in the bad band will waste the whole thing.
 
 Constraints measured on 2026-08-10: `seedance2` tops out at **15 seconds**, and
-high resolution together with 15s fails — pick one. Ratios are per-model; the
-loops use `720:1280` portrait.
+high resolution together with 15s fails — pick one.
+
+**Ratios are per-model, and the valid set is free to ask for.** POST an
+invalid one and the 400 lists every option, at no cost and without a task being
+created. `seedance2` on `image_to_video`, probed 2026-08-11:
+
+```
+992:432  864:496  752:560  640:640  560:752  496:864
+1470:630  1280:720  1112:834  960:960  834:1112  720:1280
+2206:946  1920:1080  1664:1248  1440:1440  1248:1664  1080:1920
+3840:1646  3840:2160  3840:2880  3840:3840  2880:3840  2160:3840
+```
+
+The loops are **`834:1112`**. Note that `1112:834` is in the list too and is
+what a landscape `promptImage` gets you whatever you ask for — a legal ratio is
+not a granted one, so the useful check is `ffprobe` on the file rather than the
+constant in the source.
 
 ## Doing this without a person
 

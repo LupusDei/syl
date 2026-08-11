@@ -69,6 +69,40 @@ import { fileURLToPath } from "node:url";
 export const DEFAULT_REFERENCE = "renders/reference.png";
 
 /**
+ * The bare blue ribbon every clip opens on — **and the video's first frame.**
+ *
+ * `promptImage` is not a style hint. Runway *starts the video from the picture
+ * it is handed*, so whatever is here is literally frame one of every render.
+ * That is the whole of the Commander's report of 2026-08-11: his renders were
+ * arriving with "the template smiling still frame as the first frame", against
+ * the eight loops he named as the template, which all open on the ribbon.
+ *
+ * Two things were being asked of one file and they are not the same job:
+ *
+ *     reference.png        WHO she is    — a close portrait, her likeness
+ *     opening-ribbon.png   WHERE it STARTS — the bare ribbon, frame one
+ *
+ * `reference.png` is a smiling headshot, so handing it over pinned frame one to
+ * her face and left `LOOP_CLAUSE` — which says the clip opens on a ribbon with
+ * no figure in it — describing something the model had already been told
+ * otherwise. **No wording can move a frame that an image input pins**, which is
+ * why rewriting that clause did not fix this and could not have.
+ *
+ * It also decides the SHAPE. Measured on the artifacts, 2026-08-11: the eight
+ * loops are 834x1112 and a service render was 1112x834 — the same pixels,
+ * transposed. Both requested `720:1280`. seedance2 takes the video's aspect
+ * from `promptImage` and quietly overrules the ratio, and `reference.png` is
+ * 1120x832 landscape. So a portrait opening still is what makes a portrait
+ * video, and `DEFAULTS.ratio` agreeing with it is belt and braces rather than
+ * the mechanism.
+ *
+ * Named for what it is rather than for the clip it was cut out of: in her home
+ * there is one of these, and a person opening the directory should be able to
+ * tell what it does.
+ */
+export const DEFAULT_OPENING = "renders/opening-ribbon.png";
+
+/**
  * The prefix on every render Syl made herself.
  *
  * Distinct from `syl-loop-`, which is what `generate.mjs` writes. Not
@@ -101,8 +135,10 @@ export interface Studio {
   readonly videoDir: string;
   /** Where extracted stills go, one directory per render. */
   readonly frameDir: string;
-  /** The reference image handed to the model, absolute. */
+  /** Her likeness, absolute. What a shot of her face would anchor on. */
   reference(relative?: string): string;
+  /** The ribbon still handed to the model as `promptImage`, absolute. Frame one. */
+  opening(relative?: string): string;
   /** The mp4 for a render. */
   video(name: string): string;
   /** The sidecar beside it — `<video>.json`, exactly as `generate.mjs` writes. */
@@ -124,6 +160,7 @@ export function studioAt(root: string): Studio {
     videoDir,
     frameDir,
     reference: (relative = DEFAULT_REFERENCE) => resolve(root, relative),
+    opening: (relative = DEFAULT_OPENING) => resolve(root, relative),
     video: (name) => resolve(videoDir, `${name}.mp4`),
     // `<video>.json` rather than `<name>.json`: `generate.mjs` writes it that
     // way, and a sidecar that does not sit beside its video under its video's
@@ -183,6 +220,36 @@ export function referenceSeed(
   return resolve(here, "..", "..", "assets", "syl_source.png");
 }
 
+/**
+ * The opening ribbon that ships with the source, used to seed her home.
+ *
+ * `assets/syl_opening_ribbon.png` is the **first frame of `syl-loop-1-emerge`
+ * at native resolution**, 834x1112. It is in the repository for the same reason
+ * the reference is: it is what every render starts from, and losing it does not
+ * fail loudly — it renders the wrong opening, expensively.
+ *
+ * The eight loops all open on this exact picture. That is measured rather than
+ * assumed: PSNR between the first frames of any two of them is ~35dB, which is
+ * one image through two h264 encodes, not two independent generations. So it
+ * was a `promptImage` they shared, and this is it, recovered from the only
+ * place it survives.
+ *
+ * Re-cut it with, from the repository root:
+ *
+ *     ffmpeg -y -ss 0 -i <a syl-loop-*.mp4> -frames:v 1 -pix_fmt rgb24 \
+ *       assets/syl_opening_ribbon.png
+ *
+ * 1.3MB, so ~1.8MB as a data URI, comfortably inside Runway's 5MB cap
+ * (`RUNWAY_API_INDEX.md` §5.2). Keep it under that or the request is rejected
+ * as malformed with an error that reads like a URL problem — see
+ * {@link DEFAULT_REFERENCE} for how that one presents.
+ */
+export function openingSeed(
+  here: string = dirname(dirname(fileURLToPath(import.meta.url))),
+): string {
+  return resolve(here, "..", "..", "assets", "syl_opening_ribbon.png");
+}
+
 /** What a boot did about her likeness. */
 export type ReferencePlacement =
   /** It was already in her home. Nothing was touched. */
@@ -205,7 +272,26 @@ export type ReferencePlacement =
  *   path, which is where a person can act on it, and no credit is spent.
  */
 export function ensureReference(studio: Studio, seed: string = referenceSeed()): ReferencePlacement {
-  const target = studio.reference();
+  return place(studio.reference(), seed);
+}
+
+/**
+ * Put the ribbon her clips open on in her home if it is not there already.
+ *
+ * The same two rules as {@link ensureReference}, and the same reasons. What is
+ * in her home is hers; a boot must not die because a picture is missing.
+ *
+ * Separate from the reference because the two pictures answer different
+ * questions — *who she is* and *where the clip starts* — and the boot that
+ * places one must be able to report on the other independently. Only this one
+ * is sent to Runway today, so only this one's absence stops a render.
+ */
+export function ensureOpening(studio: Studio, seed: string = openingSeed()): ReferencePlacement {
+  return place(studio.opening(), seed);
+}
+
+/** Copy a seed picture into her home, once, without ever replacing one. */
+function place(target: string, seed: string): ReferencePlacement {
   if (existsSync(target)) return "present";
   if (!existsSync(seed)) return "unplaced";
 

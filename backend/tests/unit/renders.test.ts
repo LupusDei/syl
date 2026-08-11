@@ -64,6 +64,9 @@ beforeEach(async () => {
   const studio = studioAt(root);
   mkdirSync(dirname(studio.reference()), { recursive: true });
   writeFileSync(studio.reference(), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  // The ribbon every clip opens on. It is what goes over as `promptImage`, so
+  // without it on disk `start` refuses and every route below answers 4xx.
+  writeFileSync(studio.opening(), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01]));
 
   renders = new RenderService({
     studio,

@@ -69,7 +69,7 @@ import { installShutdownHandlers } from "./ops/shutdown.js";
 import { tailnetCertProbe } from "./ops/tailnet-cert.js";
 import { RenderService } from "./render/render-service.js";
 import { RunwayClient } from "./render/runway.js";
-import { ensureReference, studioAt, studioRootFrom } from "./render/studio.js";
+import { ensureOpening, ensureReference, studioAt, studioRootFrom } from "./render/studio.js";
 import { createGoalRouter } from "./routes/goals.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
 import { createJobRouter } from "./routes/jobs.js";
@@ -1379,14 +1379,25 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // `render/studio.ts` has the rest of why.
   const studio = studioAt(studioRootFrom(options.env ?? process.env, home));
   if (home !== undefined) {
-    // Her likeness, placed on first boot and never overwritten after. It is the
-    // only thing holding her face still between shots, and it must not live in
-    // a checkout that belongs to a different project.
+    // Her likeness, placed on first boot and never overwritten after. It is
+    // what a shot of her face anchors on, and it must not live in a checkout
+    // that belongs to a different project.
     const placed = ensureReference(studio);
     if (placed === "unplaced") {
       console.warn(
         `[syl] WARNING: there is no reference picture at ${studio.reference()} and none could ` +
           `be placed — she will refuse to render rather than render somebody else.`,
+      );
+    }
+    // The ribbon her clips open on, placed the same way. This is the one that
+    // reaches Runway: it is `promptImage`, and `promptImage` is frame one. A
+    // machine without it cannot render at all, which is why the warning is
+    // stronger than the one above.
+    const opening = ensureOpening(studio);
+    if (opening === "unplaced") {
+      console.warn(
+        `[syl] WARNING: there is no opening ribbon at ${studio.opening()} and none could be ` +
+          `placed — she will refuse to render, because it is the first frame of every clip.`,
       );
     }
   }
