@@ -17,13 +17,15 @@
 |---|---|---|---|
 | `syl-015.1` | 1 — she renders herself | **CLOSED**, shipped and deployed | **0** |
 | `syl-015.2` | 2 — the hourly turn | built on `syl-heartbeat`, merging | 6 |
-| `syl-015.3` | 3 — sendings, the backend | in flight by another agent | 6 |
+| `syl-015.3` | 3 — sendings, the backend | landed on main; gaps + one bug | 7 |
 | `syl-015.4` | 4 — From Syl, the surface | not started | 9 |
 | `syl-015.5` | 5 — her voice | not started | 6 |
 | `syl-015.6` | 6 — proof | not started | 1 |
 
-Existing epic-level dependencies, unchanged by this import:
-`syl-015.4 → syl-015.3`, `syl-015.6 → syl-015.4`, `syl-015.6 → syl-015.5`.
+Epic-level dependencies. None were created or removed by this import; recorded as they
+now stand: `syl-015.6 → syl-015.4` and `syl-015.6 → syl-015.5`. The `syl-015.4 →
+syl-015.3` edge existed when these tasks were written and **has since been cut**, which
+is why the iOS track is open — see "Verification after wiring" below.
 
 ## Tasks
 
@@ -47,7 +49,14 @@ Existing epic-level dependencies, unchanged by this import:
 | T008a | Failing tests for a sending stranded pending | `backend/tests/unit/sending-service.test.ts` | `syl-015.3.3` |
 | T008b | The recovery pass, on boot, `RenderService.resume()`-shaped | `backend/src/services/sending-service.ts` | `syl-015.3.4` |
 | T009 | The `0024` collision, which stops a boot rather than a test | `backend/src/migrations/` | `syl-015.3.5` |
+| T025 | **bug** — the mock serves sendings in the wrong order | `shared/src/mock/server.ts` | `syl-015.3.7` |
 | T010 | Verify acceptance 3, 4 and 6 on the running service | `docs/RUNBOOK.md` | `syl-015.3.6` |
+
+`T025` was found after planning, by the agent that wrote the mock, and beaded because it
+is the kind of defect that produces a *green* wrong answer: the mock is schema-conformant
+and serves the wrong order, so snapshots taken against it would disagree with production
+while passing. It is filed under `.3` because it is `.3`'s code, and wired to block
+`syl-015.4.4` because that is where the damage would land.
 
 **Dropped after the agent holding `.3` claimed them, both landed 2026-08-11**: the live
 broadcast of her words (via `chat: ConversationService`, not a second sink) and the
@@ -90,15 +99,16 @@ reaping of the derived working directory (`#reap(sendingId)`). Not planned, not 
 |---|---|---|---|
 | 1: she renders herself | 0 (CLOSED) | 0 | `syl-015.1` |
 | 2: the hourly turn | 6 | 0 | `syl-015.2` |
-| 3: sendings — the backend | 6 | 0 | `syl-015.3` |
+| 3: sendings — the backend | 7 | 0 | `syl-015.3` |
 | 4: From Syl — the surface | 9 | 0 | `syl-015.4` |
 | 5: her voice | 6 | 0 | `syl-015.5` |
 | 6: proof | 1 | 0 | `syl-015.6` |
-| **Total task beads** | **28** | | |
+| **Total task beads** | **29** | | |
 
-24 T-IDs; four of them (`T007`, `T008`, `T014`, `T021`) are Shape A splits and become
-two beads each. 28 task beads in all, under six pre-existing sub-epics under one
-pre-existing root.
+25 T-IDs; four of them (`T007`, `T008`, `T014`, `T021`) are Shape A splits and become
+two beads each. 29 task beads in all, under six pre-existing sub-epics under one
+pre-existing root. `T025` is the one bead added after planning — a bug found by the
+agent that wrote the code it is against.
 
 ## Dependency graph
 
@@ -110,10 +120,10 @@ syl-015
 ├── syl-015.3  .1 ──► .2 ──┐
 │               .3 ──► .4 ──┴──► .6
 │               .5  (independent)
-│              └── blocks ──► syl-015.4
+│               .7  (independent) ── blocks ──► syl-015.4.4
 ├── syl-015.4  .1 ──┐
 │               .2 ──┴──► .3 ──► .6 ──► .7 ──► .8 ──► .9
-│               .4 ──► .5 ─────────┘
+│               .4 ──► .5 ─────────┘   .4 ◄── syl-015.3.7
 │              └── blocks ──► syl-015.6
 ├── syl-015.5  .1 ──► .3 ──► .4 ──► .5 ──► .6 ◄── syl-015.3.2
 │               .2  (independent)
@@ -125,6 +135,8 @@ Cross-phase task edges deliberately added:
 
 - `syl-015.2.3 → syl-015.3.2` — the rate cannot count a verb that does not exist.
 - `syl-015.5.6 → syl-015.3.2` — a sending must exist before it can carry a voice.
+- `syl-015.4.4 → syl-015.3.7` — snapshots must not be taken against a mock that serves
+  the wrong order, or they pass while disagreeing with production.
 
 ## Verification after wiring
 
@@ -140,11 +152,13 @@ open blocker:
 | `syl-015.3.1` | T007a failing tests for the verb — **start here** |
 | `syl-015.3.3` | T008a failing tests for the stranded `pending` row |
 | `syl-015.3.5` | T009 the duplicate-migration check |
+| `syl-015.3.7` | T025 the mock's sending order — **do this before `.4.4`** |
 | `syl-015.4.1` | T011 the contract on the phone |
 | `syl-015.4.2` | T012 sendings on disk |
-| `syl-015.4.4` | T014a failing tests for the list and its snapshot |
 | `syl-015.5.1` | T019 crack `voice.type` |
 | `syl-015.5.2` | T020 the voice id in her home |
+
+`syl-015.4.4` was ready and is now deliberately blocked on `syl-015.3.7`.
 
 ### The Phase 4 edge, and why the iOS track is open
 
