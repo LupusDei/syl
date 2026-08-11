@@ -215,7 +215,7 @@ export interface InferredRelationSpec {
  * similarity threshold is measured to collapse accuracy from 0.82 to 0.62, and
  * a dream that could assert identity would be a route around that split.
  *
- * `backend/tests/unit/memory-relations.test.ts` asserts the disjointness
+ * `backend/tests/unit/dream-relations.test.ts` asserts the disjointness
  * against those modules' own constants, so this stays true by contact rather
  * than by anyone remembering it.
  */
