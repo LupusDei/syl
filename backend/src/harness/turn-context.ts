@@ -323,7 +323,33 @@ export const MEMORY_FENCE_END = "--- END OF WHAT YOU REMEMBER ---";
  * how a ceiling stops meaning anything. When that lands, ONE number gets set
  * ONCE by whoever lands it, in conversation with the others.
  */
-export const DEFAULT_CONTEXT_BUDGET_BYTES = 40_000;
+/**
+ * 40,000 -> 72,000, which is the "when that lands" the paragraph above names.
+ *
+ * This DOES size for `syl-ulf`, an unlanded branch, and the paragraph above
+ * argues against exactly that. Both belong here, because the distinction is the
+ * useful part: sizing for work that MIGHT land makes a ceiling meaningless,
+ * while sizing for the merge this number exists to unblock is the job. The test
+ * is whether the branch is hypothetical. `syl-ulf` is not — it raises working
+ * memory to 32,000, and against main's `SOUL.md` and tool surface it does not
+ * fit at any smaller number.
+ *
+ *   working memory  32,000   replies 4,800
+ *   SOUL.md         11,954   tools  11,370   = 60,124 required
+ *
+ * 72,000 rather than the 64,000 that also clears it: `SOUL.md` grew 3,593 bytes
+ * in a single day, so a 3,900-byte spare is one day of headroom. Every turn pays
+ * this ceiling in full, which is the reason not to go higher still — 72,000 is
+ * roughly 18k tokens, about 9% of context as fixed cost.
+ *
+ * BEFORE YOU RAISE THIS AGAIN: say the number in the team channel first, then
+ * edit the file. It has been set five times in two days and collided twice,
+ * because four contributors move independently and each of us was correct
+ * alone. `tool-surface-budget.test.ts` computes the minimum viable value and
+ * prints it on failure — take the number from the test rather than deriving it
+ * by hand, because a subtraction done by hand is stale by the time it is done.
+ */
+export const DEFAULT_CONTEXT_BUDGET_BYTES = 72_000;
 
 /**
  * POSTSCRIPT, and it arrived while the paragraph above was being written.

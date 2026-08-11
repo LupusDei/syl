@@ -192,31 +192,14 @@ struct HomeView: View {
         // else is composited over the bottom of it, which is what the concept art always
         // showed and what the Commander asked for.
         ZStack(alignment: .bottom) {
-            ZStack {
-                SylHero(presence: presence, intensity: presenceIntensity, prefersStill: !scrolls)
+            // The hero art alone. What she is *doing* used to be drawn across it, as a
+            // ribbon — see ``SylHalo`` for why it moved, and for why the ribbon was
+            // right in chat and wrong here.
+            SylHero(presence: presence, intensity: presenceIntensity, prefersStill: !scrolls)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .animation(SylTheme.Motion.breathe, value: presence)
 
-                // The ribbon appears only while she is *doing* something.
-                //
-                // Drawn continuously it was a coloured line lying across her — a
-                // scratch, not light, and it competed with the art every second of
-                // every day. Restricting it to the active states fixes the look and is
-                // the better rule anyway: the art says who she is, the ribbon says what
-                // she is doing, and most of the time she is not doing anything, which
-                // is exactly the state this whole product is designed to make restful.
-                if HomeSnapshot.isActive(presence) {
-                    SylRibbon(state: presence, intensity: presenceIntensity)
-                        .frame(height: viewport.height * 0.20)
-                        .offset(y: viewport.height * 0.06)
-                        .opacity(0.75)
-                        .blendMode(.plusLighter)
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(SylTheme.Motion.breathe, value: presence)
-
-            nameplate
+            nameplate(width: viewport.width)
         }
         // One *visible* screen, not one raw geometry height.
         //
@@ -244,25 +227,26 @@ struct HomeView: View {
     /// needs, and a thin `luminanceCore` sheen just above it catches the eye the way a
     /// curved glass surface would — that is the "glossy" part, and without it the ramp
     /// alone reads as a grey wash.
-    private var nameplate: some View {
+    private func nameplate(width: CGFloat) -> some View {
         VStack(spacing: 0) {
             Text("Syl")
                 .font(.system(size: 54, design: .serif))
                 .foregroundStyle(SylTheme.Colour.ink)
                 .shadow(color: SylTheme.Colour.luminanceCore.opacity(0.9), radius: 14)
 
-            Text(HomeSnapshot.phrase(for: presence) ?? snapshot.greeting)
-                .font(.system(.subheadline, design: .serif))
-                .tracking(2.2)
-                .foregroundStyle(SylTheme.Colour.inkSoft)
-                .multilineTextAlignment(.center)
-                .contentTransition(.opacity)
-                .animation(SylTheme.Motion.breathe, value: presence)
-                .padding(.top, SylTheme.Metric.tight)
-                .padding(.horizontal, SylTheme.Metric.gutter)
+            // Her line, inside the halo that orbits it. The halo owns the `Text` because
+            // it is sized from the phrase's own measured lines, and it occupies a layout
+            // box exactly the size of its ring — which is what makes "the ring never
+            // collides with the title above or the orbs below" a fact about this stack
+            // rather than a promise about some numbers.
+            SylHalo(
+                phrase: HomeSnapshot.phrase(for: presence) ?? snapshot.greeting,
+                state: presence,
+                intensity: presenceIntensity,
+                availableWidth: width
+            )
 
             orbs
-                .padding(.top, SylTheme.Metric.loose)
                 .padding(.bottom, SylTheme.Metric.gutter)
         }
         .frame(maxWidth: .infinity)
