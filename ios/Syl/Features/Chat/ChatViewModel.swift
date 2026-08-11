@@ -35,6 +35,13 @@ final class ChatViewModel: ObservableObject {
     /// working and so a fast scroll cannot queue five overlapping loads.
     @Published private(set) var isLoadingEarlier = false
 
+    /// Whether a turn he asked for is still outstanding.
+    ///
+    /// Set when a send is queued and cleared the moment she answers — or the moment
+    /// nothing is vouching for it any more. See ``armTurnWatch(from:)`` for why that
+    /// second condition is presence rather than a stopwatch.
+    @Published private(set) var isAwaitingReply = false
+
     private let store: LocalStore
     /// `var`: the window grows as the Commander reaches back through history.
     private var loader: ChatSnapshotLoader
@@ -60,6 +67,29 @@ final class ChatViewModel: ObservableObject {
     /// poll. Cancelled and re-armed on every frame.
     private var decay: Task<Void, Never>?
 
+    /// Armed while a turn is outstanding; fires when presence can no longer speak for it.
+    private var turnWatch: Task<Void, Never>?
+
+    /// How long a turn is given when presence never said anything about it at all.
+    ///
+    /// Only reached when a send goes out and **no** presence frame follows — a socket
+    /// that was never up, or a service that accepted the message and died before
+    /// announcing the turn. When presence does speak, its own ladder is the deadline and
+    /// this is not consulted. Deliberately the same length as that ladder
+    /// (`thinking`'s 15-second TTL plus the 30-second grace) so the two cases cannot
+    /// disagree about how long silence is allowed to last.
+    ///
+    /// It is also the floor after a **socket drop**, which clears the timeline outright.
+    /// A drop must not declare the turn lost on the spot: the client reconnects and the
+    /// server replays from the high-water mark, so the reply very often arrives a second
+    /// later. Waiting the same silence out is what tells the two apart.
+    static let defaultTurnSilence: TimeInterval = 45
+
+    /// Injected so a test can assert the floor without waiting it out in real seconds.
+    /// The watch sleeps in real time — `now` decides what it *concludes*, not when it
+    /// wakes — so this is the only way to exercise the no-presence path at all.
+    private let turnSilence: TimeInterval
+
     init(
         store: LocalStore,
         conversationId: SylID = SylIDs.interactiveConversation,
@@ -80,8 +110,10 @@ final class ChatViewModel: ObservableObject {
         flush: @escaping @Sendable () async -> Void = {},
         now: @escaping @Sendable () -> Date = { Date() },
         makeClientId: @escaping @Sendable () -> String = { UUID().uuidString },
-        makeIdempotencyKey: @escaping @Sendable () -> String = { IdempotencyKey.generate() }
+        makeIdempotencyKey: @escaping @Sendable () -> String = { IdempotencyKey.generate() },
+        turnSilence: TimeInterval = ChatViewModel.defaultTurnSilence
     ) {
+        self.turnSilence = turnSilence
         self.store = store
         self.conversationId = conversationId
         self.pageSize = limit
@@ -205,6 +237,11 @@ final class ChatViewModel: ObservableObject {
 
         draft = ""
         notice = nil
+        // He has asked for something, and from here until she answers the screen owes him
+        // an account of it. Armed before the send rather than after, because a send that
+        // throws is exactly the case where the turn may never come back.
+        isAwaitingReply = true
+        armTurnWatch(from: now())
         await refresh()
 
         if !staging.isEmpty {
@@ -302,6 +339,8 @@ final class ChatViewModel: ObservableObject {
                 notice = "A message arrived that this device could not save."
                 return false
             }
+            // She answered. Whatever the turn was waiting on, it has arrived.
+            if message.role == .assistant { closeTurn() }
             await refresh()
             return true
 
@@ -339,6 +378,10 @@ final class ChatViewModel: ObservableObject {
         presence = timeline.state(at: instant)
         intensity = timeline.intensity(at: instant)
         armDecay(from: instant)
+        // Every presence frame is fresh evidence that the outstanding turn is alive, so
+        // the watch is re-armed from it. This is what lets a ten-minute turn run without
+        // being accused: the service re-announces `thinking` every 7.5 seconds.
+        armTurnWatch(from: instant)
     }
 
     /// Arm a single timer for the next moment the rendered state changes.
@@ -360,6 +403,90 @@ final class ChatViewModel: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.refreshPresence()
         }
+    }
+
+    // MARK: - The turn he is waiting on
+
+    /// Arm the watch for the moment nothing will be vouching for this turn any more.
+    ///
+    /// **Not a timeout, and the service is why.** A turn is allowed to take ten minutes
+    /// (`DEFAULT_TURN_TIMEOUT_MS`), twenty if the agent retries from a clean session, so
+    /// any stopwatch short enough to be useful would accuse turns that are working. But
+    /// the service also reports continuously while it works: `thinking` carries a
+    /// 15-second TTL and is re-announced every 7.5 seconds for as long as the turn runs.
+    ///
+    /// So the question is not "has it been long enough" but **"is anything still vouching
+    /// for it"**, and `PresenceTimeline` already answers that: it decays to `absent` after
+    /// the TTL and a further grace, and it is cleared outright when the socket drops. A
+    /// working turn never reaches `absent`; a stranded one gets there on its own, with no
+    /// clock of ours. That is what makes this structural rather than bolted on — the same
+    /// instinct that put the expiry in the timeline rather than in the view.
+    private func armTurnWatch(from instant: Date) {
+        turnWatch?.cancel()
+        guard isAwaitingReply else { return }
+
+        // The moment presence stops being able to speak for the turn. When no frame has
+        // ever arrived there is no ladder to read, and `turnSilence` is the floor.
+        let deadline =
+            timeline.nextTransition()?.addingTimeInterval(PresenceTimeline.idleGrace)
+            ?? instant.addingTimeInterval(turnSilence)
+
+        // **Capped, and it re-arms.** The wake-up is real time; what it concludes is read
+        // from `now()`, which a test moves by hand and which a suspended app moves in
+        // jumps. Sleeping straight to a computed deadline would mean a watch that slept
+        // through the very interval it was meant to observe. Waking no less often than
+        // `turnSilence` and re-checking costs one wake a minute while a turn is
+        // outstanding, and nothing at all when none is.
+        let delay = max(min(deadline.timeIntervalSince(instant), turnSilence), 0.05)
+
+        turnWatch = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            await self?.turnWentQuiet()
+        }
+    }
+
+    /// Nothing has vouched for the outstanding turn. Say so — and then actually go and
+    /// look, because the reply usually exists.
+    ///
+    /// Constraint 4 is that the system does not get to silently discard things, and a
+    /// notice that narrates a lost reply without trying to fetch it is still a lost
+    /// reply. The socket is not the only way the answer can arrive: `flush` is
+    /// `SyncEngine.synchronise()`, which pulls the change feed, and a reply the server
+    /// appended while this device was wedged or disconnected comes back through it. So
+    /// the recovery asks first and reports only what survives asking.
+    private func turnWentQuiet() async {
+        guard isAwaitingReply else { return }
+        // A frame may have landed between the watch being armed and it firing.
+        guard timeline.state(at: now()) == .absent else {
+            armTurnWatch(from: now())
+            return
+        }
+
+        isAwaitingReply = false
+        turnWatch?.cancel()
+        turnWatch = nil
+
+        // Ask before concluding. This is the half that recovers rather than reports.
+        await flush()
+        await refresh()
+
+        if snapshot.groups.last?.role == .assistant {
+            // It was there all along and is now on screen. Nothing to report.
+            return
+        }
+
+        notice = """
+            Syl did not come back to that one. Your message is safe here — pull down or \
+            tap Retry and it will go again.
+            """
+    }
+
+    /// The turn is closed: she answered, or he asked something else.
+    private func closeTurn() {
+        isAwaitingReply = false
+        turnWatch?.cancel()
+        turnWatch = nil
     }
 
     // MARK: - What the Commander is told

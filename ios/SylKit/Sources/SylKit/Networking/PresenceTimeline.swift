@@ -50,6 +50,12 @@ public struct PresenceTimeline: Equatable, Sendable {
 
         let expiry = latest.receivedAt.addingTimeInterval(latest.frame.ttl)
         if instant < expiry { return latest.frame.state }
+        // **Decay only ever makes her less present.** `absent` is the resting state and
+        // the one the service ships with `ttl_ms: 0`, so without this the frame expired
+        // the instant it arrived and decayed *upward* into `idle` — the client drawing
+        // her resting for thirty seconds after the server said she was gone, at the end
+        // of every turn.
+        if latest.frame.state == .absent { return .absent }
         if instant < expiry.addingTimeInterval(Self.idleGrace) { return .idle }
         return .absent
     }
@@ -73,6 +79,10 @@ public struct PresenceTimeline: Equatable, Sendable {
     /// one timer instead of polling.
     public func nextTransition() -> Date? {
         guard let latest else { return nil }
+        // A frame already at rest never changes into anything, so there is no moment to
+        // wake up for. Answering with one would have a view arm a timer that can only
+        // recompute the same answer.
+        guard latest.frame.state != .absent else { return nil }
         return latest.receivedAt.addingTimeInterval(latest.frame.ttl)
     }
 }
