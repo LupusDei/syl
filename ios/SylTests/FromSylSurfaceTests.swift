@@ -182,3 +182,96 @@ final class FromSylSnapshotTests: XCTestCase {
         SendingListSnapshot.project(Array(sendings), now: now, timeZone: zone, locale: Locale(identifier: "en_GB"))
     }
 }
+
+/// The screen's lifecycle (`syl-015.4.6`, T015).
+///
+/// The whole of this class is one distinction: **"I have not asked" is not "she has sent
+/// you nothing".** A nil snapshot is the first; an empty one is the second; and the
+/// difference is what stops a first launch with no network from making a confident false
+/// statement about a surface whose entire content is things she gave him.
+@MainActor
+final class FromSylViewModelTests: XCTestCase {
+    /// A store per case, built inside it.
+    ///
+    /// Not a property with a `setUp`: this class is `@MainActor` — the view model is —
+    /// and XCTest's `setUpWithError` is not, so a shared property would have to be
+    /// written from outside the actor that owns it. `LocalStore` holds the database, so
+    /// the queue lives exactly as long as the case that made it.
+    private func makeStore() throws -> LocalStore {
+        LocalStore(database: try SylDatabase.inMemory())
+    }
+
+    func testShouldStartWithNoSnapshotAtAll() throws {
+        let store = try makeStore()
+        let model = FromSylViewModel(source: SendingSource(store: store, gateway: .unreachable))
+
+        XCTAssertNil(model.snapshot, "nil is 'not asked yet' and renders as the bare veil")
+    }
+
+    func testShouldPublishASnapshotWhenTheFetchAnswers() async throws {
+        let store = try makeStore()
+        let model = FromSylViewModel(
+            source: SendingSource(store: store, gateway: .stub(page: SendingFixtures.page())))
+
+        await model.refresh()
+
+        XCTAssertEqual(model.snapshot?.rows.map(\.id), SendingFixtures.newestFirstIDs)
+    }
+
+    /// **The one it must not get wrong.** A first launch that cannot reach the Mac has
+    /// not learned that she has sent him nothing — it has learned nothing at all, and an
+    /// empty list would be the app inventing an answer out of its own failure to ask.
+    func testShouldStayUnaskedWhenTheFirstFetchFails() async throws {
+        let store = try makeStore()
+        let model = FromSylViewModel(source: SendingSource(store: store, gateway: .unreachable))
+
+        await model.refresh()
+
+        XCTAssertNil(model.snapshot)
+    }
+
+    /// She has genuinely sent nothing. That is a true thing to say, and it is only
+    /// sayable because the fetch answered.
+    func testShouldPublishAnEmptySnapshotWhenTheFetchAnswersWithNothing() async throws {
+        let store = try makeStore()
+        let model = FromSylViewModel(
+            source: SendingSource(
+                store: store,
+                gateway: .stub(page: SendingPage(items: [], nextCursor: nil, hasMore: false))))
+
+        await model.refresh()
+
+        XCTAssertEqual(model.snapshot?.isEmpty, true)
+    }
+
+    /// A failed refresh leaves what he was looking at exactly where it was.
+    func testShouldLeaveThePreviousSnapshotStandingWhenARefreshFails() async throws {
+        let store = try makeStore()
+        let model = FromSylViewModel(
+            source: SendingSource(store: store, gateway: .stub(page: SendingFixtures.page())))
+        await model.refresh()
+
+        let broken = FromSylViewModel(source: SendingSource(store: store, gateway: .unreachable))
+        await broken.refresh()
+
+        XCTAssertEqual(
+            broken.snapshot?.rows.count, 3,
+            "the rows are on disk, so a dead network costs the refresh and not the screen")
+    }
+
+    /// Local-first: what is on disk is drawn before anything is asked of the network.
+    func testShouldShowTheStoredSendingsBeforeTheNetworkAnswers() async throws {
+        let store = try makeStore()
+        try store.replaceSendings(SendingFixtures.page())
+        let model = FromSylViewModel(source: SendingSource(store: store, gateway: .unreachable))
+
+        await model.refresh()
+
+        XCTAssertEqual(model.snapshot?.rows.count, 3)
+    }
+
+    func testShouldBuildTheScreenWithoutBootingTheObjectGraph() throws {
+        let store = try makeStore()
+        XCTAssertNotNil(FromSylScreen(source: SendingSource(store: store, gateway: .unreachable)).body)
+    }
+}
