@@ -1999,6 +1999,14 @@ components:
           id,
           kind,
           text,
+          # Required-and-nullable, like every other absent-able field on this
+          # schema, and for a reason `syl-y82` turns on: the server writes both
+          # keys on every reminder it returns, so `null` is a statement — "this
+          # row predates the record" — and a MISSING key is a bug. An optional
+          # field would let a reader conflate the two, which is the exact
+          # confusion the columns exist to end.
+          because,
+          origin,
           todoId,
           eventId,
           wallTime,
