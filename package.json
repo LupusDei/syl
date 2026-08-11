@@ -67,7 +67,8 @@
     "prelaunchd": "npm run check:env",
     "launchd": "tsx backend/src/ops/cli/launchd.ts",
     "predeploy": "npm run check:env",
-    "deploy": "tsx backend/src/ops/cli/deploy.ts"
+    "deploy": "tsx backend/src/ops/cli/deploy.ts",
+    "video": "node scripts/video/generate.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

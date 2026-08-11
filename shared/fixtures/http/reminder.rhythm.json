@@ -4,6 +4,8 @@
     "id": "syl:reminder:0198f2c1-5b4c-7d21-9f00-1a2b3c4d5e70",
     "kind": "rhythm",
     "text": "Morning agenda.",
+    "because": null,
+    "origin": null,
     "todoId": null,
     "eventId": null,
     "wallTime": "07:00",

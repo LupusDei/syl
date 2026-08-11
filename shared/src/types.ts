@@ -310,8 +310,8 @@ export type Reminder = {
   readonly id: Id;
   readonly kind: ReminderKind;
   readonly text: string;
-  readonly because?: string | null;
-  readonly origin?: ReminderOrigin | null;
+  readonly because: string | null;
+  readonly origin: ReminderOrigin | null;
   readonly todoId: Id | null;
   readonly eventId: Id | null;
   readonly wallTime: WallTime;

@@ -236,6 +236,21 @@ private struct SpineRow: View {
                 if moment.pinned {
                     Badge(text: "Pinned", tint: SylTheme.Colour.accent)
                 }
+                // `syl-y82`. Only on the ones she offered unprompted — badging the
+                // ones he asked for would double the chips on the spine to mark the
+                // unremarkable case and drown the one he is looking for. `accent`
+                // rather than `warmth`: these are rows to notice, not rows that need
+                // him now.
+                if moment.sheNoticed {
+                    Badge(text: "Syl noticed", tint: SylTheme.Colour.accent)
+                }
+            }
+
+            // The reason, when one was recorded. Nil renders as nothing at all — see
+            // `DayMoment.reason`: a null means the row predates the record, and a line
+            // saying so belongs in the admin, not in his day.
+            if let reason = moment.reason {
+                reasonNote(reason)
             }
 
             if moment.deferralAskedAt != nil {
@@ -267,6 +282,31 @@ private struct SpineRow: View {
             // SYL…", which is not a shortened version of the sentence — it is a different
             // and worse claim, because what is missing is the half that says the time
             // above has not moved.
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Why this is on his day at all. `syl-y82`.
+    ///
+    /// `SOUL.md` is explicit that an unprompted offer without its reason is a machine
+    /// acting on his behalf rather than a gift: "He needs to know why it exists, or he
+    /// cannot tell a good suggestion from a wrong one." The notification carries it to
+    /// the lock screen; this is where it stays once he is in the app.
+    ///
+    /// Sentence case in `detail`, not `sylLabelStyle`. The two notes above are *states*
+    /// — short, uppercase, chip-like, and there is a fixed set of them. This is her
+    /// prose, of unbounded length, and setting it in tracked uppercase would make an
+    /// unreadable label out of a readable sentence.
+    ///
+    /// `inkSoft` and not `inkFaint`, the same call the title makes one block up: the day
+    /// sits on the bare veil, whose blooms composite `plusLighter`, and a faint line in
+    /// the middle of a bloom is simply gone. A reason he cannot read is a reason that
+    /// was not given.
+    private func reasonNote(_ reason: String) -> some View {
+        Text(reason)
+            .font(SylTheme.Typeface.detail)
+            .foregroundStyle(SylTheme.Colour.inkSoft)
+            // Wraps rather than truncating: half a reason can read as a different one.
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
     }

@@ -4,6 +4,8 @@
     "id": "syl:reminder:0198f2c1-6c5d-7d21-9f00-1a2b3c4d5e71",
     "kind": "commitment",
     "text": "Send the quarterly numbers to Priya.",
+    "because": "Priya asked for them on Friday and the quarter closes tomorrow",
+    "origin": "she_noticed",
     "todoId": null,
     "eventId": null,
     "wallTime": "23:30",
