@@ -76,7 +76,12 @@ describe("the tool surface", () => {
     // Guarded by SHAPE rather than by a list of names, so a seventh verb added
     // next month is covered without anyone remembering this file exists. A rule
     // that has to be re-applied by hand is the rule that was already missed.
-    const reads = new Set(["whats_outstanding"]);
+    //
+    // `see_myself` joins it: looking at a render she already made changes
+    // nothing and spends nothing, and requiring a reason to look at her own
+    // face would turn the one thing `SOUL.md` tells her to do often into
+    // paperwork. `render_me` is a write and carries `because` like the rest.
+    const reads = new Set(["whats_outstanding", "see_myself"]);
 
     for (const tool of TOOLS) {
       if (reads.has(tool.name)) continue;

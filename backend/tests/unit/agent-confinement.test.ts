@@ -270,8 +270,15 @@ describe("the agent scope, over HTTP", () => {
  * the other from the requirement.
  */
 describe("everything the agent scope cannot reach, swept from the router", () => {
-  /** Her three nouns, written down rather than imported. See above. */
-  const HERS: readonly string[] = ["/reminders", "/todos", "/goals"];
+  /**
+   * Everything she may reach, written down rather than imported. See above.
+   *
+   * Three of his nouns and one of hers. `/renders` is deliberately spelled out
+   * here too: the whole point of taking one side of this comparison from the
+   * requirement rather than from `AGENT_SURFACE` is that widening the allowlist
+   * has to be done twice, on purpose, in two files.
+   */
+  const HERS: readonly string[] = ["/reminders", "/todos", "/goals", "/renders"];
 
   /**
    * The two operations that answer without a token, and why each must.
@@ -482,7 +489,15 @@ describe("AGENT_SURFACE", () => {
     // A canary on the boundary itself. Adding to this list is a decision about
     // what Syl can do on the Commander's machine, so it should not be possible
     // to make it as a side effect of some other change.
-    expect([...AGENT_SURFACE].sort()).toEqual(["/goals", "/reminders", "/todos"]);
+    //
+    // `/renders` joined the three on 2026-08-11. It is not one of his nouns —
+    // it is the first surface she reaches for HERSELF — and it was added with
+    // the argument spelled out beside the constant: it touches no row of his,
+    // has no path to `/auth`, and its records live outside the database
+    // entirely. What it does do is spend Runway credits, which the Commander
+    // ruled is the point rather than a risk. Read the note on `AGENT_SURFACE`
+    // before touching this line.
+    expect([...AGENT_SURFACE].sort()).toEqual(["/goals", "/reminders", "/renders", "/todos"]);
   });
 });
 

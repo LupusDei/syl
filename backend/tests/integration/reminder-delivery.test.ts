@@ -31,6 +31,7 @@ import {
   testDatabase,
   testKeys,
   testMemory,
+  testRenders,
 } from "../helpers/service.js";
 
 /**
@@ -153,6 +154,8 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         intake: new ArticleIntake({ store: new IntakeStore({ db: db.handle, clock }), clock }),
         memory: testMemory(db, clock),
         attachments,
+        // Cannot render, cannot reach Runway, spends nothing. See `testRenders`.
+        renders: testRenders(clock),
       }),
     );
     token = keys.pair(keys.issuePairingCode().code, "Commander's iPhone").token;

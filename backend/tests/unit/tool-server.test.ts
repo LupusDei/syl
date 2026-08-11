@@ -297,6 +297,11 @@ describe("the tool surface she is offered", () => {
       // with fields nobody taught it.
       who: "treasurer",
       question: "What is he actually paying for health insurance?",
+      // `render_me` — the first verb here that is about her rather than about
+      // him, and the first one that spends money. It is held to the same rule,
+      // which is the point of guarding by shape rather than by a list of names.
+      scene: "she turns once and lets the light run down her arm",
+      framing: "close_portrait",
     };
 
     for (const tool of advertisedTools()) {

@@ -13,6 +13,8 @@ import { DreamLog } from "../../src/memory/dream/log.js";
 import { MemoryGraph } from "../../src/memory/graph.js";
 import { MemoryMetrics } from "../../src/memory/metrics.js";
 import { EdgeWeights } from "../../src/memory/weights.js";
+import { RenderService } from "../../src/render/render-service.js";
+import { studioAt } from "../../src/render/studio.js";
 import type { MemoryViews } from "../../src/routes/memory.js";
 import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api-key-service.js";
 import { AttachmentStore } from "../../src/services/attachment-store.js";
@@ -273,6 +275,29 @@ export function testMemory(db: SylDatabase, clock: Clock = fixedClock(TEST_NOW))
   };
 }
 
+/**
+ * A `RenderService` that cannot render, over a studio nothing shares.
+ *
+ * **`backend: null` is the important half.** Renders are billed to a real
+ * Runway account, so the default in a test fixture has to be a service that
+ * spends nothing and reaches nothing — and `null` is not a stub, it is the
+ * ordinary state of any machine without a grant, which means every suite that
+ * does not care about renders is exercising a real configuration rather than a
+ * doubled one. A test that wants a render that succeeds builds its own with a
+ * fake backend; `renders.test.ts` does.
+ *
+ * The studio is a fresh temp directory for the same reason `testAttachments`
+ * uses one: a unit test must never write into the directory the running
+ * service keeps the Commander's own media in.
+ */
+export function testRenders(clock: Clock = fixedClock(TEST_NOW)): RenderService {
+  return new RenderService({
+    studio: studioAt(mkdtempSync(join(tmpdir(), "syl-test-studio-"))),
+    backend: null,
+    clock,
+  });
+}
+
 /** Everything `createApp` and `startServer` need, on one in-memory store. */
 export function testDeps(db: SylDatabase): {
   readonly keys: ApiKeyService;
@@ -289,6 +314,7 @@ export function testDeps(db: SylDatabase): {
   readonly intake: ArticleIntake;
   readonly memory: MemoryViews;
   readonly attachments: AttachmentStore;
+  readonly renders: RenderService;
   readonly presence: PresenceService;
   readonly intakeQueue: IntakeQueue;
   readonly memoryRuntime: MemoryRuntime;
@@ -338,6 +364,8 @@ export function testDeps(db: SylDatabase): {
     }),
     memory,
     attachments,
+    // Cannot render and cannot reach Runway. See `testRenders`.
+    renders: testRenders(clock),
     // No sink. `startServer` attaches one; a test that wants to watch frames
     // hands its own to `PresenceService` directly.
     presence: new PresenceService({ clock }),

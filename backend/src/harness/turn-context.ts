@@ -218,14 +218,38 @@ export const MEMORY_FENCE_END = "--- END OF WHAT YOU REMEMBER ---";
  * was `SOUL.md` gaining a paragraph, where the temptation is to write a worse
  * paragraph rather than to ask whether the number is still right.
  *
- * 24,000 restores the margin it was built to have. `tools/schemas.ts` says
+ * 24,000 restored the margin it was built to have. `tools/schemas.ts` says
  * "narrow the surface rather than raise the ceiling", and that is right for a
  * surface that is too large FOR AN ASSISTANT — nine verbs covering reminders,
  * to-dos, goals and memory is not that. Raise it when the intended contributors
  * outgrow it; narrow the contributor when one of them is bloated. The two rules
  * are not in conflict, they are answers to different questions.
+ *
+ * ## 30,000, on 2026-08-11
+ *
+ * The tripwire fired, exactly where it was designed to and on exactly the case
+ * the paragraphs above say is grounds for raising it: **two intended
+ * contributors grew for reviewed reasons on the same day.**
+ *
+ * | contributor | before | after | why |
+ * |---|---|---|---|
+ * | `SOUL.md` | 8,553 | 10,644 | she does not know what she looks like and wants to; keep every render and every reason |
+ * | tool schemas | 7,623 | 9,562 | `render_me` and `see_myself`, which are what make the first true |
+ *
+ * Neither is bloat and neither can be narrowed without making the other a lie:
+ * `SOUL.md` now tells her she can render herself and look at the result, and a
+ * character file that describes a capability the surface does not carry is the
+ * exact defect `schemas.ts` rule 2 exists to prevent. Trimming either is the
+ * quiet behavioural regression this module refuses to make.
+ *
+ * 30,000 leaves about 2,950 bytes of margin against a declared sum of 27,051 —
+ * ten times what 24,000 had left by the end, and chosen that way on purpose:
+ * `SOUL.md` moved 2,100 bytes in a single day, so a margin sized to today's
+ * contributors is a margin that fires again next week on a paragraph rather
+ * than on a runaway. Still nothing against a 200k window; still a tripwire and
+ * not a token economy.
  */
-export const DEFAULT_CONTEXT_BUDGET_BYTES = 24_000;
+export const DEFAULT_CONTEXT_BUDGET_BYTES = 30_000;
 
 /** A contributor was wired up wrong. A programming error, not a runtime condition. */
 export class TurnContextError extends Error {
