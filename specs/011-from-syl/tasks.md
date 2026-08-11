@@ -140,11 +140,10 @@ store).
 
 **Four facts from that exchange that these tasks depend on:**
 
-- **Branch from `feat/from-syl-backend` @ `cc8e44e`, not from `origin/main`.** That work
-  is committed but **not merged and not pushed** — 25 files. `POST /sendings` exists
-  only there, so a verb branched from `main` has nothing to call. Its final gate:
-  4666 passed, 4 failed, 16 skipped, and all four failures declared (`syl-b97` ×3,
-  `syl-dep1.7`).
+- **Branch from `main`.** `cc8e44e` and `5cefe25` are now on **local `main`** — not yet
+  on `origin/main` — so `POST /sendings` is there and `feat/from-syl-backend` is
+  redundant; do not branch from it. Its gate before merge: 4666 passed, 4 failed, 16
+  skipped, all four failures declared (`syl-b97` ×3, `syl-dep1.7`).
 - **`renderName` is required on `CreateSendingRequest`, not optional.** A sending is
   *she says something and the form it takes is her own face*; words with no face is an
   ordinary message and she already has chat for those. The verb must require it too.
@@ -154,9 +153,12 @@ store).
   callers carry a message from *him*, and a sending is Syl originating. Any task that
   adds a fourth path into `accept`/`append` will make it fire, and the test's own
   comment says which question to ask first. Relevant to T007b and to T003 in Phase 2.
-- **`0024` is contested.** `agent/fenix` has `0024_working_memory_budget.sql` committed
-  on its own branch. `readMigrations` hard-fails on a gap, so `0025` cannot simply be
-  taken instead. See T009.
+- **`0024` was contested and is now settled.** Local `main` runs `0001`–`0024` with no
+  gap and `0024_sendings.sql` is the `0024`. `agent/fenix` still holds a second
+  `0024_working_memory_budget.sql` on its own branch, which must become `0025` at
+  merge — and note the shape has changed: it will now present as a **duplicate-number
+  conflict, not the gap error** `readMigrations` throws, so the failure will not name
+  the problem. Cross-noted on `syl-ulf`, whose fix that migration is. See T009.
 
 - [ ] **T007a** Write failing tests for the sending verb — the thing that is missing,
       and the agent holding this phase ranks it first. `TOOLS` in
@@ -204,22 +206,23 @@ store).
       as the precedent** — same shape, same place, and the store method it needs
       already exists. Gate: `npm run verify`. **Blocked by T008a.**
 
-- [ ] **T009** `[P]` The `0024` collision, which stops a boot rather than failing a
-      test. `0024_sendings.sql` and `agent/fenix`'s `0024_working_memory_budget.sql`
-      exist on two branches at the same number, and `readMigrations` **hard-fails on a
-      gap**, so whichever merges second cannot simply become `0025` — renumbering has
-      to happen at merge, in order, and the service will refuse to start until it does.
-      Whoever integrates second: **take the lowest free number immediately before
-      renaming**, do not reserve one, and re-run the migration list.
-      **Scope, corrected by the agent holding `.3`: the gap half of this check already
-      exists** — `readMigrations` threw *"Gap in the migration sequence: expected
-      version 24, found 25"* at it, which is how `0024` was found to be the only free
-      number. So the genuinely new coverage is the **duplicate** check, and the value of
-      the task is that a collision fails at `npm test` rather than at boot. Keep it;
-      do not oversell it in the commit message. Phases: **write the failing test first**
-      in `backend/tests/unit/migrations.test.ts` — assert the migration directory has no
-      duplicate number and no gap — **confirm RED** against the collided tree, then
-      renumber until GREEN and **confirm GREEN**. Gate: `npm run verify`.
+- [ ] **T009** `[P]` The duplicate-migration check, so the next collision fails at
+      `npm test` rather than at boot. **The `0024` collision itself is now settled** —
+      local `main` runs `0001`–`0024` with no gap and `0024_sendings.sql` is the `0024`,
+      so the renumbering half belongs to whoever merges `agent/fenix` (its
+      `0024_working_memory_budget.sql` becomes `0025`), not to this task. Cross-noted on
+      `syl-ulf`.
+      **The gap half of the check also already exists**: `readMigrations` threw *"Gap in
+      the migration sequence: expected version 24, found 25"* at the `.3` agent, which
+      is how `0024` was found to be the only free number. So the genuinely new coverage
+      here is the **duplicate** check — keep the task, and do not oversell it in the
+      commit message. It earns its place because a duplicate presents as a merge
+      conflict rather than as an error that names the problem, and because "take the
+      lowest free number immediately before writing it" is a rule no tool currently
+      enforces. Phases: **write the failing test first** in
+      `backend/tests/unit/migrations.test.ts` — assert the migration directory has no
+      duplicate number and no gap — **confirm RED** against a tree with a deliberate
+      duplicate, then make it pass and **confirm GREEN**. Gate: `npm run verify`.
 
 - [ ] **T010** `[docs]` Verify acceptance 3, 4 and 6 on the running service and record
       it in `docs/RUNBOOK.md`. Compose one sending through the verb from T007b and
