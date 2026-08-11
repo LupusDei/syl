@@ -145,22 +145,6 @@ export const MEMORY_EDGE_SPECIES = ["observed", "inferred"] as const;
 
 export type MemoryEdgeSpecies = (typeof MEMORY_EDGE_SPECIES)[number];
 
-/**
- * One relation the dream is allowed to write, and what it means.
- *
- * The source is ALWAYS the grammatical subject, so every gloss reads
- * "A ⟨relation⟩ B". Stated once, here, because the judgment has to get
- * direction right on every edge and a vocabulary where some relations read
- * forwards and some backwards is a vocabulary that will be got wrong.
- */
-export interface InferredRelationSpec {
-  /** The wire form: lower case, underscores, no spaces. What an index groups by. */
-  readonly relation: string;
-  /** True when the relation means the same thing read backwards. */
-  readonly symmetric: boolean;
-  /** Reads as "A ⟨gloss⟩". Shown to the judgment verbatim. */
-  readonly gloss: string;
-}
 
 /**
  * The closed vocabulary of inferred relations. `syl-017.1`.
@@ -219,100 +203,26 @@ export interface InferredRelationSpec {
  * against those modules' own constants, so this stays true by contact rather
  * than by anyone remembering it.
  */
-export const INFERRED_RELATIONS = [
-  {
-    relation: "resembles",
-    symmetric: true,
-    gloss: "and B are alike, and nothing more precise is warranted",
-  },
-  {
-    relation: "contradicts",
-    symmetric: true,
-    gloss: "and B cannot both be true",
-  },
-  {
-    relation: "parent_of",
-    symmetric: false,
-    gloss: "is a parent of B",
-  },
-  {
-    relation: "sibling_of",
-    symmetric: true,
-    gloss: "and B are siblings",
-  },
-  {
-    relation: "partner_of",
-    symmetric: true,
-    gloss: "and B are partners or spouses",
-  },
-  {
-    relation: "causes",
-    symmetric: false,
-    gloss: "brings B about, or B is true because of A",
-  },
-  {
-    relation: "motivates",
-    symmetric: false,
-    gloss: "is a reason for the goal or decision B",
-  },
-  {
-    relation: "blocks",
-    symmetric: false,
-    gloss: "stands in the way of B",
-  },
-  {
-    relation: "part_of",
-    symmetric: false,
-    gloss: "is a component or subdivision of B",
-  },
-  {
-    relation: "located_in",
-    symmetric: false,
-    gloss: "is situated in the place B",
-  },
-  {
-    relation: "precedes",
-    symmetric: false,
-    gloss: "happened before B, and the two are one story",
-  },
-] as const satisfies readonly InferredRelationSpec[];
-
-/** A relation the dream may write. */
-export type InferredRelation = (typeof INFERRED_RELATIONS)[number]["relation"];
-
 /**
- * What a connection is filed as when nothing more precise is warranted.
+ * RELATION NAMES DO NOT LIVE HERE, and that is a layer rule rather than a
+ * filing preference. `syl-017.1`.
  *
- * The relation every inferred edge carried before `syl-017.1`, kept as the
- * honest answer rather than retired as the wrong one. See the vocabulary's
- * header.
- */
-export const FALLBACK_INFERRED_RELATION: InferredRelation = "resembles";
-
-/** Whether a value is a relation the dream may write. */
-export function isInferredRelation(value: unknown): value is InferredRelation {
-  return INFERRED_RELATIONS.some((spec) => spec.relation === value);
-}
-
-/** The spec for a relation, or `null` if the vocabulary does not hold it. */
-export function inferredRelation(value: unknown): InferredRelationSpec | null {
-  return INFERRED_RELATIONS.find((spec) => spec.relation === value) ?? null;
-}
-
-/**
- * A relation in its wire form, or `null` if there is nothing there.
+ * This module owns the graph's STRUCTURE — tiers, node kinds, edge species,
+ * id prefixes. `memory/relations.ts` owns the NAMES within those species.
+ * A vocabulary was briefly defined in both, independently, by two epics that
+ * could not see each other; the mechanisms moved to `relations.ts` and the
+ * names never came back here.
  *
- * Models write `Parent_Of`, `parent of` and `parent-of` for the one relation,
- * and three spellings of one thing is the free-text failure arriving through
- * the back door. Canonicalising is not the same as accepting: what comes out of
- * here is still checked against {@link INFERRED_RELATIONS}, and `employs` stays
- * `employs`.
+ * Putting a relation name in this file is not a second list so much as
+ * structure learning about content — and `relations.ts` imports THIS module
+ * for `MemoryEdgeSpecies`, so the dependency only runs one way. Adding names
+ * here would make it run both.
+ *
+ * `backend/tests/unit/memory-relations.test.ts` fails if a second vocabulary
+ * appears anywhere, because a comment saying where names belong is exactly the
+ * artefact that did not work for `REACHES_HIM`.
  */
-export function canonicalRelation(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const canonical = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
-  return canonical === "" ? null : canonical;
-}
+
 
 /**
  * Id namespaces.

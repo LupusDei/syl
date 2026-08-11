@@ -9,16 +9,16 @@ import {
   resolveRelation,
   type SweepCandidate,
 } from "../../src/memory/dream/sweep.js";
-import { STATED_RELATION, ABOUT_RELATION } from "../../src/memory/extract-apply.js";
+import { STATED_RELATION } from "../../src/memory/extract-apply.js";
 import { MemoryGraph } from "../../src/memory/graph.js";
 import { CONCERNS_RELATION } from "../../src/memory/remember.js";
 import {
-  FALLBACK_INFERRED_RELATION,
-  INFERRED_RELATIONS,
+  DECLINED_RELATION,
+  INFERRED_RELATION_SPECS,
   canonicalRelation,
   inferredRelation,
   isInferredRelation,
-} from "../../src/memory/schema.js";
+} from "../../src/memory/relations.js";
 import { EXTRACTED_RELATION } from "../../src/memory/sources.js";
 import {
   BODY_RELATION,
@@ -105,9 +105,9 @@ function sideOf(candidate: SweepCandidate, subject: string): "A" | "B" {
 
 describe("the inferred-relation vocabulary", () => {
   it("should be a closed set whose every entry is distinct and well formed", () => {
-    const names = INFERRED_RELATIONS.map((spec) => spec.relation);
+    const names = INFERRED_RELATION_SPECS.map((spec) => spec.relation);
     expect(new Set(names).size).toBe(names.length);
-    for (const spec of INFERRED_RELATIONS) {
+    for (const spec of INFERRED_RELATION_SPECS) {
       // The wire form is what an index groups by, so it may not carry casing or
       // whitespace that two writers could disagree about.
       expect(spec.relation).toBe(canonicalRelation(spec.relation));
@@ -119,8 +119,12 @@ describe("the inferred-relation vocabulary", () => {
     // A vocabulary with no honest way to decline forces every connection into
     // the nearest label that fits badly, which is the claim-beyond-evidence
     // failure wearing a schema.
-    expect(isInferredRelation(FALLBACK_INFERRED_RELATION)).toBe(true);
-    expect(inferredRelation(FALLBACK_INFERRED_RELATION)?.symmetric).toBe(true);
+    // DECLINED_RELATION, not ESCAPE_RELATION. Reconciling the two vocabularies
+    // surfaced that `about` is directional — a claim is about a person, not the
+    // reverse — so it cannot carry "connected, nothing more precise" without
+    // asserting a direction nobody claimed. `resembles` is the symmetric one.
+    expect(isInferredRelation(DECLINED_RELATION)).toBe(true);
+    expect(inferredRelation(DECLINED_RELATION)?.symmetric).toBe(true);
   });
 
   it("should hold both relations the kernels propose, so a kernel cannot name one it may not write", () => {
@@ -129,7 +133,7 @@ describe("the inferred-relation vocabulary", () => {
   });
 
   it("should carry at least one directed relation, which is the whole point of typing them", () => {
-    expect(INFERRED_RELATIONS.some((spec) => !spec.symmetric)).toBe(true);
+    expect(INFERRED_RELATION_SPECS.some((spec) => !spec.symmetric)).toBe(true);
   });
 
   it("should refuse a relation owned by another module, so an inference cannot dress as testimony", () => {
@@ -137,9 +141,15 @@ describe("the inferred-relation vocabulary", () => {
     // `merged_into` are tidy's, and tidy deliberately splits nominating from
     // acting. A dream that could write any of them would forge the one thing
     // its species is supposed to make unmistakable.
+    // `ABOUT_RELATION` is deliberately NOT reserved, and reconciling the two
+    // vocabularies is what settled it. This half assumed extraction owned
+    // `about` and an inference writing it would be forging testimony. The
+    // shipped module disagrees on purpose: an inference MAY write `about`, and
+    // `ABOUT_SHARE_ALARM` meters how often it does — the concern is a dream
+    // that reaches for the vague relation too readily, which is an observation
+    // to raise rather than a write to forbid.
     const reserved = [
       STATED_RELATION,
-      ABOUT_RELATION,
       CONCERNS_RELATION,
       EXTRACTED_RELATION,
       SAME_AS_RELATION,

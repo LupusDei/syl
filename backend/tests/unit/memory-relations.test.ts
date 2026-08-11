@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { STATED_RELATION } from "../../src/memory/extract-apply.js";
@@ -37,6 +38,10 @@ describe("the relation vocabulary", () => {
       "contradicts",
       "located_in",
       "about",
+      // Added by `syl-017.1`: the SYMMETRIC escape. `about` is directional and
+      // cannot carry "connected, nothing more precise" without asserting a
+      // direction nobody claimed.
+      "resembles",
     ]);
   });
 
@@ -142,3 +147,76 @@ describe("the `about` meter", () => {
     expect(meter.share).toBe(1);
   });
 });
+
+/**
+ * ONE VOCABULARY, AND A TEST THAT FAILS IF A SECOND APPEARS.
+ *
+ * `syl-017.1`. Two epics independently built a typed relation vocabulary for
+ * `memory_edges` — one in this module, one in `schema.ts` — neither knowing
+ * about the other. Nothing complained, because they were separate files and
+ * both typechecked. The dream would have validated against one list and the
+ * digestion path against the other, for the same column.
+ *
+ * artanis's ruling settled where names live, and the layering is the reason
+ * rather than seniority: `schema.ts` owns STRUCTURE — tiers, node kinds, edge
+ * species, id prefixes — and this module owns the NAMES within those species.
+ * `relations.ts` imports `schema.ts` for `MemoryEdgeSpecies`, so the dependency
+ * runs one way; names in `schema.ts` would make it run both.
+ *
+ * **A comment saying so is not enough**, which this project has already paid
+ * for: `REACHES_HIM` carried a comment telling the next person to add the
+ * sending verb, the verb landed, nobody did, and thirty-six tests passed over
+ * it because they asserted the list matched itself. So this asserts the
+ * property against the SOURCE rather than against another list.
+ */
+describe("relation names live in exactly one module", () => {
+  const SOURCE = new URL("../../src/memory/", import.meta.url);
+
+  it("should keep every relation name out of schema.ts", () => {
+    // Read the file rather than import it: an import can only see what is
+    // exported, and a second vocabulary that is merely declared would be
+    // invisible to a test that asks the module what it exports.
+    const schema = readFileSync(new URL("schema.ts", SOURCE), "utf8");
+
+    for (const relation of MEMORY_RELATIONS) {
+      expect(
+        schema.includes(`"${relation}"`),
+        `schema.ts names the relation "${relation}" — names belong in relations.ts, ` +
+          "and structure must not learn about content",
+      ).toBe(false);
+    }
+  });
+
+  it("should be the only module that DECLARES them, though others may use them", () => {
+    // The distinction that matters, and it cost a false positive to find:
+    // `entities.ts` maps English words to relations —
+    // `{ wife: "spouse_of", son: "child_of", … }` — typed
+    // `Record<string, InferredRelation>`. Every value is checked against THIS
+    // module, so an invented name there is already a compile error. That is a
+    // consumer, not a second vocabulary.
+    //
+    // My first version of this test failed on it and I nearly loosened the
+    // threshold to let it through. Loosening is how a guard stops guarding —
+    // we watched a flat margin quietly become meaningless today by exactly
+    // that route. So the property is stated precisely instead:
+    //
+    //   a module may NAME relations if it IMPORTS the type that constrains
+    //   them. A module that names them while importing nothing from here is
+    //   declaring its own list, and that is the defect.
+    const suspects = ["schema.ts", "graph.ts", "digest.ts", "entities.ts", "weights.ts"];
+
+    for (const file of suspects) {
+      const text = readFileSync(new URL(file, SOURCE), "utf8");
+      const named = MEMORY_RELATIONS.filter((relation) => text.includes(`"${relation}"`));
+      if (named.length === 0) continue;
+
+      expect(
+        text.includes('from "./relations.js"'),
+        `${file} names ${String(named.length)} relations (${named.join(", ")}) without importing ` +
+          "from relations.ts, so nothing checks them. Import InferredRelation and let the " +
+          "compiler hold the list — two vocabularies is the defect syl-017.1 closed.",
+      ).toBe(true);
+    }
+  });
+});
+

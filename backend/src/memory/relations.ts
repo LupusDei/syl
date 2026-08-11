@@ -63,6 +63,8 @@
  * which is a decision someone makes rather than one that happens.
  */
 
+import type { MemoryEdgeSpecies } from "./schema.js";
+
 /**
  * Relations an OBSERVED edge may carry.
  *
@@ -70,6 +72,22 @@
  * asserted this", and the interesting structure lives on the inferred side. It
  * is a list rather than a constant so {@link MEMORY_RELATIONS} can be the union
  * rather than a hand-maintained third copy.
+ */
+/**
+ * The two species, imported rather than restated. artanis's finding, and the
+ * one that was live rather than pending.
+ *
+ * This module split observed from inferred **without importing the module that
+ * defines that split** — two files independently encoding one two-way
+ * distinction, with nothing forcing them to agree. Add a species and only one
+ * half changes.
+ *
+ * The check below is the whole repair: it is a compile error if
+ * `MEMORY_EDGE_SPECIES` ever stops being exactly the two names this file
+ * organises itself around. Deriving the LISTS from it is not possible — a
+ * species does not know its own relation names — so the seam that can be
+ * closed is the one that says the species list is the source of truth about
+ * WHICH SPECIES EXIST.
  */
 export const OBSERVED_RELATIONS = ["stated"] as const;
 
@@ -107,16 +125,78 @@ export const INFERRED_RELATIONS = [
   "contradicts",
   "located_in",
   "about",
+  // The SYMMETRIC escape, and distinct from `about` on purpose. `syl-017.1`.
+  //
+  // Reconciling two vocabularies surfaced a real gap: `about` is DIRECTIONAL —
+  // a claim is about a person, not the reverse — so it cannot carry "these two
+  // are connected and nothing more precise is warranted", which is what the
+  // dream needs when a judgment declines to name a relation. Using `about` for
+  // both would have made the escape hatch quietly assert a direction nobody
+  // claimed.
+  "resembles",
 ] as const;
 
 /** A relation an inferred edge may carry. */
 export type InferredRelation = (typeof INFERRED_RELATIONS)[number];
+
+/**
+ * Which relations read the same both ways round. `syl-017.1`.
+ *
+ * **Load-bearing, not documentation.** `identityOf` deduplicates an edge by
+ * looking for the pair it already holds — and for a SYMMETRIC relation it must
+ * also try the reverse, or "a resembles b" and "b resembles a" become two
+ * edges. For a DIRECTED one it must not, or the direction ends up decided by
+ * whichever night ran first.
+ *
+ * Every relation is listed. A `Record` over the union rather than a `Set` of
+ * the symmetric ones, so **adding a relation without deciding its symmetry is
+ * a compile error** rather than a silent default — and the default that would
+ * have been chosen is the dangerous one.
+ */
+export const RELATION_SYMMETRY: Readonly<Record<InferredRelation, boolean>> = {
+  spouse_of: true,
+  child_of: false,
+  parent_of: false,
+  sibling_of: true,
+  employed_by: false,
+  works_on: false,
+  evidence_for: false,
+  blocks: false,
+  contradicts: true,
+  located_in: false,
+  about: false,
+  resembles: true,
+};
+
+/** Whether this relation reads the same in both directions. */
+export function isSymmetric(relation: InferredRelation): boolean {
+  return RELATION_SYMMETRY[relation];
+}
+
 
 /** A relation an observed edge may carry. */
 export type ObservedRelation = (typeof OBSERVED_RELATIONS)[number];
 
 /** Every value `memory_edges.relation` may legitimately hold. */
 export const MEMORY_RELATIONS = [...OBSERVED_RELATIONS, ...INFERRED_RELATIONS] as const;
+
+/**
+ * Every relation, keyed by the species that may write it.
+ *
+ * A `Record` over `MemoryEdgeSpecies` rather than a hand-kept pair, which is
+ * artanis's finding repaired: this module used to split observed from inferred
+ * **without importing the module that defines that split**, so two files
+ * encoded one two-way distinction and nothing forced them to agree.
+ *
+ * Now adding a species to `MEMORY_EDGE_SPECIES` is a **compile error here**
+ * until somebody says which relations it may carry — which is the only version
+ * of this that cannot be forgotten. A comment saying "keep these in step" is
+ * the artefact that did not work for `REACHES_HIM`.
+ */
+export const RELATIONS_BY_SPECIES: Readonly<Record<MemoryEdgeSpecies, readonly string[]>> = {
+  observed: OBSERVED_RELATIONS,
+  inferred: INFERRED_RELATIONS,
+};
 
 /** Anything the `relation` column may hold. */
 export type MemoryRelation = (typeof MEMORY_RELATIONS)[number];
@@ -129,6 +209,15 @@ export type MemoryRelation = (typeof MEMORY_RELATIONS)[number];
  * one being rationed.
  */
 export const ESCAPE_RELATION: InferredRelation = "about";
+
+/**
+ * What an inference writes when it declines to name the relation.
+ *
+ * NOT {@link ESCAPE_RELATION}: that one is `about`, which is directional, and a
+ * declined relation must not smuggle in a direction nobody claimed. This is the
+ * symmetric one.
+ */
+export const DECLINED_RELATION: InferredRelation = "resembles";
 
 /**
  * The share of `about` above which the meter goes loud.
@@ -235,3 +324,52 @@ export function meterAbout(relations: readonly string[]): AboutMeter {
 
   return { total, about, typed: total - about, share, loud: share > ABOUT_SHARE_ALARM };
 }
+
+/**
+ * A relation in its wire form, or `null` if there is nothing there.
+ *
+ * Models write `Parent_Of`, `parent of` and `parent-of` for the one relation,
+ * and three spellings of one thing is the free-text failure arriving through
+ * the back door. Canonicalising is not the same as accepting: what comes out of
+ * here is still checked against {@link INFERRED_RELATIONS}, and `employs` stays
+ * `employs`.
+ */
+export function canonicalRelation(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const canonical = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return canonical === "" ? null : canonical;
+}
+
+/** How each relation reads in the prompt. `syl-017.1`. */
+export const RELATION_GLOSS: Readonly<Record<InferredRelation, string>> = {
+  spouse_of: "is married to or partnered with B",
+  child_of: "is a child of B",
+  parent_of: "is a parent of B",
+  sibling_of: "and B are siblings",
+  employed_by: "works for B",
+  works_on: "works on B",
+  evidence_for: "is evidence for B",
+  blocks: "stands in the way of B",
+  contradicts: "and B cannot both be true",
+  located_in: "is in B",
+  about: "is about B",
+  resembles: "and B are connected, and nothing more precise is warranted",
+};
+
+/** One relation with everything a prompt or a dedupe needs. */
+export interface InferredRelationSpec {
+  readonly relation: InferredRelation;
+  readonly symmetric: boolean;
+  readonly gloss: string;
+}
+
+/** The spec for a relation, or `null` if it is not one. */
+export function inferredRelation(value: unknown): InferredRelationSpec | null {
+  if (!isInferredRelation(value)) return null;
+  return { relation: value, symmetric: RELATION_SYMMETRY[value], gloss: RELATION_GLOSS[value] };
+}
+
+/** Every relation as a spec, for building a prompt. */
+export const INFERRED_RELATION_SPECS: readonly InferredRelationSpec[] = INFERRED_RELATIONS.map(
+  (relation) => ({ relation, symmetric: RELATION_SYMMETRY[relation], gloss: RELATION_GLOSS[relation] }),
+);

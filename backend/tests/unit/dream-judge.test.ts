@@ -15,7 +15,7 @@ import {
 } from "../../src/memory/dream/judge.js";
 import { DreamSweep, RELATED_RELATION, type SweepCandidate } from "../../src/memory/dream/sweep.js";
 import { MemoryGraph } from "../../src/memory/graph.js";
-import { FALLBACK_INFERRED_RELATION, INFERRED_RELATIONS } from "../../src/memory/schema.js";
+import { ESCAPE_RELATION, INFERRED_RELATION_SPECS } from "../../src/memory/relations.js";
 import { EdgeWeights } from "../../src/memory/weights.js";
 import { instant, type Clock } from "../../src/services/clock.js";
 import { IN_MEMORY, openDatabase, type SylDatabase } from "../../src/services/database.js";
@@ -866,7 +866,7 @@ describe("the relation vocabulary reaches the model and the graph", () => {
       { candidate: candidate(a, b), source: graph.getNode(a)!, target: graph.getNode(b)! },
     ]);
 
-    for (const spec of INFERRED_RELATIONS) {
+    for (const spec of INFERRED_RELATION_SPECS) {
       expect(prompt).toContain(spec.relation);
       expect(prompt).toContain(spec.gloss);
     }
@@ -882,7 +882,7 @@ describe("the relation vocabulary reaches the model and the graph", () => {
       { candidate: candidate(a, b), source: graph.getNode(a)!, target: graph.getNode(b)! },
     ]);
     expect(prompt).toContain(
-      `Use \`${FALLBACK_INFERRED_RELATION}\` whenever nothing more precise is warranted. That is a`,
+      `Use \`${ESCAPE_RELATION}\` whenever nothing more precise is warranted. That is a`,
     );
   });
 

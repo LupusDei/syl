@@ -4,9 +4,9 @@ import { systemClock, type Clock } from "../../services/clock.js";
 import { autoMemoryOff } from "../auto-memory.js";
 import {
   canonicalRelation,
-  FALLBACK_INFERRED_RELATION,
-  INFERRED_RELATIONS,
-} from "../schema.js";
+  ESCAPE_RELATION,
+  INFERRED_RELATION_SPECS,
+} from "../relations.js";
 
 import { DreamLog, type DreamSessionOutcome } from "./log.js";
 import {
@@ -223,7 +223,7 @@ export function buildJudgePrompt(items: readonly JudgeItem[]): string {
     }
   }
 
-  const vocabulary = INFERRED_RELATIONS.map((spec) => {
+  const vocabulary = INFERRED_RELATION_SPECS.map((spec) => {
     const direction = spec.symmetric ? "either way round" : "A is the subject";
     return `      ${spec.relation.padEnd(12)} (${direction}) — A ${spec.gloss}`;
   });
@@ -248,7 +248,7 @@ export function buildJudgePrompt(items: readonly JudgeItem[]): string {
     .map(
       (_, index) =>
         `    {"id": ${index + 1}, "connect": false, "confidence": 0.0, ` +
-        `"reasoning": "one sentence", "relation": "${FALLBACK_INFERRED_RELATION}", ` +
+        `"reasoning": "one sentence", "relation": "${ESCAPE_RELATION}", ` +
         `"subject": null, "surface": null}`,
     )
     .join(",\n");
@@ -266,13 +266,13 @@ export function buildJudgePrompt(items: readonly JudgeItem[]): string {
     "",
     ...vocabulary,
     "",
-    `Use \`${FALLBACK_INFERRED_RELATION}\` whenever nothing more precise is warranted. That is a`,
+    `Use \`${ESCAPE_RELATION}\` whenever nothing more precise is warranted. That is a`,
     "correct answer, not a failure — a relation stretched to fit says something",
     "the memories do not, and it says it in a form that looks precise.",
     "",
     "For a relation where A is the subject, `subject` says WHICH memory is A:",
     '"A" for the first, "B" for the second. A directed relation with no subject',
-    `is discarded and the connection is filed as \`${FALLBACK_INFERRED_RELATION}\`, because a`,
+    `is discarded and the connection is filed as \`${ESCAPE_RELATION}\`, because a`,
     "relation pointing the wrong way is not a vaguer claim, it is a false one.",
     "",
     "Answer with exactly this shape:",

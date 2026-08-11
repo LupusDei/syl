@@ -11,9 +11,10 @@ import {
   canonicalRelation,
   inferredRelation,
   isInferredRelation,
-  INFERRED_RELATIONS,
+  DECLINED_RELATION,
+  INFERRED_RELATION_SPECS,
   type InferredRelation,
-} from "../schema.js";
+} from "../relations.js";
 import { crossingInstant, EdgeWeights } from "../weights.js";
 
 import { DreamLog, type DreamDisposition, type MemoryTier } from "./log.js";
@@ -137,7 +138,11 @@ export type CandidateKernel = (typeof CANDIDATE_KERNELS)[number];
  * {@link INFERRED_RELATIONS} is a compile error here rather than a night of
  * `unusable_candidate`.
  */
-export const RELATED_RELATION: InferredRelation = "resembles";
+// `about`, not `resembles`. Two epics independently built a relation
+// vocabulary; `relations.ts` is the home and its escape relation is `about`.
+// Keeping `resembles` here would have been a twelfth name that only this file
+// knew — the defect this consolidation exists to close.
+export const RELATED_RELATION: InferredRelation = DECLINED_RELATION;
 
 /** The relation a contradiction proposal takes when the judgment accepts it. */
 export const CONTRADICT_RELATION: InferredRelation = "contradicts";
@@ -923,7 +928,7 @@ export class DreamSweep {
         "unusable_candidate",
         `"${target.relation}" is not an inferred relation. The vocabulary is closed so that ` +
           `edges GROUP — forty relations each invented once are as untraversable as one label ` +
-          `used everywhere. Expected one of ${INFERRED_RELATIONS.map((spec) => spec.relation).join(", ")}.`,
+          `used everywhere. Expected one of ${INFERRED_RELATION_SPECS.map((spec) => spec.relation).join(", ")}.`,
       );
     }
     // The weight a fresh inference starts at, and the instant it will cross the
