@@ -22,7 +22,14 @@ import { composeTurnContext, type Contributor } from "./turn-context.js";
 export const LANES = {
   /** The Commander's own conversation. The default. */
   commander: "commander",
-  /** Scheduled "is anything wrong?" checks. Notice, do not nag. */
+  /**
+   * The hourly self-ping. Notice, do not nag.
+   *
+   * An hour that is hers, in which she decides whether anything is worth doing
+   * — and in which the expected answer, most hours, is nothing. It is the one
+   * lane besides `commander` that can act; see {@link LANES_WITH_HANDS} and
+   * `jobs/heartbeat-job.ts`.
+   */
   heartbeat: "heartbeat",
   /** The morning agenda. */
   agenda: "agenda",
@@ -37,6 +44,36 @@ export const LANES = {
    */
   extraction: "extraction",
 } as const;
+
+/**
+ * The lanes that are handed an MCP surface — the ones that can *act*.
+ *
+ * Declared here, beside the lanes themselves, because it is a statement about
+ * lanes rather than about wiring: `index.ts` reads it to decide what a turn
+ * carries, and `ops/container.ts` reads it so the boot notice names exactly the
+ * lanes that were given hands. Two places that each wrote the list down would
+ * be two places to keep in step, and the one that drifted would be the notice —
+ * which is precisely the false security claim `syl-009.9` was about.
+ *
+ * **`commander`** is his own conversation: the lane `syl-009` was written for.
+ *
+ * **`heartbeat`** is the widening, and it is a considered one rather than a
+ * relaxation. The Commander asked for an hourly turn that "wakes her up and
+ * lets her decide what to do" — the entire point of which is that she can do
+ * it. An hour that could only think would be an hour that could only report,
+ * and there is nobody to report to at 14:00 on a Tuesday. What keeps it narrow
+ * is not the absence of hands but the bounds on the hour: `jobs/heartbeat-job.ts`
+ * spends at most one turn, may put something in front of him at most twice a
+ * day, and cannot pierce quiet hours because no heartbeat turn ever records
+ * words as HIS — so `harness/urgency.ts` has nothing to verify a claim against
+ * and the Outbox holds everything until morning.
+ *
+ * **Every other lane has nothing, and that is not an oversight.** The dream
+ * must not be able to write a reminder while judging what matters; the agenda
+ * reads rather than acts; and the extraction turn is a sealed reader over text
+ * he may have pasted from anywhere, which must never hold a capability at all.
+ */
+export const LANES_WITH_HANDS: readonly Lane[] = [LANES.commander, LANES.heartbeat];
 
 /**
  * Lanes that must never write into Claude Code's auto-memory.
@@ -456,6 +493,11 @@ export class SylAgent {
       // every turn inherits.
       strictMcpConfig: true,
       ...forLane,
+      // WHO IS SPEAKING, after the spread so it cannot be overridden. A wrapper
+      // around the runner sees only a prompt and an options object, and at
+      // least one of them has to tell his lane from hers — see
+      // `TurnOptions.lane`. Never reaches argv.
+      lane,
       // After the spread, not before: if the agent was told where its memory
       // lives, an incidental `turnOptions` must not be able to move it.
       ...((): { autoMemory?: AutoMemory } => {
