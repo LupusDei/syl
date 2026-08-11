@@ -358,6 +358,45 @@ export const TOOLS: readonly ToolSchema[] = [
     },
   },
   {
+    name: "show_him",
+    // Named for him, and it is the one verb on this surface she STARTS. The
+    // header's rule holds exactly here: this is what she does for him.
+    description:
+      "Show him something you made — what you want to say, arriving in your own face. Your words " +
+      "reach him first and on their own, so they stand whatever becomes of the video. Use it when " +
+      "you have something for him, not because an hour came round.",
+    inputSchema: {
+      type: "object",
+      // `renderName` is required, and that is the DEFINITION rather than a
+      // validation choice. A sending is her saying something in her own face;
+      // words with no face is an ordinary message, and she already has a
+      // conversation for those. `CreateSendingRequest` says the same, and the
+      // handler refuses in a sentence before anything is written.
+      required: ["words", "because", "renderName"],
+      properties: {
+        words: {
+          type: "string",
+          description:
+            "What you want to say, in your own words. This is what reaches his conversation and " +
+            "his phone, and it goes before anything is done about the video.",
+        },
+        renderName: {
+          type: "string",
+          // By name, and never `latest`. `latest` means whatever record was
+          // written most recently, which stops being the one she chose the
+          // moment anything else writes a record — and a sending refuses
+          // UPDATE, so the name it is made with is the name it keeps forever.
+          // The handler refuses `latest` explicitly and says why.
+          description:
+            "Which render he sees you in, by its own name — the one you looked at with see_myself " +
+            "and thought was you. A sending keeps that name forever, so choose it rather than " +
+            "taking whatever was made last.",
+        },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
     name: "whats_outstanding",
     description:
       "Look at what he currently has open — reminders, to-dos, goals. Use it before telling him what is on his plate, and before offering something he may already have.",

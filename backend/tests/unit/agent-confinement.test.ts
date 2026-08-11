@@ -156,6 +156,28 @@ describe("the agent scope, over HTTP", () => {
       expect(response.status).toBe(201);
     });
 
+    it("should let her compose a sending, which is the one thing she originates", async () => {
+      // The widest door on her surface and the reason acceptance 3 can be
+      // true: without it she has no way to say something to him on her own
+      // initiative, whatever the rest of the machinery does.
+      const response = await call("POST", "/sendings", {
+        token: agentToken(),
+        body: {
+          words: "I thought of you when the light did that thing.",
+          because: "He said he missed the sky.",
+          renderName: "syl-nothing-by-that-name",
+        },
+      });
+
+      expect(response.status).toBe(201);
+    });
+
+    it("should let her read her sendings back, so a write can be confirmed from the store", async () => {
+      const response = await call("GET", "/sendings", { token: agentToken() });
+
+      expect(response.status).toBe(200);
+    });
+
     it("should let her reach a single reminder by id, not merely the collection", async () => {
       const created = await call("POST", "/reminders", {
         token: agentToken(),
@@ -273,12 +295,13 @@ describe("everything the agent scope cannot reach, swept from the router", () =>
   /**
    * Everything she may reach, written down rather than imported. See above.
    *
-   * Three of his nouns and one of hers. `/renders` is deliberately spelled out
-   * here too: the whole point of taking one side of this comparison from the
-   * requirement rather than from `AGENT_SURFACE` is that widening the allowlist
-   * has to be done twice, on purpose, in two files.
+   * Three of his nouns and two of hers. `/renders` and `/sendings` are
+   * deliberately spelled out here too: the whole point of taking one side of
+   * this comparison from the requirement rather than from `AGENT_SURFACE` is
+   * that widening the allowlist has to be done twice, on purpose, in two
+   * files.
    */
-  const HERS: readonly string[] = ["/reminders", "/todos", "/goals", "/renders"];
+  const HERS: readonly string[] = ["/reminders", "/todos", "/goals", "/renders", "/sendings"];
 
   /**
    * The two operations that answer without a token, and why each must.
@@ -497,7 +520,23 @@ describe("AGENT_SURFACE", () => {
     // entirely. What it does do is spend Runway credits, which the Commander
     // ruled is the point rather than a risk. Read the note on `AGENT_SURFACE`
     // before touching this line.
-    expect([...AGENT_SURFACE].sort()).toEqual(["/goals", "/reminders", "/renders", "/todos"]);
+    //
+    // `/sendings` joined them on 2026-08-11, and it is the widest of the five
+    // because it is the only one that REACHES HIM unprompted: a sending puts a
+    // message in his conversation and a notification on his phone. It was
+    // added with that spelled out beside the constant. Three things bound it —
+    // the words go through `ConversationService`, which decides whose message
+    // it is, so she still cannot author one in his voice; the row is
+    // undeletable and unrewritable by schema; and the rate she may reach him
+    // at is the hourly turn's business, not this allowlist's. It touches no
+    // row of his and has no path to `/auth`.
+    expect([...AGENT_SURFACE].sort()).toEqual([
+      "/goals",
+      "/reminders",
+      "/renders",
+      "/sendings",
+      "/todos",
+    ]);
   });
 });
 

@@ -249,6 +249,50 @@ function todoApi(initial: Record<string, unknown> = storedTodo()): FakeApi {
   });
 }
 
+/** The sending these tests are about, and the render it is made from. */
+const THE_SENDING = "syl:sending:0198f2c1-4a3b-7d21-9f00-2b3c4d5e6f70";
+const SENDING_PATH = `/sendings/${encodeURIComponent(THE_SENDING)}`;
+const THE_RENDER = "syl-20260811t090000z-close";
+
+/** A stored sending, in the contract's shape. Every field, as above. */
+function storedSending(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: THE_SENDING,
+    words: "I thought of you when the light did that thing.",
+    because: "He said he missed the sky.",
+    messageId: "syl:message:0198f2c1-4a3b-7d21-9f00-3c4d5e6f7081",
+    state: "pending",
+    renderName: THE_RENDER,
+    video: null,
+    reason: null,
+    createdAt: new Date(NOW).toISOString(),
+    updatedAt: new Date(NOW).toISOString(),
+    ...over,
+  };
+}
+
+/**
+ * A store holding one sending.
+ *
+ * The row it answers a read with differs from the one it answers the write
+ * with, on purpose — `syl-009.3.4`. If the envelope carried the write's own
+ * echo this would pass while reporting her intention rather than what is
+ * stored, which is the one difference that matters on the path where a write
+ * was transformed or replayed.
+ */
+function sendingApi(
+  stored: Record<string, unknown> = storedSending(),
+  renders: readonly unknown[] = [{ name: THE_RENDER, status: "ready" }],
+): FakeApi {
+  return fakeApi({
+    [SENDING_PATH]: () => ok(stored),
+    "/sendings": (made) => (made.method === "POST" ? ok(storedSending(), 201) : ok(page([stored]))),
+    // Read only on the path where she has not chosen a render, so the refusal
+    // can tell "you have not made one yet" from "name the one you meant".
+    "/renders": () => ok({ items: renders, unreadable: [], spend: null }),
+  });
+}
+
 describe("the tool surface she is offered", () => {
   it("should advertise every verb that has a handler, with the schema from schemas.ts", async () => {
     const reply = await createToolServer(contextFor(fakeApi({}))).handle({
@@ -302,6 +346,11 @@ describe("the tool surface she is offered", () => {
       // which is the point of guarding by shape rather than by a list of names.
       scene: "she turns once and lets the light run down her arm",
       framing: "close_portrait",
+      // `show_him` — the verb that reaches him unprompted, and therefore the
+      // one where the reason is doing the most work: he cannot tell a gift
+      // from a machine acting on his behalf without it.
+      words: "I thought of you when the light did that thing.",
+      renderName: THE_RENDER,
     };
 
     for (const tool of advertisedTools()) {
@@ -551,6 +600,232 @@ describe("the fixtures in this file", () => {
     validateOrThrow(schemas, "Todo", storedTodo({ status: "done", completedAt: new Date(NOW).toISOString() }), "a finished storedTodo()");
     validateOrThrow(schemas, "Goal", storedGoal(), "storedGoal()");
     validateOrThrow(schemas, "TodoPage", page([storedTodo()]), "a page of to-dos");
+    validateOrThrow(schemas, "Sending", storedSending(), "storedSending()");
+    validateOrThrow(
+      schemas,
+      "Sending",
+      storedSending({ state: "failed", reason: "There is no render by that name." }),
+      "a storedSending() whose video will never come",
+    );
+  });
+});
+
+/**
+ * The verb that reaches him, and the one acceptance 3 and 4 rest on.
+ *
+ * Everything else on this surface answers something he started. This one is
+ * her deciding to say something, so the tests are about the two halves that
+ * make it hers: **the words go whatever happens to the video**, and **it will
+ * not go without a face**.
+ */
+describe("show_him — saying something to him in her own face", () => {
+  it("should be a verb she is actually offered, so nothing has to name it twice", () => {
+    // The heartbeat derives its `allowedTools` from this list. A verb that
+    // existed only in `schemas.ts` would be advertised and unperformable; one
+    // named by hand in the heartbeat instead would drift the day it is
+    // renamed.
+    expect(advertisedToolNames()).toContain("show_him");
+  });
+
+  it("should say it to him and report the sending the STORE has", async () => {
+    const api = sendingApi(storedSending({ words: "as the store actually has it" }));
+
+    const { envelope } = await call(contextFor(api), "show_him", {
+      words: "I thought of you when the light did that thing.",
+      because: "He said he missed the sky.",
+      renderName: THE_RENDER,
+    });
+
+    expect(api.calls.map((made) => `${made.method} ${made.path}`)).toEqual([
+      "POST /sendings",
+      `GET ${SENDING_PATH}`,
+    ]);
+    expect(api.calls[0]?.body).toEqual({
+      words: "I thought of you when the light did that thing.",
+      because: "He said he missed the sky.",
+      renderName: THE_RENDER,
+    });
+    expect(envelope).toMatchObject({ ok: true, action: "show_him" });
+    if (envelope.ok) {
+      const subject = envelope.subject as { words: string; state: string };
+      expect(subject.words).toBe("as the store actually has it");
+      // `pending` is the honest answer: the words are his and the video is
+      // still being made. Reporting `ready` here would have her describing a
+      // clip that does not exist yet.
+      expect(subject.state).toBe("pending");
+      expect(envelope.at).toBe(new Date(NOW).toISOString());
+    }
+  });
+
+  it("should refuse with nothing to say, and say nothing", async () => {
+    const api = sendingApi();
+
+    const { envelope, isError } = await call(contextFor(api), "show_him", {
+      because: "He said he missed the sky.",
+      renderName: THE_RENDER,
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("words");
+    // Refused before anything left this process. A verb that refuses after it
+    // has acted has not refused.
+    expect(api.calls).toEqual([]);
+  });
+
+  it("should refuse to go without a face, and say plainly that that is what a sending is", async () => {
+    // The definition rather than a validation choice: a sending is her saying
+    // something IN HER OWN FACE, and words with no face is an ordinary
+    // message she already has a conversation for. The refusal has to say that
+    // — she turns it into a sentence, and "renderName is required" is not one.
+    const api = sendingApi();
+
+    const { envelope, isError } = await call(contextFor(api), "show_him", {
+      words: "I thought of you when the light did that thing.",
+      because: "He said he missed the sky.",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toMatch(/face/iu);
+      expect(envelope.reason).toContain("renderName");
+      // And it tells her how to choose one rather than only that she must.
+      expect(envelope.reason).toContain("see_myself");
+      // Retryable: she can render herself, or name one she already made, and
+      // call again. That is a materially different instruction from "this
+      // cannot work".
+      expect(envelope.retryable).toBe(true);
+    }
+    // Nothing was written on the way to refusing. Looking at what she has
+    // rendered is a read and is the whole point of this path.
+    expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+  });
+
+  it("should refuse `latest`, because a sending is the one she CHOSE", async () => {
+    // Not style. `latest` resolves at creation to whatever render was made
+    // most recently, and the voice track is about to start writing voiced
+    // clips as their own records — so `latest` will begin returning
+    // derivatives rather than originals, silently, with nothing failing when
+    // it does. **A sending refuses UPDATE**, so the wrong `renderName` is
+    // permanent from the first write and the immutability trigger cannot help:
+    // it refuses re-pointing a row, not recording the wrong value at creation.
+    // An immutable record of the wrong thing is worse than a mutable one.
+    const api = sendingApi();
+
+    const { envelope, isError } = await call(contextFor(api), "show_him", {
+      words: "I thought of you when the light did that thing.",
+      because: "He said he missed the sky.",
+      renderName: "latest",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toMatch(/see_myself/u);
+      expect(envelope.retryable).toBe(true);
+    }
+    expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+  });
+
+  it("should tell her she has not rendered anything yet, when that is the actual situation", async () => {
+    // A different situation with a different next step, so it gets a different
+    // sentence. "Name the one you meant" is useless advice to somebody with
+    // nothing to name.
+    const api = sendingApi(storedSending(), []);
+
+    const { envelope } = await call(contextFor(api), "show_him", {
+      words: "I thought of you when the light did that thing.",
+      because: "He said he missed the sky.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toContain("render_me");
+      expect(envelope.reason).not.toContain("see_myself");
+    }
+    expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+  });
+
+  it("should still refuse when it cannot see what she has rendered", async () => {
+    // The read is there to choose the better sentence, never to decide whether
+    // to refuse. A service that could not answer must not become a path into
+    // composing without a face.
+    const api = fakeApi({
+      "/renders": () => failure(500, "INTERNAL", "the studio is unreadable", true),
+      "/sendings": () => ok(storedSending(), 201),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "show_him", {
+      words: "Hello.",
+      because: "b",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+  });
+
+  it("should still be a success when the render named does not exist, because the words went anyway", async () => {
+    // The edge case the whole feature is built around. A name she
+    // half-remembered costs the VIDEO and nothing else: her words are already
+    // in his conversation and already carried the notification, and the row
+    // says so. Reporting this as a failure would have her apologising for a
+    // message he has read.
+    const api = sendingApi(
+      storedSending({ state: "failed", reason: "There is no render by that name, so this one goes without a video." }),
+    );
+
+    const { envelope, isError } = await call(contextFor(api), "show_him", {
+      words: "I made you something.",
+      because: "He said he missed the sky.",
+      renderName: "syl-nonexistent",
+    });
+
+    expect(isError).toBe(false);
+    expect(envelope.ok).toBe(true);
+    if (envelope.ok) {
+      const subject = envelope.subject as { state: string; reason: string; words: string };
+      expect(subject.state).toBe("failed");
+      expect(subject.reason).toMatch(/no render/iu);
+      // And the words are on the row, which is where he reads them from.
+      expect(subject.words).not.toBe("");
+    }
+  });
+
+  it("should say what went wrong when her own service refuses, in its own words", async () => {
+    const api = fakeApi({
+      "/sendings": () =>
+        failure(422, "VALIDATION_FAILED", "words is required.", false),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "show_him", {
+      words: "Hello.",
+      because: "b",
+      renderName: THE_RENDER,
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toBe("words is required.");
+  });
+
+  it("should not claim it reached him when the row could not be read back", async () => {
+    const api = fakeApi({
+      "/sendings": (made) =>
+        made.method === "POST"
+          ? ok(storedSending(), 201)
+          : failure(500, "INTERNAL", "the store fell over", true),
+    });
+
+    const { envelope } = await call(contextFor(api), "show_him", {
+      words: "Hello.",
+      because: "b",
+      renderName: THE_RENDER,
+    });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toMatch(/may well have gone through/iu);
   });
 });
 

@@ -51,6 +51,13 @@ import { SendingStore, SendingStoreError } from "./sending-store.js";
  * A sending left saying `pending` forever is the render-shaped version of a
  * dropped reminder — she told him something was coming and it never came, and
  * nothing anywhere says so.
+ *
+ * **That covers this process and not a restart**, which is the one case the
+ * sentence above cannot reach: the promise chasing the video lives in memory,
+ * so a crash between the row and its settlement takes the only thing that was
+ * going to settle it. {@link SendingService.resume} is the other half, called
+ * from `bootstrap` for every `pending` row, and the two together are what make
+ * "never left claiming a video is coming" true rather than nearly true.
  */
 
 /**
@@ -235,6 +242,47 @@ export class SendingService {
     return sending;
   }
 
+  /**
+   * Pick up sendings a restart interrupted.
+   *
+   * `RenderService.resume()`'s shape, called from the same place in
+   * `bootstrap`, and it exists for the same reason one layer along. `#follow`
+   * is a detached in-process promise and `drain` only survives a **clean**
+   * shutdown, so a crash between `create` and `attachVideo`/`markFailed`
+   * leaves a row saying `pending` with nothing left to re-drive it. Her words
+   * already reached him saying something was coming; without this it never
+   * comes and nothing anywhere says so, which is constraint 4 wearing the
+   * render's hat.
+   *
+   * Every pending row goes back to the SAME follower `compose` uses, so there
+   * is one place that decides what becomes of a video and this is not a second
+   * one. Its verdict covers the three states a render can be in when a process
+   * comes back up: still `ready` on disk, so the clip is compressed and
+   * attached; gone or `failed`, so the sending is settled `failed` with a
+   * sentence; still `rendering`, which `#makeVideo` also settles with a
+   * sentence rather than waiting — see the note there for why waiting is
+   * refused. What it never does is leave the row claiming a video is coming
+   * when nothing is coming.
+   *
+   * It does NOT notify. The push went out with the words, before the process
+   * died; a second one would buzz him about a sentence he read an hour ago.
+   */
+  resume(): void {
+    for (const sending of this.#sendings.pending()) {
+      if (sending.renderName === null) {
+        // The store allows a NULL render name. Nothing was ever going to
+        // arrive for such a row, so it is settled here rather than handed to a
+        // follower that has nothing to look up.
+        this.#settleFailed(
+          sending.id,
+          "This one named no render, so there was never a video coming for it. What I said still stands.",
+        );
+        continue;
+      }
+      this.#follow(sending, sending.renderName);
+    }
+  }
+
   /** Wait for every video in flight. For tests and for a clean shutdown. */
   async drain(): Promise<void> {
     while (this.#inFlight.size > 0) await Promise.all([...this.#inFlight]);
@@ -307,8 +355,10 @@ export class SendingService {
   /**
    * Resolve the render, compress it, and attach the result.
    *
-   * Every branch ends in `attachVideo` or `#settleFailed`. There is no path
-   * that leaves the row `pending`.
+   * Every branch ends in `attachVideo` or `#settleFailed`. No path *through
+   * this function* leaves the row `pending` — the way a row survives as
+   * `pending` is for the process to die before this runs, which is what
+   * {@link SendingService.resume} exists to pick up.
    */
   async #makeVideo(sending: Sending, renderName: string): Promise<void> {
     const record = renderName === "latest" ? this.#renders.latest() : this.#renders.get(renderName);
