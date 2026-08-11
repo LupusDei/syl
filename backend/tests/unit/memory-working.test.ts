@@ -343,3 +343,61 @@ describe("toCandidate", () => {
     });
   });
 });
+
+/**
+ * The budget, raised from 4,000 to 32,000 bytes on the Commander's order
+ * (2026-08-11, `syl-ulf`). He accepted the extra per-turn cost explicitly:
+ * "I'm fine with it burning extra tokens... if it ever gets too expensive we
+ * can start rolling that back."
+ *
+ * The FIRST test here is the cheap one and it is not the point. The second is:
+ * `0019`'s `CHECK (bytes > 0 AND bytes <= 4096)` is a SCHEMA backstop, so
+ * raising the constant alone leaves a code path that fits 32,000 bytes and a
+ * database that refuses to store them. That failure would not appear in any
+ * test that only reads the constant — it appears on the first real projection
+ * that grows past 4 KB, in production, as a write error on a path whose whole
+ * job is to never go silently dark.
+ */
+describe("working memory — the raised budget", () => {
+  it("should carry a budget of 32,000 bytes across at least 400 lines", () => {
+    expect(WORKING_MEMORY_MAX_BYTES).toBe(32_000);
+    expect(WORKING_MEMORY_MAX_LINES).toBeGreaterThanOrEqual(400);
+  });
+
+  it("should PERSIST a projection larger than the old 4,096-byte schema backstop", () => {
+    // 120 nodes of ~160 chars each is ~19 KB of entries: comfortably past the
+    // old ceiling and comfortably inside the new one, so this asserts the
+    // migration rather than the arithmetic.
+    for (let i = 0; i < 120; i += 1) {
+      graph.addNode({
+        kind: "fact",
+        label: `fact number ${String(i)}`,
+        body: `a body long enough to matter, repeated to fill the entry budget ${"x".repeat(90)}`,
+      });
+    }
+
+    const working = new WorkingMemory({ db, graph, clock: fixedClock(NOW) });
+    const result = working.regenerate();
+
+    expect(result.row.bytes).toBeGreaterThan(4096);
+    expect(result.row.bytes).toBeLessThanOrEqual(WORKING_MEMORY_MAX_BYTES);
+    expect(working.preamble()).toBe(result.row.text);
+
+    const stored = db.prepare("SELECT bytes FROM working_memory WHERE id = 1").get() as {
+      bytes: number;
+    };
+    expect(stored.bytes).toBe(result.row.bytes);
+  });
+
+  it("should admit far more entries than the old budget could hold", () => {
+    for (let i = 0; i < 120; i += 1) {
+      graph.addNode({ kind: "fact", label: `fact number ${String(i)}`, body: "short body" });
+    }
+
+    const working = new WorkingMemory({ db, graph, clock: fixedClock(NOW) });
+    const result = working.regenerate();
+
+    // The old 4,000-byte budget admitted 23 entries against the live graph.
+    expect(result.plan.included.length).toBeGreaterThan(60);
+  });
+});
