@@ -379,7 +379,24 @@ export class MockServer {
       return found === undefined ? notFound("to-do") : ok(found);
     },
 
-    listSendings: ({ store }) => ok(page(store.sendings)),
+    // Sorted here rather than in the seed, and rather than trusted from
+    // insertion order. The real store is `ORDER BY created_at DESC, id DESC`,
+    // and a client that snapshots this list bakes whatever order it is given —
+    // so a mock in authoring order produces green tests that disagree with
+    // production. Ordering is not expressible in JSON Schema, so the contract
+    // conformance suite cannot catch it: the mock would be conformant and wrong
+    // at the same time, which is the one failure a mock exists to prevent.
+    //
+    // Sorting in the handler also leaves `createSending`'s unshift correct
+    // rather than making two places agree about the same order.
+    listSendings: ({ store }) =>
+      ok(
+        page(
+          [...store.sendings].sort((a, b) =>
+            a.createdAt === b.createdAt ? b.id.localeCompare(a.id) : b.createdAt.localeCompare(a.createdAt),
+          ),
+        ),
+      ),
     createSending: ({ body, store }) => ok(store.createSending(body), 201),
     getSending: ({ params, store }) => {
       const found = store.sending(params["sendingId"] ?? "");
