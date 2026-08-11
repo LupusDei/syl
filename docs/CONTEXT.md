@@ -1673,3 +1673,37 @@ of something being *said*. Home has no transcript, so the same shape there merel
 crosses the picture. A ring is a halo rather than an utterance: it encloses
 instead of dividing, and light travelling a closed path reads as attention
 circling a thought. He saw that it was wrong before anyone could say why.
+
+### A success signal that is not downstream of the effect (2026-08-11)
+
+Two of these landed within an hour, in different hands, and they are one bug.
+
+A push was confirmed with `git push -q …; echo "pushed: $(git log --oneline -1)"`.
+The push **failed** on a divergent branch; the echo printed the local HEAD, which
+is always there. A restore was done with `cp`, which hit an interactive overwrite
+prompt — **in a non-interactive shell that defaults to NO**, so the file was never
+restored and the exit code meant only *"I asked"*.
+
+**Neither success message was capable of reporting failure.** One was composed
+from local state, the other from an exit code that did not describe the effect.
+The rule: **confirm the thing you actually wanted, from the side that would know.**
+For a push that is `git merge-base --is-ancestor HEAD origin/<branch>`; for a copy
+it is reading the destination. A check that cannot fail is decoration.
+
+### A stale test is worse than a stale comment (2026-08-11)
+
+Raising `DEFAULT_CONTEXT_BUDGET_BYTES` to 72,000 silently disarmed the test that
+proves the budget guard fires. It asked for **40,000 of overage** — enough to
+break the 24,000 ceiling it was written against, not enough to break 72,000. It
+kept passing, so nothing anywhere said the guard was now unprotected. The overage
+is derived from the ceiling now.
+
+This is the same family as a comment that asks the next person to update it, but
+it is worse in one specific way: **the test is the mechanism we rely on to tell
+us when something else has gone stale.** When it goes stale it does not merely
+fail to help, it actively reports that all is well — and it reports it in the
+one place designed to be trusted without re-derivation.
+
+A constant inside a test that is a function of production code must be **derived
+from that code**, never restated. If a test asserts "this breaks when X exceeds
+the limit", the number it uses to exceed the limit has to come from the limit.
