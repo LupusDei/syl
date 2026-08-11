@@ -1012,6 +1012,49 @@ about. `advertisedTools()` from the handler map; `origin` from whether he spoke;
 the capability sentence from the surface. **A stated property has a shelf life
 and nothing announces its expiry.**
 
+One postscript, earned the same afternoon: deriving the refusal from the list
+immediately produced a defect that *could not exist while they were two things*
+— a `says` may not contain a comma, because they are spliced into one sentence,
+and "her own memory, to search it and read it back, her own renders" is a list
+nobody can parse. That is the derivation working, not an argument against it: a
+single mechanism has failure modes, and failure modes are findable. Two hand-kept
+strings have *drift*, which is not.
+
+**A MEASUREMENT CARRIES ITS REF, not just its version stamp.** `CLAUDE.md` says
+load-bearing measurements against someone else's binary need a version stamp and
+a re-run. Generalise it: **any tree that moves is someone else's binary**, and
+that is every branch in this repo.
+
+Three of us hit this on 2026-08-11, in three different materials, and it is one
+failure:
+
+| what was measured | against what | why it went stale |
+|---|---|---|
+| the tool-surface slot | a commit *inside* a branch | the ceiling was raised 26 commits later, on the same branch |
+| migration `0018` | origin, correctly, at the time | origin reached `0024` while the work was in flight |
+| "cherry-pick this commit" | a main that had since moved | an instruction to a merger names a ref implicitly |
+
+The sharp version, and it is `extraction`'s: **a number in a decision has no
+expiry either, and "I checked at the time" feels exactly like "I checked."**
+Every one of those checks was *complete* against the world it was run against.
+
+Two consequences worth holding:
+
+1. **Measure the tip of what will actually merge.** A commit inside a branch is
+   a waypoint, not a destination — it may be momentarily inconsistent on its way
+   to being right, and quoting it produces a plausible number with no error and
+   a conclusion nobody re-tests.
+2. **Record the ref beside the number**, so the next person can re-run it.
+   `c8462cf` and "fenix tip" are different worlds; a figure naming neither cannot
+   be checked and therefore will not be.
+
+Note which of these had a guard. Two migrations at one version fail loudly with
+both filenames, so that one was always going to surface on contact. A slot
+computed from the wrong ref produces **a plausible number and a conclusion** —
+"unlandable" — and nothing in the system ever contradicts it. *The variant with
+no guard is the one that propagates*, which is why it reached a second agent's
+report before it was caught.
+
 **An instruction and the capability it assumes are ONE decision, and the failure
 is always prose.** Hit three times on 2026-08-10, in both directions:
 

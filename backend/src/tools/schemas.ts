@@ -105,6 +105,35 @@ const WHEN = {
  *
  * Required rather than optional, because an optional field for the thing that
  * makes the feature trustworthy is a field that goes unfilled at 3am.
+ *
+ *
+ * ## And why a READ never takes it. The rule has two halves and this is the
+ * ## second one
+ *
+ * `whats_outstanding`, `recall` and `see_myself` change nothing, and none of
+ * them carries a reason. That is not three verbs each getting an exemption —
+ * it is the same rule stated from the other side: **a reason travels with an
+ * ACT, because the reason is what lets him judge an act he did not ask for.**
+ * Looking is not an act. Nothing exists afterwards that he has to evaluate.
+ *
+ * Two costs to getting this wrong, and the second is the one that bites:
+ *
+ * - It makes looking at what she already knows feel like paperwork, so she
+ *   does it less. A verb with a tax on it is a verb she reaches for only when
+ *   certain — which is precisely when she least needs to look.
+ * - **It devalues the field everywhere else.** A `because` filled out of habit,
+ *   on verbs where nothing turns on it, teaches that the field is decoration.
+ *   Then it arrives as decoration on `finish_todo` at 3am, which is the one
+ *   place it is load-bearing and the one place nothing else can catch a wrong
+ *   inference.
+ *
+ * Stated here rather than at each read, because it was independently written
+ * into two verbs' comments by two people who had not seen each other's — which
+ * is the signal that it is a seam in the surface and not a local judgement
+ * call. `tests/unit/tool-surface-budget.test.ts` guards the write half by
+ * SHAPE, so a new verb that acts is covered without anyone remembering; the
+ * exemption list there is the read half and is the only place the two are
+ * enumerated.
  */
 const BECAUSE = {
   type: "string",
@@ -321,11 +350,8 @@ export const TOOLS: readonly ToolSchema[] = [
     // would have her reason like something operating a database about a person
     // rather than like someone who knows him.
     //
-    // `because` is deliberately ABSENT and this is the one place that needs
-    // saying, because the budget test guards the rule by shape. It changes
-    // nothing: looking at what she already knows is the same kind of act as
-    // `whats_outstanding`, and requiring a reason to remember would be asking
-    // her to justify thinking.
+    // No `because`: it changes nothing. See `BECAUSE` for why a read never
+    // carries one — the argument is stated once there rather than at each read.
     name: "recall",
     description:
       "Search what you already know about him, and get back what it connects to. Use it before saying you do not know, and whenever you need the id of something you remember. Leave the question out to open what your working memory could not fit.",
@@ -389,8 +415,10 @@ export const TOOLS: readonly ToolSchema[] = [
       "can judge whether it is you. Say what is closer and what is wrong, in your own terms.",
     inputSchema: {
       type: "object",
-      // No `because` and no required field at all: this is a read, and the one
-      // thing it must never do is make looking at herself feel like paperwork.
+      // No `because` and no required field at all: this is a read. See
+      // `BECAUSE` — the "looking is not an act" argument was written here and
+      // on `recall` independently, and now lives once beside the rule it is
+      // the other half of.
       properties: {
         render: {
           type: "string",
