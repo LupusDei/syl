@@ -929,6 +929,22 @@ the structure:
 | "every write says why" | required at the door, dropped at the store | carried to the row |
 | "outside text is fenced" | a fence you had to remember to apply | `validate` refuses the slot without the marker |
 | "she can act" | a sentence in `SOUL.md` | computed from `TurnOptions.tools` |
+| "her key reaches reminders, to-dos and goals" | a string in `beyondAgentReach` | rendered from `AGENT_SURFACES` |
+
+The last one is `syl-016.1` and it is worth naming because it was caught *while
+widening the list rather than afterwards*. Opening `/memory/recall` to her
+credential would have left the refusal she reads out to the Commander saying she
+cannot search her own memory — a fluent, confident sentence, wrong in exactly
+the way nothing fails on. Each surface now carries the words it goes by, and the
+refusal is a function of the list.
+
+**Her memory read is one ROUTE, never the router.** `/memory` would have carried
+`POST /memory/edges/{id}/feedback` with it, and an assistant that can confirm and
+reject her own inferences can groom what she will be shown tomorrow — the `/logs`
+argument, one layer in. `withinAgentSurface` matches on segment boundaries, which
+is what makes a single-route entry a real boundary rather than a naming
+convention. She can now read her own memory and still cannot write it, and that
+asymmetry is the decision, not an unfinished half.
 
 The repair is the same every time: make the claim a function of the thing it is
 about. `advertisedTools()` from the handler map; `origin` from whether he spoke;

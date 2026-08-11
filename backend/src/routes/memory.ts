@@ -8,8 +8,20 @@ import {
 import { DreamLogError, type DeclaredCounts, type DreamLog } from "../memory/dream/log.js";
 import { GraphError, type MemoryEdge, type MemoryGraph, type MemoryNode } from "../memory/graph.js";
 import type { MemoryMetrics } from "../memory/metrics.js";
-import type { MemoryTier } from "../memory/schema.js";
+import {
+  RetrievalError,
+  RETRIEVAL_CHANNELS,
+  type RetrievalChannel,
+  type Retriever,
+} from "../memory/retrieve.js";
+import {
+  isMemoryNodeKind,
+  MEMORY_NODE_KINDS,
+  type MemoryNodeKind,
+  type MemoryTier,
+} from "../memory/schema.js";
 import { WeightError, type EdgeWeights } from "../memory/weights.js";
+import type { OverflowKindCount, WorkingMemory } from "../memory/working.js";
 import { instant, systemClock, type Clock } from "../services/clock.js";
 import type { IdempotencyStore } from "../services/idempotency.js";
 import { ApiFailure, sendOk } from "./envelope.js";
@@ -119,6 +131,27 @@ export interface MemoryViews {
   readonly metrics: MemoryMetrics;
   /** Telemetry about the graph, which is a different store and stays one. */
   readonly dreams: DreamLog;
+  /**
+   * The projection Syl reads on every turn. Here for the one thing it can
+   * answer and nothing else can: **what it could not fit**.
+   */
+  readonly working: WorkingMemory;
+  /**
+   * Retrieval, or `null` on a machine that has none.
+   *
+   * A THUNK, and required rather than optional, for two separate reasons:
+   *
+   * - The retriever lives behind `MemoryRuntime.trySearchable()`, which builds
+   *   the store lazily and degrades to `null` when `vec0` is missing. Resolving
+   *   it at construction would put a native extension on the boot path, and
+   *   `services/memory-runtime.ts` argues at length why nothing about memory may
+   *   decide whether this service starts — Syl holds reminder guarantees.
+   * - Required, so that wiring it is not something a future bootstrap can
+   *   forget. An optional field left unset would make recall answer "there is
+   *   nothing here" forever, which is a lie the shape of the defect this whole
+   *   epic exists to fix.
+   */
+  readonly recall: () => Retriever | null;
 }
 
 export interface MemoryRouterOptions {
@@ -273,6 +306,272 @@ export interface MemoryGraphView {
   readonly superseded: readonly MemoryNodeView[];
 }
 
+// ---------------------------------------------------------------------------
+// Recall — `syl-016.1`
+// ---------------------------------------------------------------------------
+
+/**
+ * How a node came to be in a recall answer.
+ *
+ * Kept on the wire because the three are different kinds of claim and a reader
+ * that flattened them would be confidently wrong. `matched` is *this answers
+ * your question*; `connected` is *this touches something that does*, which is
+ * often the more useful one and is never the same statement; `not_shown` is
+ * *nothing matched anything, this is simply what the digest hid from you*.
+ */
+export type RecallOrigin = "matched" | "connected" | "not_shown";
+
+/** One remembered thing, **with its id**. */
+export interface RecalledNodeView {
+  /**
+   * The handle every other memory verb needs.
+   *
+   * The reason this route exists. She could read a digest and nothing else, so
+   * there was no way for her to obtain an id — which meant no verb that acts on
+   * a memory could ever be given one.
+   */
+  readonly id: string;
+  readonly kind: MemoryNodeKind;
+  readonly label: string;
+  readonly body: string | null;
+  readonly updatedAt: string;
+  readonly origin: RecallOrigin;
+  /** `relevance * trust * decay`. `null` for anything the ranker did not score. */
+  readonly score: number | null;
+  /** Which channels spoke for it. Empty for anything the ranker did not score. */
+  readonly channels: readonly RetrievalChannel[];
+}
+
+/**
+ * One connection between two remembered things.
+ *
+ * `reasoning` travels on an inference and never on an observation, the same
+ * separation `MemoryEdgeView` keeps and for the same reason: Syl's own
+ * speculation and a source's assertion must not be readable through one field.
+ */
+export interface RecalledEdgeView {
+  readonly id: string;
+  readonly kind: "observed" | "inferred";
+  readonly sourceNode: string;
+  readonly targetNode: string;
+  readonly relation: string;
+  /** WHY she believes this. `null` on an observation — a source simply said so. */
+  readonly reasoning: string | null;
+}
+
+/** What one recall found, and what it could not speak for. */
+export interface MemoryRecallView {
+  readonly generatedAt: string;
+  /** What was asked, or `null` when the overflow was opened instead. */
+  readonly asked: string | null;
+  readonly mode: "search" | "not_shown";
+  readonly found: readonly RecalledNodeView[];
+  /** Every edge the walk crossed. Empty in `not_shown`, which does not walk. */
+  readonly connections: readonly RecalledEdgeView[];
+  /** Channels that were available for this query at all, in formula order. */
+  readonly channels: readonly RetrievalChannel[];
+  /**
+   * The highest relevance this query could have produced.
+   *
+   * Read this before comparing a score against a threshold: the fusion weights
+   * are never renormalised, so a query with no entity honestly caps at 0.7 and
+   * a 0.5 from it is not the same evidence as a 0.5 out of 1.0.
+   */
+  readonly ceiling: number;
+  readonly limit: number;
+  /**
+   * How many more there are than came back. `null` when it was not counted.
+   *
+   * Counted in `not_shown`, where the set is finite and known. `null` in
+   * `search`, because ranking returns the best `limit` and does not count what
+   * it passed over — and a zero there would be a claim that there is nothing
+   * else, which is the silent kind of wrong this project keeps finding.
+   */
+  readonly more: number | null;
+  /** What the overflow is made of. Empty in `search`. */
+  readonly byKind: readonly OverflowKindCount[];
+  /** What this answer is, in words, so a slice is never read as the whole store. */
+  readonly explanation: string;
+}
+
+/** How many memories one recall returns when nobody says. */
+export const DEFAULT_RECALL_LIMIT = 10;
+/** The most a single recall will carry. Beyond this it is a data dump. */
+export const MAX_RECALL_LIMIT = 50;
+/** The longest question this route will take. */
+export const MAX_RECALL_QUERY_CHARS = 500;
+/** The most entity names the holographic channel is given. */
+export const MAX_RECALL_ENTITIES = 8;
+
+/** What a recall was asked for, already parsed. */
+export interface RecallBounds {
+  /** The question, or `null` to open the overflow instead. */
+  readonly query: string | null;
+  readonly kind: MemoryNodeKind | null;
+  /** Entity names for the structural channel. See `RetrievalQuery.entities`. */
+  readonly entities: readonly string[];
+  readonly limit: number;
+}
+
+/** The channels a query could not use, named so an absence is never silent. */
+function missingChannels(available: readonly RetrievalChannel[]): readonly RetrievalChannel[] {
+  return RETRIEVAL_CHANNELS.filter((channel) => !available.includes(channel));
+}
+
+/**
+ * Answer one recall.
+ *
+ * Exported so the judgement can be exercised without a socket, exactly as
+ * {@link buildGraphView} is. Two modes, and they are deliberately one verb:
+ *
+ * - **A question** goes to `Retriever`, the fusion kernels built in
+ *   `syl-005.3` and wired to nothing until now. Entry points AND the
+ *   neighbourhood they open onto — a caller that read only the ranked list
+ *   would have used a search engine and left the graph on the table.
+ * - **No question** opens the working-memory overflow (`syl-016.2`): the items
+ *   the digest counted and would not name. That is not a search and must not be
+ *   answered by one, because "what is being kept from me" is a question about
+ *   the projection's own ranking and no query text can reproduce it.
+ *
+ * @throws {ApiFailure} `UPSTREAM_UNAVAILABLE` when a question is asked on a
+ * machine whose searchable half could not be assembled. Deliberately not an
+ * empty result: "I found nothing" and "I could not look" are different
+ * sentences and she has to be able to say which.
+ */
+export async function buildRecall(
+  memory: MemoryViews,
+  bounds: RecallBounds,
+  now: number,
+): Promise<MemoryRecallView> {
+  const generatedAt = instant(now);
+
+  if (bounds.query === null) {
+    const overflow = memory.working.overflow({
+      limit: bounds.limit,
+      ...(bounds.kind === null ? {} : { kind: bounds.kind }),
+    });
+
+    return {
+      generatedAt,
+      asked: null,
+      mode: "not_shown",
+      found: overflow.items.map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        label: item.label,
+        body: item.body,
+        updatedAt: item.updatedAt,
+        origin: "not_shown",
+        score: null,
+        channels: [],
+      })),
+      connections: [],
+      channels: [],
+      ceiling: 0,
+      limit: bounds.limit,
+      more: overflow.matched - overflow.items.length,
+      byKind: overflow.byKind,
+      explanation:
+        `Everything in the hot region that the working-memory digest could not fit — ` +
+        `${String(overflow.total)} item(s), most salient first. This is NOT a search: it is ` +
+        `the same ranking the digest itself uses, so it is exactly what was left out and ` +
+        `nothing else. Anything colder than the hot region is found by asking a question.`,
+    };
+  }
+
+  const retriever = memory.recall();
+  if (retriever === null) {
+    throw new ApiFailure(
+      "UPSTREAM_UNAVAILABLE",
+      "Syl's memory cannot be searched on this machine right now — the searchable half did " +
+        "not assemble, so keyword and meaning are both unavailable. Nothing has been lost: " +
+        "the graph is intact and what the digest could not fit can still be opened without a " +
+        "question.",
+    );
+  }
+
+  let retrieval;
+  try {
+    retrieval = await retriever.retrieve({
+      text: bounds.query,
+      limit: bounds.limit,
+      ...(bounds.kind === null ? {} : { kind: bounds.kind }),
+      ...(bounds.entities.length === 0 ? {} : { entities: bounds.entities }),
+    });
+  } catch (error) {
+    if (error instanceof RetrievalError) {
+      throw new ApiFailure("VALIDATION_FAILED", error.message, {
+        details: { reason: error.kind },
+      });
+    }
+    throw error;
+  }
+
+  const ranked = new Map(retrieval.entries.map((entry) => [entry.node.id, entry]));
+  const found: RecalledNodeView[] = retrieval.nodes.map((node) => {
+    const entry = ranked.get(node.id);
+    return {
+      id: node.id,
+      kind: node.kind,
+      label: node.label,
+      body: node.body,
+      updatedAt: node.updatedAt,
+      origin: entry === undefined ? "connected" : "matched",
+      score: entry?.score ?? null,
+      channels: entry?.channels ?? [],
+    };
+  });
+
+  // Ranked first and in rank order, then the neighbourhood. `retrieval.nodes`
+  // is walk order, which is an implementation detail of the traversal; what she
+  // reads first should be what best answers her.
+  found.sort((a, b) => {
+    if (a.origin !== b.origin) return a.origin === "matched" ? -1 : 1;
+    if (a.score !== b.score) return (b.score ?? 0) - (a.score ?? 0);
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+
+  const blind = missingChannels(retrieval.channels);
+  return {
+    generatedAt,
+    asked: bounds.query,
+    mode: "search",
+    found,
+    connections: retrieval.edges.map(toRecalledEdge),
+    channels: retrieval.channels,
+    ceiling: retrieval.ceiling,
+    limit: bounds.limit,
+    more: null,
+    byKind: [],
+    explanation:
+      `The best ${String(bounds.limit)} match(es) for that question, plus everything one hop ` +
+      `out from them — a connection is often the answer even when the node itself is not. ` +
+      (retrieval.channels.length === 0
+        ? `Nothing matched on any channel. `
+        : `Searched by: ${retrieval.channels.join(", ")}. `) +
+      (blind.length === 0
+        ? ``
+        : `NOT searched by: ${blind.join(", ")}, so a score here is out of ` +
+          `${retrieval.ceiling.toFixed(2)} rather than 1.00${
+            blind.includes("holographic") ? ` — name the people or things it is about to add ` +
+              `the structural channel` : ``
+          }. `) +
+      `Nothing beyond the best few is counted, so this does not say how much more there is.`,
+  };
+}
+
+/** One walked edge, with the two species kept apart. See {@link RecalledEdgeView}. */
+export function toRecalledEdge(edge: MemoryEdge): RecalledEdgeView {
+  return {
+    id: edge.id,
+    kind: edge.kind,
+    sourceNode: edge.sourceNode,
+    targetNode: edge.targetNode,
+    relation: edge.relation,
+    reasoning: edge.kind === "inferred" ? edge.reasoning : null,
+  };
+}
+
 /** What a verdict did. */
 export interface MemoryFeedbackResult {
   readonly verdict: "confirm" | "reject";
@@ -394,6 +693,57 @@ export function countParam(request: Request, field: string, fallback: number, ma
     });
   }
   return value;
+}
+
+/**
+ * The bounds of one recall, off the query string.
+ *
+ * Every field is refused rather than coerced, on the same argument
+ * {@link countParam} makes: a value quietly read as something else hands back
+ * an answer to a question nobody asked, under a label that says otherwise.
+ *
+ * An ABSENT `q` and a BLANK one both mean "open the overflow". They are the
+ * same intent — a model that has nothing to search for sends one or the other
+ * depending on how it was feeling — and splitting them would make an empty
+ * string a validation error she has no way to interpret.
+ */
+export function recallBounds(request: Request): RecallBounds {
+  const asked = request.query["q"];
+  if (asked !== undefined && typeof asked !== "string") {
+    throw new ApiFailure("VALIDATION_FAILED", "q must appear at most once.", {
+      details: { field: "q", reason: "repeated" },
+    });
+  }
+  const query = (asked ?? "").trim();
+  if (query.length > MAX_RECALL_QUERY_CHARS) {
+    throw new ApiFailure("VALIDATION_FAILED", "That question is too long to search on.", {
+      details: { field: "q", reason: `at most ${String(MAX_RECALL_QUERY_CHARS)} characters` },
+    });
+  }
+
+  const rawKind = request.query["kind"];
+  if (rawKind !== undefined && rawKind !== "" && !isMemoryNodeKind(rawKind)) {
+    throw new ApiFailure("VALIDATION_FAILED", "That is not a kind of thing Syl remembers.", {
+      details: { field: "kind", reason: `must be one of ${MEMORY_NODE_KINDS.join(", ")}` },
+    });
+  }
+
+  // Repeated or comma-separated, both accepted. The holographic channel takes a
+  // list and a caller should not have to know which spelling this route chose.
+  const rawAbout = request.query["about"];
+  const entities = (Array.isArray(rawAbout) ? rawAbout : [rawAbout])
+    .filter((value): value is string => typeof value === "string")
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter((value) => value !== "")
+    .slice(0, MAX_RECALL_ENTITIES);
+
+  return {
+    query: query === "" ? null : query,
+    kind: isMemoryNodeKind(rawKind) ? rawKind : null,
+    entities,
+    limit: countParam(request, "limit", DEFAULT_RECALL_LIMIT, MAX_RECALL_LIMIT),
+  };
 }
 
 /** Read the verdict off a JSON body. */
@@ -639,6 +989,21 @@ export function createMemoryRouter(options: MemoryRouterOptions): Router {
   router.get("/memory/constellation", (request, response) => {
     const bounds = { stars: countParam(request, "stars", DEFAULT_STARS, MAX_STARS) };
     sendOk(response, buildConstellation(memory, bounds, clock()));
+  });
+
+  /**
+   * **Her own read.** The one route on this surface Syl's credential reaches.
+   *
+   * Everything else here is an instrument for the Commander — seeds, edge
+   * budgets, dream windows, and a verdict that moves weights inside her own
+   * memory. This one is the answer to a question she asked about herself:
+   * *"I can't even see the nodes. I see a summary someone else chose for me."*
+   *
+   * `async` is safe on Express 5, which forwards a rejected handler to
+   * `onError` — the retrieval's overlap channel awaits an embedding.
+   */
+  router.get("/memory/recall", async (request, response) => {
+    sendOk(response, await buildRecall(memory, recallBounds(request), clock()));
   });
 
   router.get("/memory/graph", (request, response) => {

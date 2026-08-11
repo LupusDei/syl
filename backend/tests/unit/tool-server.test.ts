@@ -268,10 +268,12 @@ describe("the tool surface she is offered", () => {
   });
 
   it("should not offer a verb it has nowhere to perform", () => {
-    // `remember` is declared in `schemas.ts` and there is no route that writes
-    // a memory — `AGENT_SURFACE` is reminders, to-dos and goals. Offering it
-    // would tell her she can keep what he said about his life and answer 403
-    // every time, which is the defect this epic exists to fix, one layer along.
+    // `remember` is declared in `schemas.ts` and there is still no route that
+    // WRITES a memory. `syl-016.1` opened `/memory/recall` on her credential
+    // and deliberately nothing else under `/memory`, so the read landed and
+    // the write did not. Offering `remember` anyway would tell her she can keep
+    // what he said about his life and answer 403 every time, which is the
+    // defect this epic exists to fix, one layer along.
     expect(TOOLS.map((tool) => tool.name)).toContain("remember");
     expect(advertisedToolNames()).not.toContain("remember");
   });
@@ -331,6 +333,139 @@ describe("the tool surface she is offered", () => {
     // What she CAN do, because a refusal she can act on beats a refusal she can
     // only repeat.
     if (!envelope.ok) expect(envelope.reason).toContain("remind_me");
+  });
+});
+
+/**
+ * `recall` — `syl-016.1`, the verb that lets her look at her own memory.
+ *
+ * The route's own behaviour is `memory-recall.test.ts`'s. What is being held
+ * here is the seam: what goes on the wire, and what comes back to her.
+ */
+describe("recall", () => {
+  const A_NODE = "syl:memory_node:0198f2c1-4a3b-7d21-9f00-2b2b2b2b2b2b";
+
+  /** What the route answers, in the shape `routes/memory.ts` builds. */
+  function recalled(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      generatedAt: new Date(NOW).toISOString(),
+      asked: "the roofer",
+      mode: "search",
+      found: [
+        {
+          id: A_NODE,
+          kind: "person",
+          label: "the roofer",
+          body: "replaced the gutter in March",
+          updatedAt: new Date(NOW).toISOString(),
+          origin: "matched",
+          score: 0.32,
+          channels: ["keyword"],
+        },
+      ],
+      connections: [],
+      channels: ["keyword"],
+      ceiling: 0.4,
+      limit: 10,
+      more: null,
+      byKind: [],
+      explanation: "The best 10 match(es) for that question…",
+      ...over,
+    };
+  }
+
+  function recallApi(over: Record<string, unknown> = {}): FakeApi {
+    return fakeApi({ "/memory/recall": () => ok(recalled(over)) });
+  }
+
+  it("should hand her the ids, unsummarised", async () => {
+    // The bead in one assertion, at this layer. A verb built because she was
+    // handed somebody else's summary must not summarise on the way past — and
+    // an id is what every other verb in `syl-016` acts on.
+    const api = recallApi();
+
+    const { envelope } = await call(contextFor(api), "recall", { question: "the roofer" });
+
+    expect(envelope.ok).toBe(true);
+    if (!envelope.ok) return;
+    const subject = envelope.subject as { found: { id: string }[] };
+    expect(subject.found[0]?.id).toBe(A_NODE);
+    expect(api.calls[0]?.path).toContain("q=the+roofer");
+  });
+
+  it("should ask nothing when she asks nothing, which is how the overflow opens", async () => {
+    // `syl-016.2`. A present-but-empty `q` would make the wire say something
+    // she did not; the route reads an absent one as "show me what you hid".
+    const api = recallApi({ mode: "not_shown", asked: null });
+
+    await call(contextFor(api), "recall", {});
+
+    expect(api.calls[0]?.path).not.toContain("q=");
+    expect(api.calls[0]?.method).toBe("GET");
+  });
+
+  it("should carry the names she decided the question is about", async () => {
+    // `retrieve.ts`: extracting an entity from free text is a JUDGEMENT, and
+    // judgement belongs to the model. Without them the structural channel has
+    // nothing to work from and contributes zero.
+    const api = recallApi();
+
+    await call(contextFor(api), "recall", {
+      question: "the gutter",
+      about: ["the roofer", "  "],
+      kind: "person",
+      limit: 3,
+    });
+
+    const path = api.calls[0]?.path ?? "";
+    expect(path).toContain("about=the+roofer");
+    // The blank was dropped rather than sent: an entity that is whitespace is
+    // not an entity, and passing it would have the ranker score against noise.
+    expect(path).not.toContain("about=the+roofer%2C");
+    expect(path).toContain("kind=person");
+    expect(path).toContain("limit=3");
+  });
+
+  it("should not demand a reason for looking at what she already knows", async () => {
+    // Every verb that CHANGES something carries `because`. This changes
+    // nothing, and requiring a reason to remember would teach her the field is
+    // decoration — which is what would then happen on the verbs where it is
+    // load-bearing.
+    const { envelope } = await call(contextFor(recallApi()), "recall", { question: "roofer" });
+
+    expect(envelope.ok).toBe(true);
+  });
+
+  it("should turn a machine that cannot search into a sentence, never into silence", async () => {
+    // `sqlite-vec` ships per-platform binaries as OPTIONAL dependencies, so
+    // "absent" is a state `npm install` reports success for. She has to be able
+    // to say "I could not look", which is a different sentence from "you never
+    // told me about your brother".
+    const api = fakeApi({
+      "/memory/recall": () =>
+        failure(
+          503,
+          "UPSTREAM_UNAVAILABLE",
+          "Syl's memory cannot be searched on this machine right now.",
+          true,
+        ),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "recall", { question: "brother" });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (envelope.ok) return;
+    expect(envelope.reason).toContain("cannot be searched");
+    expect(envelope.retryable).toBe(true);
+  });
+
+  it("should report when it looked, so she is not inventing a moment", async () => {
+    const { envelope } = await call(contextFor(recallApi()), "recall", { question: "roofer" });
+
+    expect(envelope.ok).toBe(true);
+    if (!envelope.ok) return;
+    expect(envelope.at).toBe(new Date(NOW).toISOString());
   });
 });
 

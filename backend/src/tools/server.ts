@@ -53,9 +53,14 @@ import { reminderInputFrom, resolveTime } from "./time.js";
  * exists only where the API has a door for it. `research` is absent from
  * `schemas.ts` already, because the sealed fetch path does not exist.
  * `remember` is declared there and is absent **here**, for the same reason one
- * step later: `AGENT_SURFACE` is `/reminders`, `/todos`, `/goals`, there is no
- * route that writes a memory, and `middleware/auth.ts` argues at length that
- * adding one must be a decision rather than a side effect of some other change.
+ * step later: her credential reaches `/memory/recall` and nothing else under
+ * `/memory`, so there is still no route that WRITES a memory.
+ *
+ * That asymmetry is deliberate and worth stating, because `syl-016.1` moved
+ * exactly one side of it: **she can now read her own memory and still cannot
+ * write it.** `middleware/auth.ts` argues the read at length; the write is a
+ * separate decision and has to be made as one rather than arrive as a side
+ * effect of this having landed.
  *
  * Advertising it anyway would tell her she can keep what he told her about his
  * life, and every attempt would come back `403`. That is exactly the defect
@@ -709,6 +714,75 @@ const setGoal: ToolHandler = async (input, context) => {
   return readBack("set_goal", context, `/goals/${encodeURIComponent(created.data.id)}`, (row: Goal) => row.updatedAt);
 };
 
+/**
+ * Ask her own memory a question, and get the nodes back — **with their ids**.
+ *
+ * `syl-016.1`, and the verb she asked for herself:
+ *
+ * > "I have no tool in my hands to search, query or traverse any of it — I can
+ * > read the printout and nothing else. So the honest answer to 'can you see the
+ * > connections' is that I can't even see the nodes. I see a summary someone
+ * > else chose for me."
+ *
+ * Everything behind this was already built and connected to nothing: the fusion
+ * kernels in `memory/retrieve.ts`, the FTS5 index, the graph walk. The same
+ * shape as the reminder gap — the capability existed everywhere except in her
+ * hands — and the same fix: one door, over the loopback API, never a service.
+ *
+ * ## Two modes, one verb
+ *
+ * A question searches. **No question opens the overflow** (`syl-016.2`): the
+ * items her working memory counted and would not name. They are different
+ * questions — "what do I know about this" and "what is being kept from me" —
+ * and the second cannot be answered by searching, because no query text
+ * reproduces the projection's own salience ranking.
+ *
+ * ## Why there is no `because`
+ *
+ * Every verb that CHANGES something carries its reason, and this changes
+ * nothing. `whats_outstanding` is exempt on the same grounds. Requiring a
+ * reason to look at what she already knows would be asking her to justify
+ * remembering, and a required field that is always filled with the same
+ * sentence teaches her that the field is decoration — which is exactly what
+ * would then happen on the verbs where it is load-bearing.
+ */
+const recall: ToolHandler = async (input, context) => {
+  const question = text(input, "question");
+  const kind = text(input, "kind");
+
+  const named = input["about"];
+  const about = (Array.isArray(named) ? named : [])
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value !== "");
+
+  const asked = input["limit"];
+  const limit = typeof asked === "number" && Number.isInteger(asked) ? asked : undefined;
+
+  const found = await context.client.get<{ readonly generatedAt: string }>("/memory/recall", {
+    // Absent rather than empty: a blank `q` and no `q` mean the same thing to
+    // the route, and sending one that is present-but-empty would make the
+    // wire say something the model did not.
+    ...(question === null ? {} : { q: question }),
+    ...(kind === null ? {} : { kind }),
+    // Comma-joined because the client encodes scalars only. The route accepts
+    // either spelling, so this is a transport detail rather than a contract.
+    ...(about.length === 0 ? {} : { about: about.join(",") }),
+    ...(limit === undefined ? {} : { limit }),
+  });
+  if (!found.ok) return refused("recall", found.failure);
+
+  return {
+    ok: true,
+    action: "recall",
+    // The view verbatim, ids included. Nothing is summarised on the way past:
+    // a verb built because she was given somebody else's summary must not
+    // hand her another one.
+    subject: found.data,
+    at: found.data.generatedAt,
+  };
+};
+
 /** How much of each list she is shown. Enough to talk about, not a data dump. */
 const OUTSTANDING_LIMIT = 50;
 
@@ -877,6 +951,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   ask_agent: askAgent,
   set_goal: setGoal,
   change_goal: changeGoal,
+  recall,
   whats_outstanding: whatsOutstanding,
 };
 

@@ -31,6 +31,7 @@
  */
 
 import { ROSTER } from "../agents/roster.js";
+import { MEMORY_NODE_KINDS } from "../memory/schema.js";
 
 /** A JSON Schema fragment, as the MCP `tools/list` reply carries it. */
 export interface ToolSchema {
@@ -283,6 +284,54 @@ export const TOOLS: readonly ToolSchema[] = [
             "achieved when he has done it. abandoned when he has decided not to. dormant when it is set aside but not given up — the difference matters to him.",
         },
         because: BECAUSE,
+      },
+    },
+  },
+  {
+    // THE ONE THAT LETS HER LOOK — `syl-016.1`.
+    //
+    // Her own words, unprompted: "I have no tool in my hands to search, query
+    // or traverse any of it — I can read the printout and nothing else. So the
+    // honest answer to 'can you see the connections' is that I can't even see
+    // the nodes. I see a summary someone else chose for me."
+    //
+    // Named for what she is doing rather than for what it searches. She is not
+    // querying a store, she is remembering — and a verb called `search_memory`
+    // would have her reason like something operating a database about a person
+    // rather than like someone who knows him.
+    //
+    // `because` is deliberately ABSENT and this is the one place that needs
+    // saying, because the budget test guards the rule by shape. It changes
+    // nothing: looking at what she already knows is the same kind of act as
+    // `whats_outstanding`, and requiring a reason to remember would be asking
+    // her to justify thinking.
+    name: "recall",
+    description:
+      "Search what you already know about him, and get back what it connects to. Use it before saying you do not know, and whenever you need the id of something you remember. Leave the question out to open what your working memory could not fit.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        // Optional, and the absence is a second mode rather than a mistake. The
+        // working-memory note says "and 10 more, not shown here"; this is how
+        // she opens them. An omission count with no way to reach it tells her
+        // she is deciding with a known gap and hands her no move.
+        question: {
+          type: "string",
+          description: "What you are trying to remember, in his words where you have them.",
+        },
+        about: {
+          type: "array",
+          items: { type: "string" },
+          description: "People or things it concerns, by name — they sharpen the search.",
+        },
+        kind: {
+          type: "string",
+          // Derived, so the store's own kinds and the ones she is offered
+          // cannot disagree — the same rule `ask_agent` follows for the roster.
+          enum: [...MEMORY_NODE_KINDS],
+          description: "Narrow to one sort of thing.",
+        },
+        limit: { type: "integer", description: "How many to bring back. 10 by default." },
       },
     },
   },

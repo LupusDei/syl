@@ -12,7 +12,9 @@ import { syncResolvers } from "../../src/index.js";
 import { DreamLog } from "../../src/memory/dream/log.js";
 import { MemoryGraph } from "../../src/memory/graph.js";
 import { MemoryMetrics } from "../../src/memory/metrics.js";
+import type { Retriever } from "../../src/memory/retrieve.js";
 import { EdgeWeights } from "../../src/memory/weights.js";
+import { WorkingMemory } from "../../src/memory/working.js";
 import type { MemoryViews } from "../../src/routes/memory.js";
 import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api-key-service.js";
 import { AttachmentStore } from "../../src/services/attachment-store.js";
@@ -263,13 +265,25 @@ export function testChat(messages: MessageStore): ConversationService {
  * the CHECK that fires and the UNIQUE that spans the cold partition, and a mock
  * cannot have them.
  */
-export function testMemory(db: SylDatabase, clock: Clock = fixedClock(TEST_NOW)): MemoryViews {
+export function testMemory(
+  db: SylDatabase,
+  clock: Clock = fixedClock(TEST_NOW),
+  options: { readonly recall?: () => Retriever | null } = {},
+): MemoryViews {
   const graph = new MemoryGraph({ db: db.handle, clock });
   return {
     graph,
     weights: new EdgeWeights({ graph, clock }),
     metrics: new MemoryMetrics({ db: db.handle, clock }),
     dreams: new DreamLog({ db: db.handle, clock }),
+    working: new WorkingMemory({ db: db.handle, graph, clock }),
+    // `null` by default, which is the honest offline configuration: the real
+    // retriever needs `vec0` and a 300M-parameter model, and `npm test` is not
+    // allowed to download one. A test that wants search injects a real
+    // `Retriever` over its own store — see `memory-recall.test.ts` — and the
+    // default keeps every OTHER test on the degraded path, which is exactly the
+    // path a machine without the extension runs.
+    recall: options.recall ?? ((): Retriever | null => null),
   };
 }
 

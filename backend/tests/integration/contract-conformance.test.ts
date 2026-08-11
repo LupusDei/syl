@@ -67,6 +67,14 @@ const UNDECLARED: readonly string[] = [
   "GET /memory/graph",
   "GET /memory/metrics",
   "POST /memory/edges/{edgeId}/feedback",
+  // `syl-016.1`, and it joins the debt above rather than escaping it. Worth
+  // one distinction though: this is the only undeclared route SYL HERSELF
+  // calls, over her own credential, through `tools/server.ts`. That consumer
+  // is in this repository and is typed against the route, so nothing is being
+  // built against a guess today — but it is also the route most likely to
+  // acquire a second caller, and `shared/openapi.yaml` is where that caller
+  // would look first.
+  "GET /memory/recall",
 ];
 
 /** Path parameters that are syntactically valid but name nothing. */

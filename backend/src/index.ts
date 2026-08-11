@@ -1165,13 +1165,6 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // thin object over the same handle — `MemoryMetrics` in particular is a
   // derived view that writes nothing — so building them here costs a
   // constructor and keeps the route free of store construction.
-  const memory: MemoryViews = {
-    graph: memoryGraph,
-    weights: new EdgeWeights({ graph: memoryGraph, clock }),
-    metrics: new MemoryMetrics({ db: database.handle, clock }),
-    dreams: new DreamLog({ db: database.handle, clock }),
-  };
-
   // The rest of `syl-005`, which had no call site at all until `syl-63n`: the
   // hybrid store, the retriever, the embedder and the supersession ledger.
   //
@@ -1196,6 +1189,24 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
             log.error("memory", { message: line, error: String(error) }),
         }),
   });
+
+  const memory: MemoryViews = {
+    graph: memoryGraph,
+    weights: new EdgeWeights({ graph: memoryGraph, clock }),
+    metrics: new MemoryMetrics({ db: database.handle, clock }),
+    dreams: new DreamLog({ db: database.handle, clock }),
+    // The projection she reads every turn, so `GET /memory/recall` can open
+    // what it could not fit. Same instance the nightly regeneration writes, so
+    // there is one admission rule and not two.
+    working: workingMemory,
+    // A THUNK over `trySearchable`, resolved per request. Three properties fall
+    // out of that and each is deliberate: no native extension on the boot path;
+    // a machine with no `vec0` degrades to a sentence rather than a dead route;
+    // and a machine that acquires one — an `npm install` that finally landed
+    // the binary — starts working without a restart, because the failure is not
+    // memoised.
+    recall: () => memoryRuntime.trySearchable()?.retriever ?? null,
+  };
 
   // The fleet, if he has turned it on. `config.adjutant` is `null` unless
   // `SYL_ADJUTANT_URL` is set, so this is `undefined` on every machine that has

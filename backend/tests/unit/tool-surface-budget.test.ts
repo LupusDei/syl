@@ -76,7 +76,12 @@ describe("the tool surface", () => {
     // Guarded by SHAPE rather than by a list of names, so a seventh verb added
     // next month is covered without anyone remembering this file exists. A rule
     // that has to be re-applied by hand is the rule that was already missed.
-    const reads = new Set(["whats_outstanding"]);
+    // The verbs that CHANGE NOTHING, and the only grounds for exemption. Both
+    // are looks: one at what he has open, one at what she already knows.
+    // Requiring a reason to look would teach her the field is decoration, and
+    // a field she fills out of habit is worth nothing on the verbs where it is
+    // load-bearing — which is every other one on this surface.
+    const reads = new Set(["whats_outstanding", "recall"]);
 
     for (const tool of TOOLS) {
       if (reads.has(tool.name)) continue;

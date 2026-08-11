@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp, API_BASE_PATH } from "../../src/index.js";
 import {
   AGENT_SURFACE,
+  AGENT_SURFACES,
   beyondAgentReach,
   confineAgent,
   type AuthenticatedContext,
@@ -21,8 +22,9 @@ import { testConfig, testDatabase, testDeps } from "../helpers/service.js";
  * What the `agent` scope MEANS, which is not what the column says.
  *
  * The column only makes the value expressible. The content of the scope is
- * this: Syl's own credential reaches reminders, to-dos and goals, and nothing
- * else on the contract. Every assertion here is about a door being shut.
+ * this: Syl's own credential reaches reminders, to-dos, goals and a single read
+ * of her own memory, and nothing else on the contract. Every assertion here is
+ * about a door being shut.
  *
  * Two properties are load-bearing and neither is obvious from reading the
  * middleware:
@@ -119,6 +121,20 @@ const OUT_OF_REACH: [method: string, path: string, body?: unknown][] = [
   ["GET", "/sync"],
   ["GET", "/jobs"],
   ["GET", "/deliveries"],
+  // `syl-016.1` opened ONE route under `/memory` and these are the three it
+  // did not. They matter more than the rest of this list put together, because
+  // they are the doors that look adjacent to the one that was opened:
+  //
+  // - the FEEDBACK write moves the weight of an edge in her own memory. An
+  //   assistant that can confirm and reject her own inferences can groom what
+  //   she will be shown tomorrow, which is the `/logs` argument exactly;
+  // - `graph` and `metrics` are the Commander's instruments for judging the
+  //   inferred engine — every night's cost, token spend and outcome. That is
+  //   the dream log, which constraint 7 keeps out of memory on purpose.
+  ["POST", "/memory/edges/syl:memory_edge:nothing/feedback", { verdict: "confirm" }],
+  ["GET", "/memory/graph"],
+  ["GET", "/memory/metrics"],
+  ["GET", "/memory/constellation"],
 ];
 
 describe("the agent scope, over HTTP", () => {
@@ -154,6 +170,20 @@ describe("the agent scope, over HTTP", () => {
       });
 
       expect(response.status).toBe(201);
+    });
+
+    it("should let her search her own memory", async () => {
+      // `syl-016.1`. Her words: "I can't even see the nodes. I see a summary
+      // someone else chose for me." This is the door that answers that, and it
+      // is the only one under `/memory` she gets — the three next to it are in
+      // OUT_OF_REACH above.
+      //
+      // No query, so it opens the working-memory overflow rather than
+      // searching, which is the path that needs no `vec0` and therefore the one
+      // that can be asserted on every machine.
+      const response = await call("GET", "/memory/recall", { token: agentToken() });
+
+      expect(response.status).toBe(200);
     });
 
     it("should let her reach a single reminder by id, not merely the collection", async () => {
@@ -270,8 +300,15 @@ describe("the agent scope, over HTTP", () => {
  * the other from the requirement.
  */
 describe("everything the agent scope cannot reach, swept from the router", () => {
-  /** Her three nouns, written down rather than imported. See above. */
-  const HERS: readonly string[] = ["/reminders", "/todos", "/goals"];
+  /**
+   * Her nouns, written down rather than imported. See above.
+   *
+   * `/memory/recall` is the FULL path and not `/memory`, and that is the whole
+   * of what `syl-016.1` decided: writing `/memory` here would make this sweep
+   * agree that every route in `routes/memory.ts` is hers, including the one
+   * that writes to the weight of her own memories.
+   */
+  const HERS: readonly string[] = ["/reminders", "/todos", "/goals", "/memory/recall"];
 
   /**
    * The two operations that answer without a token, and why each must.
@@ -482,13 +519,56 @@ describe("AGENT_SURFACE", () => {
     // A canary on the boundary itself. Adding to this list is a decision about
     // what Syl can do on the Commander's machine, so it should not be possible
     // to make it as a side effect of some other change.
-    expect([...AGENT_SURFACE].sort()).toEqual(["/goals", "/reminders", "/todos"]);
+    //
+    // `/memory/recall` was added deliberately by `syl-016.1` — she could read a
+    // digest somebody else had ranked for her and nothing more — and it is
+    // spelled out to the route rather than to the router precisely so that this
+    // line stays a canary. `/memory` here would have quietly granted the
+    // feedback write, the graph and the dream metrics along with it.
+    expect([...AGENT_SURFACE].sort()).toEqual([
+      "/goals",
+      "/memory/recall",
+      "/reminders",
+      "/todos",
+    ]);
+  });
+
+  it("should not open the rest of the memory router by prefix", () => {
+    // The property the entry rests on: `withinAgentSurface` matches on segment
+    // boundaries, so a longer path under `/memory` is not covered by a shorter
+    // entry. Asserted here as well as over HTTP because this is the reason the
+    // entry is safe, and it should fail on its own terms if it stops holding.
+    expect(AGENT_SURFACE).not.toContain("/memory");
+    expect(AGENT_SURFACE.filter((path) => path.startsWith("/memory"))).toEqual([
+      "/memory/recall",
+    ]);
   });
 });
 
 describe("beyondAgentReach", () => {
   it("should name what she can do rather than only what she cannot", () => {
-    expect(beyondAgentReach("/api/v1/devices").message).toMatch(/reminders, to-dos and goals/u);
+    // The requirement, spelled out: she has to be able to turn this into a
+    // sentence for him. The sentence is DERIVED from `AGENT_SURFACES` rather
+    // than written beside it, so widening the list can never leave her telling
+    // him she cannot do something she can — the failure this project catalogues
+    // seven times over in `docs/CONTEXT.md` §8.
+    const message = beyondAgentReach("/api/v1/devices").message;
+
+    expect(message).toMatch(/reminders/u);
+    expect(message).toMatch(/to-dos/u);
+    expect(message).toMatch(/goals/u);
+    expect(message).toMatch(/her own memory/u);
+  });
+
+  it("should name every surface she has, so the sentence cannot go stale", () => {
+    // One side from the code, the other from the requirement — the same
+    // discipline as the sweep above. If a surface is added and the sentence
+    // does not move, this is what fails.
+    const message = beyondAgentReach("/api/v1/devices").message;
+
+    for (const surface of AGENT_SURFACES) {
+      expect(message, `${surface.path} is unnamed in the refusal`).toContain(surface.says);
+    }
   });
 
   it("should not be retryable — a scope does not change on a second try", () => {

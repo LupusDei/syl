@@ -204,7 +204,13 @@ describe("SylApiClient, when the service refuses", () => {
 
     expect(failure.status).toBe(403);
     expect(failure.code).toBe("FORBIDDEN");
-    expect(failure.message).toMatch(/reminders, to-dos and goals/u);
+    expect(failure.message).toMatch(/reminders/u);
+    // `syl-016.1` gave her a fourth surface, and this line is why the sentence
+    // is now RENDERED from `AGENT_SURFACES` rather than written beside it: it
+    // used to pin "reminders, to-dos and goals" as a literal, so widening what
+    // she may do would have left her reading out a refusal that named three of
+    // her four surfaces. Nothing would have failed — it is a fluent sentence.
+    expect(failure.message).toMatch(/her own memory/u);
   });
 
   it("should say her own credential stopped working, not 'Re-pair this device'", async () => {
@@ -235,7 +241,7 @@ describe("SylApiClient, when the service refuses", () => {
     // client that rewrote refusals would be a second opinion that drifts.
     const failure = failureOf(await client.get("/logs"));
 
-    expect(failure.message).toMatch(/reminders, to-dos and goals/u);
+    expect(failure.message).toMatch(/reminders, to-dos, goals and her own memory/u);
     expect(failure.message).not.toMatch(/credential is no longer accepted/u);
   });
 

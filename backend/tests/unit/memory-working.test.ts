@@ -131,6 +131,46 @@ describe("buildWorkingMemory", () => {
     expect(plan.included).toHaveLength(400 - plan.dropped.length);
   });
 
+  it("should say what KIND was left out, not merely how many — `syl-016.2`", () => {
+    // Her complaint, verbatim: "It says there are ten more items it isn't
+    // showing me." A bare count tells her she is deciding with a known gap and
+    // gives her nothing to weigh — ten dropped sources and ten dropped people
+    // are not remotely the same situation, and she could not tell which.
+    const plan = buildWorkingMemory(
+      [
+        ...many(4, { kind: "person" }),
+        ...many(3, { kind: "fact", salience: 0.5 }),
+      ].map((entry, index) => ({ ...entry, id: `syl:memory_node:${String(index)}` })),
+      { maxLines: 9 },
+    );
+
+    expect(plan.dropped.length).toBeGreaterThan(0);
+    // Named in the plural where there is more than one, singular where there is
+    // one: she reads this out, and "3 memory" is a schema leaking into it.
+    expect(plan.text).toMatch(/not shown here: \d+ (person|people|fact|facts)/u);
+  });
+
+  it("should tell her how to open what it is hiding, now that she can", () => {
+    // An omission count with no way to reach it is worse than a shorter list.
+    // This line was "Search deep memory for anything specific" for months while
+    // she had no tool that could — an instruction outliving its capability,
+    // which is the failure this project keeps catching in prose.
+    const plan = buildWorkingMemory(many(400));
+
+    expect(plan.text).toContain("recall");
+  });
+
+  it("should size the notice it will really print, not one from a count", () => {
+    // The budget is measured against the rendered text, and the notice now
+    // varies with what was dropped. A trial render sized from a count and a
+    // final render printed from a list would be two answers to one question,
+    // and the budget would silently be the wrong one.
+    const plan = buildWorkingMemory(many(400));
+
+    expect(plan.bytes).toBe(Buffer.byteLength(plan.text, "utf8"));
+    expect(plan.bytes).toBeLessThanOrEqual(WORKING_MEMORY_MAX_BYTES);
+  });
+
   it("should drop the LEAST salient tail, never the most salient head", () => {
     const plan = buildWorkingMemory(many(400));
     const first = many(400)[0];
@@ -178,6 +218,108 @@ describe("buildWorkingMemory", () => {
       buildWorkingMemory(kinds.map((kind, index) => candidate({ id: `n${String(index)}`, kind })))
         .dropped,
     ).toEqual([]);
+  });
+});
+
+describe("WorkingMemory.overflow", () => {
+  /**
+   * A projection squeezed by LINES rather than bytes.
+   *
+   * The byte budget has a floor — the note alone is 200-odd bytes, and
+   * `regenerate` refuses a projection over budget even with nothing admitted —
+   * so squeezing that way would exercise the overflow *guard* instead of the
+   * overflow.
+   */
+  const working = (): WorkingMemory =>
+    new WorkingMemory({ db, graph, clock: fixedClock(NOW), maxLines: 9 });
+
+  function crowd(): void {
+    graph.addNode({ kind: "person", label: "the Commander" });
+    graph.addNode({ kind: "person", label: "his wife" });
+    graph.addNode({ kind: "goal", label: "sell the house" });
+    graph.addNode({ kind: "fact", label: "he sleeps badly in August" });
+    graph.addNode({ kind: "decision", label: "no metered API, ever" });
+  }
+
+  it("should be exactly what the projection could not fit", () => {
+    // The property that makes this trustworthy: one admission rule, in one
+    // function, producing both the text she reads and the list she can open.
+    // A stored list of dropped ids would be a second answer to the same
+    // question, going stale the moment the graph moved.
+    crowd();
+    const memory = working();
+    const plan = memory.regenerate().plan;
+
+    const overflow = memory.overflow({ limit: 1_000 });
+
+    expect(overflow.items.map((item) => item.id)).toEqual(plan.dropped);
+    expect(overflow.total).toBe(plan.dropped.length);
+  });
+
+  it("should carry the ids, because an id is what every other verb needs", () => {
+    crowd();
+
+    for (const item of working().overflow({ limit: 1_000 }).items) {
+      expect(item.id).toMatch(/^syl:memory_node:/u);
+      expect(item.label).not.toBe("");
+    }
+  });
+
+  it("should count the overflow by kind, in the order the sections run", () => {
+    crowd();
+
+    const overflow = working().overflow({ limit: 1_000 });
+    const order = overflow.byKind.map((entry) => entry.kind);
+
+    expect(overflow.byKind.reduce((sum, entry) => sum + entry.count, 0)).toBe(overflow.total);
+    expect(order).toEqual(
+      WORKING_MEMORY_SECTIONS.map((section) => section.kind).filter((kind) => order.includes(kind)),
+    );
+    // No zero rows: a kind that was not dropped is not part of the omission.
+    expect(overflow.byKind.every((entry) => entry.count > 0)).toBe(true);
+  });
+
+  it("should narrow to one kind while still reporting the whole omission", () => {
+    // She reads "2 people, 1 fact" and asks for the people. Narrowing must not
+    // make the rest invisible — that is the original defect with an extra step.
+    crowd();
+    const memory = working();
+
+    const people = memory.overflow({ kind: "person", limit: 1_000 });
+
+    expect(people.items.every((item) => item.kind === "person")).toBe(true);
+    expect(people.matched).toBe(people.items.length);
+    expect(people.total).toBe(memory.overflow({ limit: 1_000 }).total);
+    expect(people.byKind).toEqual(memory.overflow({ limit: 1_000 }).byKind);
+  });
+
+  it("should report how many a limit held back, rather than looking complete", () => {
+    crowd();
+    const memory = working();
+    const whole = memory.overflow({ limit: 1_000 });
+
+    const first = memory.overflow({ limit: 1 });
+
+    expect(first.items).toHaveLength(1);
+    expect(first.matched).toBe(whole.total);
+  });
+
+  it("should be empty when the projection is hiding nothing", () => {
+    graph.addNode({ kind: "person", label: "the Commander" });
+
+    const overflow = new WorkingMemory({ db, graph, clock: fixedClock(NOW) }).overflow();
+
+    expect(overflow.items).toEqual([]);
+    expect(overflow.total).toBe(0);
+    expect(overflow.byKind).toEqual([]);
+  });
+
+  it("should not need the projection to have been regenerated first", () => {
+    // A brand-new install has no stored row at all. Recomputing from the graph
+    // means the overflow is answerable before the first night has ever run.
+    crowd();
+
+    expect(working().overflow({ limit: 1_000 }).total).toBeGreaterThan(0);
   });
 });
 
