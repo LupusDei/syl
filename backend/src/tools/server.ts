@@ -1194,13 +1194,20 @@ const seeMyself: ToolHandler = async (input, context) => {
   const looked = await context.client.get<{
     render: RenderRow;
     frames: readonly FrameRow[];
+    verdicts?: readonly { verdict: string; at: string }[];
   }>(
     `/renders/${encodeURIComponent(which)}/frames`,
     second === undefined ? {} : { at: second },
   );
   if (!looked.ok) return refused("see_myself", looked.failure);
 
-  const { render, frames } = looked.data;
+  const { render, frames, verdicts } = looked.data;
+
+  // WHAT SHE ALREADY CONCLUDED, arriving with the pictures rather than from a
+  // second call. This is the half that makes `judge_render` a loop rather than
+  // a diary — "a hundred renders with no record of what I made of them isn't a
+  // hundred attempts, it's one attempt made a hundred times".
+  const alreadySaid = (verdicts ?? []).map((row) => row.verdict);
 
   return {
     ok: true,
@@ -1219,10 +1226,45 @@ const seeMyself: ToolHandler = async (input, context) => {
       // Without it she has four images and no idea which one is the end.
       at: frames.map((frame) => frame.atSeconds),
       files: frames.map((frame) => frame.path),
+      // Newest first. Empty on the first look, which is honest rather than
+      // empty-as-in-broken: she has not judged this one yet.
+      alreadySaid,
     },
     at: null,
     images: frames.map((frame) => ({ mimeType: frame.mimeType, base64: frame.base64 })),
   };
+};
+
+/** Keep what she made of a render, after looking at it. */
+const judgeRender: ToolHandler = async (input, context) => {
+  const verdict = text(input, "verdict");
+  if (verdict === null) {
+    return missing(
+      "judge_render",
+      "verdict",
+      "I did not catch what you made of it. Say what was closer and what was wrong.",
+    );
+  }
+
+  if (text(input, "because") === null) {
+    return missing(
+      "judge_render",
+      "because",
+      "Tell me why you were looking — whether he asked, or you came back to it yourself.",
+    );
+  }
+
+  // Same default as `see_myself`, and for the same reason: she should be able
+  // to judge the thing she is looking at without knowing its generated name.
+  const which = text(input, "render") ?? "latest";
+
+  const kept = await context.client.post<{ readonly at: string }>(
+    `/renders/${encodeURIComponent(which)}/verdicts`,
+    { verdict },
+  );
+  if (!kept.ok) return refused("judge_render", kept.failure);
+
+  return { ok: true, action: "judge_render", subject: kept.data, at: kept.data.at };
 };
 
 /**
@@ -1368,6 +1410,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   change_goal: changeGoal,
   recall,
   render_me: renderMe,
+  judge_render: judgeRender,
   see_myself: seeMyself,
   show_him: showHim,
   whats_outstanding: whatsOutstanding,

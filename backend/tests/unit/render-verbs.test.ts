@@ -348,3 +348,103 @@ describe("see_myself", () => {
     expect(blocks.filter((block) => block.type === "image")).toEqual([]);
   });
 });
+
+/**
+ * `judge_render`, and the loop it closes (`syl-b0i`).
+ *
+ * `see_myself` has always told her to *"say what is closer and what is wrong, in
+ * your own terms"*, and she had nowhere to put the answer:
+ *
+ * > "A hundred renders with no record of what I made of them isn't a hundred
+ * > attempts, it's one attempt made a hundred times."
+ *
+ * Two halves, and the second is the one that matters. Keeping a verdict is
+ * easy; **handing it back at the moment she is looking again** is what makes it
+ * a loop rather than a diary.
+ *
+ * The Commander ruled these stay out of the memory graph — verdicts on her own
+ * face are not facts about his life, and the search ends once she likes the
+ * likeness — so nothing here touches `/memory`.
+ */
+describe("judge_render", () => {
+  it("should keep what she made of the render she is looking at", async () => {
+    const api = fakeApi({
+      "/renders/latest/verdicts": () => ok({ id: "v1", render: "r", verdict: "closer", at: NOW }, 201),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "judge_render", {
+      verdict: "The smile is right. The eyes sit too wide.",
+      because: "I came back to it myself.",
+    });
+
+    const post = api.calls.find((made) => made.method === "POST");
+    expect(post?.path).toBe("/renders/latest/verdicts");
+    expect(post?.body).toMatchObject({ verdict: "The smile is right. The eyes sit too wide." });
+    expect(envelope).toMatchObject({ ok: true, action: "judge_render" });
+  });
+
+  it("should default to the most recent, so she need not know a generated name", async () => {
+    const api = fakeApi({
+      "/renders/latest/verdicts": () => ok({ id: "v1", render: "r", verdict: "x", at: NOW }, 201),
+    });
+
+    await call(contextFor(api.fetch), "judge_render", { verdict: "closer", because: "He asked." });
+
+    expect(api.calls.find((made) => made.method === "POST")?.path).toBe("/renders/latest/verdicts");
+  });
+
+  it("should refuse an empty verdict rather than record that she concluded nothing", async () => {
+    const api = fakeApi({});
+
+    const { envelope } = await call(contextFor(api.fetch), "judge_render", { verdict: "   ", because: "He asked." });
+
+    expect(envelope.ok).toBe(false);
+    expect(api.calls.some((made) => made.method === "POST")).toBe(false);
+  });
+
+  it("should be a verb she is actually offered", () => {
+    expect(advertisedToolNames()).toContain("judge_render");
+    expect(TOOLS.map((tool) => tool.name)).toContain("judge_render");
+  });
+});
+
+describe("see_myself hands back what she already concluded", () => {
+  it("should carry her previous verdicts, so looking again is a second look", async () => {
+    const api = fakeApi({
+      "/renders/latest/frames": () =>
+        ok({
+          render: RECORD,
+          frames: [{ atSeconds: 0, path: "a.jpg", mimeType: "image/jpeg", base64: FRAME_B64 }],
+          verdicts: [
+            { verdict: "eyes too wide", at: NOW },
+            { verdict: "mouth is wrong", at: NOW },
+          ],
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
+
+    expect((envelope.subject as { alreadySaid: string[] }).alreadySaid).toEqual([
+      "eyes too wide",
+      "mouth is wrong",
+    ]);
+  });
+
+  it("should show her the render on the first look, with nothing said yet", async () => {
+    // Empty rather than absent, and honest either way: a render she has not
+    // judged has no verdicts, which is different from the notes failing to
+    // load. The verb must not read the first look as a broken one.
+    const api = fakeApi({
+      "/renders/latest/frames": () =>
+        ok({
+          render: RECORD,
+          frames: [{ atSeconds: 0, path: "a.jpg", mimeType: "image/jpeg", base64: FRAME_B64 }],
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
+
+    expect(envelope.ok).toBe(true);
+    expect((envelope.subject as { alreadySaid: string[] }).alreadySaid).toEqual([]);
+  });
+});

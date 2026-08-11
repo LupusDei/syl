@@ -24,6 +24,7 @@ import { Outbox } from "../../src/services/outbox.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
 import { SendingService } from "../../src/services/sending-service.js";
 import { SendingStore } from "../../src/services/sending-store.js";
+import { RenderVerdicts } from "../../src/render/verdicts.js";
 import { RenderWatchStore } from "../../src/services/render-watch-store.js";
 import { SyncService } from "../../src/services/sync-service.js";
 import { TodoService } from "../../src/services/todo-service.js";
@@ -177,6 +178,7 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
           log: () => undefined,
         }),
         renderWatches: new RenderWatchStore({ db: db.handle, clock }),
+        renderVerdicts: new RenderVerdicts({ db: db.handle, clock }),
       }),
     );
     token = keys.pair(keys.issuePairingCode().code, "Commander's iPhone").token;

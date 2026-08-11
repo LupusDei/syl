@@ -90,6 +90,20 @@ const UNDECLARED: readonly string[] = [
   "POST /renders",
   "GET /renders/{name}",
   "GET /renders/{name}/frames",
+  // `syl-b0i` — what she made of a render after looking at it. Joins the render
+  // debt above and inherits its argument: her tool server is the only client,
+  // it lives in this repository, and both shapes are pinned by
+  // `tests/unit/render-verbs.test.ts` and `tests/unit/render-verdicts.test.ts`.
+  //
+  // The GET is not a separate route in practice — verdicts also ride on
+  // `GET /renders/{name}/frames`, because handing them back at the moment she
+  // is looking again is what makes the write a loop rather than a diary. It
+  // exists on its own for a surface that wants the notes without the pictures.
+  //
+  // The POST is the write, and the one to publish first if a phone screen ever
+  // shows her renders: a second client would otherwise have to guess the body.
+  "POST /renders/{name}/verdicts",
+  "GET /renders/{name}/verdicts",
 ];
 
 /** Path parameters that are syntactically valid but name nothing. */

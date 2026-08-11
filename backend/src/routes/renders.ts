@@ -3,6 +3,7 @@ import { Router, type Request, type RequestHandler } from "express";
 import { FRAMING_IDS } from "../render/framing.js";
 import type { RenderService } from "../render/render-service.js";
 import { isRenderName } from "../render/studio.js";
+import { RenderVerdicts, VerdictError } from "../render/verdicts.js";
 import type { IdempotencyStore } from "../services/idempotency.js";
 import { ApiFailure, sendOk } from "./envelope.js";
 import { runIdempotentAsync, sendIdempotent } from "./idempotency.js";
@@ -37,6 +38,14 @@ import { runIdempotentAsync, sendIdempotent } from "./idempotency.js";
 
 export interface RenderRouterOptions {
   readonly renders: RenderService;
+  /**
+   * What she made of a render after looking at it (`syl-b0i`).
+   *
+   * Its own store rather than the memory graph, on the Commander's ruling: a
+   * verdict on her own face is not a fact about his life, and the search ends
+   * once she likes the likeness. See `render/verdicts.ts`.
+   */
+  readonly verdicts: RenderVerdicts;
   readonly idempotency: IdempotencyStore;
   readonly authenticate: RequestHandler;
 }
@@ -84,7 +93,7 @@ function atOf(request: Request): number | undefined {
 }
 
 export function createRenderRouter(options: RenderRouterOptions): Router {
-  const { renders, idempotency, authenticate } = options;
+  const { renders, idempotency, authenticate, verdicts } = options;
   const router = Router();
 
   router.use("/renders", authenticate);
@@ -141,6 +150,44 @@ export function createRenderRouter(options: RenderRouterOptions): Router {
     sendOk(response, { record, spend: renders.spend() });
   });
 
+  /**
+   * What she concluded, kept.
+   *
+   * `latest` is resolved the same way it is everywhere else here, so she can
+   * judge the thing she just looked at without knowing its generated name.
+   *
+   * NOT idempotent, and deliberately so: every other write on this surface
+   * guards against a retry creating a second row, and here a second row is the
+   * whole point. Looking again and concluding something new is the behaviour
+   * being kept — see `render/verdicts.ts` on why this store accumulates where
+   * the memory graph folds.
+   */
+  router.post("/renders/:name/verdicts", (request, response) => {
+    const asked = nameOf(request.params["name"]);
+    const name = asked === "latest" ? (renders.latest()?.name ?? null) : asked;
+    if (name === null) throw new ApiFailure("NOT_FOUND", "There is no render by that name.");
+
+    const body = bodyOf(request);
+    const verdict = typeof body["verdict"] === "string" ? body["verdict"] : "";
+    try {
+      response.status(201);
+      sendOk(response, verdicts.record({ render: name, verdict }));
+    } catch (error) {
+      if (error instanceof VerdictError) {
+        throw new ApiFailure("VALIDATION_FAILED", error.message, {
+          details: { reason: error.kind },
+        });
+      }
+      throw error;
+    }
+  });
+
+  router.get("/renders/:name/verdicts", (request, response) => {
+    const asked = nameOf(request.params["name"]);
+    const name = asked === "latest" ? (renders.latest()?.name ?? null) : asked;
+    sendOk(response, { items: name === null ? [] : verdicts.forRender(name) });
+  });
+
   router.get("/renders/:name/frames", (request, response, next) => {
     const name = nameOf(request.params["name"]);
     const at = atOf(request);
@@ -167,6 +214,17 @@ export function createRenderRouter(options: RenderRouterOptions): Router {
         sendOk(response, {
           render: looked.record,
           frames: looked.frames.frames,
+          // WHAT SHE ALREADY CONCLUDED, handed back with the pictures.
+          //
+          // Carried on this response rather than fetched separately, because
+          // this is the exact moment it is useful: she is looking again, and a
+          // verdict she cannot see when she looks is a diary rather than a loop
+          // (`syl-b0i`). One read, one round trip, and no second call that
+          // could fail on its own and cost her the picture.
+          //
+          // Resolved from the RECORD's name, not the requested one, so `latest`
+          // returns the verdicts of the render she was actually shown.
+          verdicts: verdicts.forRender(looked.record.name),
           spend: renders.spend(),
         });
       })

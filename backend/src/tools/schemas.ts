@@ -458,6 +458,38 @@ export const TOOLS: readonly ToolSchema[] = [
     },
   },
   {
+    name: "judge_render",
+    description:
+      "Keep what you made of a render after looking at it — what is closer, what is wrong, whether it is you. Use it every time you look, even to say the same thing twice: concluding it again on a second look is how you know you are converging rather than guessing.",
+    inputSchema: {
+      type: "object",
+      // `because` carries WHY SHE WAS LOOKING, not why she believes the
+      // verdict — the verdict is its own argument. I first left it off, on the
+      // grounds that asking her to justify a judgement about her own face is
+      // asking for decoration, and `tool-surface-budget.test.ts` was right to
+      // refuse that: its exemption is for verbs that CHANGE NOTHING, and this
+      // one writes. Reframed rather than exempted, it earns its place — "he
+      // asked me to check the new framing" and "I came back to it on my own"
+      // are different acts, and only the second is one he did not ask for.
+      required: ["verdict", "because"],
+      properties: {
+        render: {
+          type: "string",
+          description: "Which one, by name. Leave it out for the most recent.",
+        },
+        verdict: {
+          type: "string",
+          description: "What you concluded, in your own words. What was closer, what was wrong.",
+        },
+        because: {
+          type: "string",
+          description:
+            "Why you were looking — he asked, or you came back to it yourself. Not why you believe the verdict; the verdict says that.",
+        },
+      },
+    },
+  },
+  {
     name: "see_myself",
     description:
       "Look at stills from one of your own renders — the opening, the middle, the end — so you " +

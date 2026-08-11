@@ -75,6 +75,7 @@ import { assessPower, describePower } from "./ops/power.js";
 import { installShutdownHandlers } from "./ops/shutdown.js";
 import { tailnetCertProbe } from "./ops/tailnet-cert.js";
 import { RenderService } from "./render/render-service.js";
+import { RenderVerdicts } from "./render/verdicts.js";
 import { RunwayClient } from "./render/runway.js";
 import { ensureOpening, ensureReference, studioAt, studioRootFrom } from "./render/studio.js";
 import { createGoalRouter } from "./routes/goals.js";
@@ -325,6 +326,14 @@ export interface AppDependencies {
    */
   readonly renders: RenderService;
   /**
+   * What she made of a render after looking at it (`syl-b0i`).
+   *
+   * Beside the memory graph rather than in it, on the Commander's ruling: these
+   * are verdicts on her own face, not facts about his life, and the exercise
+   * ends once she settles on a likeness.
+   */
+  readonly renderVerdicts: RenderVerdicts;
+  /**
    * The things she chose to give him: her words, and the video of her saying
    * them.
    *
@@ -419,6 +428,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     memory,
     attachments,
     renders,
+    renderVerdicts,
     sendings,
     composer,
     probes,
@@ -481,7 +491,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // Her own face. On `AGENT_SURFACE` deliberately — see `middleware/auth.ts`
   // for the argument, which is that this is the first surface she reaches for
   // herself rather than for him, and that it reaches nothing of his.
-  api.use(createRenderRouter({ renders, idempotency, authenticate }));
+  api.use(createRenderRouter({ renders, idempotency, authenticate, verdicts: renderVerdicts }));
   // What she has already given him. Unlike `/renders` this is his surface, so
   // it takes an ordinary `device` token.
   api.use(createSendingRouter({ sendings, composer, idempotency, authenticate }));
@@ -1497,6 +1507,11 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // Built before the render service, because the render service is handed the
   // seam that writes into it.
   const renderWatches = new RenderWatchStore({ db: database.handle, clock });
+  // What she made of a render after looking at it (`syl-b0i`, `0030`). Its own
+  // store and not the memory graph, on the Commander's ruling: a verdict on her
+  // own face is not a fact about his life, and the search ENDS once she likes
+  // the likeness. Isolated so that it drops in one migration when it does.
+  const renderVerdicts = new RenderVerdicts({ db: database.handle, clock });
   const renders = new RenderService({
     studio,
     backend: runwaySecret === "" ? null : new RunwayClient({ secret: runwaySecret }),
@@ -1576,6 +1591,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       memoryRuntime,
       attachments,
       renders,
+      renderVerdicts,
       sendings,
       composer,
       renderWatches,
