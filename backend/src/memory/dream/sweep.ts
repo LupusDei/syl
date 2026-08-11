@@ -7,6 +7,13 @@ import {
   type MemoryNode,
 } from "../graph.js";
 import { encodeHoloFact, contradict, related, type HoloFact } from "../holographic-queries.js";
+import {
+  canonicalRelation,
+  inferredRelation,
+  isInferredRelation,
+  INFERRED_RELATIONS,
+  type InferredRelation,
+} from "../schema.js";
 import { crossingInstant, EdgeWeights } from "../weights.js";
 
 import { DreamLog, type DreamDisposition, type MemoryTier } from "./log.js";
@@ -79,6 +86,28 @@ import { DreamLog, type DreamDisposition, type MemoryTier } from "./log.js";
  * rejected**, which is a trust failure and must be loud.
  *
  *
+ * ## The kernel proposes a SHAPE; the judgment names the RELATION
+ *
+ * Tier 1 knows only that two memories are structurally alike or structurally
+ * at odds, so it can only ever say `resembles` or `contradicts`. Until
+ * `syl-017.1` that was also all any edge ever said, and Syl found the defect
+ * herself: *"Ela to Rowan is not resemblance, it's parenthood ... you can't
+ * ask 'who are his children.'"*
+ *
+ * So the judgment may name a relation, from the closed vocabulary in
+ * `schema.ts`, and may say which memory is the SUBJECT — because a directed
+ * relation pointing the wrong way is not a vaguer answer than `resembles`, it
+ * is a false one that looks exactly like a true one. {@link resolveRelation}
+ * is the whole of it, and it declines rather than guesses.
+ *
+ * **A relation is never edited onto an existing edge.** An edge's identity is
+ * `(source, target, relation)`, so a night that names a pair more precisely
+ * writes a NEW edge beside the vague one; the vague one keeps its own
+ * reasoning and decays on its own terms. That is constraint 6 one layer in —
+ * nothing is rewritten, nothing is destroyed — and it is why this bead needs no
+ * backfill and no supersession ledger.
+ *
+ *
  * ## Constraint 7: the log is telemetry ABOUT the graph
  *
  * This module writes to both stores and neither store writes to the other. No
@@ -100,11 +129,18 @@ export const CANDIDATE_KERNELS = ["related", "contradict", "embedding"] as const
 
 export type CandidateKernel = (typeof CANDIDATE_KERNELS)[number];
 
-/** The relation a structural proposal takes when the judgment accepts it. */
-export const RELATED_RELATION = "resembles";
+/**
+ * The relation a structural proposal takes when the judgment accepts it.
+ *
+ * Typed as an {@link InferredRelation} rather than a bare string, so a kernel
+ * cannot propose a relation the write path would refuse: dropping it from
+ * {@link INFERRED_RELATIONS} is a compile error here rather than a night of
+ * `unusable_candidate`.
+ */
+export const RELATED_RELATION: InferredRelation = "resembles";
 
 /** The relation a contradiction proposal takes when the judgment accepts it. */
-export const CONTRADICT_RELATION = "contradicts";
+export const CONTRADICT_RELATION: InferredRelation = "contradicts";
 
 /** What went wrong, as a closed set a caller can branch on. */
 export type SweepErrorKind =
@@ -237,14 +273,129 @@ export interface RunSweep {
   readonly now?: number;
 }
 
+/**
+ * Which endpoint of a candidate the judgment meant as the subject.
+ *
+ * `A` is the candidate's source and `B` its target, which is exactly how
+ * `buildJudgePrompt` labels them — one naming, so the model's answer and the
+ * write path cannot disagree about which memory is which.
+ */
+export type RelationSubject = "A" | "B";
+
 /** What Tier 2 decided about one candidate. */
 export interface Verdict {
   readonly disposition: DreamDisposition;
   /** WHY. Mandatory: an inference nobody can audit is a rumour. */
   readonly reasoning: string;
   readonly confidence?: number;
-  /** The judgment may name the relation more precisely than the kernel did. */
+  /**
+   * The judgment may name the relation more precisely than the kernel did.
+   *
+   * Checked against {@link INFERRED_RELATIONS}; anything outside it is a
+   * nomination rather than a write. See {@link resolveRelation}.
+   */
   readonly relation?: string;
+  /**
+   * Which memory is the subject, for a directed relation.
+   *
+   * Required for a directed relation and ignored for a symmetric one. A
+   * directed relation arriving without it is declined rather than guessed:
+   * half the time a coin flip is right, which is what makes it unfalsifiable.
+   */
+  readonly subject?: RelationSubject;
+}
+
+/** Why the judgment's chosen relation was not the one written. */
+export interface DeclinedRelation {
+  /** What the judgment asked for, canonicalised. The evidence for widening. */
+  readonly requested: string;
+  readonly why: "unknown_relation" | "no_direction";
+}
+
+/** A candidate's endpoints and relation, after the judgment has had its say. */
+export interface ResolvedRelation {
+  readonly relation: string;
+  readonly sourceNode: string;
+  readonly targetNode: string;
+  readonly symmetric: boolean;
+  /** Set when the judgment named a relation that was not written. */
+  readonly declined: DeclinedRelation | null;
+}
+
+/**
+ * What relation this verdict actually writes, and which way round.
+ *
+ * The whole of `syl-017.1`'s tension lives in this function, and it resolves it
+ * the way `tidy.ts` resolves the same one: **the vocabulary is closed, and
+ * anything outside it is a NOMINATION.** A relation the vocabulary does not
+ * hold does not kill the candidate and does not enter the graph — the
+ * connection is filed under the kernel's relation, which is what the dream did
+ * for every edge before this bead, and the word that was wanted is carried out
+ * on {@link ResolvedRelation.declined} for the log.
+ *
+ * A directed relation with no subject is declined for the same reason: the
+ * direction is the claim. `parent_of` pointing the wrong way is not a vaguer
+ * answer than `resembles`, it is a false one, and it looks exactly like a true
+ * one.
+ */
+export function resolveRelation(
+  candidate: {
+    readonly sourceNode: string;
+    readonly targetNode: string;
+    readonly relation: string;
+  },
+  verdict: Pick<Verdict, "relation" | "subject">,
+): ResolvedRelation {
+  const fallback: ResolvedRelation = {
+    relation: candidate.relation,
+    sourceNode: candidate.sourceNode,
+    targetNode: candidate.targetNode,
+    symmetric: inferredRelation(candidate.relation)?.symmetric ?? true,
+    declined: null,
+  };
+
+  const requested = canonicalRelation(verdict.relation);
+  if (requested === null) return fallback;
+
+  const spec = inferredRelation(requested);
+  if (spec === null) {
+    return { ...fallback, declined: { requested, why: "unknown_relation" } };
+  }
+  if (spec.symmetric) {
+    return { ...fallback, relation: spec.relation, symmetric: true };
+  }
+  if (verdict.subject !== "A" && verdict.subject !== "B") {
+    return { ...fallback, declined: { requested, why: "no_direction" } };
+  }
+
+  const forwards = verdict.subject === "A";
+  return {
+    relation: spec.relation,
+    sourceNode: forwards ? candidate.sourceNode : candidate.targetNode,
+    targetNode: forwards ? candidate.targetNode : candidate.sourceNode,
+    symmetric: false,
+    declined: null,
+  };
+}
+
+/**
+ * The sentence a declined relation leaves in the dream log.
+ *
+ * In the LOG and never on the edge. The reasoning the Commander reads is the
+ * part that was already good, and vocabulary bookkeeping is telemetry about the
+ * judgment rather than part of the inference — constraint 7's line, one layer
+ * in. It is also the only place the nomination survives, so it is the evidence
+ * behind any future widening of {@link INFERRED_RELATIONS}.
+ */
+function declinedNote(declined: DeclinedRelation, written: string): string {
+  const why =
+    declined.why === "unknown_relation"
+      ? `is not in the inferred-relation vocabulary`
+      : `is directed and the judgment did not say which memory is the subject`;
+  return (
+    `[relation] The judgment asked for "${declined.requested}", which ${why}, so the ` +
+    `connection was filed as "${written}".`
+  );
 }
 
 /** What actually happened to the graph, which is not always what was asked. */
@@ -642,13 +793,27 @@ export class DreamSweep {
       );
     }
 
-    const relation = verdict.relation?.trim() === undefined || verdict.relation.trim() === ""
-      ? candidate.relation
-      : verdict.relation.trim();
-    const target = { ...candidate, relation };
+    // The relation, the direction, and whether the judgment asked for something
+    // the vocabulary does not hold. `symmetric` is carried onto the target
+    // because `identityOf` reads it: a directed relation must NOT match its own
+    // reverse, or the direction would be decided by whichever night ran first.
+    const resolved = resolveRelation(candidate, verdict);
+    const relation = resolved.relation;
+    const target: SweepCandidate = {
+      ...candidate,
+      sourceNode: resolved.sourceNode,
+      targetNode: resolved.targetNode,
+      relation,
+      symmetric: resolved.symmetric,
+    };
+    // The log's copy, never the edge's. See `declinedNote`.
+    const logged =
+      resolved.declined === null
+        ? reasoning
+        : `${reasoning} ${declinedNote(resolved.declined, relation)}`;
 
     if (verdict.disposition === "rejected") {
-      return this.#justRecord(sessionId, turnIndex, target, "rejected", reasoning, verdict.confidence, {
+      return this.#justRecord(sessionId, turnIndex, target, "rejected", logged, verdict.confidence, {
         tierBefore: candidate.existing?.tier ?? null,
         tierAfter: candidate.existing?.tier ?? null,
       });
@@ -678,7 +843,7 @@ export class DreamSweep {
         targetNode: target.targetNode,
         tierBefore: existing.tier as MemoryTier,
         tierAfter: moved.tier as MemoryTier,
-        reasoning,
+        reasoning: logged,
         confidence: verdict.confidence ?? null,
       });
       this.#log.recordCounts(sessionId, { candidatesJudged: 1, edgesSuppressed: 1 });
@@ -686,7 +851,7 @@ export class DreamSweep {
     }
 
     if (existing !== null) {
-      return this.#reactivateOrRefuse(sessionId, turnIndex, target, existing, reasoning, verdict, false);
+      return this.#reactivateOrRefuse(sessionId, turnIndex, target, existing, logged, verdict, false);
     }
 
     // Nothing found, so write one. If the store refuses it, the identity lookup
@@ -697,7 +862,7 @@ export class DreamSweep {
       created = this.#write(target, reasoning, verdict.confidence ?? 0.5, now);
     } catch (cause) {
       if (cause instanceof GraphError && cause.kind === "duplicate_edge") {
-        return this.#recordBreach(sessionId, turnIndex, target, reasoning, verdict, cause);
+        return this.#recordBreach(sessionId, turnIndex, target, logged, verdict, cause);
       }
       throw new SweepError(
         "unusable_candidate",
@@ -716,7 +881,7 @@ export class DreamSweep {
       targetNode: target.targetNode,
       tierBefore: null,
       tierAfter: created.tier as MemoryTier,
-      reasoning,
+      reasoning: logged,
       confidence: verdict.confidence ?? null,
     });
     this.#log.recordCounts(sessionId, { candidatesJudged: 1, edgesCreated: 1 });
@@ -736,12 +901,31 @@ export class DreamSweep {
     return [...seeds, ...rest].slice(0, this.#limits.poolLimit);
   }
 
+  /**
+   * The one place an inferred edge enters the graph, and therefore the one
+   * place the vocabulary has to hold.
+   *
+   * {@link resolveRelation} already refuses anything outside
+   * {@link INFERRED_RELATIONS} that came from the JUDGMENT. This guards the
+   * other half — a candidate whose own relation is not in the vocabulary,
+   * which is what a corrupted checkpoint or a future kernel would look like.
+   * Guarding at the door rather than at the parser is the difference between a
+   * loud failure and a free-text relation walking in behind the parser's back.
+   */
   #write(
     target: { readonly sourceNode: string; readonly targetNode: string; readonly relation: string },
     reasoning: string,
     confidence: number,
     now: number,
   ): InferredEdge {
+    if (!isInferredRelation(target.relation)) {
+      throw new SweepError(
+        "unusable_candidate",
+        `"${target.relation}" is not an inferred relation. The vocabulary is closed so that ` +
+          `edges GROUP — forty relations each invented once are as untraversable as one label ` +
+          `used everywhere. Expected one of ${INFERRED_RELATIONS.map((spec) => spec.relation).join(", ")}.`,
+      );
+    }
     // The weight a fresh inference starts at, and the instant it will cross the
     // floor, both come from the weight law rather than from a literal here.
     const weight = Math.min(1, Math.max(this.#weights.law.relevanceFloor * 2, confidence));
@@ -832,9 +1016,17 @@ export class DreamSweep {
     // it, and asking a broken lookup to diagnose itself produces "existing_tier:
     // null", which is the one value that says nothing. Both exact identities
     // are tried explicitly before falling back.
+    //
+    // The REVERSED lookup only for a symmetric relation. `B parent_of A` is not
+    // a clashing spelling of `A parent_of B`, it is a different claim about a
+    // different pair of roles — and treating it as the clash would hand
+    // `#reactivateOrRefuse` an unrelated edge to boost.
+    const reversed = target.symmetric
+      ? this.#graph.findEdge(target.targetNode, target.sourceNode, target.relation)
+      : null;
     const clash =
       this.#graph.findEdge(target.sourceNode, target.targetNode, target.relation) ??
-      this.#graph.findEdge(target.targetNode, target.sourceNode, target.relation) ??
+      reversed ??
       this.identityOf(target);
 
     const suppressed = clash?.tier === "suppressed";

@@ -15,6 +15,7 @@ import {
 } from "../../src/memory/dream/judge.js";
 import { DreamSweep, RELATED_RELATION, type SweepCandidate } from "../../src/memory/dream/sweep.js";
 import { MemoryGraph } from "../../src/memory/graph.js";
+import { FALLBACK_INFERRED_RELATION, INFERRED_RELATIONS } from "../../src/memory/schema.js";
 import { EdgeWeights } from "../../src/memory/weights.js";
 import { instant, type Clock } from "../../src/services/clock.js";
 import { IN_MEMORY, openDatabase, type SylDatabase } from "../../src/services/database.js";
@@ -806,6 +807,143 @@ describe("parseVerdicts", () => {
       4,
     );
     expect(verdicts[0]?.confidence).toBeUndefined();
+  });
+
+  it("should read the relation and the subject the judgment named", () => {
+    const verdicts = parseVerdicts(
+      JSON.stringify({
+        verdicts: [
+          { id: 1, connect: true, reasoning: "she is his mother", relation: "parent_of", subject: "B" },
+        ],
+      }),
+      4,
+    );
+    expect(verdicts[0]?.relation).toBe("parent_of");
+    expect(verdicts[0]?.subject).toBe("B");
+  });
+
+  it("should canonicalise a relation rather than let three spellings become three relations", () => {
+    const verdicts = parseVerdicts(
+      JSON.stringify({
+        verdicts: [{ id: 1, connect: true, reasoning: "why", relation: " Parent Of ", subject: "a" }],
+      }),
+      4,
+    );
+    expect(verdicts[0]?.relation).toBe("parent_of");
+    expect(verdicts[0]?.subject).toBe("A");
+  });
+
+  it("should carry an unknown relation through rather than drop it, so the write path can log it", () => {
+    // Dropping it here would silently destroy the only evidence for widening
+    // the vocabulary. The refusal belongs at the door of the graph.
+    const verdicts = parseVerdicts(
+      JSON.stringify({ verdicts: [{ id: 1, connect: true, reasoning: "why", relation: "employs" }] }),
+      4,
+    );
+    expect(verdicts[0]?.relation).toBe("employs");
+  });
+
+  it("should ignore a subject that is not one of the two memories it was shown", () => {
+    const verdicts = parseVerdicts(
+      JSON.stringify({
+        verdicts: [{ id: 1, connect: true, reasoning: "why", relation: "parent_of", subject: "Ela" }],
+      }),
+      4,
+    );
+    expect(verdicts[0]?.subject).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Naming the relation. `syl-017.1`
+// ---------------------------------------------------------------------------
+
+describe("the relation vocabulary reaches the model and the graph", () => {
+  it("should render the vocabulary into the prompt from the schema, never a second list", () => {
+    const a = nodeId("one");
+    const b = nodeId("two");
+    const prompt = buildJudgePrompt([
+      { candidate: candidate(a, b), source: graph.getNode(a)!, target: graph.getNode(b)! },
+    ]);
+
+    for (const spec of INFERRED_RELATIONS) {
+      expect(prompt).toContain(spec.relation);
+      expect(prompt).toContain(spec.gloss);
+    }
+    // The reply shape has to carry both, or the model has nowhere to put them.
+    expect(prompt).toContain('"relation"');
+    expect(prompt).toContain('"subject"');
+  });
+
+  it("should tell the model that declining to name is a correct answer", () => {
+    const a = nodeId("one");
+    const b = nodeId("two");
+    const prompt = buildJudgePrompt([
+      { candidate: candidate(a, b), source: graph.getNode(a)!, target: graph.getNode(b)! },
+    ]);
+    expect(prompt).toContain(
+      `Use \`${FALLBACK_INFERRED_RELATION}\` whenever nothing more precise is warranted. That is a`,
+    );
+  });
+
+  it("should write the relation and direction a whole night decided", async () => {
+    const reply = JSON.stringify({
+      verdicts: [
+        { id: 1, connect: true, confidence: 0.9, reasoning: "he is her father", relation: "parent_of", subject: "B" },
+      ],
+    });
+    const fake = makeFakeClaude({ after: transcriptSaying(reply, 400) });
+    fakes.push(fake);
+
+    const commander = graph.addNode({ kind: "person", label: "the Commander" }).id;
+    const isla = graph.addNode({ kind: "person", label: "Isla" }).id;
+    const session = openNight();
+    const judge = new DreamJudge({
+      sweep,
+      log,
+      clock,
+      turnOptions: { claudeBin: fake.bin },
+      sessionStore: sessions,
+    });
+
+    // `candidate` normalises to id order, so "B" names whichever of the two
+    // sorts second — which is the point: the direction comes from the verdict,
+    // not from the ids.
+    const pair = candidate(commander, isla);
+    await judge.judge({ sessionId: session.id, candidates: [pair] });
+
+    const edges = graph.edgesBetween(commander, isla);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.relation).toBe("parent_of");
+    expect(edges[0]?.sourceNode).toBe(pair.targetNode);
+    expect(edges[0]?.targetNode).toBe(pair.sourceNode);
+  });
+
+  it("should still make the connection when the judgment names a relation nobody has defined", async () => {
+    const reply = JSON.stringify({
+      verdicts: [{ id: 1, connect: true, reasoning: "one contractor did both", relation: "invoiced_together" }],
+    });
+    const fake = makeFakeClaude({ after: transcriptSaying(reply, 400) });
+    fakes.push(fake);
+
+    const a = nodeId("the gutter was replaced");
+    const b = nodeId("the roof was inspected");
+    const session = openNight();
+    const judge = new DreamJudge({
+      sweep,
+      log,
+      clock,
+      turnOptions: { claudeBin: fake.bin },
+      sessionStore: sessions,
+    });
+
+    const report = await judge.judge({ sessionId: session.id, candidates: [candidate(a, b)] });
+
+    expect(report.created).toBe(1);
+    const edges = graph.edgesBetween(a, b);
+    expect(edges[0]?.relation).toBe(RELATED_RELATION);
+    // The nomination survives where a person can count it.
+    expect(log.reasoningOf(session.id)[0]?.reasoning).toContain("invoiced_together");
   });
 });
 

@@ -135,6 +135,175 @@ export const MEMORY_EDGE_SPECIES = ["observed", "inferred"] as const;
 export type MemoryEdgeSpecies = (typeof MEMORY_EDGE_SPECIES)[number];
 
 /**
+ * One relation the dream is allowed to write, and what it means.
+ *
+ * The source is ALWAYS the grammatical subject, so every gloss reads
+ * "A ⟨relation⟩ B". Stated once, here, because the judgment has to get
+ * direction right on every edge and a vocabulary where some relations read
+ * forwards and some backwards is a vocabulary that will be got wrong.
+ */
+export interface InferredRelationSpec {
+  /** The wire form: lower case, underscores, no spaces. What an index groups by. */
+  readonly relation: string;
+  /** True when the relation means the same thing read backwards. */
+  readonly symmetric: boolean;
+  /** Reads as "A ⟨gloss⟩". Shown to the judgment verbatim. */
+  readonly gloss: string;
+}
+
+/**
+ * The closed vocabulary of inferred relations. `syl-017.1`.
+ *
+ * Syl found the defect herself, and the diagnosis is the specification:
+ *
+ * > "Ela to Rowan is not resemblance, it's parenthood. The reasoning text is
+ * > good, but the relation label is uniform and empty, so nothing can be
+ * > traversed by type — **you can't ask 'who are his children.'**"
+ *
+ *
+ * ## Why closed, when free text is obviously more expressive
+ *
+ * **Free-text relations are as unqueryable as one label.** If every edge
+ * invents its own wording, `parent_of`, `is the parent of`, `father to` and
+ * `parent` are four relations, no query finds all four, and the graph is back
+ * where it started with more words in it. One uniform label and forty unique
+ * ones fail the same test: neither GROUPS.
+ *
+ * A closed set groups, and it will not fit something real. That is the tension,
+ * and it is `tidy.ts`'s nominate/act shape again — so the answer is the same
+ * one: **a relation outside this list is a NOMINATION, never a write.** The
+ * dream files the connection under the kernel's relation, the connection is
+ * still made, and the word the judgment wanted is recorded in the dream log.
+ * The log is then the evidence for widening this list, which is a decision a
+ * person makes from data rather than one every edge makes for itself.
+ *
+ * Adding an entry here is cheap and reversible. Discovering six months later
+ * that thirty edges each invented their own wording is neither.
+ *
+ *
+ * ## {@link FALLBACK_INFERRED_RELATION} is not a failure state
+ *
+ * `resembles` stays, and stays first. A vocabulary with no honest way to say
+ * "these are connected and I cannot name how" forces every connection into the
+ * nearest label that fits badly — which is the claim-beyond-evidence failure
+ * this project keeps finding, arriving through the schema that was supposed to
+ * make claims precise. The judgment is told, in those words, that declining to
+ * name is the right answer when nothing fits.
+ *
+ *
+ * ## What is deliberately ABSENT, and it is a boundary rather than an omission
+ *
+ * Every relation another module owns: `stated` and `about` (`extract-apply.ts`),
+ * `concerns` (`remember.ts`), `extracted` (`sources.ts`), `same_as`,
+ * `merged_into`, `label`, `body` and `kind` (`tidy.ts`).
+ *
+ * `stated` is extraction's word for **"HE asserted it"**. An inferred edge
+ * carrying it would read as testimony, and the species is exactly what is
+ * supposed to make that distinction unmistakable. `same_as` is worse: tidy
+ * splits nominating a duplicate from merging it precisely because acting on a
+ * similarity threshold is measured to collapse accuracy from 0.82 to 0.62, and
+ * a dream that could assert identity would be a route around that split.
+ *
+ * `backend/tests/unit/memory-relations.test.ts` asserts the disjointness
+ * against those modules' own constants, so this stays true by contact rather
+ * than by anyone remembering it.
+ */
+export const INFERRED_RELATIONS = [
+  {
+    relation: "resembles",
+    symmetric: true,
+    gloss: "and B are alike, and nothing more precise is warranted",
+  },
+  {
+    relation: "contradicts",
+    symmetric: true,
+    gloss: "and B cannot both be true",
+  },
+  {
+    relation: "parent_of",
+    symmetric: false,
+    gloss: "is a parent of B",
+  },
+  {
+    relation: "sibling_of",
+    symmetric: true,
+    gloss: "and B are siblings",
+  },
+  {
+    relation: "partner_of",
+    symmetric: true,
+    gloss: "and B are partners or spouses",
+  },
+  {
+    relation: "causes",
+    symmetric: false,
+    gloss: "brings B about, or B is true because of A",
+  },
+  {
+    relation: "motivates",
+    symmetric: false,
+    gloss: "is a reason for the goal or decision B",
+  },
+  {
+    relation: "blocks",
+    symmetric: false,
+    gloss: "stands in the way of B",
+  },
+  {
+    relation: "part_of",
+    symmetric: false,
+    gloss: "is a component or subdivision of B",
+  },
+  {
+    relation: "located_in",
+    symmetric: false,
+    gloss: "is situated in the place B",
+  },
+  {
+    relation: "precedes",
+    symmetric: false,
+    gloss: "happened before B, and the two are one story",
+  },
+] as const satisfies readonly InferredRelationSpec[];
+
+/** A relation the dream may write. */
+export type InferredRelation = (typeof INFERRED_RELATIONS)[number]["relation"];
+
+/**
+ * What a connection is filed as when nothing more precise is warranted.
+ *
+ * The relation every inferred edge carried before `syl-017.1`, kept as the
+ * honest answer rather than retired as the wrong one. See the vocabulary's
+ * header.
+ */
+export const FALLBACK_INFERRED_RELATION: InferredRelation = "resembles";
+
+/** Whether a value is a relation the dream may write. */
+export function isInferredRelation(value: unknown): value is InferredRelation {
+  return INFERRED_RELATIONS.some((spec) => spec.relation === value);
+}
+
+/** The spec for a relation, or `null` if the vocabulary does not hold it. */
+export function inferredRelation(value: unknown): InferredRelationSpec | null {
+  return INFERRED_RELATIONS.find((spec) => spec.relation === value) ?? null;
+}
+
+/**
+ * A relation in its wire form, or `null` if there is nothing there.
+ *
+ * Models write `Parent_Of`, `parent of` and `parent-of` for the one relation,
+ * and three spellings of one thing is the free-text failure arriving through
+ * the back door. Canonicalising is not the same as accepting: what comes out of
+ * here is still checked against {@link INFERRED_RELATIONS}, and `employs` stays
+ * `employs`.
+ */
+export function canonicalRelation(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const canonical = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return canonical === "" ? null : canonical;
+}
+
+/**
  * Id namespaces.
  *
  * `syl:<type>:<uuidv7>`, the project-wide convention from `services/id.ts`.
