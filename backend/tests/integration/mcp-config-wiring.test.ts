@@ -298,10 +298,11 @@ describe("which lane the service actually gives them to", () => {
   }
 
   it("should be exactly the lanes declared to have hands, and no other", async () => {
-    // Two now, and the second one is the widening `syl-hb` made: the hourly
-    // self-ping is the one other lane that acts. It is stated as a list rather
-    // than as two names so that this test asks the real question — *does the
-    // wiring match the declaration* — rather than restating today's answer.
+    // Three now: his own conversation, the hourly self-ping (`syl-hb`) and the
+    // morning brief. Each widening was argued where the list lives. It is
+    // stated as a list rather than as three names so that this test asks the
+    // real question — *does the wiring match the declaration* — rather than
+    // restating today's answer.
     const home = aHome();
     const lanes = lanesOf(home);
 
@@ -318,8 +319,8 @@ describe("which lane the service actually gives them to", () => {
       }
 
       // The dream must not be able to write a reminder while judging what
-      // matters; the agenda reads rather than acts; the extraction turn is a
-      // sealed reader over text he may have pasted from anywhere.
+      // matters; the extraction turn is a sealed reader over text he may have
+      // pasted from anywhere.
       for (const lane of Object.values(LANES)) {
         if (LANES_WITH_HANDS.includes(lane)) continue;
         expect(lanes.options.get(lane)?.mcpConfig, `${lane} was given hands`).toBeUndefined();

@@ -75,10 +75,15 @@ const INTENDED_MCP: Readonly<
   // ever records words as HIS, so `harness/urgency.ts` has nothing to verify an
   // urgency claim against and the Outbox holds everything until the window ends.
   heartbeat: toolConfigPath,
-  // Still nothing, and each for its own reason: the agenda reads rather than
-  // acts, and the dream must not be able to write a reminder while judging what
-  // matters.
-  agenda: undefined,
+  // AND THE MORNING BRIEF, which is the third entry and the least surprising
+  // of them. This lane's whole job is to compose his day and put it where he
+  // will find it before the 07:00 note announces it; a brief she could not
+  // file would exist only in a run record nobody reads, which is the state
+  // `jobs/agenda-job.ts` was written to end. Same declaration again — one
+  // narrow named surface, not a third one nobody reviewed.
+  agenda: toolConfigPath,
+  // Still nothing: the dream must not be able to write a reminder while judging
+  // what matters.
   consolidation: undefined,
   // The extraction turn reads a conversation, and a conversation is untrusted
   // the moment he pastes an article into it. It is a READER turn — no built-ins
