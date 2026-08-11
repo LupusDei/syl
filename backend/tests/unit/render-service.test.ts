@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { fixedClock } from "../../src/services/clock.js";
-import { RenderService } from "../../src/render/render-service.js";
+import { RenderService, type RenderRecord } from "../../src/render/render-service.js";
 import type { RenderBackend, RunwayResult, RunwayTask, SubmitSpec } from "../../src/render/runway.js";
 import { DEFAULT_OPENING, studioAt } from "../../src/render/studio.js";
 
@@ -275,6 +275,95 @@ describe("asking for a render", () => {
 
     await service.drain();
     expect(service.list().filter((r) => r.status === "ready").length).toBe(1);
+  });
+});
+
+describe("arranging to come back and look", () => {
+  /**
+   * The Commander's ruling, 2026-08-11, at the seam where it starts.
+   *
+   * > *"when Syl triggers a video to be rendered she needs some kind of wake up
+   * > mechanism five minutes later to check to see whether or not it's done and
+   * > whether or not she wants to send it to me"*
+   *
+   * The wake is arranged HERE, at submission — not when the render finishes,
+   * because a render that never finishes is exactly the case that must not
+   * silently vanish.
+   */
+  function serviceWatching(seen: RenderRecord[], watch?: () => void): RenderService {
+    return new RenderService({
+      studio,
+      backend: fakeBackend(),
+      clock: fixedClock(NOW),
+      sleep: async () => undefined,
+      watch: (record) => {
+        seen.push(record);
+        watch?.();
+      },
+    });
+  }
+
+  it("should arrange the wake for every render it starts", async () => {
+    const seen: RenderRecord[] = [];
+    const service = serviceWatching(seen);
+
+    const started = await service.start(ASK);
+    await service.drain();
+
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    expect(seen.map((record) => record.name)).toEqual([started.record.name]);
+    // Arranged while the render is still going, so the promise to look exists
+    // from the same moment the render does.
+    expect(seen[0]?.status).toBe("rendering");
+    // Carrying her reason, which is what the wake has to remind her with: the
+    // review happens on a fresh thread that remembers nothing.
+    expect(seen[0]?.because).toBe(ASK.because);
+  });
+
+  it("should not arrange a wake for a render that was never submitted", async () => {
+    // Nothing was made and nothing was spent, so there is nothing to come back
+    // to. A watch here would wake her about a render that does not exist.
+    const seen: RenderRecord[] = [];
+    const service = new RenderService({
+      studio,
+      backend: fakeBackend({
+        submit: { ok: false, failure: { message: "Runway answered 402.", retryable: false } },
+      }),
+      clock: fixedClock(NOW),
+      sleep: async () => undefined,
+      watch: (record) => seen.push(record),
+    });
+
+    await service.start(ASK);
+
+    expect(seen).toHaveLength(0);
+  });
+
+  it("should never let a failed watch cost a render that has already been paid for", async () => {
+    // A credit is spent by the time this runs. Turning a submitted render into
+    // a refusal because a row could not be written would lose the thing that
+    // was actually bought — so the failure is reported and the render stands.
+    const seen: RenderRecord[] = [];
+    const errors: unknown[] = [];
+    const service = new RenderService({
+      studio,
+      backend: fakeBackend(),
+      clock: fixedClock(NOW),
+      sleep: async () => undefined,
+      watch: (record) => {
+        seen.push(record);
+        throw new Error("the database is gone");
+      },
+      onError: (error) => errors.push(error),
+    });
+
+    const started = await service.start(ASK);
+    await service.drain();
+
+    expect(started.ok).toBe(true);
+    expect(seen).toHaveLength(1);
+    expect(errors).toHaveLength(1);
   });
 });
 

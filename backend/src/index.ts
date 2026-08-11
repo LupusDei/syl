@@ -25,6 +25,13 @@ import {
   ensureHeartbeatJob,
 } from "./jobs/heartbeat-job.js";
 import {
+  createRenderReviewHandler,
+  describeRenderReview,
+  ensureRenderReviewJob,
+  FIRST_LOOK_MS,
+  RENDER_REVIEW_KIND,
+} from "./jobs/render-review-job.js";
+import {
   createMorningAgendaHandler,
   describeAgenda,
   ensureMorningAgendaJob,
@@ -126,6 +133,7 @@ import { Outbox } from "./services/outbox.js";
 import { PresenceService } from "./services/presence.js";
 import { ReminderService } from "./services/reminder-service.js";
 import { SendingService } from "./services/sending-service.js";
+import { RenderWatchStore } from "./services/render-watch-store.js";
 import { SendingStore } from "./services/sending-store.js";
 import { SyncService, type SyncResolvers } from "./services/sync-service.js";
 import { TodoService } from "./services/todo-service.js";
@@ -327,6 +335,14 @@ export interface AppDependencies {
    */
   readonly sendings: SendingStore;
   readonly composer: SendingService;
+  /**
+   * The promises to come back and look at a render she started.
+   *
+   * On `AppDeps` rather than kept inside the boot function because the render
+   * review job reads it, and because a promise nobody can enumerate is a
+   * promise nobody can tell was dropped.
+   */
+  readonly renderWatches: RenderWatchStore;
   /** Extra health probes. The billing check is always present. */
   readonly probes?: readonly HealthProbe[];
   /**
@@ -1401,10 +1417,29 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       );
     }
   }
+  // The promises to come back and look, one per render (`0026_render_watches.sql`).
+  // Built before the render service, because the render service is handed the
+  // seam that writes into it.
+  const renderWatches = new RenderWatchStore({ db: database.handle, clock });
   const renders = new RenderService({
     studio,
     backend: runwaySecret === "" ? null : new RunwayClient({ secret: runwaySecret }),
     clock,
+    // HER WAKE-UP, ARRANGED AT THE MOMENT THE RENDER STARTS. The Commander's
+    // ruling, 2026-08-11: nothing reaches him when a render is asked for, and
+    // five minutes later she comes back, looks at what came out, and decides.
+    // A row rather than a timer, so the promise survives the restart that a
+    // deploy inside that five-minute window would otherwise cost.
+    watch: (record) => {
+      renderWatches.watch({
+        renderName: record.name,
+        // Her own reason, carried forward: the review happens on a fresh thread
+        // that remembers nothing, and without it she is handed a
+        // machine-generated name and asked to have an opinion.
+        because: record.because,
+        checkAt: clock() + FIRST_LOOK_MS,
+      });
+    },
   });
   // A render the last process was mid-poll on. Without this the sidecar says
   // `rendering` forever and she tells him something is coming that never was —
@@ -1467,6 +1502,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       renders,
       sendings,
       composer,
+      renderWatches,
       presence,
       intakeQueue,
       // The same clock every store above was built on — not a second one. See
@@ -1767,6 +1803,12 @@ export async function startSyl(
   // so the brief exists before he is told it does.
   const agendaSchedule = { tz: config.quietHours.tz, quiet: config.quietHours.quiet };
   const agendaJob = ensureMorningAgendaJob(deps.jobs, agendaSchedule, clock());
+  // Coming back to look at a render she started. Scheduled from NOW rather than
+  // an interval out: its trigger is an event and computes no instant of its
+  // own, so a row defined without one is a row `due` never returns — and a
+  // render started in the first minutes of a boot would be stranded with
+  // nothing anywhere to notice.
+  const renderReviewJob = ensureRenderReviewJob(deps.jobs, clock());
 
   const runtime = createDeliveryRuntime({
     jobs: deps.jobs,
@@ -1804,6 +1846,30 @@ export async function startSyl(
           jobs: deps.jobs,
           ...heartbeatSchedule,
           // A failed hour is silent to him and loud here.
+          ...(options.logger === undefined ? {} : { log: options.logger }),
+        }),
+      ],
+      [
+        RENDER_REVIEW_KIND,
+        createRenderReviewHandler({
+          // The studio lane, bound once. It carries the same MCP declaration
+          // the commander lane does — see `LANES_WITH_HANDS` — because the
+          // whole turn exists to reach a decision, and the decision is a verb.
+          voice: agent.forLane(LANES.studio),
+          watches: deps.renderWatches,
+          // Two readers, never the service: a pass deciding whether the last
+          // render was any good must not be able to start another one.
+          renders: deps.renders,
+          // The idempotency guard. A wake that sent and then died comes back to
+          // a render he already has, and this is what stops it sending twice.
+          sendings: deps.sendings,
+          // The ledger, shared with the hour: a render she sends spends from
+          // the same day's allowance an hour that reaches him does.
+          jobs: deps.jobs,
+          tz: config.quietHours.tz,
+          quiet: config.quietHours.quiet,
+          // A review that died, and one that was given up on, are reported
+          // here and nowhere near him.
           ...(options.logger === undefined ? {} : { log: options.logger }),
         }),
       ],
@@ -1866,6 +1932,8 @@ export async function startSyl(
       ...describeHeartbeat(deps.jobs.get(heartbeatJob.id) ?? heartbeatJob, heartbeatSchedule),
       // Re-read for the same reason.
       ...describeAgenda(deps.jobs.get(agendaJob.id) ?? agendaJob, agendaSchedule),
+      // Re-read for the same reason.
+      ...describeRenderReview(deps.jobs.get(renderReviewJob.id) ?? renderReviewJob),
       ...describePushEnvironment(push, { pushConfigured: runtime.pushEnabled }),
       ...describePower(power),
       ...describeAdmin(admin),

@@ -67,6 +67,13 @@ export class SendingStoreError extends Error {
     | "empty_words"
     | "empty_because"
     | "empty_reason"
+    // Named here rather than in `sending-service.ts` because a caller catching
+    // a refusal from `compose` should not have to import two error types to
+    // find out what it caught. Both are refusals about the RENDER, and both
+    // happen before a message is appended: `unknown_render` is a name she got
+    // wrong, `render_not_ready` is a clip that is still going or that failed.
+    | "unknown_render"
+    | "render_not_ready"
     | "unknown_message"
     | "unknown_sending"
     | "unknown_attachment"
@@ -295,6 +302,30 @@ export class SendingStore {
       .all();
 
     return rows.map((row) => this.#hydrate(row as unknown as SendingRow));
+  }
+
+  /**
+   * Has anything already been sent from this render?
+   *
+   * The idempotency guard on the deferred wake. `jobs/render-review-job.ts`
+   * wakes her to decide about one render, and a wake that ran, sent, and then
+   * died before it could settle its watch would come back to a render she has
+   * already given him — a second decision about one thing, and if she says yes
+   * twice he gets two notifications for one video. The push's own
+   * `sending:<id>` key cannot help there, because the second send is a
+   * different sending with a different id.
+   *
+   * Deliberately a question about the RENDER rather than about a watch, so it
+   * is true of a sending composed by any path — the review turn, an hour, or
+   * the Commander's own conversation.
+   */
+  existsForRender(renderName: string): boolean {
+    const name = renderName.trim();
+    if (name === "") return false;
+    return (
+      this.#db.prepare("SELECT 1 FROM sendings WHERE render_name = ? LIMIT 1").get(name) !==
+      undefined
+    );
   }
 
   /**

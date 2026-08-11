@@ -1214,14 +1214,24 @@ async function chooseARender(context: ToolContext): Promise<ToolEnvelope> {
  * is the caller that keeps that true from above. She renders with `render_me`,
  * looks with `see_myself`, and sends what she already made.
  *
- * ## A render that is missing is still a success, and that is the feature
+ * ## A render that is not finished is a refusal, and that is the feature
  *
- * By the time anything looks at the video her words are already in his
- * conversation and already carried the notification. So a name she
- * half-remembered comes back `201`, with `state: "failed"` and a reason on the
- * row — not as a refusal. Reporting it as a failure would have her apologising
- * for a message he has read. The only refusals here are about the WORDS, and
- * every one of them happens before anything is written.
+ * The opposite of what this said until the Commander's ruling of 2026-08-11,
+ * and the reversal is the point. A name she half-remembered, or a clip that is
+ * still rendering, used to come back `201` with `state: "failed"` on the row —
+ * on the grounds that her words had already been said and already carried the
+ * notification, so reporting a failure would have her apologising for a message
+ * he had read. What that actually produced was **a buzz about a video that did
+ * not exist**.
+ *
+ * So `POST /sendings` now resolves the render first and refuses one that is not
+ * `ready`, before a message exists. She gets a sentence saying which render and
+ * why, and nothing has reached him — which is a thing she can act on. The
+ * ordinary way to reach this verb is `jobs/render-review-job.ts`, which wakes
+ * her five minutes after a render starts, on a turn whose whole subject is that
+ * clip; by then it is finished and this refusal never fires.
+ *
+ * Every refusal here still happens before anything is written.
  *
  * ## Why it will not go without a face, and will not take `latest`
  *
@@ -1270,8 +1280,9 @@ const showHim: ToolHandler = async (input, context) => {
 
   // Read back, like every other write — `syl-009.3.4`, and it earns its place
   // here: what comes back says `pending` rather than `ready`, because the
-  // video is still being made. Reporting the write's own optimism would have
-  // her describing a clip that does not exist yet.
+  // playable copy is still being compressed out of a render that has already
+  // finished. Reporting the write's own optimism would have her describing a
+  // clip that is not on the row yet.
   return readBack(
     "show_him",
     context,

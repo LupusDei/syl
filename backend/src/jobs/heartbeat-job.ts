@@ -102,6 +102,30 @@ export const SENDINGS_PER_DAY = 4;
  */
 export const REACHES_HIM: readonly string[] = ["remind_me", "show_him"];
 
+/**
+ * The job kinds whose runs spend from the day's allowance.
+ *
+ * **The ceiling is a property of HER, not of one job**, and this list is what
+ * keeps that true as the ways she can reach him multiply. The hour used to be
+ * the only unattended turn that could put something in front of him, so
+ * counting runs of the heartbeat job was the same thing as counting how often
+ * she had reached him. `render_review` broke that identity: the hour now
+ * starts a render and a *different* job, minutes later, makes the decision to
+ * send it. Counting one job would have moved every sending outside the bound
+ * without a line of code saying so — a limit silently repealed by a feature
+ * that never mentioned it.
+ *
+ * `morning_agenda` is deliberately NOT here. The brief is a fixed slot in his
+ * rhythm that he is already expecting, announced by a note at 07:00; spending
+ * the day's spare-time allowance on it would mean a morning brief could use up
+ * what she had for the afternoon.
+ *
+ * `maintenance` is the render review. It is filed under that kind rather than
+ * under one of its own because widening `jobs.kind` would cost the run ledger —
+ * the argument is in `jobs/render-review-job.ts`, beside `RENDER_REVIEW_KIND`.
+ */
+export const REACHING_KINDS: readonly string[] = ["heartbeat", "maintenance"];
+
 /** How far back the ledger looks. Two and a half days of hourly runs. */
 const LEDGER_DEPTH = 64;
 
@@ -328,6 +352,47 @@ interface Ledger {
   readonly lastDay: string | null;
 }
 
+/** The local day a run started on, or `null` for an instant that will not parse. */
+function dayOf(startedAt: string, tz: string): string | null {
+  const at = parseInstant(startedAt);
+  return at === null ? null : localDate(new Date(at), tz);
+}
+
+/**
+ * How many times she has reached him since local midnight.
+ *
+ * Counted across {@link REACHING_KINDS} rather than over one job, so a sending
+ * decided on the `studio` lane spends from the same day as an hour that
+ * reached him. Exported because `jobs/render-review-job.ts` reads the same
+ * number — two implementations of one ceiling is two ceilings, and the one
+ * that drifts is the one nobody is looking at.
+ *
+ * `exceptRunId` is this pass's own run row, which `JobRunner` opens before
+ * calling the handler. It is excluded by id rather than by guesswork about
+ * ordering.
+ */
+export function reachedHimToday(
+  jobs: Pick<JobStore, "listRuns">,
+  options: {
+    readonly exceptRunId: string;
+    readonly now: number;
+    readonly tz: string;
+    readonly kinds?: readonly string[];
+  },
+): number {
+  const runs = jobs
+    .listRuns({ kinds: options.kinds ?? REACHING_KINDS, limit: LEDGER_DEPTH })
+    .items.filter((run) => run.id !== options.exceptRunId);
+
+  const today = localDate(new Date(options.now), options.tz);
+
+  let spent = 0;
+  for (const run of runs) {
+    if (run.spoke && dayOf(run.startedAt, options.tz) === today) spent += 1;
+  }
+  return spent;
+}
+
 function readLedger(
   jobs: Pick<JobStore, "listRuns">,
   jobId: string,
@@ -335,28 +400,17 @@ function readLedger(
   now: number,
   tz: string,
 ): Ledger {
-  // This pass's own run row already exists — `JobRunner` starts it before
-  // calling the handler — so it is excluded by id rather than by guesswork
-  // about ordering.
-  const runs = jobs
-    .listRuns({ jobId, limit: LEDGER_DEPTH })
-    .items.filter((run) => run.id !== exceptRunId);
+  // The previous HOUR, from this job's own runs. Deliberately not read from
+  // the widened ledger above: `lastDay` decides whether the day's thread is
+  // reset, and that is a question about this lane's continuity rather than
+  // about how often she has spoken.
+  const previous = jobs
+    .listRuns({ jobId, limit: 2 })
+    .items.find((run) => run.id !== exceptRunId);
 
-  const today = localDate(new Date(now), tz);
-  const dayOf = (startedAt: string): string | null => {
-    const at = parseInstant(startedAt);
-    return at === null ? null : localDate(new Date(at), tz);
-  };
-
-  let spentToday = 0;
-  for (const run of runs) {
-    if (run.spoke && dayOf(run.startedAt) === today) spentToday += 1;
-  }
-
-  const previous = runs[0];
   return {
-    spentToday,
-    lastDay: previous === undefined ? null : dayOf(previous.startedAt),
+    spentToday: reachedHimToday(jobs, { exceptRunId, now, tz }),
+    lastDay: previous === undefined ? null : dayOf(previous.startedAt, tz),
   };
 }
 
