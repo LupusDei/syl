@@ -296,11 +296,11 @@ struct HomeView: View {
     private var orbs: some View {
         HStack(alignment: .top, spacing: SylTheme.Metric.chapter) {
             SylOrb(title: "Goals", symbol: "sparkle") { onOpen(.goals) }
-            // Memory is `syl-010` and is not built. An orb identical to the two beside it
-            // that does nothing when tapped is worse than one visibly not ready — he
-            // tapped it and reasonably concluded the app was broken. `isReady: false`
-            // dims it, drops the press response, refuses the touch, and says so aloud.
-            SylOrb(title: "Memory", symbol: "cloud", isReady: false) {}
+            // Open since `syl-ryp.2`. It was dimmed because an orb identical to the two
+            // beside it that does nothing when tapped is worse than one visibly not
+            // ready — he tapped it and reasonably concluded the app was broken. It now
+            // leads to the constellation, so the dimming would be the lie instead.
+            SylOrb(title: "Memory", symbol: "cloud") { onOpen(.memory) }
             SylOrb(
                 title: "Today",
                 symbol: "sun.horizon",

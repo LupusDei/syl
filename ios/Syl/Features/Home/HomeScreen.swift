@@ -66,10 +66,10 @@ struct HomeScreen: View {
                 onPostpone: { moment in Task { await model.postpone(moment) } },
                 onDismissRefusal: { moment in model.dismissRefusal(moment.id) },
                 onOpen: { destination in
-                    // Only Goals leads anywhere today. Today is already this screen, and
-                    // Memory belongs to `syl-010` — pushing a blank for either would be a
-                    // door that opens onto a wall.
-                    guard destination == .goals else { return }
+                    // Today is already this screen — the orb scrolls to it rather than
+                    // pushing a second copy of it onto a stack, so it never gets here.
+                    // Goals and Memory both lead somewhere now.
+                    guard destination != .today else { return }
                     path.append(destination)
                 },
                 onCapture: capture,
@@ -79,7 +79,11 @@ struct HomeScreen: View {
             .navigationDestination(for: HomeView.Destination.self) { destination in
                 switch destination {
                 case .goals: GoalsScreen(store: model.store)
-                case .memory, .today: EmptyView()
+                // The default source reads nothing, which is the honest state of a brand
+                // new pairing and stays honest until the device-scoped graph read lands —
+                // at which point this line takes an adapter and nothing that draws moves.
+                case .memory: MemoryScreen()
+                case .today: EmptyView()
                 }
             }
         }
