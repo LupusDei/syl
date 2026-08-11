@@ -165,6 +165,30 @@ struct GoalRecord: Codable, PayloadRecord, Equatable {
     typealias Model = Goal
 }
 
+/// One thing she sent him.
+///
+/// Rows rather than a snapshot — see the `v6-a-sending-is-kept-not-cached` migration for
+/// why the constellation's whole-payload argument does not transfer. `createdAt` and
+/// `state` are out here because they are the only two things a query asks about: the
+/// order of the list, and which rows are still waiting on a video.
+struct SendingRecord: Codable, PayloadRecord, Equatable {
+    static let databaseTableName = "sending"
+
+    var id: SylID
+    var createdAt: Date
+    var state: String
+    var payload: Data
+
+    init(_ sending: Sending) throws {
+        self.id = sending.id
+        self.createdAt = sending.createdAt
+        self.state = sending.state.rawValue
+        self.payload = try SylJSON.encoder().encode(sending)
+    }
+
+    typealias Model = Sending
+}
+
 /// The device's position in both sync mechanisms.
 ///
 /// They are kept side by side precisely because they are **not interchangeable**:

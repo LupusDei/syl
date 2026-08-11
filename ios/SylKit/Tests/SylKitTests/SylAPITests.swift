@@ -123,6 +123,33 @@ final class SylAPITests: XCTestCase {
         XCTAssertEqual(endpoint?.requiresAuthentication, false)
     }
 
+    // MARK: - Sendings
+
+    func testShouldReadSendingsFromTheirOwnPathAsAPlainGet() {
+        // A read, so no idempotency key — `Endpoint.init` traps on a write without one,
+        // and a sendings call written as a write would take the whole app down on the
+        // first tap rather than fail a request.
+        let endpoint = SylAPI.sendings()
+
+        XCTAssertEqual(endpoint.path, "/sendings")
+        XCTAssertEqual(endpoint.method, .get)
+        XCTAssertNil(endpoint.idempotencyKey)
+        XCTAssertTrue(endpoint.query.isEmpty)
+    }
+
+    func testShouldRequireATokenForSendings() {
+        // Health and pair are the only two exemptions. A sendings call outside the
+        // bearer requirement would answer 401 and read on the phone as an empty surface.
+        XCTAssertTrue(SylAPI.sendings().requiresAuthentication)
+    }
+
+    func testShouldPageSendingsWithTheContractsCursorAndLimit() {
+        let endpoint = SylAPI.sendings(cursor: "eyJhdCI6…", limit: 20)
+
+        XCTAssertEqual(endpoint.query.map(\.name), ["cursor", "limit"])
+        XCTAssertEqual(endpoint.query.map(\.value), ["eyJhdCI6…", "20"])
+    }
+
     // MARK: - Query construction
 
     func testShouldUseTheCursorParameterNameForHTTPSyncAndNotASequence() {
