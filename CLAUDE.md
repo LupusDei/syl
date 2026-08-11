@@ -216,6 +216,14 @@ to add is about *additional* surfaces and blocks nothing.
   local view into a namespace someone else was actively extending. A colliding
   create can also wire itself into another epic's dependency graph, which is
   invisible unless you look for the edges rather than the rows.
+- **Write commit messages through a heredoc, never `git commit -m`.** The shell
+  expands `$` and executes backticks inside a double-quoted `-m`, so a message
+  mentioning a price or naming a field in backticks loses the word silently —
+  the commit succeeds and the sentence is simply missing. Both have now
+  happened: `$5,000` vanished from one message, and a backticked field name
+  from another, in a commit that was recording a lesson about guarantees held
+  by remembering. Use `git commit -F -` with a quoted heredoc (`<<'MSG'`),
+  which expands nothing.
 - The shell has `noclobber` set — a plain `>` fails if the file exists. Use `>|`.
 - `--verbose` is mandatory alongside `--output-format stream-json` in `-p` mode.
 - Headless sessions are pre-authorised (`--permission-mode bypassPermissions`)
