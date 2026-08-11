@@ -1,6 +1,7 @@
 import { loadSchemas, validateOrThrow } from "@syl/shared";
 import { describe, expect, it } from "vitest";
 
+import type { AdjutantClient } from "../../src/agents/adjutant-client.js";
 import { SylApiClient, type FetchLike } from "../../src/tools/client.js";
 import { TOOLS } from "../../src/tools/schemas.js";
 import {
@@ -97,6 +98,10 @@ function contextFor(api: FakeApi, hisMessage = ""): ToolContext {
       token: "test-token",
       fetch: api.fetch,
     }),
+    // No fleet by default: most verbs have nothing to do with the others, and
+    // a test that had to opt OUT of reaching them would be a test that reached
+    // them by accident.
+    fleet: null,
     tz: HIS_ZONE,
     hisMessage: () => hisMessage,
   };
@@ -286,6 +291,12 @@ describe("the tool surface she is offered", () => {
       when: FIVE_MINUTES,
       id: THE_TODO,
       fact: "His wife's birthday is in March.",
+      // `ask_agent` — added when she gained a way to reach the fleet. The guard
+      // failed loudly on these rather than skipping the verb, which is the
+      // behaviour it was built for: a new verb cannot get past it by arriving
+      // with fields nobody taught it.
+      who: "treasurer",
+      question: "What is he actually paying for health insurance?",
     };
 
     for (const tool of advertisedTools()) {
@@ -1235,6 +1246,121 @@ describe("a reminder remembers why it exists", () => {
     expect(posted["origin"]).toBe("she_noticed");
   });
 });
+
+/**
+ * `ask_agent` — she can reach the fleet, under her own name, on his behalf.
+ *
+ * `syl-014`. The Commander wants her asking the treasurer what his insurance
+ * actually costs. Three properties make that safe enough to hand her, and each
+ * is here because leaving it out was the tempting version.
+ */
+describe("ask_agent — putting a question to someone who knows more", () => {
+  const fleet = (
+    result: Awaited<ReturnType<AdjutantClient["ask"]>>,
+  ): { asked: { who: string; body: string }[]; client: AdjutantClient } => {
+    const asked: { who: string; body: string }[] = [];
+    return {
+      asked,
+      client: {
+        ask: async (who: string, body: string) => {
+          asked.push({ who, body });
+          return result;
+        },
+      } as unknown as AdjutantClient,
+    };
+  };
+
+  const sent = {
+    ok: true as const,
+    data: { messageId: "msg-1", at: new Date(NOW).toISOString() },
+  };
+
+  it("should ask, and report having ASKED rather than having an answer", async () => {
+    // The distinction the whole verb turns on. Agents are offline most of the
+    // time — `treasurer` was not live when this was written — so a verb that
+    // implied an answer would have her telling him the treasurer said something.
+    const { asked, client } = fleet(sent);
+
+    const { envelope } = await call(
+      { ...contextFor(fakeApi({})), fleet: client },
+      "ask_agent",
+      {
+        who: "treasurer",
+        question: "What is he paying for health insurance?",
+        because: "He asked me to find out.",
+      },
+    );
+
+    expect(envelope).toMatchObject({ ok: true, action: "ask_agent" });
+    expect(asked).toEqual([
+      { who: "treasurer", body: "What is he paying for health insurance?" },
+    ]);
+    if (envelope.ok) {
+      const subject = envelope.subject as Record<string, unknown>;
+      expect(subject["who"]).toBe("treasurer");
+      // No answer field to mistake for one.
+      expect(subject["answer"]).toBeUndefined();
+    }
+  });
+
+  it("should refuse someone off the roster WITHOUT sending, and name who she can ask", async () => {
+    // The roster is checked before the transport, so a name she should not
+    // reach never leaves this process — and the refusal is something she can
+    // turn into a sentence for him.
+    const { asked, client } = fleet(sent);
+
+    const { envelope } = await call(
+      { ...contextFor(fakeApi({})), fleet: client },
+      "ask_agent",
+      { who: "nova", question: "Anything.", because: "He asked." },
+    );
+
+    expect(envelope.ok).toBe(false);
+    expect(asked).toEqual([]);
+    if (!envelope.ok) {
+      expect(envelope.reason).toContain("nova");
+      expect(envelope.reason).toContain("treasurer");
+    }
+  });
+
+  it("should say plainly that it did not ask when it could not", async () => {
+    // "I could not reach them" and "they have not replied yet" are different
+    // facts and he acts differently on each. Reporting the first as the second
+    // is the failure this project keeps finding.
+    const { client } = fleet({
+      ok: false as const,
+      failure: {
+        kind: "unreachable" as const,
+        operation: "ask" as const,
+        message: "Adjutant did not answer.",
+        retryable: true,
+      },
+    });
+
+    const { envelope } = await call(
+      { ...contextFor(fakeApi({})), fleet: client },
+      "ask_agent",
+      { who: "treasurer", question: "Anything.", because: "He asked." },
+    );
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("I have not asked treasurer");
+  });
+
+  it("should answer without a fleet rather than throw", async () => {
+    // Adjutant is optional. A machine without one is not misconfigured — it is
+    // a machine where she talks only to him — and it must not take a turn down.
+    const { envelope } = await call(
+      { ...contextFor(fakeApi({})), fleet: null },
+      "ask_agent",
+      { who: "treasurer", question: "Anything.", because: "He asked." },
+    );
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("no way to reach");
+  });
+});
+
 
 
 

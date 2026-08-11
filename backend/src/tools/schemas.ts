@@ -30,6 +30,8 @@
  * rather than raising the ceiling.
  */
 
+import { ROSTER } from "../agents/roster.js";
+
 /** A JSON Schema fragment, as the MCP `tools/list` reply carries it. */
 export interface ToolSchema {
   readonly name: string;
@@ -213,6 +215,30 @@ export const TOOLS: readonly ToolSchema[] = [
       required: ["id", "because"],
       properties: {
         id: { type: "string", description: "The to-do's id, from whats_outstanding." },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
+    name: "ask_agent",
+    description:
+      "Ask someone who knows more than you. Ask the ONE whose subject it is, and tell him you have asked — never that you have an answer.",
+    inputSchema: {
+      type: "object",
+      required: ["who", "question", "because"],
+      properties: {
+        who: {
+          type: "string",
+          // The roster inline, so she picks rather than guesses, and so its
+          // cost is paid once here rather than in a contributor she has to be
+          // told to read. Derived from `ROSTER` — one list, not two.
+          enum: ROSTER.map((entry) => entry.id),
+          description: ROSTER.map((entry) => `${entry.id}: ${entry.good_for}`).join("; "),
+        },
+        question: {
+          type: "string",
+          description: "What to ask, in a sentence, on his behalf.",
+        },
         because: BECAUSE,
       },
     },

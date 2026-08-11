@@ -3,6 +3,9 @@ import { createInterface } from "node:readline";
 
 import type { Goal, HealthStatus, Reminder, ReminderOrigin, Todo } from "@syl/shared";
 
+import { AdjutantClient } from "../agents/adjutant-client.js";
+import { mayReach, notOnTheRoster } from "../agents/roster.js";
+
 import { verifyUrgency } from "../harness/urgency.js";
 
 import { SylApiClient, type ToolFailure, type ToolResult } from "./client.js";
@@ -101,6 +104,15 @@ export interface ToolContext {
    * immediately before the turn, so reading it late is reading it correctly.
    */
   readonly hisMessage: () => string;
+  /**
+   * How she reaches the fleet, or `null` when she cannot.
+   *
+   * Null is the ordinary state, not a failure: Adjutant is optional, and a
+   * missing one must never stop her talking to him. `ask_agent` refuses with a
+   * sentence he can act on rather than throwing, because "I cannot reach anyone
+   * right now" is an answer and a stack trace is not.
+   */
+  readonly fleet: AdjutantClient | null;
 }
 
 type ToolHandler = (input: Record<string, unknown>, context: ToolContext) => Promise<ToolEnvelope>;
@@ -602,6 +614,79 @@ const dropTodo: ToolHandler = async (input, context) => {
   return readBack("drop_todo", context, path, (row: Todo) => row.updatedAt);
 };
 
+/**
+ * Put a question to another agent, on his behalf and under her own name.
+ *
+ * `syl-014`. The Commander's ask: let her reach the treasurer, who knows his
+ * real finances, and the engineers, who can build. **Not coordination** — his
+ * words — so nothing here reports status, claims work, or answers to anyone.
+ *
+ * Three things this refuses to do, each for a reason that cost something:
+ *
+ * 1. **It never sends as him.** `POST /api/messages` stamps `from: "user"`, so
+ *    the obvious integration would have had her asking about his money in his
+ *    voice. `AdjutantClient` carries her own identity and has no sender field
+ *    to get wrong; this handler could not impersonate him if it tried.
+ * 2. **It never claims an answer.** Agents are offline most of the time. She
+ *    reports having ASKED, and that is all that has happened — the failure this
+ *    project keeps catching is a system claiming more than it did.
+ * 3. **It never reaches someone off the roster**, and the refusal names who she
+ *    can reach, because she has to turn it into a sentence for him.
+ */
+const askAgent: ToolHandler = async (input, context) => {
+  const who = text(input, "who");
+  if (who === null) return missing("ask_agent", "who", "I did not catch who to ask.");
+
+  const question = text(input, "question");
+  if (question === null) return missing("ask_agent", "question", "I did not catch what to ask them.");
+
+  if (text(input, "because") === null) {
+    return missing(
+      "ask_agent",
+      "because",
+      "Asking someone on his behalf has to say why, so he can tell a good instinct from a wrong one.",
+    );
+  }
+
+  // The roster BEFORE the transport. Who she may influence, and be influenced
+  // by, is a decision rather than a convenience — and checking it first means a
+  // name she should not reach never leaves this process.
+  if (!mayReach(who)) {
+    return { ok: false, action: "ask_agent", reason: notOnTheRoster(who), retryable: false };
+  }
+
+  if (context.fleet === null) {
+    return {
+      ok: false,
+      action: "ask_agent",
+      reason: "I have no way to reach the others right now, so I have not asked anyone.",
+      retryable: true,
+    };
+  }
+
+  const sent = await context.fleet.ask(who, question);
+  if (!sent.ok) {
+    return {
+      ok: false,
+      action: "ask_agent",
+      // Says what did NOT happen. "I could not reach them" and "they have not
+      // replied" are different facts and he will act differently on each.
+      reason: `${sent.failure.message} I have not asked ${who}.`,
+      retryable: sent.failure.kind !== "refused",
+    };
+  }
+
+  return {
+    ok: true,
+    action: "ask_agent",
+    // Deliberately not `subject: the answer`. Nothing has been answered — most
+    // agents are offline most of the time, and a verb that implied otherwise
+    // would have her telling him the treasurer said something.
+    subject: { who, question, messageId: sent.data.messageId },
+    at: sent.data.at,
+  };
+};
+
 /** Record something he is working toward. */
 const setGoal: ToolHandler = async (input, context) => {
   const title = text(input, "text");
@@ -789,6 +874,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   add_todo: addTodo,
   finish_todo: finishTodo,
   drop_todo: dropTodo,
+  ask_agent: askAgent,
   set_goal: setGoal,
   change_goal: changeGoal,
   whats_outstanding: whatsOutstanding,
@@ -972,6 +1058,15 @@ export interface ToolServerEnvironment {
   readonly SYL_AGENT_TOKEN?: string;
   readonly SYL_TIMEZONE?: string;
   readonly SYL_TURN_FILE?: string;
+  /**
+   * Where Adjutant is, and who she is there. Both absent is the ordinary case.
+   *
+   * Passed through rather than re-read from `process.env`, so a test can run
+   * this process without a fleet and a test can run it WITH one — and neither
+   * can reach the real Adjutant by forgetting to set something.
+   */
+  readonly SYL_ADJUTANT_URL?: string;
+  readonly SYL_ADJUTANT_AGENT_ID?: string;
 }
 
 /**
@@ -1004,8 +1099,21 @@ export function contextFromEnvironment(env: ToolServerEnvironment): ToolContext 
 
   const turnFile = env.SYL_TURN_FILE;
 
+  // Her reach, or nothing. Absent config is the ORDINARY case — a machine with
+  // no Adjutant is not misconfigured, it is a machine where she talks only to
+  // him — so this is `null` rather than a throw. The one configuration that
+  // does throw lives in `config.ts`: an agent id of `user`, which would have
+  // her speaking in his voice, and which must stop a boot rather than degrade.
+  const adjutantUrl = env.SYL_ADJUTANT_URL;
+  const adjutantAgentId = env.SYL_ADJUTANT_AGENT_ID;
+  const fleet =
+    adjutantUrl === undefined || adjutantAgentId === undefined
+      ? null
+      : new AdjutantClient({ baseUrl: adjutantUrl, agentId: adjutantAgentId });
+
   return {
     client: new SylApiClient({ baseUrl, token }),
+    fleet,
     tz,
     hisMessage: () => {
       if (turnFile === undefined) return "";
