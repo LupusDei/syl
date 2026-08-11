@@ -124,11 +124,18 @@ describe("buildWorkingMemory", () => {
   it("should NAME what did not fit rather than dropping it silently", () => {
     // The auto-memory index cliff (`syl-03d`) in one assertion: past a limit
     // the thing stops being loaded and nothing says so. Here it says so.
-    const plan = buildWorkingMemory(many(400));
+    //
+    // Deliberately sized to overflow the REAL production budget rather than a
+    // caller-supplied one — this asserts the cliff at the ceiling that actually
+    // ships. 400 stopped overflowing when the budget went 4,000 -> 32,000
+    // (`syl-ulf`); the count has to track the budget or the test quietly stops
+    // testing anything, which is the same class of rot the expected-failures
+    // gate exists to catch.
+    const plan = buildWorkingMemory(many(1_200));
 
     expect(plan.dropped.length).toBeGreaterThan(0);
     expect(plan.text).toContain(`…and ${String(plan.dropped.length)} more`);
-    expect(plan.included).toHaveLength(400 - plan.dropped.length);
+    expect(plan.included).toHaveLength(1_200 - plan.dropped.length);
   });
 
   it("should say what KIND was left out, not merely how many — `syl-016.2`", () => {
@@ -155,7 +162,12 @@ describe("buildWorkingMemory", () => {
     // This line was "Search deep memory for anything specific" for months while
     // she had no tool that could — an instruction outliving its capability,
     // which is the failure this project keeps catching in prose.
-    const plan = buildWorkingMemory(many(400));
+    //
+    // Sized to overflow the REAL budget, like its two siblings above. 400
+    // stopped overflowing when the budget went 4,000 -> 32,000 (`syl-ulf`), so
+    // this asserted the notice on a plan that no longer had one. A test whose
+    // fixture drifts under the thing it measures stops measuring it silently.
+    const plan = buildWorkingMemory(many(1_200));
 
     expect(plan.text).toContain("recall");
   });
@@ -172,11 +184,11 @@ describe("buildWorkingMemory", () => {
   });
 
   it("should drop the LEAST salient tail, never the most salient head", () => {
-    const plan = buildWorkingMemory(many(400));
-    const first = many(400)[0];
+    const plan = buildWorkingMemory(many(1_200));
+    const first = many(1_200)[0];
 
     expect(plan.included[0]).toBe(first?.id);
-    expect(plan.dropped).toContain(many(400)[399]?.id);
+    expect(plan.dropped).toContain(many(1_200)[1_199]?.id);
   });
 
   it("should be deterministic — the same input renders the same bytes", () => {
@@ -480,8 +492,67 @@ describe("toCandidate", () => {
       kind: "person",
       label: "the Commander",
       body: "he is busy",
-      salience: 0,
+      // A `person` scores its kind floor with no edges at all (`syl-zdf.6`).
+      salience: 3,
       updatedAt: NOW_ISO,
     });
+  });
+});
+
+/**
+ * The budget, raised from 4,000 to 32,000 bytes on the Commander's order
+ * (2026-08-11, `syl-ulf`). He accepted the extra per-turn cost explicitly:
+ * "I'm fine with it burning extra tokens... if it ever gets too expensive we
+ * can start rolling that back."
+ *
+ * The FIRST test here is the cheap one and it is not the point. The second is:
+ * `0019`'s `CHECK (bytes > 0 AND bytes <= 4096)` is a SCHEMA backstop, so
+ * raising the constant alone leaves a code path that fits 32,000 bytes and a
+ * database that refuses to store them. That failure would not appear in any
+ * test that only reads the constant — it appears on the first real projection
+ * that grows past 4 KB, in production, as a write error on a path whose whole
+ * job is to never go silently dark.
+ */
+describe("working memory — the raised budget", () => {
+  it("should carry a budget of 32,000 bytes across at least 400 lines", () => {
+    expect(WORKING_MEMORY_MAX_BYTES).toBe(32_000);
+    expect(WORKING_MEMORY_MAX_LINES).toBeGreaterThanOrEqual(400);
+  });
+
+  it("should PERSIST a projection larger than the old 4,096-byte schema backstop", () => {
+    // 120 nodes of ~160 chars each is ~19 KB of entries: comfortably past the
+    // old ceiling and comfortably inside the new one, so this asserts the
+    // migration rather than the arithmetic.
+    for (let i = 0; i < 120; i += 1) {
+      graph.addNode({
+        kind: "fact",
+        label: `fact number ${String(i)}`,
+        body: `a body long enough to matter, repeated to fill the entry budget ${"x".repeat(90)}`,
+      });
+    }
+
+    const working = new WorkingMemory({ db, graph, clock: fixedClock(NOW) });
+    const result = working.regenerate();
+
+    expect(result.row.bytes).toBeGreaterThan(4096);
+    expect(result.row.bytes).toBeLessThanOrEqual(WORKING_MEMORY_MAX_BYTES);
+    expect(working.preamble()).toBe(result.row.text);
+
+    const stored = db.prepare("SELECT bytes FROM working_memory WHERE id = 1").get() as {
+      bytes: number;
+    };
+    expect(stored.bytes).toBe(result.row.bytes);
+  });
+
+  it("should admit far more entries than the old budget could hold", () => {
+    for (let i = 0; i < 120; i += 1) {
+      graph.addNode({ kind: "fact", label: `fact number ${String(i)}`, body: "short body" });
+    }
+
+    const working = new WorkingMemory({ db, graph, clock: fixedClock(NOW) });
+    const result = working.regenerate();
+
+    // The old 4,000-byte budget admitted 23 entries against the live graph.
+    expect(result.plan.included.length).toBeGreaterThan(60);
   });
 });

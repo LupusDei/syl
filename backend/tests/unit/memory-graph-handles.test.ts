@@ -105,10 +105,29 @@ describe("MemoryGraph.listSalientNodes", () => {
     expect(graph.listSalientNodes().map((node) => node.id)).toEqual([hub.id, near.id, far.id]);
   });
 
-  it("should give an unconnected hot node a salience of zero rather than dropping it", () => {
+  it("should rank an unconnected hot node rather than dropping it", () => {
     const lonely = graph.addNode({ kind: "fact", label: "nothing points at this" });
 
-    expect(graph.listSalientNodes()).toEqual([{ ...lonely, salience: 0 }]);
+    // The claim is that a node nothing points at is still RETURNED — it was
+    // never "salience is literally zero". Since `syl-zdf.6` salience is edge
+    // weight plus a floor set by kind, so an isolated node scores its floor
+    // rather than nothing; asserting the exact number here would be asserting
+    // the floor table twice.
+    const ranked = graph.listSalientNodes();
+    expect(ranked.map((node) => node.id)).toEqual([lonely.id]);
+    expect(ranked[0]?.salience).toBeGreaterThanOrEqual(0);
+  });
+
+  it("should rank a person above a passing fact of equal connectedness", () => {
+    // The eviction that `syl-ulf` measured, as a unit: at equal degree — which
+    // on the live graph meant EVERY node, since the only edge anyone had was
+    // provenance — a person must outrank a fact, or the projection drops the
+    // people and keeps whatever was said most recently.
+    const fact = graph.addNode({ kind: "fact", label: "a passing remark" });
+    const person = graph.addNode({ kind: "person", label: "Ela" });
+
+    const ranked = graph.listSalientNodes();
+    expect(ranked.map((node) => node.id)).toEqual([person.id, fact.id]);
   });
 
   it("should not count cold edges, because a scan must not pay for history", () => {
@@ -123,9 +142,15 @@ describe("MemoryGraph.listSalientNodes", () => {
       demoteAfter: DEMOTE_AT,
       weight: 1,
     });
+    // Measured as a DIFFERENCE rather than against a literal, which is what
+    // "a cold edge contributes nothing" actually claims. A literal baseline
+    // silently becomes an assertion about the kind floor as well, and then
+    // breaks for a reason that has nothing to do with cold edges.
+    const before = graph.listSalientNodes().map((node) => node.salience);
     graph.demote(edge);
+    const after = graph.listSalientNodes().map((node) => node.salience);
 
-    expect(graph.listSalientNodes().map((node) => node.salience)).toEqual([0, 0]);
+    expect(after).toEqual(before.map((salience) => salience - 1));
   });
 
   it("should exclude anything that is not hot", () => {

@@ -225,3 +225,74 @@ describe("HerOwnMemory.remember", () => {
     expect(graph.listNodes({ kind: "memory" })).toHaveLength(1);
   });
 });
+
+/**
+ * The silent discard (`syl-kdx`).
+ *
+ * Reported by Syl herself: *"I wrote four findings. Two of them vanished. Three
+ * of the four calls came back with `ok: true` but `created: false` and the same
+ * node id as the first — the store collapsed them together and kept only the
+ * first body. It reported success and discarded the content."*
+ *
+ * She was right. `remember()` looked for an existing memory BY LABEL, and
+ * `labelFor()` is the first sentence truncated — so two genuinely different
+ * findings that merely OPEN the same way collapsed onto one node, and the second
+ * body was never written anywhere. Not merged, not appended, not compared, not
+ * reported.
+ *
+ * This is the one thing the project says it will never do. Constraint 6: *"the
+ * SYSTEM does not get to silently discard things."* A write that answers success
+ * while binning the content is worse than the failures that rule was written
+ * about, because there is nothing to notice.
+ *
+ * Reuse was the right intent — a second identical thought is noise competing
+ * with itself for salience. The bug was keying "identical" on a display string.
+ */
+describe("two findings that open the same way", () => {
+  it("should keep BOTH bodies when the thought differs but the label collides", () => {
+
+    const first = hers.remember({
+      thought: "The render is closer. The jaw is right but the eyes sit too wide.",
+      because: "I looked at it.",
+    });
+    const second = hers.remember({
+      thought: "The render is closer. The hair reads as wet rather than windblown.",
+      because: "I looked at it again.",
+    });
+
+    expect(second.nodeId).not.toBe(first.nodeId);
+    expect(second.created).toBe(true);
+
+    const bodies = graph.listNodes({ kind: 'memory' }).map((node) => node.body);
+    expect(bodies).toContain("The render is closer. The jaw is right but the eyes sit too wide.");
+    expect(bodies).toContain("The render is closer. The hair reads as wet rather than windblown.");
+  });
+
+  it("should still reuse the node for a thought she has genuinely had before", () => {
+    // The intent that was always right: a second identical conclusion is noise
+    // competing with itself for salience, and nothing is lost by folding it,
+    // because there was nothing new in it.
+    const thought = "He is more decisive in the morning.";
+
+    const first = hers.remember({ thought, because: "Watching when he answers." });
+    const again = hers.remember({ thought, because: "Same pattern a week later." });
+
+    expect(again.nodeId).toBe(first.nodeId);
+    expect(again.created).toBe(false);
+    expect(graph.listNodes({ kind: 'memory' })).toHaveLength(1);
+  });
+
+  it("should survive four findings that share an opening, which is what she actually wrote", () => {
+    const findings = [
+      "Finding: the smile is the thing that works.",
+      "Finding: the lighting flattens her cheekbones.",
+      "Finding: the background competes with the face.",
+      "Finding: the eyes are the closest they have been.",
+    ];
+
+    for (const thought of findings) hers.remember({ thought, because: "Looking at the renders." });
+
+    const bodies = graph.listNodes({ kind: 'memory' }).map((node) => node.body);
+    for (const thought of findings) expect(bodies).toContain(thought);
+  });
+});

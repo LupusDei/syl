@@ -335,10 +335,70 @@ const addTodo: ToolHandler = async (input, context) => {
     return missing("add_todo", "because", "Every to-do carries its reason.");
   }
 
-  const created = await context.client.post<Todo>("/todos", { text: errand });
+  // `dueAt` and `pinned` are what the agenda sorts on, and until `syl-74p`
+  // neither could be set — every to-do landed undated and unpinned, so a view
+  // of his day was empty by construction however well she planned it. Only
+  // forwarded when given: `POST /todos` defaults both, and sending an explicit
+  // null for every undated to-do would be noise on the wire.
+  const created = await context.client.post<Todo>("/todos", {
+    text: errand,
+    ...todoScheduleFrom(input),
+  });
   if (!created.ok) return refused("add_todo", created.failure);
 
   return readBack("add_todo", context, `/todos/${encodeURIComponent(created.data.id)}`, (row: Todo) => row.updatedAt);
+};
+
+/**
+ * The `dueAt`/`pinned` half of a to-do write, read off a tool call.
+ *
+ * **`dueAt` is genuinely three-valued and the route already models all three:**
+ * absent means leave it alone, `null` means take the date off, and a string
+ * means set it. Collapsing null into absent would make "actually, no date on
+ * that" unsayable — and a retraction she cannot say is how his list stops
+ * matching what he believes about it.
+ */
+function todoScheduleFrom(input: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+
+  const dueAt = input["dueAt"];
+  if (dueAt === null) patch["dueAt"] = null;
+  else if (typeof dueAt === "string" && dueAt.trim() !== "") patch["dueAt"] = dueAt;
+
+  if (typeof input["pinned"] === "boolean") patch["pinned"] = input["pinned"];
+
+  return patch;
+}
+
+/** Date, move, undate or pin something already on his list. */
+const scheduleTodo: ToolHandler = async (input, context) => {
+  const id = text(input, "id");
+  if (id === null) {
+    return missing("schedule_todo", "id", "I need to know which one — ask me what is outstanding.");
+  }
+  if (text(input, "because") === null) {
+    return missing("schedule_todo", "because", "Every change to his list carries its reason.");
+  }
+
+  const patch = todoScheduleFrom(input);
+  if (Object.keys(patch).length === 0) {
+    // Nothing to do is not the same as done. A silent no-op reads to her as
+    // success, and she tells him it moved.
+    return {
+      ok: false,
+      action: "schedule_todo",
+      reason:
+        "I did not catch what to change about that one. " +
+        "Tell me the new date, or that the date comes off, or that it should be pinned.",
+      retryable: false,
+    };
+  }
+
+  const path = `/todos/${encodeURIComponent(id)}`;
+  const changed = await context.client.patch<Todo>(path, patch);
+  if (!changed.ok) return refused("schedule_todo", changed.failure);
+
+  return readBack("schedule_todo", context, path, (row: Todo) => row.updatedAt);
 };
 
 /**
@@ -1300,6 +1360,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   change_reminder: changeReminder,
   remember,
   add_todo: addTodo,
+  schedule_todo: scheduleTodo,
   finish_todo: finishTodo,
   drop_todo: dropTodo,
   ask_agent: askAgent,

@@ -262,6 +262,18 @@ export const ENTITY_RECURRENCE_THRESHOLD = 2;
 export const DEFAULT_CONVERSATION_LABEL = "Conversation with the Commander";
 
 /**
+ * The savepoint this store's all-or-nothing write runs in.
+ *
+ * Named, exported, and asserted to be distinct from every other writer's —
+ * SQLite releases a savepoint BY NAME and `RELEASE` on a name that is open
+ * twice releases the innermost, so two writers sharing a name means one commits
+ * half of the other's work. There are three writers to this graph now
+ * (extraction, digestion, the dream); the name is the only thing keeping their
+ * units of work separate.
+ */
+export const EXTRACTION_SAVEPOINT = "syl_extraction";
+
+/**
  * The most of his own words one provenance row keeps.
  *
  * A quote is evidence, not a second copy of the conversation — and a pasted
@@ -721,14 +733,14 @@ export class ExtractionStore {
       };
     }
 
-    this.#db.exec("SAVEPOINT syl_extraction");
+    this.#db.exec(`SAVEPOINT ${EXTRACTION_SAVEPOINT}`);
     try {
       const result = this.#write(digest, input);
-      this.#db.exec("RELEASE SAVEPOINT syl_extraction");
+      this.#db.exec(`RELEASE SAVEPOINT ${EXTRACTION_SAVEPOINT}`);
       return result;
     } catch (error) {
-      this.#db.exec("ROLLBACK TO SAVEPOINT syl_extraction");
-      this.#db.exec("RELEASE SAVEPOINT syl_extraction");
+      this.#db.exec(`ROLLBACK TO SAVEPOINT ${EXTRACTION_SAVEPOINT}`);
+      this.#db.exec(`RELEASE SAVEPOINT ${EXTRACTION_SAVEPOINT}`);
       if (error instanceof ExtractionApplyError) throw error;
       if (error instanceof GraphError) {
         throw new ExtractionApplyError(

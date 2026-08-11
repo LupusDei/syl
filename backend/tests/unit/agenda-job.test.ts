@@ -29,7 +29,7 @@ import { testDatabase } from "../helpers/service.js";
 /**
  * The morning agenda (`syl-agd`).
  *
- * `LANES.agenda` has existed since the harness was written and three files'
+ * A lane for it existed since the harness was written and three files'
  * comments described the morning brief as part of her rhythm. Nothing defined
  * it and nothing scheduled it, so the only thing that arrived at 07:00 was a
  * note announcing a brief that was never composed.
@@ -93,10 +93,21 @@ function said(text: string, tools: readonly string[] = []): TurnResult {
 
 interface Recorder extends AgendaVoice {
   readonly prompts: string[];
+  /**
+   * Every time the thread was thrown away — which must now be never.
+   *
+   * `AgendaVoice` no longer offers `reset`, so the handler CANNOT call it: the
+   * brief is composed in the Commander's own conversation now, and clearing it
+   * deletes what he has been saying. The double offers one anyway, on purpose.
+   * A guarantee that rests only on a method being absent from a `Pick` is a
+   * guarantee that widening the `Pick` silently repeals, and this array is what
+   * goes red when that happens.
+   */
   readonly resets: number[];
+  reset(): void;
 }
 
-/** A stand-in for the agenda lane that records what it was asked. */
+/** A stand-in for his thread, as the morning brief sees it. */
 function voice(answer: TurnResult | (() => Promise<TurnResult>) = said("Composed.")): Recorder {
   const prompts: string[] = [];
   const resets: number[] = [];
@@ -179,8 +190,8 @@ describe("defineMorningAgendaJob", () => {
   });
 
   it("should declare the hands it is actually given, rather than claiming none", () => {
-    // The agenda lane is the second widening of `LANES_WITH_HANDS`, and for the
-    // plainest possible reason: a brief she cannot file is a brief that exists
+    // The brief was the second widening of `LANES_WITH_HANDS`, for the plainest
+    // possible reason: a brief she cannot file is a brief that exists
     // only in a run record nobody reads. Derived from the server so the
     // catalogue cannot claim a verb she does not have.
     const job = defineMorningAgendaJob(store(), { tz: TZ, quiet: QUIET });
@@ -384,10 +395,15 @@ describe("the morning itself", () => {
     expect(lines.some((line) => line.event === "agenda.composed_nothing")).toBe(true);
   });
 
-  it("should start each morning on a fresh thread", async () => {
-    // A brief is a day's work, and the days are not one conversation. Left to
-    // resume, the lane would carry every previous morning's transcript into
-    // every later one, on the rate-limit pool she shares with him.
+  it("should never throw away the thread it composes in, on any morning", async () => {
+    // It used to start a fresh one each morning, because a lane of its own left
+    // to resume would carry every previous morning's assembly into the next.
+    // That thread is the Commander's now — *"the morning routine update should
+    // also be on the same lane for now"* — and the same call deletes his
+    // conversation, once a day, from a job he never sees.
+    //
+    // `AgendaVoice` no longer offers `reset`, so this cannot compile its way
+    // back. The assertion is here for the day someone widens the `Pick`.
     const { jobs, job } = ready();
     const heard = voice();
     const handler = createMorningAgendaHandler({ voice: heard, tz: TZ, quiet: QUIET });
@@ -395,7 +411,8 @@ describe("the morning itself", () => {
     await handler(contextFor(jobs, job, AT_THE_SLOT));
     await handler(contextFor(jobs, job, NEXT_MORNING));
 
-    expect(heard.resets).toHaveLength(2);
+    expect(heard.prompts).toHaveLength(2);
+    expect(heard.resets).toEqual([]);
   });
 
   it("should be silent to him and loud in the log when the turn dies", async () => {

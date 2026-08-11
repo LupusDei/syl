@@ -39,6 +39,13 @@ export type IdType =
   // shape must never address two different stores.
   | "memory_node"
   | "memory_edge"
+  // An ENTITY, as opposed to a node that mentions one (`syl-zdf.3`). Two
+  // `person` rows for one woman share a `memory_subject`; neither row is
+  // deleted and neither is the "real" one. Its own namespace rather than
+  // reusing `memory_node`, because `subject_id` pointing at a node would say
+  // "this node is a handle for that node", which is a different claim from
+  // "these nodes are the same thing" and is one `projection.ts` already owns.
+  | "memory_subject"
   // The supersession ledger (`0017_supersession_ledger.sql`). A row is a CLAIM
   // with a validity interval, not a node: facts are never deleted, they are
   // retired, and the closed rows are what answers "what did I believe in

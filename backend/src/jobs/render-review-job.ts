@@ -203,7 +203,7 @@ export function defineRenderReviewJob(store: JobStore, firstRunAt?: string): Job
       maxWallClockMs: 5 * 60_000,
       // Derived from the server rather than written out beside it, so the
       // catalogue cannot claim a verb she does not have — or miss one she does.
-      // The studio lane carries an MCP surface; saying `[]` here would be the
+      // This turn carries an MCP surface; saying `[]` here would be the
       // same false security claim `syl-009.9` was about.
       allowedTools: advertisedToolNames().map(mcpToolName),
     },
@@ -380,10 +380,18 @@ function describeMinutes(ms: number): string {
  * What the handler needs of Syl.
  *
  * A `Pick` of the real class rather than a hand-written interface, so a change
- * to either method's signature is a type error here rather than a double that
- * has drifted from the thing it stands in for.
+ * to its signature is a type error here rather than a double that has drifted
+ * from the thing it stands in for.
+ *
+ * **`ask` and nothing else.** It used to include `reset`, and the review used
+ * it on every wake: one render's opinions had no business in the next one's
+ * context. Since the Commander moved this turn onto his lane (2026-08-11, see
+ * `harness/agent.ts`) that call would delete his conversation — and the point
+ * of the move is that she should be judging the clip *with the conversation in
+ * view*. The method is withheld rather than the call being removed, so nothing
+ * can put it back by accident.
  */
-export type RenderReviewVoice = Pick<SylAgent, "ask" | "reset">;
+export type RenderReviewVoice = Pick<SylAgent, "ask">;
 
 /**
  * The half of `RenderService` this needs.
@@ -402,7 +410,7 @@ export interface ReviewSendingSource {
 }
 
 export interface RenderReviewDeps {
-  /** The studio lane, already bound. `SylAgent.forLane` produces one. */
+  /** Syl on the commander lane: the thread he talks to, resumed. */
   readonly voice: RenderReviewVoice;
   /** The promises to come back and look. */
   readonly watches: Pick<RenderWatchStore, "due" | "defer" | "settle" | "nextDueAt">;
@@ -538,10 +546,12 @@ export function createRenderReviewHandler(deps: RenderReviewDeps): JobHandler {
     // later; `HARD_MAX_ATTEMPTS` is what stops it being a loop.
     deps.watches.defer(watch.id, now + RECHECK_MS);
 
-    // A fresh thread. One render's review has no business carrying her opinions
-    // of the last five into its context, and this lane is the one place where
-    // every turn has a different subject.
-    deps.voice.reset();
+    // NOTHING IS RESET HERE. This turn used to start a fresh thread so that one
+    // render's review never carried her opinions of the last five; it happens
+    // in his conversation now, where that call would delete what he has been
+    // saying and where the surrounding talk is the reason he asked for the
+    // move. What keeps a review about one clip is the prompt naming that clip,
+    // not an empty transcript.
 
     const spentToday = reachedHimToday(deps.jobs, { exceptRunId: context.run.id, now, tz: deps.tz });
     const prompt = renderReviewPrompt({

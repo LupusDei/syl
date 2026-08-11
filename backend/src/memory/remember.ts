@@ -167,9 +167,27 @@ const ENTITY_SQL =
   `ORDER BY updated_at DESC, id LIMIT 1`;
 
 /** Her own conclusion, reused rather than duplicated. See {@link HerOwnMemory.remember}. */
+/**
+ * The memory she has already kept, matched on **the whole thought**.
+ *
+ * It used to match on `label` alone, and that lost content (`syl-kdx`). A label
+ * is {@link labelFor} — the first sentence, truncated — so two genuinely
+ * different findings that merely OPEN the same way resolved to one node, and
+ * the second body was silently dropped while the call answered success. Four
+ * findings written in one sitting collapsed to two.
+ *
+ * That is not a rare collision. A series of observations about one thing is
+ * exactly the shape that shares an opening clause, and a series of observations
+ * about one thing is precisely what this verb is for.
+ *
+ * **A label is a display string. It was never identity.** Matching `body` as
+ * well makes "she reached the same conclusion again" mean what the reuse was
+ * always documented to mean, and it keeps the label predicate in front of it so
+ * the index still does the work.
+ */
 const MEMORY_IDENTITY_SQL =
   `SELECT id FROM memory_nodes WHERE kind = 'memory' AND label = ? COLLATE NOCASE ` +
-  `AND tier = ? ORDER BY updated_at DESC, id LIMIT 1`;
+  `AND body IS ? AND tier = ? ORDER BY updated_at DESC, id LIMIT 1`;
 
 /** How long a memory's label may be before it is a body with no label. */
 const LABEL_MAX_CHARS = 120;
@@ -237,7 +255,7 @@ export class HerOwnMemory {
 
     this.#db.exec("SAVEPOINT syl_remember");
     try {
-      const existing = this.#existingMemory(label);
+      const existing = this.#existingMemory(label, thought);
       const node =
         existing ?? this.#graph.addNode({ kind: "memory", label, body: thought });
 
@@ -287,9 +305,9 @@ export class HerOwnMemory {
     return this.#graph.getNode((row as unknown as { id: string }).id);
   }
 
-  /** A memory she has already kept under this label, or `null`. */
-  #existingMemory(label: string): MemoryNode | null {
-    const row = this.#db.prepare(MEMORY_IDENTITY_SQL).get(label, SCANNED_TIER);
+  /** A memory she has already kept, matched on the whole thought, or `null`. */
+  #existingMemory(label: string, thought: string): MemoryNode | null {
+    const row = this.#db.prepare(MEMORY_IDENTITY_SQL).get(label, thought, SCANNED_TIER);
     if (row === undefined) return null;
     return this.#graph.getNode((row as unknown as { id: string }).id);
   }

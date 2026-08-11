@@ -10,11 +10,29 @@ import { parseInstant } from "../services/clock.js";
  *
  * The Commander found a reminder at 07:04 he had not asked for. Asked about it,
  * Syl said plainly that she had no memory of writing it — and she was right.
- * The hourly self-ping runs on `LANES.heartbeat`, with its own session, and the
- * morning brief on `LANES.agenda` with another. Lanes exist so her inner
- * monologue does not interleave with his conversation (`harness/agent.ts`), and
- * the cost of that separation had never been paid: **the Syl he talks to had no
- * way to know what the unattended Syl had done.**
+ * The hourly self-ping ran on a lane of its own with its own session, and the
+ * morning brief on another. Lanes existed so her inner monologue did not
+ * interleave with his conversation (`harness/agent.ts`), and the cost of that
+ * separation had never been paid: **the Syl he talks to had no way to know what
+ * the unattended Syl had done.**
+ *
+ * ## Kept after the lanes were merged, and why
+ *
+ * The Commander has since moved all three unattended turns onto his own lane
+ * (2026-08-11), which is the "merged session" option rejected below — taken
+ * deliberately, for a reason this file did not weigh: an hour deciding whether
+ * to interrupt him, and how it should sound, needs the conversation in view.
+ *
+ * So in the ordinary case this block now restates what his transcript already
+ * shows, and it is kept anyway, because two things remain true only of the runs
+ * table. **A resumed session is not guaranteed** — `SylAgent` starts a clean
+ * one when a stored id has gone, and a dropped transcript takes every
+ * unattended turn in it with it, while the runs table is untouched. And
+ * `Run.spoke` lives here, which is what makes this *the turns that reached him*
+ * rather than everything she thought.
+ *
+ * It is bounded, it is cheap, and its failure mode is a paragraph he can
+ * already see — against a failure mode of an hour he cannot account for.
  *
  * `CLAUDE.md` constraint 4 is about a reminder never vanishing. Its spirit is
  * that nothing she does is invisible, and here it was invisible to *her*, which
@@ -23,10 +41,13 @@ import { parseInstant } from "../services/clock.js";
  *
  * ## Why this shape and not the others
  *
- * **Not a merged session.** Putting the commander lane and the hourly lane on
- * one session id would put his conversation in the same context as twenty-four
- * unattended turns a day, which is the exact failure `harness/agent.ts` created
- * lanes to prevent, and every later turn of his would pay to re-read them.
+ * **Not a merged session** — *at the time*, and this one has since been
+ * overruled. The objection was cost: his conversation in the same context as
+ * twenty-four unattended turns a day, every later turn of his paying to re-read
+ * them. That reading was right about the cost and wrong about what it was
+ * buying, and the Commander overruled it on 2026-08-11 with the bloat stated
+ * and accepted. The record of the argument stays because the cost did not go
+ * away; only the verdict did.
  *
  * **Not a verb.** `AGENT_SURFACE` deliberately excludes the record of what she
  * has done — `beyondAgentReach` says so in as many words, and `/logs` is

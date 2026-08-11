@@ -4,8 +4,8 @@
       "type": "http",
       "url": "http://localhost:4201/mcp",
       "headers": {
-        "X-Agent-Id": "${ADJUTANT_AGENT_ID:-tassadar}",
-        "X-Project-Root": "${ADJUTANT_PROJECT_ROOT:-/Users/Reason/code/ai/syl}"
+        "X-Agent-Id": "fenix",
+        "X-Project-Root": "/Users/Reason/code/ai/syl/worktrees/fenix"
       }
     }
   }

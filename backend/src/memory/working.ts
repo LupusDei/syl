@@ -46,15 +46,40 @@ import type { MemoryNodeKind } from "./schema.js";
  *
  * ## The budget, and the cliff underneath it
  *
- * {@link WORKING_MEMORY_MAX_BYTES} is 4,000 bytes — roughly 1,000 tokens —
+ * {@link WORKING_MEMORY_MAX_BYTES} is 32,000 bytes — roughly 8,000 tokens —
  * across at most {@link WORKING_MEMORY_MAX_LINES} lines.
  *
  * The number is chosen against what it is spent on: this is prepended to
  * *every* turn on every lane, so it is paid for on the morning agenda, the
- * evening review, every heartbeat and every message. At ~1k tokens it is a
- * rounding error against a turn's context and still holds on the order of
- * fifty distilled lines, which is more than a person could recite about
- * their own week. Doubling it would buy little and cost it every single turn.
+ * evening review, every heartbeat and every message. It is the one cost in
+ * the system that recurs on literally every turn, which is why it is written
+ * down here rather than left to grow.
+ *
+ * ### Why it was 4,000 and is now 32,000
+ *
+ * The original argument was sound and its arithmetic was not. It reasoned that
+ * 4,000 bytes "still holds on the order of fifty distilled lines" — but
+ * {@link WORKING_MEMORY_ENTRY_MAX_CHARS} is 160, so the real ceiling was
+ * 4,000/160 ≈ **25 entries**, and {@link WORKING_MEMORY_MAX_LINES} at 60 bound
+ * even earlier. Measured against the live graph on 2026-08-11 it admitted 23
+ * of 30 nodes and dropped the Commander's own name, his wife, his son and his
+ * daughter (`syl-ulf`). A budget that cannot hold thirty memories was sized
+ * for a corpus of fifty thousand.
+ *
+ * The word doing the work in that sentence was **distilled**, and nothing
+ * distils: {@link renderEntry} emits the label plus the raw body and truncates
+ * mid-sentence. The digest is supposed to be *written* by the nightly
+ * consolidation ("consolidation writes a compact digest of the current state
+ * of play"), which has never run, so the budget was sized for an artefact that
+ * has never been produced.
+ *
+ * Raised to 32,000 on the Commander's explicit order, 2026-08-11, with the
+ * cost accepted: *"I'm fine with it burning extra tokens. I want more context
+ * in memory and if it ever gets too expensive, we can start rolling that
+ * back."* This is a STOPGAP and is documented as one — it buys room while the
+ * two real fixes land (distillation, and a salience signal that is not a
+ * constant). A larger budget filled by a broken ranker is more of the wrong
+ * things, in recency order.
  *
  * The reason it is enforced rather than aspired to is `syl-03d`: Claude Code's
  * `MEMORY.md` loads its first 200 lines / 25 KB and **silently ignores the
@@ -120,13 +145,26 @@ import type { MemoryNodeKind } from "./schema.js";
  */
 
 /** The most bytes the projection may occupy. See the header for the argument. */
-export const WORKING_MEMORY_MAX_BYTES = 4_000;
+export const WORKING_MEMORY_MAX_BYTES = 32_000;
 
-/** The most lines it may occupy. */
-export const WORKING_MEMORY_MAX_LINES = 60;
+/**
+ * The most lines it may occupy.
+ *
+ * Raised with the byte budget and for the same reason. These two are a PAIR:
+ * whichever binds first is the real budget, so raising bytes alone would have
+ * moved the ceiling nowhere. At 4,000/60 the line cap bound at 51 entries
+ * before a single byte of the byte budget was at risk.
+ */
+export const WORKING_MEMORY_MAX_LINES = 480;
 
-/** How many hot nodes are considered before the budget is applied. */
-export const WORKING_MEMORY_SCAN_LIMIT = 200;
+/**
+ * How many hot nodes are considered before the budget is applied.
+ *
+ * Raised with the budget: this is the candidate pool the ranker sorts, so a
+ * pool smaller than the budget can hold is a cap the budget cannot see. At 200
+ * against 32,000 bytes the scan would have become the binding constraint.
+ */
+export const WORKING_MEMORY_SCAN_LIMIT = 1_000;
 
 /** Longest rendered entry, label and detail together. */
 export const WORKING_MEMORY_ENTRY_MAX_CHARS = 160;

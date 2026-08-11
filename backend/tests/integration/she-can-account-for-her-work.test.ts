@@ -18,8 +18,11 @@ import { silentRunner, testConfig } from "../helpers/service.js";
  *
  * The Commander found a reminder at 07:04 he had not asked for, asked Syl about
  * it, and she said honestly that she had no memory of writing it. She was right:
- * the hourly turn runs on `LANES.heartbeat` with its own session, and nothing on
- * that lane had ever reached the lane he talks to.
+ * the hourly turn ran on a lane of its own with its own session, and nothing on
+ * that lane had ever reached the lane he talks to. The Commander has since
+ * merged her unattended turns onto his (2026-08-11), so the record is now
+ * mostly a restatement of his own transcript — kept because a resumed session
+ * is not guaranteed and the runs table is. See `jobs/unattended-contributor.ts`.
  *
  * `unattended-contributor.test.ts` covers the record's shape. What only the
  * assembly can answer is whether the lane he talks to is actually handed it, and

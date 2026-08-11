@@ -10,49 +10,74 @@ import { composeTurnContext, type Contributor } from "./turn-context.js";
 /**
  * A lane is one independent thread of conversation.
  *
- * Syl talks to herself as well as to the Commander: a heartbeat asking whether
- * anything needs attention, a morning agenda, a nightly consolidation pass. On
- * a single session id all of that lands in one transcript, so her inner
- * monologue interleaves with what he actually said and every lane pays for the
- * others' context. Lanes are what keep them apart.
+ * Syl talks to herself as well as to the Commander, and the question a lane
+ * answers is which of those belong in the same transcript. On a single session
+ * id everything interleaves and every lane pays for the others' context; on
+ * separate ids nothing she thinks on one is available to another.
+ *
+ * ## Her spare-time turns are HIS thread, and that is the Commander's ruling
+ *
+ * > *"running the hourly checkin on a different thread is wrong for now —
+ * > resume the same session — there will be things in the chat session that
+ * > might invoke a reason to send a message and how it should appear — a new
+ * > lane invalidates that entirely. The hourly checkin should also use the same
+ * > lane. If it causes bloat on that thread we can solve it later, but for
+ * > right now much of her personality lives in that thread."*
+ * >                                        — the Commander, 2026-08-11
+ *
+ * This file used to argue the opposite in as many words, and the argument was
+ * about *cost*: an inner monologue interleaving with what he actually said, and
+ * every later turn paying to re-read it. That cost is real and he has read it
+ * and taken it — **the bloat is accepted, not overlooked**, and the note it
+ * leaves behind is that if the commander thread becomes expensive the answer is
+ * summarisation inside it rather than a second thread beside it.
+ *
+ * What the separation cost was harder to see, and is why he ruled: the hour
+ * that decides whether to say something to him was the one turn with no access
+ * to how he had been spoken to. Whether a thing is worth interrupting him with,
+ * and what it should sound like when it arrives, are judgements made out of the
+ * conversation — and an hour that cannot read the conversation makes them out
+ * of nothing. `jobs/unattended-contributor.ts` exists because the separation
+ * had already produced its own defect in the other direction: a reminder she
+ * filed at 07:04 that the Syl he talks to had never heard of.
+ *
+ * So all three of her unattended turns — the hourly self-ping
+ * (`jobs/heartbeat-job.ts`), the render review (`jobs/render-review-job.ts`)
+ * and the morning brief (`jobs/agenda-job.ts`, on his later ruling the same
+ * day) — take their turns on {@link LANES.commander}, resuming the session he
+ * talks to. **None of them may reset it.** Each used to start a fresh thread
+ * for a good reason of its own; on his lane that call now throws his
+ * conversation away, so no handler is given a `reset` to make.
+ *
+ * ## What still gets a lane of its own
+ *
+ * The two that are not conversation at all. The dream is speculation about the
+ * corpus and the extraction turn is a sealed reader over text he may have
+ * pasted from anywhere; putting either in his thread would mix a reasoning pass
+ * — or an attacker's article — into the transcript he is talking to.
+ *
+ * ## The protection that used to be a side effect of all this
+ *
+ * A heartbeat could not pierce quiet hours because `index.ts` recorded "what he
+ * said" for the commander lane and no other, and the hour was not that lane.
+ * That is no longer a distinction a lane can carry, so it is not keyed on one:
+ * see {@link AskOptions.hisWords}, which is set only by the seam that actually
+ * holds a message he sent.
  *
  * These are the lanes that exist today; the type is a plain string so a caller
  * can add one (a per-project research thread, say) without touching this file.
  */
 export const LANES = {
-  /** The Commander's own conversation. The default. */
+  /**
+   * The Commander's own conversation, and every turn she takes in her spare
+   * time. The default.
+   *
+   * See the note above: the hourly self-ping and the render review resume this
+   * session deliberately, so "the commander lane" now means *the thread she
+   * lives in* rather than *the turns he started*. It can act; see
+   * {@link LANES_WITH_HANDS}.
+   */
   commander: "commander",
-  /**
-   * The hourly self-ping. Notice, do not nag.
-   *
-   * An hour that is hers, in which she decides whether anything is worth doing
-   * — and in which the expected answer, most hours, is nothing. It is the one
-   * lane besides `commander` that can act; see {@link LANES_WITH_HANDS} and
-   * `jobs/heartbeat-job.ts`.
-   */
-  heartbeat: "heartbeat",
-  /**
-   * The morning brief.
-   *
-   * One turn a day, before the note at 07:00 that announces it, assembling his
-   * reminders, to-dos and goals into something he can read on waking. It acts;
-   * see {@link LANES_WITH_HANDS} and `jobs/agenda-job.ts`.
-   */
-  agenda: "agenda",
-  /**
-   * Coming back to look at a render she started.
-   *
-   * One turn per render, minutes after it was asked for, whose whole subject is
-   * that one clip: is it finished, does it look right, does she still want him
-   * to have it. It acts — the decision it exists to reach is `show_him` — so
-   * see {@link LANES_WITH_HANDS} and `jobs/render-review-job.ts`.
-   *
-   * Its own lane rather than a step inside `heartbeat`: the hour is her spare
-   * time and runs as one day-long conversation, and threading a specific
-   * render's review through it would make every later hour pay to re-read her
-   * opinions of clips that are already decided.
-   */
-  studio: "studio",
   /** The nightly review and memory consolidation pass. */
   consolidation: "consolidation",
   /**
@@ -63,6 +88,16 @@ export const LANES = {
    * separate turn can be given a narrow output contract. See `memory/extract.ts`.
    */
   extraction: "extraction",
+  /**
+   * Reading the recent neighbourhood back to decide what CONNECTS to what.
+   *
+   * Extraction's sibling and its successor in the same pass: extraction says
+   * what is worth remembering, digestion says how the things remembered relate.
+   * Its own lane for extraction's three reasons unchanged — his answer must not
+   * wait on it, a failed digestion must not fail his reply, and only a separate
+   * turn can be given a narrow output contract. See `memory/digest.ts`.
+   */
+  digestion: "digestion",
 } as const;
 
 /**
@@ -75,54 +110,33 @@ export const LANES = {
  * be two places to keep in step, and the one that drifted would be the notice —
  * which is precisely the false security claim `syl-009.9` was about.
  *
- * **`commander`** is his own conversation: the lane `syl-009` was written for.
+ * **`commander`** is the thread she lives in: his own conversation, and the
+ * three unattended turns that now resume it. It is the lane `syl-009` was
+ * written for, and it is back to being the only entry here — not because
+ * anything was taken away, but because the hour, the render review and the
+ * morning brief stopped being lanes at all.
  *
- * **`heartbeat`** is the widening, and it is a considered one rather than a
- * relaxation. The Commander asked for an hourly turn that "wakes her up and
- * lets her decide what to do" — the entire point of which is that she can do
- * it. An hour that could only think would be an hour that could only report,
- * and there is nobody to report to at 14:00 on a Tuesday. What keeps it narrow
- * is not the absence of hands but the bounds on the hour: `jobs/heartbeat-job.ts`
- * spends at most one turn, may put something in front of him at most twice a
- * day, and cannot pierce quiet hours because no heartbeat turn ever records
- * words as HIS — so `harness/urgency.ts` has nothing to verify a claim against
- * and the Outbox holds everything until morning.
+ * That is worth stating plainly, because this list shrinking usually means a
+ * capability was withdrawn and here it means the opposite. Each of those three
+ * was argued onto this list for the same reason: an unattended turn that could
+ * only *think* would be a turn that judges something and then has no way to act
+ * on the judgement, and there is nobody to report to at 14:00 on a Tuesday.
+ * They still act. They act as this lane.
  *
- * **`agenda`** is the second widening, and the least surprising of the three.
- * The morning brief exists to be *put in front of him* before the 07:00 note
- * announces it; a brief she could only think would live in a run record nobody
- * reads, which is exactly the state `jobs/agenda-job.ts` was written to end.
- * What keeps it narrow is the shape of the slot rather than the absence of
- * hands: one turn, once a day, in a fifteen-minute window before the
- * announcement, and it cannot pierce quiet hours for the same structural reason
- * the heartbeat cannot — no unattended turn ever records words as HIS.
- *
- * **`studio`** is the fourth, and it is the narrowest of them: the lane exists
- * for exactly one decision, and that decision is a verb. The Commander's
- * ruling, 2026-08-11 — *"when Syl triggers a video to be rendered she needs
- * some kind of wake up mechanism five minutes later to check to see whether or
- * not it's done and whether or not she wants to send it to me"* — makes
- * `show_him` the entire point of the turn. A review turn that could only think
- * would be a turn that judges a clip and then has no way to act on the
- * judgement, which is the state this lane was added to end. What keeps it
- * narrow is that every wake is caused by a render SHE started and is about that
- * one render: one turn, one clip, a bounded number of wakes per render
- * (`jobs/render-review-job.ts`), and the same daily ceiling the hour spends
- * from — a review that reaches him counts against `SENDINGS_PER_DAY` exactly as
- * an hour that reaches him does, or moving the send out of the heartbeat would
- * have quietly removed the bound.
+ * **What keeps the widening narrow has never lived here**, which is why merging
+ * the lanes did not loosen it: the bounds are in the jobs. One turn per wake,
+ * at most `SENDINGS_PER_DAY` reachings a local day counted across every job
+ * that can reach him, a bounded number of wakes per render — and, for his
+ * sleep, `TurnOptions.hisWords`, which is false for every unattended turn
+ * whatever lane it runs on. See {@link AskOptions.hisWords}: that is the
+ * protection that used to be a side effect of this list having several entries.
  *
  * **Every other lane has nothing, and that is not an oversight.** The dream
  * must not be able to write a reminder while judging what matters, and the
  * extraction turn is a sealed reader over text he may have pasted from
  * anywhere, which must never hold a capability at all.
  */
-export const LANES_WITH_HANDS: readonly Lane[] = [
-  LANES.commander,
-  LANES.heartbeat,
-  LANES.agenda,
-  LANES.studio,
-];
+export const LANES_WITH_HANDS: readonly Lane[] = [LANES.commander];
 
 /**
  * Lanes that must never write into Claude Code's auto-memory.
@@ -155,10 +169,18 @@ export const LANES_WITH_HANDS: readonly Lane[] = [
  * unconditionally and cannot be told otherwise — this entry is what keeps the
  * guarantee if extraction is ever moved onto `SylAgent` for continuity, and
  * `assertExtractionIsMemoryless` fails loudly if it is removed.
+ *
+ * `digestion` is the third, and it inherits BOTH arguments rather than one.
+ * Like the dream it produces speculation about the corpus — typed edges nobody
+ * asserted — and like extraction it reads node bodies that were written from a
+ * transcript the Commander may have pasted an article into. A turn that is both
+ * downstream of untrusted text and upstream of the graph is the one that must
+ * least of all hold a writable store loaded at the start of every later session.
  */
 export const MEMORYLESS_LANES: ReadonlySet<string> = new Set<string>([
   LANES.consolidation,
   LANES.extraction,
+  LANES.digestion,
 ]);
 
 /** The auto-memory a lane may use — off for {@link MEMORYLESS_LANES}. */
@@ -313,6 +335,96 @@ export interface SylAgentOptions {
    * to make unrepresentable.
    */
   readonly hands?: readonly string[] | ((lane: Lane) => readonly string[]);
+}
+
+/**
+ * What a caller can say about a turn beyond its prompt and its lane.
+ *
+ * Deliberately not part of {@link SylAgentOptions.turnOptions}: everything here
+ * is a fact about **this one turn**, and an agent-level option cannot express a
+ * fact that changes between two turns on the same lane. That is exactly the
+ * distinction that used to be carried by the lane name and no longer can be.
+ */
+export interface AskOptions {
+  /**
+   * Whether `prompt` is text the **Commander himself sent**.
+   *
+   * ## What this defends
+   *
+   * `harness/urgency.ts` lets a reminder pierce quiet hours only when she
+   * quotes a phrase he actually wrote, and the phrase is checked against a file
+   * that `index.ts` writes from the prompt of a turn. So whatever decides
+   * *which* turns write that file decides whether an unattended turn can wake
+   * him at 03:00 by quoting the words it was woken with.
+   *
+   * That used to be decided by the lane: the commander lane wrote, and the
+   * hour, the review and the brief were different lanes, so they could not. The
+   * Commander has since merged all three onto his lane — see {@link LANES} —
+   * and a lane name now says nothing at all about who spoke. Left keyed on the
+   * lane, the merge would have repealed the protection silently, with no line
+   * of code mentioning quiet hours.
+   *
+   * So it is keyed on the thing that is actually true. **Absent means no**, and
+   * the only caller that may set it is the one holding a message he sent
+   * (`services/conversation-service.ts`, from the message store). A job handler
+   * cannot set it by omission, by copying an options object, or by running on
+   * his lane; `SylAgent` writes it into `TurnOptions` after the caller's
+   * overrides, so a turn cannot claim it either.
+   *
+   * The failure mode of getting this wrong in the safe direction is a reminder
+   * that waits until morning. In the unsafe direction it is his house woken at
+   * three by a sentence nobody said.
+   */
+  readonly hisWords?: boolean;
+}
+
+/**
+ * One turn at a time per lane, shared by every agent over the same store.
+ *
+ * ## Why this exists now and did not before
+ *
+ * A turn is `claude --resume <session id>`, and two of those against one id are
+ * two processes reading and appending the same transcript. Nothing used to be
+ * able to arrange that: `ConversationService` serialises per conversation, and
+ * every other turn was on a lane of its own, so the per-conversation queue was
+ * accidentally a per-session queue as well.
+ *
+ * Merging her unattended turns onto his lane ends that. The hour fires from the
+ * job runner and he sends a message from his phone, and neither knows about the
+ * other — so the session he is mid-turn on is the session the heartbeat is
+ * about to resume. That is a hazard the lanes were absorbing for free, which is
+ * the exact shape of "a protection that evaporates because a lane changed".
+ *
+ * ## Keyed on the STORE
+ *
+ * `forLane` builds a new `SylAgent` sharing the runner and the store, so a map
+ * held on the instance would give each job handler a queue of its own and
+ * serialise nothing. The store is what owns session ids, and a session id is
+ * what two overlapping turns would collide over — so the store is the honest
+ * key. A `WeakMap` because a store belongs to a service and a test builds many.
+ *
+ * The cost is that an unattended turn can wait behind one of his. That is the
+ * right way round: his turn is never delayed by hers, and the job runner
+ * already runs one job at a time and already tolerates a turn taking minutes.
+ * A job that would rather stand aside than wait can ask {@link SylAgent.busy}
+ * — see `jobs/heartbeat-job.ts`, which does exactly that. **That is a reader
+ * over this queue and not a second lock**; two locking schemes over one session
+ * id would be the bug this one exists to prevent, wearing a hat.
+ */
+const TURNS_IN_FLIGHT = new WeakMap<SessionStore, Map<Lane, LaneTurns>>();
+
+/** One lane's queue: what to chain behind, and how many turns are on it. */
+interface LaneTurns {
+  /** The last turn queued. Already-handled, so a failure cannot escape here. */
+  tail: Promise<unknown>;
+  /**
+   * Turns queued and not yet settled, this one included.
+   *
+   * Counted rather than inferred from {@link tail}, because a settled promise
+   * is indistinguishable from a pending one without awaiting it — and `busy`
+   * has to answer now.
+   */
+  depth: number;
 }
 
 /** A resume failure means the stored id is unusable — not that Claude is down. */
@@ -476,18 +588,80 @@ export class SylAgent {
    * once from a clean session. Without that, a pruned or expired id would wedge
    * the lane permanently — it would keep resuming a conversation that no longer
    * exists and never speak again.
+   *
+   * Turns on one lane are serialised against each other — see
+   * {@link TURNS_IN_FLIGHT} — because his conversation and her unattended turns
+   * now share a session id and two `--resume` processes over one transcript is
+   * not a thing to find out about in production.
    */
-  async ask(prompt: string, lane: Lane = this.#lane): Promise<TurnResult> {
+  async ask(prompt: string, lane: Lane = this.#lane, options: AskOptions = {}): Promise<TurnResult> {
     assertLane(lane);
+    // Captured before the wait, used after it: `hisWords` is a fact about this
+    // prompt and must not be re-derived from anything that could have moved
+    // while the lane was busy.
+    const hisWords = options.hisWords === true;
+    return this.#queued(lane, () => this.#take(prompt, lane, hisWords));
+  }
+
+  /**
+   * Whether a turn is already running or queued on `lane`.
+   *
+   * For a caller that would rather stand aside than wait: the hourly self-ping
+   * is the lowest-priority thing on the Commander's thread and must not make
+   * him — or the morning brief — queue behind it. Asked of the same queue
+   * `ask` uses, so there is one answer and not two.
+   *
+   * True the instant a turn is queued rather than when it starts, because a
+   * caller deciding whether to add one more is asking about the queue and not
+   * about the subprocess.
+   */
+  busy(lane: Lane = this.#lane): boolean {
+    return (TURNS_IN_FLIGHT.get(this.#store)?.get(assertLane(lane))?.depth ?? 0) > 0;
+  }
+
+  /** Run `work` once every turn already queued on `lane` has settled. */
+  async #queued<T>(lane: Lane, work: () => Promise<T>): Promise<T> {
+    const lanes = TURNS_IN_FLIGHT.get(this.#store) ?? new Map<Lane, LaneTurns>();
+    TURNS_IN_FLIGHT.set(this.#store, lanes);
+    const queue = lanes.get(lane) ?? { tail: Promise.resolve(), depth: 0 };
+    lanes.set(lane, queue);
+
+    queue.depth += 1;
+    // Both arms, so a turn that throws still releases the lane. A rejection
+    // that only settled the success path would wedge the lane forever, which is
+    // a worse failure than the one this queue prevents.
+    const next = queue.tail.then(work, work);
+    // The tail is stored already-handled, so a failed turn cannot surface as an
+    // unhandled rejection on the NEXT caller's chain. The real rejection still
+    // reaches this call's own returned promise.
+    queue.tail = next.then(
+      () => {
+        queue.depth -= 1;
+      },
+      () => {
+        queue.depth -= 1;
+      },
+    );
+    return next;
+  }
+
+  /** One turn, with the resume retry. Always called with the lane held. */
+  async #take(prompt: string, lane: Lane, hisWords: boolean): Promise<TurnResult> {
     const resume = this.#store.read(lane);
 
     try {
-      return this.#remember(lane, await this.#runner(prompt, this.#buildOptions(lane, resume)));
+      return this.#remember(
+        lane,
+        await this.#runner(prompt, this.#buildOptions(lane, resume, hisWords)),
+      );
     } catch (error) {
       if (!resume || !isResumeFailure(error)) throw error;
 
       this.reset(lane);
-      return this.#remember(lane, await this.#runner(prompt, this.#buildOptions(lane, undefined)));
+      return this.#remember(
+        lane,
+        await this.#runner(prompt, this.#buildOptions(lane, undefined, hisWords)),
+      );
     }
   }
 
@@ -506,7 +680,7 @@ export class SylAgent {
     this.#store.clear(assertLane(lane));
   }
 
-  #buildOptions(lane: Lane, resume: string | undefined): TurnOptions {
+  #buildOptions(lane: Lane, resume: string | undefined, hisWords: boolean): TurnOptions {
     const forLane = this.#turnOptionsFor(lane);
     return {
       // Unattended means pre-authorised: in `-p` mode there is nobody to
@@ -542,11 +716,17 @@ export class SylAgent {
       // every turn inherits.
       strictMcpConfig: true,
       ...forLane,
-      // WHO IS SPEAKING, after the spread so it cannot be overridden. A wrapper
+      // WHICH THREAD, after the spread so it cannot be overridden. A wrapper
       // around the runner sees only a prompt and an options object, and at
-      // least one of them has to tell his lane from hers — see
+      // least one of them has to say which transcript this belongs to — see
       // `TurnOptions.lane`. Never reaches argv.
       lane,
+      // WHO IS SPEAKING, and no longer the same question as the one above.
+      // After the spread for the same reason and a sharper one: this is what
+      // decides whether a prompt is recorded as evidence the Commander said
+      // something, and a turn that could set it in its own `turnOptions` could
+      // grant itself the quiet-hours bypass. See `AskOptions.hisWords`.
+      hisWords,
       // After the spread, not before: if the agent was told where its memory
       // lives, an incidental `turnOptions` must not be able to move it.
       ...((): { autoMemory?: AutoMemory } => {

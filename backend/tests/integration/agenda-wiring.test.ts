@@ -107,12 +107,19 @@ describe("the morning brief, as scheduled by the running service", () => {
     for (const run of runs) expect(run.error ?? "").not.toContain("No handler is registered");
   });
 
-  it("should take one turn, on the agenda lane's own thread", async () => {
+  it("should take one turn, on the thread the Commander talks to", async () => {
+    // *"The morning routine update should also be on the same lane for now"* —
+    // the Commander, 2026-08-11, extending to the brief the ruling he had
+    // already made about the hour and the render review. It composes his day
+    // with his conversation in view rather than from outside it.
     const { service, turns } = await boot();
     await composeNow(service);
 
     expect(turns).toHaveLength(1);
-    expect(turns[0]?.[1].lane).toBe("agenda");
+    expect(turns[0]?.[1].lane).toBe("commander");
+    // And still not marked as words he said — see the sleep test below. Being
+    // on his lane is exactly what stopped being evidence of that.
+    expect(turns[0]?.[1].hisWords).toBe(false);
   });
 
   it("should hand that turn the hands the widening was argued for", async () => {
@@ -142,10 +149,14 @@ describe("the morning brief, as scheduled by the running service", () => {
   });
 
   it("should never let an agenda prompt be recorded as something HE said", async () => {
-    // The same protection the heartbeat has, for the same reason: the agenda
-    // lane now carries hands, and `harness/urgency.ts` checks a claimed urgent
-    // phrase against the file holding his last message. A prompt of hers in that
-    // file is a sentence she can quote to pierce his sleep.
+    // The same protection the heartbeat has, for the same reason:
+    // `harness/urgency.ts` checks a claimed urgent phrase against the file
+    // holding his last message, and a prompt of hers in that file is a sentence
+    // she can quote to pierce his sleep.
+    //
+    // It used to hold because this was a different lane from his. It is HIS
+    // LANE now, so what holds it is `AskOptions.hisWords` — the question asked
+    // directly instead of inferred from where the turn was running.
     const { service, turns } = await boot();
     await composeNow(service);
 

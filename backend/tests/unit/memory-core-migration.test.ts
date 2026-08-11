@@ -580,7 +580,7 @@ describe("nothing inferred is ever deleted", () => {
 });
 
 /**
- * `0027_memory_places.sql` widens `memory_nodes.kind`, and SQLite has no way to
+ * `0029_memory_places.sql` widens `memory_nodes.kind`, and SQLite has no way to
  * widen a CHECK. So the table is dropped and re-created under the same name,
  * inside the runner's own transaction, with foreign keys deferred to the commit.
  *
@@ -591,8 +591,30 @@ describe("nothing inferred is ever deleted", () => {
  * `foreign_key_check` at that moment. So the assertions below are about the
  * things that would NOT announce themselves.
  */
-describe("0027_memory_places — the rebuild kept everything it was standing on", () => {
-  /** A database migrated to `before`, seeded, then carried the rest of the way. */
+describe("memory_places — the rebuild kept everything it was standing on", () => {
+  /**
+   * The version the rebuild lives at, found BY NAME.
+   *
+   * A migration number is not stable while it is in flight. This file was
+   * written against `0027`; origin reached `0028` the same afternoon and the
+   * file became `0029`. The prose references were updated and these numbers
+   * were not — which would have left the definition diff below comparing two
+   * migrations that do not contain the rebuild, and **passing**. A guard that
+   * a renumber can silently defang is worse than no guard, because it goes on
+   * reporting success.
+   *
+   * So the boundary is derived from the migration's NAME, which is the part
+   * that does not move.
+   */
+  function rebuildVersion(): number {
+    const found = readMigrations(MIGRATIONS_DIR).find(
+      (migration) => migration.name === "memory_places",
+    );
+    if (found === undefined) throw new Error("no migration named memory_places");
+    return found.version;
+  }
+
+  /** A database migrated to just before the rebuild, seeded, then carried the rest of the way. */
   function acrossTheRebuild(): Database {
     const scoped = new DatabaseSync(IN_MEMORY);
     applyPragmas(scoped, { busyTimeoutMs: 100, requireWal: false });
@@ -600,7 +622,7 @@ describe("0027_memory_places — the rebuild kept everything it was standing on"
 
     applyMigrations(
       scoped,
-      all.filter((migration) => migration.version < 27),
+      all.filter((migration) => migration.version < rebuildVersion()),
     );
 
     const source = newMemoryNodeId();
@@ -711,8 +733,8 @@ describe("0027_memory_places — the rebuild kept everything it was standing on"
       );
     };
 
-    const before = definitions(26);
-    const after = definitions(27);
+    const before = definitions(rebuildVersion() - 1);
+    const after = definitions(rebuildVersion());
 
     expect(before.size).toBeGreaterThan(0);
     expect([...after.keys()].sort()).toEqual([...before.keys()].sort());

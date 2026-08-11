@@ -287,7 +287,61 @@ const NODE_COLUMNS_QUALIFIED = NODE_COLUMNS.split(", ")
   .join(", ");
 
 /**
+ * What a node's KIND is worth to the ranking, before any edge touches it.
+ *
+ * Measured on the live graph on 2026-08-11: every non-hub node had exactly one
+ * incident edge — provenance — so the edge sum was the **constant 1** across
+ * all 29 memories. A constant primary sort key is not a sort key, so admission
+ * fell through to the recency tiebreaker, and the working-memory projection
+ * evicted the Commander's own name, his wife, his son and his daughter in
+ * favour of newer chatter (`syl-ulf`). His father survived because he was
+ * mentioned more recently than his children.
+ *
+ * Two things are wrong there and they need different fixes. The graph having no
+ * real edges is `syl-5co` and is fixed by digestion writing them. But even in a
+ * richly connected graph, **degree alone is the wrong ranking for a projection
+ * that answers "who is this man"**: a person he mentions constantly and a fact
+ * that happens to sit in a dense corner would rank the same, and the identity
+ * that makes every other memory legible would be evicted by whatever was said
+ * this morning.
+ *
+ * So salience is degree PLUS a floor set by kind. The floor is small enough
+ * that a well-connected fact still outranks an isolated person, and large
+ * enough that a person is never dropped for a fact of equal degree — which is
+ * exactly the failure that was measured. `person` and `goal` sit highest
+ * because they are the anchors the constellation spec already treats as
+ * anchors, and `source` sits at zero because a source is a handle, not
+ * knowledge (`working.ts` filters it out of the rendered projection for the
+ * same reason).
+ *
+ * This also makes salience VARY on a graph that has no inferred edges yet,
+ * which matters more than it sounds: until digestion lands, a constant ranking
+ * key means the projection is ordered by nothing at all.
+ */
+const KIND_FLOOR_SQL =
+  `CASE n.kind ` +
+  `WHEN 'person' THEN 3.0 ` +
+  `WHEN 'goal' THEN 3.0 ` +
+  `WHEN 'decision' THEN 2.0 ` +
+  `WHEN 'event' THEN 1.0 ` +
+  `WHEN 'source' THEN 0.0 ` +
+  `ELSE 0.5 END`;
+
+/**
  * Hot nodes ranked by how much hot edge weight touches them, pinned as text.
+ *
+ * **Provenance edges do not count, at either end.** Both halves join BOTH
+ * endpoints and drop the edge if either is a `source`. Every memory has exactly
+ * one such edge — the conversation it came from — so it contributed a constant
+ * to every node and therefore zero information.
+ *
+ * Excluding it only on the far side is not enough, and the difference is
+ * visible on the live graph: the hub's own edges all point at non-sources, so a
+ * one-sided exclusion still let it accumulate **32**, leaving the conversation
+ * container ranked as the single most salient thing Syl knew — ahead of his
+ * children. A source is a handle, not knowledge; it should score its floor of
+ * zero and sit at the bottom, which is what dropping the edge at both ends
+ * gives.
  *
  * Written as a `UNION ALL` over the two endpoint columns and then aggregated,
  * rather than as a correlated `SUM(...) WHERE source = n.id OR target = n.id`.
@@ -301,13 +355,20 @@ const NODE_COLUMNS_QUALIFIED = NODE_COLUMNS.split(", ")
  */
 export const SALIENCE_SQL =
   `WITH incident AS ( ` +
-  `SELECT source_node AS node_id, weight FROM memory_edges WHERE tier = 'hot' ` +
+  `SELECT e.source_node AS node_id, e.weight FROM memory_edges e ` +
+  `JOIN memory_nodes a ON a.id = e.source_node ` +
+  `JOIN memory_nodes b ON b.id = e.target_node ` +
+  `WHERE e.tier = 'hot' AND a.kind <> 'source' AND b.kind <> 'source' ` +
   `UNION ALL ` +
-  `SELECT target_node AS node_id, weight FROM memory_edges WHERE tier = 'hot' ` +
+  `SELECT e.target_node AS node_id, e.weight FROM memory_edges e ` +
+  `JOIN memory_nodes a ON a.id = e.source_node ` +
+  `JOIN memory_nodes b ON b.id = e.target_node ` +
+  `WHERE e.tier = 'hot' AND a.kind <> 'source' AND b.kind <> 'source' ` +
   `), salience AS ( ` +
   `SELECT node_id, sum(weight) AS total FROM incident GROUP BY node_id ` +
   `) ` +
-  `SELECT ${NODE_COLUMNS_QUALIFIED}, coalesce(s.total, 0.0) AS salience ` +
+  `SELECT ${NODE_COLUMNS_QUALIFIED}, ` +
+  `coalesce(s.total, 0.0) + ${KIND_FLOOR_SQL} AS salience ` +
   `FROM memory_nodes n LEFT JOIN salience s ON s.node_id = n.id ` +
   `WHERE n.tier = 'hot' ` +
   `ORDER BY salience DESC, n.updated_at DESC, n.id LIMIT ?`;
@@ -763,6 +824,57 @@ export class MemoryGraph {
       .run(next, at, node.id, next);
 
     return this.#nodeOrThrow(node.id);
+  }
+
+  /**
+   * Claim an identity for a node — "these two rows are the same person".
+   *
+   * `subject_id` is the identity column. It has been there since
+   * `0012_memory_core.sql` and, until `syl-zdf.3`, nothing on the conversational
+   * path had ever written it: `extract-apply.ts` says *"Deliberately no
+   * `subjectId`"*, correctly, because a turn that could point one at an
+   * operational row would have exactly the one field it needs to attach itself
+   * to a goal. The service may write it; the model still may not.
+   *
+   * **Never overwrites a different identity.** A node already claiming one has
+   * been resolved before — or is a projection handle, where `subject_id` means
+   * "the row this is a handle for" and re-pointing it would silently detach a
+   * goal from its own node. Re-stamping the SAME identity is a no-op, statement
+   * and all: the `WHERE` carries `subject_id IS NULL`, so a second identical
+   * pass writes nothing and does not bump `updated_at`. That is what lets an
+   * idempotence test assert on `updatedAt` rather than merely on a row count.
+   *
+   * Nothing is merged and nothing is deleted. Two rows keep their bodies, their
+   * provenance and their edges, and gain a shared answer to "who is this?" —
+   * which is the reading of constraint 6 that applies here: the system does not
+   * get to silently discard things, so identity is something rows SHARE rather
+   * than something one row survives.
+   *
+   * @throws {GraphError} `bad_subject` on a malformed id or on a node that
+   * already claims a different one; `unknown_node` if the row is gone.
+   */
+  setSubject(node: MemoryNode, subjectId: string): MemoryNode {
+    const subject = requireSubject(subjectId);
+    const current = this.#nodeOrThrow(node.id);
+
+    if (current.subjectId !== null && current.subjectId !== subject) {
+      throw new GraphError(
+        "bad_subject",
+        `Node ${current.id} already claims identity ${current.subjectId}, so it will not be ` +
+          `re-pointed at ${subject}. Reconciling two identities is a merge of merges: it is ` +
+          `proposed and surfaced, never applied, because a wrong merge collapses two things ` +
+          `into one and no amount of decay makes that less wrong.`,
+      );
+    }
+
+    const at = instant(this.#clock());
+    this.#db
+      .prepare(
+        "UPDATE memory_nodes SET subject_id = ?, updated_at = ? WHERE id = ? AND subject_id IS NULL",
+      )
+      .run(subject, at, current.id);
+
+    return this.#nodeOrThrow(current.id);
   }
 
   // ── Edges: the two species ───────────────────────────────────────────────

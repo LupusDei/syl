@@ -1885,3 +1885,122 @@ describe("ask_agent — putting a question to someone who knows more", () => {
 
 
 
+
+/**
+ * Dating and pinning a to-do (`syl-74p`).
+ *
+ * Reported by the Commander with a screenshot and verified against the live
+ * database: ten to-dos, `due_at` NULL on all ten, `pinned` false on all ten.
+ *
+ * The whole stack already supported this — the columns, `TodoService.create`,
+ * `TodoService.update`, `POST /todos`, `PATCH /todos/{id}`, and an agenda order
+ * in the contract that sorts on exactly these two fields. Only the tool surface
+ * was missing, so every to-do landed in one undifferentiated pile and any
+ * "today" view was empty BY CONSTRUCTION, however well she planned his morning.
+ *
+ * A capability the model cannot reach does not exist.
+ */
+describe("dating and pinning a to-do", () => {
+  it("should carry a due date and a pin through to the store", async () => {
+    const api = fakeApi({
+      [TODO_PATH]: () => ok(storedTodo()),
+      "/todos": () => ok(storedTodo(), 201),
+    });
+
+    await call(contextFor(api), "add_todo", {
+      text: "Price the Illinois place",
+      because: "He asked for it today.",
+      dueAt: "2026-08-12T14:00:00.000Z",
+      pinned: true,
+    });
+
+    const post = api.calls.find((made) => made.method === "POST");
+    expect(post?.body).toMatchObject({
+      text: "Price the Illinois place",
+      dueAt: "2026-08-12T14:00:00.000Z",
+      pinned: true,
+    });
+  });
+
+  it("should still add an undated to-do, because most of them are", async () => {
+    const api = fakeApi({
+      [TODO_PATH]: () => ok(storedTodo()),
+      "/todos": () => ok(storedTodo(), 201),
+    });
+
+    await call(contextFor(api), "add_todo", { text: "Fix my render pipeline", because: "He said so." });
+
+    const post = api.calls.find((made) => made.method === "POST");
+    expect(post?.body).toMatchObject({ text: "Fix my render pipeline" });
+    expect(post?.body?.["dueAt"]).toBeUndefined();
+  });
+
+  it("should reschedule one that already exists", async () => {
+    const api = fakeApi({ [TODO_PATH]: () => ok(storedTodo()) });
+
+    const { envelope } = await call(contextFor(api), "schedule_todo", {
+      id: THE_TODO,
+      because: "He moved it to tomorrow.",
+      dueAt: "2026-08-13T09:00:00.000Z",
+    });
+
+    expect(api.calls.map((made) => made.method)).toContain("PATCH");
+    expect(api.calls.find((made) => made.method === "PATCH")?.body).toMatchObject({
+      dueAt: "2026-08-13T09:00:00.000Z",
+    });
+    expect(envelope).toMatchObject({ ok: true, action: "schedule_todo" });
+  });
+
+  it("should CLEAR a due date when he takes the date off, not ignore the ask", async () => {
+    // The three-way the route already models: leave alone, clear, set. A tool
+    // that can only set would make "actually, no date on that" unsayable, and
+    // an unsayable retraction is how a list stops matching what he believes.
+    const api = fakeApi({ [TODO_PATH]: () => ok(storedTodo()) });
+
+    await call(contextFor(api), "schedule_todo", {
+      id: THE_TODO,
+      because: "He took the date off.",
+      dueAt: null,
+    });
+
+    expect(api.calls.find((made) => made.method === "PATCH")?.body).toMatchObject({ dueAt: null });
+  });
+
+  it("should pin and unpin without touching the date", async () => {
+    const api = fakeApi({ [TODO_PATH]: () => ok(storedTodo()) });
+
+    await call(contextFor(api), "schedule_todo", {
+      id: THE_TODO,
+      because: "This one matters.",
+      pinned: true,
+    });
+
+    const body = api.calls.find((made) => made.method === "PATCH")?.body;
+    expect(body).toMatchObject({ pinned: true });
+    expect(body?.["dueAt"]).toBeUndefined();
+  });
+
+  it("should refuse a change that changes nothing, and write nothing", async () => {
+    const api = fakeApi({ [TODO_PATH]: () => ok(storedTodo()) });
+
+    const { envelope } = await call(contextFor(api), "schedule_todo", {
+      id: THE_TODO,
+      because: "He said something vague.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    expect(api.calls.some((made) => made.method === "PATCH")).toBe(false);
+  });
+
+  it("should refuse without a reason, like every other verb that writes", async () => {
+    const api = fakeApi({ [TODO_PATH]: () => ok(storedTodo()) });
+
+    const { envelope } = await call(contextFor(api), "schedule_todo", {
+      id: THE_TODO,
+      dueAt: "2026-08-13T09:00:00.000Z",
+    });
+
+    expect(envelope.ok).toBe(false);
+    expect(api.calls.some((made) => made.method === "PATCH")).toBe(false);
+  });
+});
