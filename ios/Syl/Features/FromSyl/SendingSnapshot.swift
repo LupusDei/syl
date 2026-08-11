@@ -19,9 +19,17 @@ struct SendingRowSnapshot: Identifiable, Equatable, Sendable {
     var dateLine: String
     /// Where the video got to.
     var standing: Standing
-    /// The clip, when there is one. The row draws its **poster** — `?variant=thumb`,
-    /// which the service guarantees exists on this one attachment and guarantees is not
-    /// frame zero, because her loops open on empty starfield.
+    /// The clip. Present exactly when there is one to play.
+    var video: Attachment?
+    /// What the row draws as its still: **the video's poster**, `?variant=thumb`, which
+    /// the service pulls from part-way into the clip rather than frame zero, because her
+    /// loops open on empty starfield.
+    ///
+    /// **Separate from ``video`` on purpose.** It is set only when the attachment
+    /// actually reports a thumbnail, so a row can never fall back to the original to
+    /// draw a still — that fallback is a whole clip, measured at 8.4 MB over a tailnet,
+    /// spent on a frame. A clip with no poster is still playable; it simply does not get
+    /// to spend that.
     var still: Attachment?
 
     var id: SylID
@@ -40,7 +48,7 @@ struct SendingRowSnapshot: Identifiable, Equatable, Sendable {
 
     /// Whether there is anything to tap. False for both the states with no video, so a
     /// row never offers a play control over nothing at all.
-    var isPlayable: Bool { still != nil }
+    var isPlayable: Bool { video != nil }
 
     /// The one line under the words when there is no video, in her voice.
     ///
@@ -104,16 +112,21 @@ struct SendingListSnapshot: Equatable, Sendable {
 
         return SendingListSnapshot(
             rows: ordered.map { sending in
-                SendingRowSnapshot(
+                let playable = sending.state == .ready ? sending.video : nil
+                return SendingRowSnapshot(
                     words: sending.words,
                     because: sending.because,
                     dateLine: dateLine(for: sending.createdAt, now: now, in: days, locale: locale),
                     standing: standing(of: sending),
-                    // **Only a ready sending has a still**, and a `video` present on any
+                    // **Only a ready sending has a clip**, and a `video` present on any
                     // other state would be the service contradicting itself. Reading the
-                    // state rather than the nullability means a row can never offer a
-                    // poster for a clip that is not there.
-                    still: sending.state == .ready ? sending.video : nil,
+                    // state rather than the nullability means a row can never offer to
+                    // play something that is not there.
+                    video: playable,
+                    // And only a clip that says it has a poster gets a still. Asking for
+                    // `?variant=thumb` where there is none is a 404; falling back to the
+                    // original is the whole clip.
+                    still: playable?.hasThumbnail == true ? playable : nil,
                     id: sending.id
                 )
             }

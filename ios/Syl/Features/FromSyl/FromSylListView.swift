@@ -152,8 +152,10 @@ private struct SendingRow: View {
         .accessibilityLabel(snapshot.accessibilityLabel)
         .accessibilityHint(snapshot.isPlayable ? "Plays this one" : "")
         .fullScreenCover(isPresented: $isPlaying) {
-            if let still = snapshot.still {
-                AttachmentViewer(attachment: still)
+            if let video = snapshot.video {
+                // The viewer chat already has: it fetches the original, plays on an
+                // explicit tap and never takes the audio session.
+                AttachmentViewer(attachment: video)
             }
         }
     }
@@ -163,13 +165,21 @@ private struct SendingRow: View {
     /// A row with no video draws **nothing at all here** rather than a plate with a play
     /// glyph on it: the affordance would promise something that cannot happen, and the
     /// words and the note below already say what is true.
+    ///
+    /// A clip that has no poster — which the service says does not happen for a sending,
+    /// and which this refuses to trust — gets the plate instead. It does **not** get the
+    /// original downloaded to produce a still.
     @ViewBuilder
     private var still: some View {
-        if let attachment = snapshot.still {
+        if let video = snapshot.video {
             Button {
                 isPlaying = true
             } label: {
-                SendingPoster(attachment: attachment)
+                if let poster = snapshot.still {
+                    SendingPoster(attachment: poster)
+                } else {
+                    SendingPosterless(attachment: video)
+                }
             }
             .buttonStyle(.plain)
             .accessibilityHidden(true)
@@ -286,6 +296,45 @@ private struct SendingPoster: View {
     }
 }
 
+/// A playable clip with no poster: the case the service says cannot happen.
+///
+/// It draws the box, the duration and a play control, and **fetches nothing at all**.
+/// The tempting fallback — ask for the original and pull a frame out of it — is the
+/// 8.4 MB the chat cell used to spend to draw a triangle, and it would be spent here on
+/// every row, invisibly, over a tailnet.
+private struct SendingPosterless: View {
+    let attachment: Attachment
+
+    var body: some View {
+        Color.clear
+            .aspectRatio(attachment.aspectRatio, contentMode: .fit)
+            .frame(maxHeight: 420)
+            .overlay {
+                ZStack {
+                    SylTheme.Colour.card.opacity(0.35)
+                    VStack(spacing: SylTheme.Metric.snug) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(SylTheme.Colour.luminanceCore)
+                            .frame(
+                                width: SylTheme.Metric.minimumTouchTarget,
+                                height: SylTheme.Metric.minimumTouchTarget)
+                            .background { Circle().fill(SylTheme.Colour.luminance.opacity(0.55)) }
+                        Text(AttachmentPlaceholder.durationLabel(for: attachment))
+                            .font(SylTheme.Typeface.numeral)
+                            .foregroundStyle(SylTheme.Colour.inkSoft)
+                    }
+                }
+            }
+            .clipShape(
+                RoundedRectangle(cornerRadius: SylTheme.Metric.cardRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: SylTheme.Metric.cardRadius, style: .continuous)
+                    .strokeBorder(SylTheme.Colour.hairline, lineWidth: SylTheme.Metric.hair)
+            }
+    }
+}
+
 /// The loader's starting fetcher, before the environment is readable.
 ///
 /// A `@StateObject` is constructed before `@Environment` can be read, so the real
@@ -321,6 +370,7 @@ extension SendingListSnapshot {
                 because: "He said the winter here makes him forget the sky has colours.",
                 dateLine: "Today",
                 standing: .rendering,
+                video: nil,
                 still: nil,
                 id: "syl:sending:0198e2c0-0000-7000-8000-00000000c001"
             ),
@@ -330,6 +380,7 @@ extension SendingListSnapshot {
                 because: "He wanted to know when she brings him up unprompted.",
                 dateLine: "Yesterday",
                 standing: .failed,
+                video: nil,
                 still: nil,
                 id: "syl:sending:0198e2c0-0000-7000-8000-00000000c003"
             ),
