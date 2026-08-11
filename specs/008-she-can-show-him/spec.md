@@ -87,9 +87,14 @@ Memory, a sheet for Lists, plus Chat, Pairing and Settings.
 per sending, newest first: her face as the still, her words underneath, the date.
 Tapping plays it.
 
-**Naming is his.** Not "Videos" — that names the file format rather than the
-thing. What it is, is *she made you something*. Candidates to rule on rather than
-my choosing: **Sendings**, **From Syl**, **She Made You This**.
+**The surface is called "From Syl."** His ruling, 2026-08-11 — *"From Syl is
+closest."* It names the sender rather than the file format, which is the whole
+point: what arrives there is not a video, it is her.
+
+Note that the internal noun stays **sending** — the thing she makes — while the
+screen he sees says *From Syl*. Those are allowed to differ, and should: one is
+what the code calls it, the other is what a person reads at the top of a
+screen.
 
 The still on each row is a frame from the video — the same frame-extraction
 `see_myself` already needs, since she cannot watch an mp4 and must look at stills
@@ -147,12 +152,36 @@ about this.
 - Her memory holds every sending with what she was trying to say, so *"show me
   the one about Ela"* is answerable.
 
+## How often — his ruling, and the distinction it needs
+
+> *"two or three immediately, and then twice a day I think"*
+
+**Two or three at launch**, so the surface is not empty the first time he opens
+it and so he can judge the thing rather than the promise. Then **twice a day.**
+
+**Twice a day is a RATE, not a TIMETABLE, and the difference is the whole
+feature.** A sending that arrives at 09:00 and 18:00 every day is a newsletter —
+it becomes furniture within a week, and he will stop opening it. The point of a
+sending is that she thought of him *just then*, and a fixed slot is proof that
+she did not.
+
+So: two per day as a ceiling she spends when she has something, not a quota she
+fills because the hour arrived.
+
+This matters more here than anywhere else in the project, because **her daily
+rhythm already owns two fixed slots** — the morning agenda and the evening
+review. A sending must not silently become a third scheduled item, and it must
+not ride along with the other two. If she has nothing worth sending today, **she
+sends nothing**, which `SOUL.md` already covers: *notice, do not nag* — and
+*silence is a valid answer.*
+
+Corollary worth stating so it is not discovered later: an unspent day does not
+accumulate. Two missed sendings do not make four tomorrow. A rate that banks is a
+timetable with extra steps.
+
 ## Open questions for the Commander
 
-1. **The name of the surface.** Sendings, From Syl, or yours.
-2. **Does she get a voice, and is it a search like her face?** I think yes to
-   both, and that it belongs in `SOUL.md` the way the face does — but writing
-   into her soul is a thing I propose and you rule on.
-3. **How often?** *Notice, do not nag* already governs, and she is told to stop
-   making a kind he ignores. I would set no numeric limit and let the existing
-   rule do the work.
+1. **Does she get a voice, and is it a search like her face?** He said things he
+   would love to **hear**, which implies yes, and the models exist. I think it
+   belongs in `SOUL.md` the way her face does — but writing into her soul is a
+   thing I propose and he rules on, so it is still open.
