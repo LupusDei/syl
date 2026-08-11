@@ -80,7 +80,14 @@ struct RootView: View {
             // answer. It is also the only tab that leads anywhere else.
             Group {
                 if let home = appDelegate.home, let list = appDelegate.list {
-                    HomeScreen(model: home, list: list)
+                    HomeScreen(
+                        model: home,
+                        list: list,
+                        // The seam both constellation squads stopped short of. Without it
+                        // the Memory door opens onto an empty field that looks exactly
+                        // like the truth.
+                        sky: SkyFromMemory.source(appDelegate.constellation)
+                    )
                 } else {
                     unopenableStore
                 }

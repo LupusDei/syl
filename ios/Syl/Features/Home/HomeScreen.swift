@@ -18,6 +18,13 @@ struct HomeScreen: View {
     /// minute for a screen that shows a number.
     @ObservedObject var list: TodoListViewModel
 
+    /// Where the Memory door leads.
+    ///
+    /// Handed in rather than built here so this screen stays renderable offscreen without
+    /// booting the object graph — and defaulted to an empty sky so a preview, a test or a
+    /// render is a sky with no stars rather than a crash.
+    var sky: SkySource = { .empty }
+
     @Environment(\.scenePhase) private var scenePhase
 
     /// Whether the list is up.
@@ -82,7 +89,10 @@ struct HomeScreen: View {
                 // The default source reads nothing, which is the honest state of a brand
                 // new pairing and stays honest until the device-scoped graph read lands —
                 // at which point this line takes an adapter and nothing that draws moves.
-                case .memory: MemoryScreen()
+                case .memory:
+                    // The seam the two squads left. Without a source the door opens onto a
+                    // permanently empty field that looks exactly like the truth.
+                    MemoryScreen(source: sky)
                 case .today: EmptyView()
                 }
             }
