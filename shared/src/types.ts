@@ -278,6 +278,79 @@ export type CreateAttachmentRequest = {
 };
 
 /**
+ * Where the **video** got to. It says nothing about the words, which
+ * were delivered before this field had any value at all.
+ *
+ * `pending` — a render is being followed, compressed, or poster-framed.
+ * `ready`   — `video` is attached and playable.
+ * `failed`  — there will be no video, and `reason` says why in a
+ *             sentence. The words stand either way.
+ *
+ * A client renders all three: a row with her words and the date is a
+ * complete row. `failed` is not an error state to hide — it is the
+ * honest one, and hiding it would be the silence this project refuses.
+ */
+export type SendingState = "pending" | "ready" | "failed";
+
+/**
+ * Something she wanted to say, in her own face.
+ *
+ * ## The words are never contingent on the video
+ *
+ * `words` and `messageId` are written before a render is asked about and
+ * are never touched again. Whatever happens to the video, he has already
+ * received what she wanted to say, and the push notification carried
+ * **her sentence** — never *"Syl sent you a video"*, which would be a
+ * notification about the app rather than from her.
+ *
+ * ## Nothing can delete a sending
+ *
+ * Not a cache eviction, not a cleanup job, not her. The `sendings` table
+ * carries `BEFORE DELETE` and `BEFORE UPDATE` triggers that `RAISE(ABORT)`
+ * unconditionally, and the message and attachment a sending points at are
+ * guarded the same way, so the words and the video cannot be removed out
+ * from under it either. There is **no named exception** — unlike the
+ * memory tables, which admit one for the Commander's explicit order.
+ * A belief the system holds about him is his to correct; a thing she
+ * gave him is not the system's to take back.
+ *
+ * The only writes the triggers permit are filling in what was not known
+ * yet: `video`, `state`, `reason`, `updatedAt`.
+ *
+ * ## The full-quality render is the record
+ *
+ * `renderName` addresses the original mp4, which is never modified and
+ * never compressed in place. `video` is a *derived, regenerable* copy,
+ * made small enough to live under the attachment ceiling. Losing the
+ * derived copy costs a re-encode; losing the record would cost the thing
+ * itself.
+ */
+export type Sending = {
+  readonly id: Id;
+  readonly words: string;
+  readonly because: string;
+  readonly messageId: Id;
+  readonly state: SendingState;
+  readonly renderName: string | null;
+  readonly video: Attachment | null;
+  readonly reason: string | null;
+  readonly createdAt: Instant;
+  readonly updatedAt: Instant;
+};
+
+export type SendingPage = {
+  readonly items: Sending[];
+  readonly nextCursor: string | null;
+  readonly hasMore: boolean;
+};
+
+export type CreateSendingRequest = {
+  readonly words: string;
+  readonly because: string;
+  readonly renderName: string;
+};
+
+/**
  * Drives the catch-up policy, which is why it is stored on the row.
  *
  * A `commitment` never collapses: it fires late and says it is late.
@@ -844,7 +917,15 @@ export type MemoryConstellation = {
   readonly filaments: MemoryFilament[];
 };
 
-export type SyncResourceType = "conversation" | "message" | "reminder" | "todo" | "goal" | "device" | "delivery" | "job" | "run";
+/**
+ * `sending` is on the feed and `attachment` is not, and the difference is
+ * the rule: an attachment is never interesting on its own — a device
+ * wants it exactly when it wants the message carrying it, and
+ * `Message.attachments` is served inline. A sending has its own surface,
+ * its own list and its own lifecycle after the message is written, so it
+ * is the resource that changes when a video finally lands.
+ */
+export type SyncResourceType = "conversation" | "message" | "reminder" | "todo" | "goal" | "device" | "delivery" | "job" | "run" | "sending";
 
 export type SyncChangeOp = "upsert" | "delete";
 

@@ -228,7 +228,7 @@
         },
         "hasThumbnail": {
           "type": "boolean",
-          "description": "Whether `?variant=thumb` will answer with bytes. False for every\nvideo, and false for an image the service could not downscale.\nA client that asks for a thumbnail that does not exist gets `404`;\nit must read this rather than probe.\n"
+          "description": "Whether `?variant=thumb` will answer with bytes. False for an image\nthe service could not downscale, and false for **an uploaded\nvideo** — no macOS built-in extracts a frame, and a client that\nwants one for its own clip uploads it alongside.\n\nTrue for the video on a `Sending`, which is the exception and the\nreason this field is worth reading rather than assuming. Those get\na poster pulled out of the clip with ffmpeg, so the From Syl list\nshows her face.\n\nA client that asks for a thumbnail that does not exist gets `404`;\nit must read this rather than probe. Reading it also decides how\nmany bytes an inline cell costs: a client that treats `false` as\n\"fetch the original instead\" pulls the whole clip to draw a play\ntriangle.\n"
         }
       }
     },

@@ -49,6 +49,11 @@ export type IdType =
   // at it, and every redaction tombstone left in surviving prose names it — so
   // a dangling reference to a deletion has to stay legible.
   | "memory_deletion"
+  // Something she chose to give him (`0024_sendings.sql`): her words, and the
+  // video of her saying them. Addressable on its own because it outlives the
+  // write that made it — the video lands minutes after the words do, and the
+  // surface that lists them is not the conversation.
+  | "sending"
   // Telemetry, not memory. A dream session is a row in the dream log
   // (`0013_dream_log.sql`) and never a node in the graph — see the header of
   // that migration for why the two must not touch.

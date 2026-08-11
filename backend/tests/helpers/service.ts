@@ -31,6 +31,8 @@ import { MessageStore } from "../../src/services/message-store.js";
 import { Outbox } from "../../src/services/outbox.js";
 import { PresenceService } from "../../src/services/presence.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
+import { SendingService } from "../../src/services/sending-service.js";
+import { SendingStore } from "../../src/services/sending-store.js";
 import { SyncService } from "../../src/services/sync-service.js";
 import { TodoService } from "../../src/services/todo-service.js";
 
@@ -315,6 +317,8 @@ export function testDeps(db: SylDatabase): {
   readonly memory: MemoryViews;
   readonly attachments: AttachmentStore;
   readonly renders: RenderService;
+  readonly sendings: SendingStore;
+  readonly composer: SendingService;
   readonly presence: PresenceService;
   readonly intakeQueue: IntakeQueue;
   readonly memoryRuntime: MemoryRuntime;
@@ -325,6 +329,7 @@ export function testDeps(db: SylDatabase): {
   // that writes them — exactly as `bootstrap` does it.
   const attachments = testAttachments(db, clock);
   const messages = testMessages(db, clock, attachments);
+  const sendings = new SendingStore({ db: db.handle, clock, attachments });
   const devices = new DeviceTokenService({ db: db.handle, clock });
   // No quiet hours by default: a route test asserting on delivery would
   // otherwise depend on what hour TEST_NOW happens to be in.
@@ -334,12 +339,16 @@ export function testDeps(db: SylDatabase): {
   const goals = new GoalService({ db: db.handle, clock });
   const jobs = new JobStore({ db: db.handle, clock });
   const memory = testMemory(db, clock);
+  const renders = testRenders(clock);
+  // Hoisted rather than inlined below: the composer publishes her words
+  // through this same object, exactly as production does.
+  const chat = testChat(messages);
   return {
     keys: testKeys(db),
     messages,
     // No sink either. `startServer` points it at the socket; a frame-level test
     // that wants to watch what is published sets its own.
-    chat: testChat(messages),
+    chat,
     devices,
     outbox,
     reminders,
@@ -350,7 +359,7 @@ export function testDeps(db: SylDatabase): {
     sync: new SyncService({
       db: db.handle,
       clock,
-      resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs }),
+      resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings }),
     }),
     jobs,
     idempotency: new IdempotencyStore({ db: db.handle, clock }),
@@ -365,7 +374,25 @@ export function testDeps(db: SylDatabase): {
     memory,
     attachments,
     // Cannot render and cannot reach Runway. See `testRenders`.
-    renders: testRenders(clock),
+    renders,
+    sendings,
+    // Composes for real, against the same stores — but its compressor refuses
+    // rather than shelling out, so no test needs ffmpeg and none decodes a file
+    // that is not really a video. A test that wants a video attached injects
+    // its own `SendingService`; `sending-service.test.ts` is where that lives.
+    composer: new SendingService({
+      sendings,
+      chat,
+      attachments,
+      outbox,
+      renders,
+      workDir: mkdtempSync(join(tmpdir(), "syl-test-sendings-")),
+      compress: async () => ({
+        ok: false,
+        reason: "There is no ffmpeg in the test environment, so this one goes without a video.",
+      }),
+      log: () => undefined,
+    }),
     // No sink. `startServer` attaches one; a test that wants to watch frames
     // hands its own to `PresenceService` directly.
     presence: new PresenceService({ clock }),

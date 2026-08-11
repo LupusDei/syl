@@ -1,4 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { ApiError, Delivery, Device, Reminder, Run, RunPage } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +22,8 @@ import { JobStore } from "../../src/services/job-store.js";
 import { MessageStore } from "../../src/services/message-store.js";
 import { Outbox } from "../../src/services/outbox.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
+import { SendingService } from "../../src/services/sending-service.js";
+import { SendingStore } from "../../src/services/sending-store.js";
 import { SyncService } from "../../src/services/sync-service.js";
 import { TodoService } from "../../src/services/todo-service.js";
 import type { SylDatabase } from "../../src/services/database.js";
@@ -133,12 +138,15 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
     const messages = new MessageStore({ db: db.handle, clock, attachments });
     const todos = new TodoService({ db: db.handle, clock });
     const goals = new GoalService({ db: db.handle, clock });
+    const sendings = new SendingStore({ db: db.handle, clock, attachments });
+    const renders = testRenders(clock);
+    const chat = testChat(messages);
 
     running = await startTestApp(
       createApp(testConfig(), {
         keys,
         messages,
-        chat: testChat(messages),
+        chat,
         devices,
         outbox,
         reminders,
@@ -147,7 +155,7 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         sync: new SyncService({
           db: db.handle,
           clock,
-          resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs }),
+          resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings }),
         }),
         jobs,
         idempotency: new IdempotencyStore({ db: db.handle, clock }),
@@ -155,7 +163,18 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         memory: testMemory(db, clock),
         attachments,
         // Cannot render, cannot reach Runway, spends nothing. See `testRenders`.
-        renders: testRenders(clock),
+        renders,
+        sendings,
+        composer: new SendingService({
+          sendings,
+          chat,
+          attachments,
+          outbox,
+          renders,
+          workDir: mkdtempSync(join(tmpdir(), "syl-reminder-sendings-")),
+          compress: async () => ({ ok: false, reason: "no ffmpeg in tests" }),
+          log: () => undefined,
+        }),
       }),
     );
     token = keys.pair(keys.issuePairingCode().code, "Commander's iPhone").token;
