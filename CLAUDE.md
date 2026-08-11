@@ -216,14 +216,24 @@ to add is about *additional* surfaces and blocks nothing.
   local view into a namespace someone else was actively extending. A colliding
   create can also wire itself into another epic's dependency graph, which is
   invisible unless you look for the edges rather than the rows.
-- **Write commit messages through a heredoc, never `git commit -m`.** The shell
-  expands `$` and executes backticks inside a double-quoted `-m`, so a message
-  mentioning a price or naming a field in backticks loses the word silently —
-  the commit succeeds and the sentence is simply missing. Both have now
-  happened: `$5,000` vanished from one message, and a backticked field name
-  from another, in a commit that was recording a lesson about guarantees held
-  by remembering. Use `git commit -F -` with a quoted heredoc (`<<'MSG'`),
-  which expands nothing.
+- **Any command carrying PROSE takes a quoted heredoc, never a `-m`/`--flag=`
+  string.** `git commit -m`, `bd create --description`, `bd update --notes`,
+  `bd close --reason` — all of them. A double-quoted argument is expanded by the
+  shell: `$` interpolates and **backticks execute**, so the word simply vanishes
+  and the command succeeds. The sentence is left short, grammatical, and wrong.
+  Four instances so far — `$5,000` out of a commit message, a field name out of
+  another, and `bd create` twice, once removing `` `tools: ""` `` from the middle
+  of a P0 description and leaving *"auto-memory is written BY THE MODEL through
+  the Write tool.  removed Write, so auto-memory stopped"* — a sentence with its
+  subject surgically extracted and still perfectly readable.
+
+  **This repository is unusually exposed and it is the house style that does
+  it.** Our comments and bead descriptions name real identifiers in backticks on
+  purpose, because a comment citing the thing it is about is the convention. So
+  the one codebase where backticks are everywhere is the one where the shell
+  eats them, and it selects for whoever writes the most careful prose. Use
+  `<<'EOF'` — quoted, so it expands nothing — and read the output for
+  `command not found`, which is the only warning you get.
 - The shell has `noclobber` set — a plain `>` fails if the file exists. Use `>|`.
 - `--verbose` is mandatory alongside `--output-format stream-json` in `-p` mode.
 - Headless sessions are pre-authorised (`--permission-mode bypassPermissions`)
