@@ -222,7 +222,55 @@ export function isCommanderNode(node: MemoryNode): boolean {
  */
 export function findCommanderNode(nodes: readonly MemoryNode[]): MemoryNode | null {
   const marked = nodes.filter((node) => node.tier === SCANNED_TIER && isCommanderNode(node));
-  return marked.length === 1 ? (marked[0] ?? null) : null;
+  if (marked.length === 1) return marked[0] ?? null;
+  if (marked.length > 1) return null;
+  return unmarkedCommander(nodes);
+}
+
+/**
+ * The anchor when nothing carries the marker, which on the live graph is
+ * always (`syl-zdf.15`).
+ *
+ * **Every relational descriptor is a possessive claim about him.** "his wife",
+ * "his son", "his father" — the referent is never named because, to the
+ * extractor, he is the one person who does not need introducing. So he is the
+ * person nobody is described *relative to*: the identity that carries no
+ * relational descriptor while others carry one.
+ *
+ * Grouping by identity FIRST is what makes this work rather than merely
+ * plausible. The live graph holds two nodes for one wife — `"Ela — his wife"`
+ * and a bare `"Ela"` — and the bare one is descriptor-less, so a scan over raw
+ * nodes finds two candidates and declines. Folding them together first leaves
+ * the descriptor attached to her identity, and exactly one candidate standing.
+ *
+ * **It declines rather than guesses**, and that asymmetry is the whole safety
+ * argument. A colleague mentioned by bare name produces a second candidate and
+ * this returns `null`, costing one quiet pass in which nothing is connected.
+ * Picking one instead would hang his wife, his children and his father off a
+ * stranger — and unlike an inferred edge, which decays, a whole family wired to
+ * the wrong person is a shape that looks deliberate forever.
+ *
+ * This is a heuristic standing in for an identity the system should simply be
+ * told. It is strictly better than matching a phrase the extractor has never
+ * produced, and it is still the most fragile joint in digestion: an explicit
+ * configured identity, seeded at bootstrap, is the real answer.
+ */
+function unmarkedCommander(nodes: readonly MemoryNode[]): MemoryNode | null {
+  const byName = new Map<string, { described: boolean; first: MemoryNode }>();
+
+  for (const node of nodes) {
+    if (node.tier !== SCANNED_TIER || node.kind !== RESOLVABLE_KIND) continue;
+    const { name, descriptor } = parseLabel(node.label);
+    const key = normaliseName(name);
+    if (key === "") continue;
+
+    const seen = byName.get(key);
+    if (seen === undefined) byName.set(key, { described: descriptor !== null, first: node });
+    else if (descriptor !== null) seen.described = true;
+  }
+
+  const candidates = [...byName.values()].filter((entry) => !entry.described);
+  return candidates.length === 1 ? (candidates[0]?.first ?? null) : null;
 }
 
 /** What should happen to a set of nodes that look like one person. */

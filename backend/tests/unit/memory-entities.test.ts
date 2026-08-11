@@ -329,3 +329,62 @@ describe("moving a relationship out of the label and into the column", () => {
     }
   });
 });
+
+/**
+ * The anchor, against the labels the extractor ACTUALLY produces (`syl-zdf.15`).
+ *
+ * Every one of these six labels and bodies is copied from the live graph on
+ * 2026-08-11, not invented. The original acceptance fixture gave the Commander
+ * the body `"The Commander."`, which satisfied the marker; the real extractor
+ * has never once used that phrase, so `findCommanderNode` declined on the live
+ * data and `proposeFromProse` returned nothing at all. Four correct kinship
+ * descriptors were parsed and then dropped for want of something to attach to.
+ *
+ * That is the second time this subsystem has been green against a fixture that
+ * did not match reality — `syl-5co` recorded the first. So this block exists to
+ * hold the anchor against captured shapes rather than expected ones.
+ */
+describe("finding the Commander in the graph as it really is", () => {
+  const live = (label: string, body: string): MemoryNode =>
+    node({ kind: "person", label, body });
+
+  const liveNodes = (): MemoryNode[] => [
+    live(
+      "Justin Martin",
+      "He is Justin Martin, an engineering leader and entrepreneur, born October 8th 1988.",
+    ),
+    live("Ela — his wife", "His wife Ela, born April 22nd 1994, is a fiery yogi."),
+    live("Ela", "Ela wants an apartment back in the old state."),
+    live("Isla — his daughter", "His daughter Isla."),
+    live("Rowan — his son", "His son Rowan."),
+    live(
+      'Robert C. Martin ("Uncle Bob") — his father',
+      "His father is Robert C. Martin, widely known as Uncle Bob.",
+    ),
+  ];
+
+  it("should find him among the real labels, where nothing says 'the commander'", () => {
+    const found = findCommanderNode(liveNodes());
+
+    expect(found).not.toBeNull();
+    expect(found?.label).toBe("Justin Martin");
+  });
+
+  it("should connect his wife, children and father from those same labels", () => {
+    const nodes = liveNodes();
+    const relations = proposeFromProse(nodes).map((edge) => edge.relation);
+
+    expect(relations).toContain("spouse_of");
+    expect(relations).toContain("child_of");
+    expect(relations).toContain("parent_of");
+  });
+
+  it("should still decline rather than guess when two people are equally unmarked", () => {
+    // A colleague mentioned by bare name is not an anchor, and picking either
+    // would hang his whole family off a stranger. Declining costs one quiet
+    // pass; guessing corrupts the graph in a way no demotion undoes.
+    const nodes = [...liveNodes(), live("Sarah Chen", "A colleague at 6lock.")];
+
+    expect(findCommanderNode(nodes)).toBeNull();
+  });
+});
