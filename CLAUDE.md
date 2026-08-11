@@ -210,6 +210,21 @@ to add is about *additional* surfaces and blocks nothing.
   (`syl-acr`); each time an agent caught it, and each time the guard reported a
   duplicate version loudly with both filenames rather than silently skipping a
   migration. That guard is why these stay ten-minute problems.
+- **Checking ORIGIN is necessary and NOT sufficient — ask two questions, not
+  one.** The rule below answers *which number is free*. It says nothing about
+  *which numbers your branch can hold*. A branch that is behind cannot satisfy
+  contiguity at the number origin says is free: take it, and you leave a gap
+  under it, and `readMigrations` hard-fails on a gap — reddening every
+  database-backed test for a reason its author did not cause. Origin was at
+  `0024` while a branch sat at `0023`, so both obvious moves were wrong.
+
+      git ls-tree --name-only origin/main backend/src/migrations/   # what is free
+      ls backend/src/migrations/                                    # what you can hold
+
+  The second is the one-liner nobody was running. If your branch is missing a
+  number origin has, import that one file byte-identical (`git checkout
+  origin/main -- <path>`) to restore contiguity rather than fast-forwarding a
+  shared tree under other agents.
 - **Before claiming an id or a number in a shared namespace — a bead root, a
   spec directory, a migration — fetch and look at ORIGIN, not at your branch.**
   Five collisions in one day all had this single cause: creating from a stale
