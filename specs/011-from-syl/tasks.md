@@ -508,8 +508,16 @@ so that search needs him, and he has said not now.
       composed with `"latest"` while a newer voiced derivative exists records the
       original render's name. **Known residual, contained rather than fixed**:
       `latest()` stays ambiguous for `#loadLatest` (`render-service.ts:618`), which
-      serves her own `see_myself latest`. That is the price of keeping the fix local, and
-      it is recorded rather than silently widened. The general statement, worth keeping
+      serves her own `see_myself latest`. Measured rather than assumed — `mux.ts` uses
+      `-c:v copy`, so the voiced file's video stream is **byte-identical** to the
+      render's and the frames she looks at are the same pixels. The one real difference:
+      `mux.ts:188` uses `-stream_loop`, so a long sentence repeats the shot, and
+      `frames.ts:49` samples at fixed *fractions* (`[0.04, 0.35, 0.65, 0.96]`), so on a
+      two-pass loop two of the four can land on near-identical moments. **Same pixels,
+      slightly weaker sample** — she still sees her own face at full fidelity, but the
+      spread is the reason `see_myself` takes four frames rather than one. Not a defect,
+      not worth fixing now, and not worth pretending is nothing. The general statement,
+      worth keeping
       because it will recur: *once a voiced clip is itself a record, `latest()` stops
       meaning "the last thing she rendered" and starts meaning "the last record
       written", and those diverge the moment she speaks over an old shot.*
