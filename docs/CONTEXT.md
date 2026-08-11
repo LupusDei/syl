@@ -1551,3 +1551,19 @@ given. Deriving the sentence from the list closed that — and within the hour t
 derivation exposed a second defect that could not have existed before, since
 entries are spliced into one sentence and **a `says` may not contain a comma**.
 A hand-written sentence never had to survive being joined to anything.
+
+**A commit inside a branch is a waypoint, not a destination.** The same day, a
+false alarm about the context budget was diagnosed as reading two constants from
+two branches, with the remedy *"take both from one `git show <branch>:<file>`"*.
+That diagnosis was wrong: both reads came from one ref, correctly. The ref was 26
+commits behind the tip, and genuinely did raise working memory without the
+ceiling — the ceiling moved later. **The proposed remedy would have passed the
+real failure straight through**, which makes it worse than none: a rule that
+looks right and does not fire ends the investigation. Measure the tip of what
+will actually merge.
+
+The same shape governs migration numbers, where checking origin is necessary and
+not sufficient: origin says which number is *free*, and nothing about which
+numbers *your branch can hold*. A branch that is behind cannot satisfy
+contiguity at the number origin calls free. Two questions, and only one of them
+was being asked.
