@@ -1907,3 +1907,34 @@ When a guard fires on something that looks legitimate, the answer is almost
 never a wider threshold. It is that the guard is testing a proxy for the
 property you actually care about, and the firing has just told you what the real
 property is.
+
+### A conflict marker says two people wrote here, not what you are deleting (2026-08-11)
+
+An add/add conflict on a test file was resolved by taking one side wholesale.
+**21 passing tests stopped existing, and every check afterwards was green** —
+because a test that no longer exists cannot fail. They were recovered verbatim,
+but nothing in the toolchain would have said so.
+
+The screen, which costs one command: **compare the merge result's blob against
+EACH parent's. Identical to one parent is the signature of a side taken
+wholesale.**
+
+    git rev-parse "$merge:$file" "$merge^1:$file" "$merge^2:$file"
+
+**It is a screen, not a verdict.** Run against another of the same day's merges
+it fired correctly — the result was byte-identical to parent 1 — and the file
+was fine: both sides carried the same 44 tests and differed only inside the
+conflicting hunks. So the second step is what turns the signal into an answer:
+**list what the discarded side contained that the result does not.** For tests,
+the `it(...)` names; for a module, the exported symbols.
+
+The habit that fails here is subtle, because it does not feel like carelessness:
+you read both sides, you understand both, you judge one correct, and you take
+it. What is never asked is what the *other* side had that the survivor lacks —
+and a conflict marker cannot prompt that question, because it marks where the
+text disagrees, not where content only exists once.
+
+The generalisation is larger than merges: **a file path is a shared namespace,
+and so is an export name.** `INFERRED_RELATIONS` was exported from two modules
+for one database column, and the migration-number discipline — check ORIGIN, not
+your branch — applies to both, unchecked by anyone for a day.
