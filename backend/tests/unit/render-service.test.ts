@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fixedClock } from "../../src/services/clock.js";
 import { RenderService } from "../../src/render/render-service.js";
 import type { RenderBackend, RunwayResult, RunwayTask, SubmitSpec } from "../../src/render/runway.js";
-import { studioAt } from "../../src/render/studio.js";
+import { DEFAULT_OPENING, studioAt } from "../../src/render/studio.js";
 
 /**
  * Syl rendering herself, and being able to say what it cost.
@@ -33,12 +33,23 @@ let studio: ReturnType<typeof studioAt>;
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "syl-studio-"));
   studio = studioAt(root);
-  // The reference. Everything hangs on it — see `docs/VIDEO.md` — so the tests
-  // put a real file where the real one lives rather than stubbing the read.
+  // Both pictures, as real files where the real ones live rather than as
+  // stubbed reads — and with DIFFERENT bytes, because the thing several tests
+  // below are about is WHICH of the two reaches Runway.
   const reference = studio.reference();
   mkdirSync(dirname(reference), { recursive: true });
-  writeFileSync(reference, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  writeFileSync(reference, REFERENCE_BYTES);
+  writeFileSync(studio.opening(), OPENING_BYTES);
 });
+
+/** Stand-ins for her likeness and for the ribbon every clip opens on. */
+const REFERENCE_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xfe]);
+const OPENING_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]);
+
+/** What a `data:` URI carries, back as bytes, so a spec can be checked against a file. */
+function bytesOf(dataUri: string): Buffer {
+  return Buffer.from(dataUri.slice(dataUri.indexOf(",") + 1), "base64");
+}
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
@@ -180,13 +191,66 @@ describe("asking for a render", () => {
     expect(prompt).toMatch(/first and last frames are identical/iu);
   });
 
-  it("should hand the reference over as the image the model anchors on", async () => {
+  it("should open on the bare ribbon the eight loops open on, never on her own face", async () => {
+    // The Commander, 2026-08-11: the service's renders "look like the template
+    // smiling still frame is the first frame of the video", where the eight
+    // loops he named as the template all open on the blue ribbon.
+    //
+    // The cause is not the prompt. `promptImage` is the FIRST FRAME — Runway
+    // starts the video from the picture it is handed — so a render given the
+    // smiling headshot opens on the smiling headshot no matter what the text
+    // says. `LOOP_CLAUSE` was rewritten to describe a bare ribbon and could not
+    // have worked, because a sentence cannot move a frame pinned by an image.
+    //
+    // Measured on the artifacts: all eight loops open on ONE image (PSNR ~35dB
+    // between any two of their first frames — the same picture through two
+    // encodes, not two generations), and it is the ribbon.
     const backend = fakeBackend();
     const service = serviceWith(backend);
 
     await service.start(ASK);
 
-    expect(backend.specs[0]?.promptImage).toMatch(/^data:image\/png;base64,/u);
+    const sent = backend.specs[0]?.promptImage ?? "";
+    expect(sent).toMatch(/^data:image\/png;base64,/u);
+    expect(bytesOf(sent)).toEqual(OPENING_BYTES);
+    expect(bytesOf(sent)).not.toEqual(REFERENCE_BYTES);
+  });
+
+  it("should ask for the portrait shape the eight loops are, not a landscape one", async () => {
+    // Measured: the eight loops are 834x1112 and a service render was 1112x834
+    // — the same pixels, transposed. `834:1112` is one of the ratios seedance2
+    // publishes, and it is the one the loops are.
+    //
+    // The old default was `720:1280`, which is a legal ratio and is NOT what
+    // came back: seedance2 takes the video's shape from `promptImage`, and the
+    // reference is a 1120x832 landscape headshot. So the requested ratio was
+    // quietly overruled by the picture. Asking for the shape the opening still
+    // already is means the two can no longer disagree.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+
+    await service.start(ASK);
+
+    const ratio = backend.specs[0]?.ratio ?? "";
+    expect(ratio).toBe("834:1112");
+    const [width, height] = ratio.split(":").map(Number);
+    expect(width).toBeLessThan(height as number);
+  });
+
+  it("should record the picture it actually sent, so the render can be made again", async () => {
+    // The sidecar's whole job. A record naming a picture the render was not
+    // made from is the same lie as a lost prompt, one indirection further out.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+
+    const started = await service.start(ASK);
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    expect(started.record.reference).toBe(DEFAULT_OPENING);
+    expect(bytesOf(backend.specs[0]?.promptImage ?? "")).toEqual(
+      readFileSync(join(root, started.record.reference)),
+    );
   });
 
   it("should record the framing and whether it is one that holds her likeness", async () => {
@@ -255,15 +319,21 @@ describe("what a render refuses", () => {
     expect(service.list()).toEqual([]);
   });
 
-  it("should say the reference is missing rather than render somebody else", async () => {
-    rmSync(studio.reference(), { force: true });
+  it("should say the opening still is missing rather than start the video somewhere else", async () => {
+    // The picture that is actually sent, and therefore the one whose absence
+    // changes what comes back. Without it Runway would be handed nothing to
+    // start from — or, worse, whatever picture somebody wired in its place,
+    // which is how the first frame became a smiling headshot.
+    rmSync(studio.opening(), { force: true });
     const service = serviceWith(fakeBackend());
 
     const refused = await service.start(ASK);
 
     expect(refused.ok).toBe(false);
     if (refused.ok) return;
-    expect(refused.reason).toMatch(/reference/iu);
+    expect(refused.reason).toMatch(/ribbon|opening/iu);
+    expect(refused.reason).toContain(studio.opening());
+    expect(refused.retryable).toBe(false);
   });
 });
 

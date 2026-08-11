@@ -25,11 +25,25 @@
     "the same clip. Everything added after this file exists is exact."
   ],
 
+  "$defaults": [
+    "`reference` is what goes over as `promptImage`, and `promptImage` IS THE",
+    "VIDEO'S FIRST FRAME — Runway starts the clip from the picture it is handed.",
+    "So it is the bare ribbon, not her likeness. All eight loops open on this one",
+    "picture: PSNR between the first frames of any two of them is ~35dB, which is",
+    "one image through two encodes rather than two generations.",
+    "",
+    "It also decides the SHAPE. Measured 2026-08-11: the loops are 834x1112 and a",
+    "render made against the 1120x832 landscape headshot came back 1112x834 —",
+    "same pixels, transposed — while both asked for `720:1280`. seedance2 takes",
+    "the aspect from the picture and overrules `ratio` without saying so. `ratio`",
+    "here is the shape the loops actually are, so the two cannot disagree."
+  ],
+
   "defaults": {
     "model": "seedance2",
-    "ratio": "720:1280",
+    "ratio": "834:1112",
     "duration": 15,
-    "reference": "renders/reference.png"
+    "reference": "renders/opening-ribbon.png"
   },
 
   "shots": [

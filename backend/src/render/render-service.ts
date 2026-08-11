@@ -66,6 +66,15 @@ export interface RenderRecord {
   readonly model: string;
   readonly ratio: string;
   readonly duration: number;
+  /**
+   * The picture handed to Runway as `promptImage`, relative to her home.
+   *
+   * **What was actually sent**, which since 2026-08-11 is the opening ribbon
+   * rather than her likeness. The field keeps the name `generate.mjs` gave it so
+   * that every sidecar ever written stays readable — a record that named a
+   * picture the render was not made from would be the same lie as a lost prompt,
+   * one indirection further out.
+   */
   readonly reference: string;
   readonly framing: Framing;
   /** The composed prompt, exactly as it was sent. Reproducible from this alone. */
@@ -159,6 +168,13 @@ const IDENTITY =
  * already formed and already smiling — she counted five out of five and called
  * the first second of each one a lie.
  *
+ * **That reading was wrong, and rewriting this clause did not fix it.** The
+ * renders opened on her already smiling because `promptImage` was the smiling
+ * headshot, and `promptImage` is the first frame: no wording can move a frame
+ * an image input has pinned. The fix is the picture — see `studio.ts`. The
+ * clause below is still the right clause, for the reason given next, and it is
+ * worth knowing that it was once believed to be the whole answer.
+ *
  * The eight loops work because they are a **transformation**: a ribbon of blue
  * light travelling alone, gathering into her, and unravelling back into the
  * ribbon it came from. She is made of the same light the whole way through, and
@@ -173,10 +189,29 @@ const LOOP_CLAUSE =
   "At the end she unravels back into the ribbon and it streams away, leaving empty starfield. " +
   "The first and last frames are identical: the bare ribbon, no figure.";
 
-/** What a render is, unless something says otherwise. The loops' own settings. */
+/**
+ * What a render is, unless something says otherwise. The loops' own settings.
+ *
+ * **`ratio` is the shape the eight loops actually are**, measured off the files
+ * with `ffprobe` on 2026-08-11: 834x1112. It used to say `720:1280`, which is a
+ * legal seedance2 ratio, is portrait, and was never what came back — a render
+ * made with it arrived 1112x834, landscape, matching the 1120x832 headshot it
+ * was handed. **seedance2 takes the video's aspect from `promptImage` and
+ * overrules `ratio` silently**, which is why a portrait constant sat here for
+ * days above a stream of landscape videos and nothing anywhere disagreed.
+ *
+ * So the fix is the picture (see {@link Studio.opening}), and this constant is
+ * the second half: with an 834x1112 opening still, asking for `834:1112` means
+ * the two can no longer say different things. `720:1280` is also a different
+ * portrait shape from the loops — 9:16 against 3:4 — so it would not have cut
+ * against them even if it had been honoured.
+ *
+ * Costs the same either way: `creditsFor` bands on the longer side, and 1112
+ * and 1280 are both under the 1280 that ends the `sd` band.
+ */
 const DEFAULTS = {
   model: "seedance2",
-  ratio: "720:1280",
+  ratio: "834:1112",
   /** `seedance2` tops out here, measured 2026-08-10. */
   duration: 15,
 } as const;
@@ -295,16 +330,18 @@ export class RenderService {
       };
     }
 
-    const reference = this.#studio.reference();
-    if (!existsSync(reference)) {
-      // The reference is the only thing holding her appearance still between
-      // clips. Rendering without it would not fail — it would produce a
-      // stranger, expensively.
+    // The picture that is actually sent, and therefore the video's first frame.
+    // Checked rather than assumed: without it there is nothing to start the
+    // clip from, and the failure mode of getting this wrong is not an error —
+    // it is fifteen seconds that open on the wrong thing, at full price.
+    const opening = this.#studio.opening();
+    if (!existsSync(opening)) {
       return {
         ok: false,
         reason:
-          `The reference picture of me is not where it should be (${reference}), and it is the ` +
-          "only thing holding my face still between shots. Without it the render would be somebody else.",
+          `The ribbon my clips open on is not where it should be (${opening}). It is the first ` +
+          "frame of every render — without it the video would begin somewhere else, and it would " +
+          "not cut against the others.",
         retryable: false,
       };
     }
@@ -316,7 +353,13 @@ export class RenderService {
 
     const submitted = await this.#backend.submit({
       model: DEFAULTS.model,
-      promptImage: this.#dataUri(reference),
+      // **The first frame of the video, not a style hint.** This used to be her
+      // reference — a smiling headshot — so every render opened on her face,
+      // already formed and already smiling, while `LOOP_CLAUSE` was busy
+      // describing an empty starfield. The clause was rewritten twice and could
+      // not have worked: no wording moves a frame that an image input pins.
+      // `studio.ts` has the measurements.
+      promptImage: this.#dataUri(opening),
       promptText: prompt,
       ratio: DEFAULTS.ratio,
       duration: DEFAULTS.duration,
@@ -337,7 +380,7 @@ export class RenderService {
       model: DEFAULTS.model,
       ratio: DEFAULTS.ratio,
       duration: DEFAULTS.duration,
-      reference: this.#relativeReference(),
+      reference: this.#relativeTo(opening),
       framing: framing.id,
       prompt,
       scene,
@@ -612,9 +655,8 @@ export class RenderService {
     return `data:image/${kind};base64,${readFileSync(reference).toString("base64")}`;
   }
 
-  /** The reference as `generate.mjs` records it: a path, not the base64. */
-  #relativeReference(): string {
-    const absolute = this.#studio.reference();
+  /** A picture as `generate.mjs` records one: a path, not the base64. */
+  #relativeTo(absolute: string): string {
     return absolute.startsWith(this.#studio.root)
       ? absolute.slice(this.#studio.root.length).replace(/^[/\\]+/u, "")
       : absolute;
