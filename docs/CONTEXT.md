@@ -912,6 +912,26 @@ Constitution Rule 1 and it has already paid for itself.
 **Fail loudly on auth and billing.** These are the failures that would quietly
 change what the Commander is paying, or quietly stop the assistant working.
 
+**A mechanism that explains the observation perfectly, and describes something
+that never happened, reads as insight rather than as a guess.** That is what
+makes it dangerous. A wild guess gets challenged; a coherent account of *why*
+gets relayed onward as a finding. Three false diagnoses reached the Commander as
+fact on 2026-08-10–11 — "extraction produces containers rather than facts", "the
+service writes frames to /tmp", "every planning commit exists twice on main" —
+and each one had a tidy mechanism attached. All three were withdrawn. **Before
+reporting a cause, name the one command that would disprove it, and run that.**
+
+Two specific forms of it, both bought the same night:
+
+- **A merge-status claim has a shelf life of minutes in a shared checkout.**
+  Re-verify at the moment you report it, not from a check you ran earlier. Main
+  moves under a running agent constantly, and "not on main" is true until it is
+  not.
+- **`git show --stat` on a merge commit is not evidence of what that commit
+  introduced.** It shows the combined diff against the first parent, so a merge
+  bringing in a large file reads exactly like a re-add. Use a path-filtered
+  `git log`, or look at `%p`. A subject line is not topology.
+
 **If a property can be STATED, it can be forgotten. If it can be DERIVED, it
 cannot.** artanis's line, and the through-line under most of what follows —
 worth reading before the individual cases, because we rediscovered it about
