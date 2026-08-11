@@ -1,0 +1,364 @@
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+
+import { resolveClaudeBinFromProcess } from "./claude-bin.js";
+
+import {
+  assertAutoMemory,
+  autoMemorySettingsFlag,
+  type AutoMemory,
+} from "../memory/auto-memory.js";
+
+import {
+  assertSubscriptionAuth,
+  buildUserFrame,
+  createLineDecoder,
+  parseEvent,
+  type InitEvent,
+  type SylEvent,
+  assembleReply,
+} from "./protocol.js";
+
+/**
+ * Runs a single conversational turn against Claude Code.
+ *
+ * ## Why one process per turn
+ *
+ * Measured behaviour on Claude Code 2.1.226: in `-p` (print) mode with
+ * `--input-format stream-json`, the CLI does not finish a turn until stdin
+ * reaches EOF. Holding the pipe open to send a second message simply stalls —
+ * verified by holding stdin open for 25s and watching the turn complete only
+ * on close.
+ *
+ * So a turn is: spawn, send one prompt, close stdin, read to completion.
+ * Continuity across turns comes from `--resume <sessionId>`, using Claude
+ * Code's own session store rather than a process we have to keep alive.
+ *
+ * That trade lands well for an assistant: there is no daemon to supervise, a
+ * crash costs at most one turn, and a heartbeat is just another turn.
+ */
+export interface TurnOptions {
+  /** Working directory for the agent. Defaults to the current process cwd. */
+  readonly cwd?: string;
+  /** Model id, e.g. "claude-haiku-4-5". Omit to use the CLI default. */
+  readonly model?: string;
+  /** Standing orders appended to the system prompt (Syl's soul). */
+  readonly systemPrompt?: string;
+  /** Path to an MCP config JSON file. Plugin MCP servers load regardless. */
+  readonly mcpConfig?: string;
+  /** Prior session id, to continue an existing conversation. */
+  readonly resume?: string;
+  /**
+   * Session id to create the conversation under, instead of letting the CLI
+   * mint one. Must be a UUID; `newSessionId()` produces a suitable value.
+   *
+   * Ignored when `resume` is set — that conversation already has an id.
+   * Defaults to a fresh uuid, so the id is always known before the spawn.
+   */
+  readonly sessionId?: string;
+  /** Override the `claude` binary path. */
+  readonly claudeBin?: string;
+  /**
+   * Claude Code permission mode. **No default** — the caller decides.
+   *
+   * A headless turn nobody can approve needs `"bypassPermissions"`, or the CLI
+   * denies every call and the assistant burns turns discovering it cannot act.
+   * But that is exactly the wrong answer for a turn that reads untrusted text,
+   * so it must be chosen at each call site rather than inherited silently.
+   * See `runReaderTurn` for the other end of that spectrum.
+   */
+  readonly permissionMode?: string;
+  /**
+   * Which built-in tools exist for this turn. `""` disables all of them.
+   *
+   * This is `--tools`, not `--allowedTools`, and the difference is a security
+   * boundary: `--allowedTools` pre-approves names on a surface that still
+   * exists, while `--tools` sets what exists at all. Only the latter makes a
+   * turn *incapable* of acting.
+   */
+  readonly tools?: string;
+  /**
+   * Ignore ambient MCP configuration. Defaults to true when `mcpConfig` is set,
+   * and can be set true on its own to mean "no MCP servers at all".
+   *
+   * Without it the session inherits every MCP server the user happens to have
+   * configured, and the model burns dozens of turns searching a tool surface
+   * it does not need.
+   */
+  readonly strictMcpConfig?: boolean;
+  /**
+   * Which of Claude Code's own settings sources this turn loads: any comma-
+   * separated subset of `user`, `project`, `local`. **`""` loads none of them.**
+   *
+   * `--strict-mcp-config` is the same idea for MCP; this is the one for
+   * everything else the machine has lying around, and it turned out to matter
+   * far more. Moving `cwd` to `~/.syl` did **not** stop the repository reaching
+   * her, because two of the three doors are not in the cwd at all. Driven live
+   * on 2.1.226 with `cwd=~/.syl` and `--tools ""`, five SessionStart hooks
+   * still fired on an ordinary turn and injected, before she had said a word:
+   *
+   * - `bd prime` — from the *user-level* `~/.claude/settings.json`, announcing
+   *   itself as "project memories and session rules";
+   * - "# Adjutant Agent Protocol" — from an installed *plugin*, telling her to
+   *   find her layer in a squad and report to her orchestrator.
+   *
+   * Neither is in her home; neither cares what `cwd` is. With
+   * `--setting-sources ""` the same turn reports no hooks, no plugins, 47 slash
+   * commands instead of 98, and five agent types instead of eight. A `CLAUDE.md`
+   * canary placed in the cwd reached the model without the flag and did not
+   * reach it with the flag — so this closes the cwd door as well.
+   *
+   * Two things it does **not** break, both verified rather than assumed:
+   * `apiKeySource` stays `"none"` (the claude.ai login is not a settings
+   * source, so subscription rails are untouched), and `--settings` is still
+   * honoured — `memory_paths.auto` came back as the directory we asked for.
+   *
+   * `--bare` looks like it does this job and must not be used: its help text
+   * says auth becomes "strictly ANTHROPIC_API_KEY or apiKeyHelper", which is
+   * the metered API and the one constraint this project does not bend.
+   */
+  readonly settingSources?: string;
+  /**
+   * Where Claude Code's own auto-memory reads and writes for this turn, or
+   * that it is switched off. Omit and the CLI uses whatever the machine's
+   * settings say, which for a personal assistant is nobody's decision.
+   *
+   * Passed as `--settings`, then **checked against the init frame** — the CLI
+   * discards a directory it does not like and falls back to its own default
+   * silently, so the flag going out proves nothing. See `memory/auto-memory.ts`
+   * for the captures behind that.
+   */
+  readonly autoMemory?: AutoMemory;
+  /**
+   * Fail fast if the CLI resolved an API key instead of the claude.ai login.
+   * Defaults to true — this harness exists to stay on subscription rails.
+   */
+  readonly requireSubscriptionAuth?: boolean;
+  /**
+   * Milliseconds before a turn that has produced no result is killed.
+   * Defaults to {@link DEFAULT_TURN_TIMEOUT_MS}; zero or less disables it.
+   */
+  readonly timeoutMs?: number;
+  /**
+   * Called with the session id **before the process is spawned**, so a caller
+   * can persist it first. See {@link runTurn} on why that ordering matters.
+   */
+  readonly onSessionId?: (sessionId: string) => void;
+  /** Called for every decoded event as it arrives. */
+  readonly onEvent?: (event: SylEvent) => void;
+}
+
+/**
+ * Default ceiling on a single turn.
+ *
+ * Generous on purpose: a research turn doing real work legitimately runs for
+ * minutes, and a timeout that fires on a healthy turn is worse than none. This
+ * is a deadlock breaker, not a latency budget.
+ */
+export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60_000;
+
+/** How long a killed child gets to exit on SIGTERM before SIGKILL. */
+const SIGKILL_GRACE_MS = 2_000;
+
+/**
+ * The turn was killed for making no progress.
+ *
+ * Distinct from a turn that failed: nothing is known about whether the work
+ * happened, so a caller must not treat this as "Claude said no".
+ */
+export class TurnTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number, sawInit: boolean) {
+    super(
+      `Claude turn exceeded its ${timeoutMs}ms timeout and was killed ` +
+        `(${sawInit ? "the session had started but never produced a result" : "the CLI never completed its init handshake"}).`,
+    );
+    this.name = "TurnTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/** A session id in the form the CLI's `--session-id` requires. */
+export function newSessionId(): string {
+  return randomUUID();
+}
+
+export interface TurnResult {
+  /** Session id to feed back as `resume` on the next turn. */
+  readonly sessionId: string;
+  /** The assistant's **final** text for this turn, exactly as the CLI reported it.
+   *
+   * This is what a structured turn wants — `runReaderTurn` parses it as JSON, and the
+   * narration a model may emit before its answer would break that parse. See `spoken`
+   * for the other question. */
+  readonly text: string;
+  /** Everything the assistant **said** this turn, in order.
+   *
+   * Differs from `text` only when a turn used a tool: the CLI's `result` carries just
+   * the prose after the last tool call, so a reply where Syl thought, acted, and then
+   * spoke arrives with the thinking removed. Chat wants this one; anything parsing a
+   * structured answer wants `text`. */
+  readonly spoken: string;
+  /** Reported cost. On subscription rails this is an estimate, not a charge. */
+  readonly costUsd: number;
+  readonly numTurns: number;
+  readonly init: InitEvent;
+  readonly events: readonly SylEvent[];
+}
+
+/** Contract for a turn runner, so callers can substitute a fake in tests. */
+export type TurnRunner = (prompt: string, options: TurnOptions) => Promise<TurnResult>;
+
+export async function runTurn(prompt: string, options: TurnOptions = {}): Promise<TurnResult> {
+  const frame = buildUserFrame(prompt); // validates before spawning anything
+
+  // Anthropic's credential precedence puts a set API key ahead of the
+  // claude.ai login unconditionally, so a stale key silently reroutes billing
+  // to the metered API. Strip both (adj-t64m9).
+  const env = { ...process.env };
+  delete env["ANTHROPIC_API_KEY"];
+  delete env["ANTHROPIC_AUTH_TOKEN"];
+
+  // The id is settled before the spawn, not learned from the init event.
+  // Learning it means a crash between spawn and init loses a conversation that
+  // exists on disk — the caller has no id to resume and no way to find one.
+  // Verified on 2.1.226: `--session-id <uuid>` is honoured exactly, and both
+  // the init and result frames come back carrying it.
+  const sessionId = options.resume ?? options.sessionId ?? newSessionId();
+  options.onSessionId?.(sessionId);
+
+  const args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"];
+  if (options.model) args.push("--model", options.model);
+  if (options.systemPrompt) args.push("--append-system-prompt", options.systemPrompt);
+  if (options.mcpConfig) args.push("--mcp-config", options.mcpConfig);
+  if (options.strictMcpConfig ?? options.mcpConfig !== undefined) args.push("--strict-mcp-config");
+  // Checked against `undefined`, not for truthiness: `""` is the whole point of
+  // the flag, and `if (options.settingSources)` would silently drop it.
+  if (options.settingSources !== undefined) args.push("--setting-sources", options.settingSources);
+  if (options.autoMemory) args.push("--settings", autoMemorySettingsFlag(options.autoMemory));
+  if (options.permissionMode) args.push("--permission-mode", options.permissionMode);
+  if (options.tools !== undefined) args.push("--tools", options.tools);
+  if (options.resume) args.push("--resume", options.resume);
+  else args.push("--session-id", sessionId);
+
+  const claudeBin = options.claudeBin ?? resolveClaudeBinFromProcess();
+  const child = spawn(claudeBin, args, {
+    cwd: options.cwd ?? process.cwd(),
+    env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+
+  const events: SylEvent[] = [];
+  let init: InitEvent | undefined;
+  // Why a variable rather than a throw at the point of discovery: this runs
+  // inside a stream handler, where a throw goes nowhere useful. The turn is
+  // killed and the reason is carried out to the settled promise below.
+  let fatal: Error | undefined;
+  let stderr = "";
+
+  const decode = createLineDecoder();
+  child.stdout.on("data", (chunk: string) => {
+    for (const line of decode(chunk)) {
+      const event = parseEvent(line);
+      if (!event) continue;
+      events.push(event);
+      options.onEvent?.(event);
+
+      if (event.kind === "init") {
+        init = event;
+        // Both guards are about what this process is allowed to do, and both
+        // have to land before the model acts: an API key means the wrong payment
+        // rail, and a memory directory the CLI did not take means the next thing
+        // written is the Commander's private memory in a path Syl never reads.
+        try {
+          if (options.requireSubscriptionAuth !== false) assertSubscriptionAuth(event);
+          if (options.autoMemory) assertAutoMemory(event, options.autoMemory);
+        } catch (error) {
+          fatal = error as Error;
+          child.kill();
+        }
+      }
+
+      // An api_error arrives shaped like a normal assistant message. Capture it
+      // so the turn rejects instead of relaying a failure as if it were an answer.
+      if (event.kind === "api_error") {
+        fatal = new Error(
+          `Claude API error${event.errorType ? ` (${event.errorType})` : ""}: ${event.message}`,
+        );
+      }
+    }
+  });
+
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+
+  // If the CLI rejects its arguments it exits before reading stdin, and the
+  // write below lands on a closed pipe. An unhandled EPIPE on a stream takes
+  // the whole process down and buries the actual error, which is the exit code
+  // and stderr the close handler is about to report.
+  child.stdin.on("error", () => {
+    /* deliberately ignored — the exit path below explains what happened */
+  });
+
+  // The turn only completes on stdin EOF — see the note above.
+  child.stdin.write(frame);
+  child.stdin.end();
+
+  // A wedged CLI holds its pipes open and produces nothing. Without this the
+  // turn never settles and takes its caller — a scheduled job, an HTTP
+  // request — down with it. SIGTERM first so the CLI can tidy up; SIGKILL
+  // after a grace period in case it is wedged badly enough to ignore that.
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
+  let timedOut = false;
+  let timer: NodeJS.Timeout | undefined;
+  let killTimer: NodeJS.Timeout | undefined;
+
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+        killTimer = setTimeout(() => child.kill("SIGKILL"), SIGKILL_GRACE_MS);
+        killTimer.unref();
+      }, timeoutMs);
+    }
+    child.once("error", reject);
+    child.once("close", resolve);
+  }).finally(() => {
+    clearTimeout(timer);
+    clearTimeout(killTimer);
+  });
+
+  // Checked first: after a kill the transcript is arbitrarily truncated, so
+  // every check below would report the wrong cause.
+  if (timedOut) throw new TurnTimeoutError(timeoutMs, init !== undefined);
+  if (fatal) throw fatal;
+  if (!init) {
+    throw new Error(
+      `claude exited with code ${exitCode ?? "null"} before the init handshake. stderr: ${stderr.trim()}`,
+    );
+  }
+
+  const result = events.find((event) => event.kind === "result");
+  if (!result || result.kind !== "result") {
+    throw new Error(`claude produced no result event (exit ${exitCode ?? "null"}). stderr: ${stderr.trim()}`);
+  }
+  if (result.isError) {
+    throw new Error(`Claude turn failed: ${result.result || stderr.trim() || "unknown error"}`);
+  }
+
+  return {
+    sessionId: init.sessionId,
+    text: result.result,
+    spoken: assembleReply(events, result.result),
+    costUsd: result.costUsd,
+    numTurns: result.numTurns,
+    init,
+    events,
+  };
+}

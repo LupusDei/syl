@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "The bearer token is expired. Re-pair this device.",
+    "retryable": false,
+    "details": null,
+    "retryAfterMs": null
+  }
+}

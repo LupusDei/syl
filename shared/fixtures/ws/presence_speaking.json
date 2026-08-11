@@ -1,0 +1,7 @@
+{
+  "type": "presence",
+  "state": "speaking",
+  "intensity": 0.4,
+  "since": "2026-08-09T07:00:03.114Z",
+  "ttl_ms": 4000
+}

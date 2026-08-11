@@ -1,0 +1,23 @@
+{
+  "success": true,
+  "data": {
+    "id": "syl:reminder:0198f2c1-5b4c-7d21-9f00-1a2b3c4d5e70",
+    "kind": "rhythm",
+    "text": "Morning agenda.",
+    "todoId": null,
+    "eventId": null,
+    "wallTime": "07:00",
+    "tz": "America/Chicago",
+    "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+    "scheduledFor": "2026-08-09T12:00:00.000Z",
+    "nextFireAt": "2026-08-10T12:00:00.000Z",
+    "urgent": false,
+    "late": false,
+    "deferredFrom": null,
+    "supersedesPrevious": true,
+    "deliveryState": "acknowledged",
+    "createdAt": "2026-07-01T14:05:00.000Z",
+    "updatedAt": "2026-08-09T12:00:02.010Z",
+    "completedAt": null
+  }
+}

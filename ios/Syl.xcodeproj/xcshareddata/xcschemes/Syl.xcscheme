@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Scheme
+   LastUpgradeVersion = "2630"
+   version = "1.7">
+   <BuildAction
+      parallelizeBuildables = "YES"
+      buildImplicitDependencies = "YES">
+      <BuildActionEntries>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "0000000000000000000000A6"
+               BuildableName = "Syl.app"
+               BlueprintName = "Syl"
+               ReferencedContainer = "container:Syl.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      shouldUseLaunchSchemeArgsEnv = "YES">
+      <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "0000000000000000000000A7"
+               BuildableName = "SylTests.xctest"
+               BlueprintName = "SylTests"
+               ReferencedContainer = "container:Syl.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
+      <!--
+         SylKitTests is deliberately NOT listed here. A TestableReference pointing at
+         a local package's test target is accepted by the scheme parser and then
+         silently skipped by xcodebuild — verified, it reports success having run
+         nothing, which is the worst possible failure mode for a test gate.
+
+         SylKit's tests run on the host with `swift test`, which is the point of the
+         package having no dependencies: they finish in tens of milliseconds and never
+         boot a simulator. `ios/scripts/test.sh` runs both halves.
+      -->
+   </TestAction>
+   <LaunchAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      launchStyle = "0"
+      useCustomWorkingDirectory = "NO"
+      ignoresPersistentStateOnLaunch = "NO"
+      debugDocumentVersioning = "YES"
+      debugServiceExtension = "internal"
+      allowLocationSimulation = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "0000000000000000000000A6"
+            BuildableName = "Syl.app"
+            BlueprintName = "Syl"
+            ReferencedContainer = "container:Syl.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+      <!--
+         The design render harnesses are gated on SYL_RENDER_SNAPSHOTS, and this is the
+         only place setting it actually works.
+
+         `SYL_RENDER_SNAPSHOTS=1 xcodebuild test …` sets it on xcodebuild, which is a
+         different process on a different machine from the test; the simulator does not
+         inherit it. `xcodebuild test … TEST_RUNNER_SYL_RENDER_SNAPSHOTS=1` is documented
+         to forward it with the prefix stripped and — verified on this toolchain, by
+         printing every SYL-matching key the runner can see — forwards nothing at all.
+         Both were tried and both silently skipped the tests, which is the failure mode
+         that makes a harness nobody runs.
+
+         TestAction has shouldUseLaunchSchemeArgsEnv = "YES", so an entry here reaches the
+         tests. Left DISABLED so an ordinary run neither writes files nor pays the render
+         cost: tick it in Product ▸ Scheme ▸ Edit Scheme ▸ Run ▸ Arguments, or flip
+         isEnabled to YES for one run, then retrieve the images with
+
+           open "$(xcrun simctl get_app_container booted com.jmm.syl data)/Documents/design-snapshots"
+      -->
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "SYL_RENDER_SNAPSHOTS"
+            value = "1"
+            isEnabled = "NO">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
+   </LaunchAction>
+   <ProfileAction
+      buildConfiguration = "Release"
+      shouldUseLaunchSchemeArgsEnv = "YES"
+      savedToolIdentifier = ""
+      useCustomWorkingDirectory = "NO"
+      debugDocumentVersioning = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "0000000000000000000000A6"
+            BuildableName = "Syl.app"
+            BlueprintName = "Syl"
+            ReferencedContainer = "container:Syl.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </ProfileAction>
+   <AnalyzeAction
+      buildConfiguration = "Debug">
+   </AnalyzeAction>
+   <ArchiveAction
+      buildConfiguration = "Release"
+      revealArchiveInOrganizer = "YES">
+   </ArchiveAction>
+</Scheme>

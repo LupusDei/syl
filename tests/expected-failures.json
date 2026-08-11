@@ -1,0 +1,56 @@
+{
+  "$comment": [
+    "Acceptance tests that describe behaviour we have NOT built yet.",
+    "",
+    "The rule this file exists to serve, set by the Commander on 2026-08-09:",
+    "an acceptance test always describes CORRECT behaviour. If the behaviour is",
+    "not implemented, the test stays RED and says what should happen. It must",
+    "never be softened into a test that asserts what the code currently does.",
+    "",
+    "We had done exactly that, and it is worse than having no test at all:",
+    "'should leave the Commander talking to himself: no assistant message ever",
+    "arrives' passed for weeks while Syl was unable to reply. It locked in the",
+    "defect, had to be rewritten rather than deleted, and made a green suite",
+    "claim the story worked.",
+    "",
+    "HOW THE GATE USES THIS FILE — strict in BOTH directions:",
+    "  - a failure NOT listed here breaks the build. The ordinary gate, kept.",
+    "  - a test listed here that PASSES breaks the build too, demanding that it",
+    "    be promoted out of this file. Without that half the list rots: entries",
+    "    linger long after the feature lands, and someone eventually deletes a",
+    "    stale line together with real coverage.",
+    "  - a listed test that no longer EXISTS breaks the build, so a rename",
+    "    cannot quietly retire a requirement.",
+    "",
+    "Every entry needs a bead, so 'expected failure' always means tracked work",
+    "and never 'known broken, nobody's problem'.",
+    "",
+    "Deliberately NOT using vitest's `it.fails`. It reports a green tick under",
+    "the correct-behaviour name, which reads as 'that feature works' to anyone",
+    "scanning CI — and it passes when the test fails for ANY reason, including",
+    "a typo or a bad import. That is the meaningless-green problem it was",
+    "supposed to solve, wearing a different hat."
+  ],
+  "expected": [
+    {
+      "test": "holographic query kernels — behaviour reason should rank the fact matching ALL entities above facts matching one, by a margin above the noise floor",
+      "bead": "syl-b97",
+      "why": "reason() is documented upstream as compositional retrieval no embedding DB can do. It does not discriminate: every fact scores 0.489-0.491, a spread of 0.002, which is the noise floor. Verified digit-for-digit against the Python original on the same corpus, so this is an inherited defect and not a porting error. Root cause: bundle() is a circular mean, which discards the magnitude that classic HRR unbinding needs to recover a composed vector. related() on the same data separates by 0.30 and works."
+    },
+    {
+      "test": "holographic query kernels — behaviour reason should rank a fact that contains the queried entity above one that does not",
+      "bead": "syl-b97",
+      "why": "Same defect, stated at its starkest: for reason(['Grace']) the fact WITHOUT Grace scores 0.5042 and the fact WITH Grace scores 0.4797. The ranking is not merely weak, it is inverted."
+    },
+    {
+      "test": "holographic query kernels — behaviour probe should rank facts whose entity slot holds the probe above one that does not",
+      "bead": "syl-b97",
+      "why": "Same defect in probe(): the fact whose entity is Grace ranks FIRST for probe('Ada'), ahead of both facts that actually carry Ada. related() and contradict() are the two kernels that work today; the nightly sweep (syl-005.4.2) must use those and not these."
+    },
+    {
+      "test": "deploy — a rollback after a migration should restore the schema the restored build expects",
+      "bead": "syl-dep1.7",
+      "why": "A health-gated rollback restores the CODE and leaves the SCHEMA forward. Migrations run on the way up and there is no down path, so after a failed deploy the restored build runs against a database it has never seen. Additive migrations usually survive that and a destructive one does not, and nothing today tells the two apart. The deploy reports the migrations involved and reports schemaRestored: false rather than pretending — but 'the code is back' and 'the system is back' are different claims, and only the first is true. Fixing it needs either down-migrations or a snapshot of the SQLite file taken before the deploy."
+    }
+  ]
+}

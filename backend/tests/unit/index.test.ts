@@ -1,0 +1,618 @@
+import type { ApiError, HealthStatus } from "@syl/shared";
+import express from "express";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { SylConfig } from "../../src/config.js";
+import {
+  API_BASE_PATH,
+  bootstrap,
+  clientErrorStatus,
+  createApp,
+  describeStartup,
+  needsPairingCode,
+  onError,
+  startServer,
+  toFailure,
+  type RunningService,
+  type ServiceDependencies,
+} from "../../src/index.js";
+import { ApiFailure } from "../../src/routes/envelope.js";
+import type { SylDatabase } from "../../src/services/database.js";
+import { WS_PATH } from "../../src/services/ws-server.js";
+import { startTestApp, wrap, type RunningApp } from "../helpers/http.js";
+import { TestClient } from "../helpers/ws.js";
+import { silentRunner, testConfig, testDatabase, testDeps } from "../helpers/service.js";
+import { INTERACTIVE_CONVERSATION_ID } from "../../src/services/database.js";
+
+const config: SylConfig = testConfig();
+
+/** Either envelope, as a test reads it. */
+interface Envelope<T = unknown> {
+  readonly success: boolean;
+  readonly data?: T;
+  readonly error?: ApiError;
+}
+
+const started: RunningService[] = [];
+let running: RunningApp | undefined;
+let db: SylDatabase | undefined;
+
+/** The dependencies `createApp` needs, on a fresh in-memory store. */
+function deps(): ServiceDependencies {
+  db?.close();
+  db = testDatabase();
+  return testDeps(db);
+}
+
+afterEach(async () => {
+  await running?.close();
+  running = undefined;
+  db?.close();
+  db = undefined;
+  await Promise.all(started.splice(0).map((service) => service.close()));
+});
+
+async function serve(overrides: Partial<SylConfig> = {}): Promise<RunningApp> {
+  running = await startTestApp(createApp({ ...config, ...overrides }, deps()));
+  return running;
+}
+
+describe("createApp", () => {
+  it("should mount the health endpoint under the contract's base path", async () => {
+    const app = await serve();
+
+    const response = await fetch(`${app.baseUrl}${API_BASE_PATH}/health`);
+
+    expect(response.status).toBe(200);
+  });
+
+  it("should not advertise the framework in its headers", async () => {
+    const app = await serve();
+
+    const response = await fetch(`${app.baseUrl}${API_BASE_PATH}/health`);
+
+    expect(response.headers.get("x-powered-by")).toBeNull();
+  });
+
+  describe("error path", () => {
+    it("should answer an unknown path with a JSON 404, not an HTML page", async () => {
+      const app = await serve();
+
+      const response = await fetch(`${app.baseUrl}${API_BASE_PATH}/nope`);
+      const body = (await response.json()) as Envelope;
+
+      expect(response.status).toBe(404);
+      expect(response.headers.get("content-type")).toMatch(/application\/json/);
+      expect(body.success).toBe(false);
+      expect(body.error?.code).toBe("NOT_FOUND");
+      expect(body.error?.retryable).toBe(false);
+    });
+
+    it("should answer a 404 for the bare root as well", async () => {
+      const app = await serve();
+
+      const response = await fetch(`${app.baseUrl}/`);
+
+      expect(response.status).toBe(404);
+    });
+
+    it("should turn a malformed JSON body into a 400, not a stack trace", async () => {
+      const app = await serve();
+
+      const response = await fetch(`${app.baseUrl}${API_BASE_PATH}/nope`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{ this is not json",
+      });
+      const body = (await response.json()) as Envelope;
+
+      expect(response.status).toBe(400);
+      expect(body.error?.code).toBe("VALIDATION_FAILED");
+    });
+
+    it("should never echo an error stack to the client", async () => {
+      const app = await serve();
+
+      const text = await (
+        await fetch(`${app.baseUrl}${API_BASE_PATH}/nope`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{ nope",
+        })
+      ).text();
+
+      expect(text).not.toMatch(/at .*\.ts:/);
+      expect(text).not.toContain("node_modules");
+    });
+  });
+
+  describe("edge cases", () => {
+    it("should carry the configured version through to the health body", async () => {
+      const app = await serve({ version: "9.9.9" });
+
+      const body = (await (
+        await fetch(`${app.baseUrl}${API_BASE_PATH}/health`)
+      ).json()) as Envelope<{ version: string }>;
+
+      expect(body.data?.version).toBe("9.9.9");
+    });
+
+    it("should carry a compromised credential source through to the health body", async () => {
+      const app = await serve({
+        credentialSource: "ANTHROPIC_AUTH_TOKEN",
+        subscriptionRails: false,
+      });
+
+      const body = (await (
+        await fetch(`${app.baseUrl}${API_BASE_PATH}/health`)
+      ).json()) as Envelope<HealthStatus>;
+
+      expect(body.data?.status).toBe("degraded");
+      expect(JSON.stringify(body.data?.checks)).toContain("ANTHROPIC_AUTH_TOKEN");
+    });
+
+    it("should answer every path in one of the contract's two envelopes", async () => {
+      // A client that cannot parse one of the two is entitled to conclude it
+      // is not talking to Syl at all — which is only useful if it is true.
+      const app = await serve();
+
+      for (const path of [`${API_BASE_PATH}/health`, `${API_BASE_PATH}/nope`, "/"]) {
+        const body = (await (await fetch(`${app.baseUrl}${path}`)).json()) as Envelope;
+        expect(typeof body.success).toBe("boolean");
+        expect(body.success ? body.data !== undefined : body.error !== undefined).toBe(true);
+      }
+    });
+  });
+});
+
+describe("clientErrorStatus", () => {
+  it("should keep a 4xx status thrown by middleware", () => {
+    // The real shape: `express.json()` rejects a bad body with exactly this.
+    expect(clientErrorStatus(Object.assign(new Error("Unexpected token"), { status: 400 }))).toBe(
+      400,
+    );
+    expect(clientErrorStatus(Object.assign(new Error("too large"), { status: 413 }))).toBe(413);
+  });
+
+  it("should treat anything without a client-error status as our own fault", () => {
+    expect(clientErrorStatus(new Error("boom"))).toBeNull();
+    expect(clientErrorStatus(Object.assign(new Error("x"), { status: 500 }))).toBeNull();
+    expect(clientErrorStatus(Object.assign(new Error("x"), { status: 302 }))).toBeNull();
+    expect(clientErrorStatus(Object.assign(new Error("x"), { status: "400" }))).toBeNull();
+  });
+
+  it("should survive a thrown value that is not an object at all", () => {
+    expect(clientErrorStatus("a bare string")).toBeNull();
+    expect(clientErrorStatus(null)).toBeNull();
+    expect(clientErrorStatus(undefined)).toBeNull();
+    expect(clientErrorStatus(42)).toBeNull();
+  });
+});
+
+describe("toFailure", () => {
+  it("should pass an ApiFailure through unchanged", () => {
+    const failure = new ApiFailure("QUIET_HOURS", "not now");
+
+    expect(toFailure(failure)).toBe(failure);
+  });
+
+  it("should name an oversized body rather than calling it our bug", () => {
+    const failure = toFailure(Object.assign(new Error("too large"), { status: 413 }));
+
+    expect(failure.code).toBe("VALIDATION_FAILED");
+    expect(failure.message).toMatch(/larger/);
+  });
+
+  it("should treat anything unrecognised as INTERNAL and retryable", () => {
+    const failure = toFailure(new Error("boom"));
+
+    expect(failure.code).toBe("INTERNAL");
+    expect(failure.status).toBe(500);
+    expect(failure.toApiError().retryable).toBe(true);
+  });
+});
+
+describe("onError", () => {
+  /** A route that throws is the only way to reach the 500 branch honestly. */
+  async function serveThrowing(thrown: unknown): Promise<RunningApp> {
+    const app = express();
+    app.get("/boom", () => {
+      throw thrown;
+    });
+    app.use(onError);
+    running = await startTestApp(app);
+    return running;
+  }
+
+  it("should answer an unhandled throw with a 500 and a code, not internals", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const app = await serveThrowing(new Error("the database fell over at /Users/Reason/secret"));
+
+    const response = await fetch(`${app.baseUrl}/boom`);
+    const body = (await response.json()) as Envelope;
+
+    expect(response.status).toBe(500);
+    expect(body.error?.code).toBe("INTERNAL");
+    expect(body.error?.message).not.toContain("database");
+    expect(body.error?.message).not.toContain("/Users/Reason");
+    logged.mockRestore();
+  });
+
+  it("should log the detail to stderr, where it is still recoverable", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const app = await serveThrowing(new Error("the database fell over"));
+
+    await fetch(`${app.baseUrl}/boom`);
+
+    expect(logged).toHaveBeenCalledOnce();
+    expect(String(logged.mock.calls[0]?.[1])).toContain("the database fell over");
+    logged.mockRestore();
+  });
+
+  it("should not log a client's own mistake as a service error", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const app = await serveThrowing(Object.assign(new Error("bad body"), { status: 400 }));
+
+    const response = await fetch(`${app.baseUrl}/boom`);
+
+    expect(response.status).toBe(400);
+    expect(logged).not.toHaveBeenCalled();
+    logged.mockRestore();
+  });
+
+  it("should not call an unnamed 4xx an internal error", async () => {
+    const app = await serveThrowing(Object.assign(new Error("teapot"), { status: 418 }));
+
+    const response = await fetch(`${app.baseUrl}/boom`);
+    const body = (await response.json()) as Envelope;
+
+    expect(response.status).toBe(400);
+    expect(body.error?.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("should render a thrown ApiFailure with its own code and status", async () => {
+    const app = await serveThrowing(new ApiFailure("DEFERRAL_NOT_LATER", "that is not later"));
+
+    const response = await fetch(`${app.baseUrl}/boom`);
+    const body = (await response.json()) as Envelope;
+
+    expect(response.status).toBe(422);
+    expect(body.error?.code).toBe("DEFERRAL_NOT_LATER");
+    expect(body.error?.message).toBe("that is not later");
+  });
+});
+
+describe("describeStartup", () => {
+  it("should tell the Commander how to pair when nothing is paired yet", () => {
+    // A service nobody can talk to, with no instructions on screen, is a
+    // service that looks broken.
+    const lines = describeStartup(config, { pairingCode: "4821-9930" });
+
+    expect(lines.join("\n")).toContain("4821-9930");
+    expect(lines.join("\n")).toContain("/auth/pair");
+  });
+
+  it("should say nothing about pairing once a device is paired", () => {
+    expect(describeStartup(config).join("\n")).not.toContain("Pairing code");
+  });
+
+  it("should say how to get a code once a device is paired", () => {
+    // `syl-q1f`. A code is printed only while nothing is paired, which left
+    // every later case — a second device, a reinstall, a revoked token — with
+    // no way to obtain one: the service had already decided not to offer a
+    // code and there was nothing to ask. Naming the command is the whole fix
+    // for discoverability, and it belongs on the boot the Commander reads.
+    expect(describeStartup(config).join("\n")).toContain("npm run pair");
+  });
+
+  it("should announce version, address and environment on a clean start", () => {
+    const lines = describeStartup({ ...config, port: 4201, version: "1.2.3" });
+
+    // Five: address, websocket, credentials, fleet, how to pair another device.
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toContain("v1.2.3");
+    expect(lines[0]).toContain("http://127.0.0.1:4201");
+    expect(lines[0]).toContain("test");
+    expect(lines[1]).toContain("ws://127.0.0.1:4201/api/v1/ws");
+  });
+
+  it("should state the credential source on every clean start, not only a bad one", () => {
+    // `syl-007.2.2`: the billing invariant is the one that costs real money if
+    // it quietly stops being true, and a line that only appears when something
+    // is wrong is a line nobody has ever seen and therefore does not miss.
+    const lines = describeStartup(config);
+
+    expect(lines.join("\n")).toContain("credentials: none");
+    expect(lines.join("\n")).toContain("claude.ai subscription");
+  });
+
+  it("should warn loudly when a metered key is in the environment", () => {
+    const lines = describeStartup({
+      ...config,
+      credentialSource: "ANTHROPIC_API_KEY",
+      subscriptionRails: false,
+    });
+
+    // Six: the five above, plus the metered-key warning.
+    expect(lines).toHaveLength(6);
+    expect(lines.join("\n")).toContain("WARNING");
+    expect(lines.join("\n")).toContain("ANTHROPIC_API_KEY");
+    expect(lines.join("\n")).toContain("METERED API");
+  });
+
+  it("should never print a credential value, only the variable's name", () => {
+    const lines = describeStartup({
+      ...config,
+      credentialSource: "ANTHROPIC_AUTH_TOKEN",
+      subscriptionRails: false,
+    });
+
+    expect(lines.join("\n")).not.toMatch(/sk-ant/);
+  });
+
+  it("should say she cannot reach the fleet when nobody has turned it on", () => {
+    // Stated on every boot rather than only when it is on, for the same reason
+    // the credential source is: "she cannot reach anyone" is a fact about what
+    // she can do today, and a line that appears in only one of the two states
+    // is a line nobody reads as an answer.
+    expect(describeStartup({ ...config, adjutant: null }).join("\n")).toMatch(/fleet: off/u);
+  });
+
+  it("should name who she reaches the fleet AS, which is the whole security argument", () => {
+    const lines = describeStartup({
+      ...config,
+      adjutant: { baseUrl: "http://127.0.0.1:4201", agentId: "syl", projectRoot: undefined },
+    });
+
+    expect(lines.join("\n")).toContain('as "syl"');
+    expect(lines.join("\n")).toContain("never as the Commander");
+  });
+});
+
+/**
+ * `syl-014.1.3`. A missing or unreachable Adjutant must never break her boot:
+ * she is the Commander's assistant first and a fleet client second.
+ */
+describe("reaching the fleet", () => {
+  it("should hand back no client at all when the fleet is off", () => {
+    const built = bootstrap(testConfig({ databasePath: ":memory:", adjutant: null }));
+    try {
+      expect(built.adjutant).toBeUndefined();
+    } finally {
+      built.database.close();
+    }
+  });
+
+  it("should build a client that knows who she is when the fleet is on", () => {
+    const built = bootstrap(
+      testConfig({
+        databasePath: ":memory:",
+        adjutant: { baseUrl: "http://127.0.0.1:4201", agentId: "syl", projectRoot: undefined },
+      }),
+    );
+    try {
+      expect(built.adjutant?.agentId).toBe("syl");
+    } finally {
+      built.database.close();
+    }
+  });
+
+  it("should boot with the fleet configured even when nothing is listening there", () => {
+    // The client is stateless until its first call — constructing it opens no
+    // connection and probes nothing. That is what makes "Adjutant is down" a
+    // sentence she says rather than a boot that fails. Port 1 has nothing on it.
+    const built = bootstrap(
+      testConfig({
+        databasePath: ":memory:",
+        adjutant: { baseUrl: "http://127.0.0.1:1", agentId: "syl", projectRoot: undefined },
+      }),
+    );
+    try {
+      expect(built.adjutant).toBeDefined();
+    } finally {
+      built.database.close();
+    }
+  });
+});
+
+describe("bootstrap", () => {
+  it("should open the store, migrate it, and hand back a usable app", async () => {
+    const built = bootstrap(testConfig({ databasePath: ":memory:" }));
+    try {
+      running = await startTestApp(createApp(config, built.deps));
+
+      const response = await fetch(`${running.baseUrl}${API_BASE_PATH}/health`);
+      const body = (await response.json()) as Envelope<HealthStatus>;
+
+      expect(body.data?.checks.map((check) => check.name)).toContain("database");
+      expect(body.data?.status).toBe("ok");
+    } finally {
+      built.database.close();
+    }
+  });
+
+  it("should never hand her a memory directory she has no tools to open", async () => {
+    // REGRESSION, `syl-010.4.5`, and it inverts what this test used to assert.
+    //
+    // It used to demand a directory, which was right while she had hands. Once
+    // `--tools ""` landed it became the instruction that broke her: auto-memory
+    // injects Claude Code's own directions to READ and MAINTAIN memory files,
+    // and those directions need the tools we removed. Asked "who are you?" she
+    // emitted a fabricated `Read` and then a fabricated `ls` listing a
+    // directory that does not exist — three runs of three. One line flipped,
+    // nothing else changed, and she answered as herself.
+    //
+    // So the test now guards the pairing rather than the path: an instruction
+    // she cannot obey does not fail loudly, it gets acted out, and prose is not
+    // a place where a failure can be caught. If auto-memory ever comes back,
+    // the tools come back in the same change or this goes red.
+    //
+    // The directory is still configured below on purpose. Passing one and
+    // getting `off` is the whole assertion — it proves the wiring ignores it by
+    // decision rather than because nobody set it.
+    const seen: (unknown | undefined)[] = [];
+    const built = bootstrap(
+      testConfig({ databasePath: ":memory:", autoMemoryDirectory: "/srv/syl/memory" }),
+      {
+        runner: async (_prompt, options) => {
+          seen.push(options.autoMemory);
+          options.onSessionId?.("sess-1");
+          return silentRunner(_prompt, options);
+        },
+      },
+    );
+    try {
+      built.deps.chat.accept(
+        built.deps.chat.append({ conversationId: INTERACTIVE_CONVERSATION_ID, role: "user", text: "hello" }),
+      );
+      await built.deps.chat.idle();
+
+      expect(seen).toEqual([{ mode: "off" }]);
+    } finally {
+      built.database.close();
+    }
+  });
+
+  it("should give the app a key service backed by that same store", () => {
+    const built = bootstrap(testConfig({ databasePath: ":memory:" }));
+    try {
+      const grant = built.deps.keys.pair(
+        built.deps.keys.issuePairingCode().code,
+        "Commander's iPhone",
+      );
+
+      expect(built.deps.keys.verify(grant.token).ok).toBe(true);
+      // Two rows: the device just paired, and Syl's own credential, which
+      // `bootstrap` mints for itself on the way up.
+      expect(
+        built.database.handle.prepare("SELECT count(*) AS n FROM api_keys").get(),
+      ).toEqual({ n: 2 });
+      expect(built.deps.keys.liveKeysWithScope("device")).toHaveLength(1);
+    } finally {
+      built.database.close();
+    }
+  });
+
+  it("should mint Syl's own agent credential into that same store", () => {
+    // Her hands, made at boot. Without this the tools have no token and every
+    // one of them fails at the first call — which is a service that answers
+    // every request and quietly does nothing.
+    const built = bootstrap(testConfig({ databasePath: ":memory:" }));
+    try {
+      expect(built.deps.keys.verify(built.agentKey.token)).toMatchObject({
+        ok: true,
+        key: { scope: "agent" },
+      });
+      expect(built.deps.keys.liveKeysWithScope("agent")).toHaveLength(1);
+    } finally {
+      built.database.close();
+    }
+  });
+
+  it("should keep her token out of everything the store can hand back", () => {
+    const built = bootstrap(testConfig({ databasePath: ":memory:" }));
+    try {
+      const rows = built.database.handle.prepare("SELECT * FROM api_keys").all();
+
+      expect(JSON.stringify(rows)).not.toContain(built.agentKey.token);
+      expect(JSON.stringify(built.deps.keys.list())).not.toContain(built.agentKey.token);
+    } finally {
+      built.database.close();
+    }
+  });
+});
+
+describe("needsPairingCode", () => {
+  /**
+   * The check that decides whether a fresh machine is told how to pair.
+   *
+   * It used to be "every key in this table is revoked", which was correct while
+   * the only keys were phones. Minting Syl's own credential at boot breaks it:
+   * on a brand-new machine there is now always a live key, so the service would
+   * decide a device was already paired and print nothing — and the Commander
+   * would be looking at a service he had no way into. The question was never
+   * "is any key live"; it is "is a DEVICE paired".
+   */
+  it("should ask for a pairing code on a store with nothing in it", () => {
+    db = testDatabase();
+    expect(needsPairingCode(testDeps(db).keys)).toBe(true);
+  });
+
+  it("should still ask when the only live key is Syl's own", () => {
+    db = testDatabase();
+    const keys = testDeps(db).keys;
+    keys.mint("Syl (her own hands)", { scope: "agent" });
+
+    expect(needsPairingCode(keys)).toBe(true);
+  });
+
+  it("should still ask when the only live key is an admin key from the console", () => {
+    db = testDatabase();
+    const keys = testDeps(db).keys;
+    keys.mint("Web admin (console)", { scope: "admin" });
+
+    expect(needsPairingCode(keys)).toBe(true);
+  });
+
+  it("should stop asking once a device is paired", () => {
+    db = testDatabase();
+    const keys = testDeps(db).keys;
+    keys.pair(keys.issuePairingCode().code, "Commander's iPhone");
+
+    expect(needsPairingCode(keys)).toBe(false);
+  });
+
+  it("should ask again after that device is revoked", () => {
+    db = testDatabase();
+    const keys = testDeps(db).keys;
+    keys.pair(keys.issuePairingCode().code, "Commander's iPhone");
+    keys.mint("Syl (her own hands)", { scope: "agent" });
+    keys.revoke(keys.liveKeysWithScope("device")[0]?.id ?? "", "phone lost");
+
+    expect(needsPairingCode(keys)).toBe(true);
+  });
+});
+
+describe("startServer", () => {
+  it("should resolve only once the socket is accepting connections", async () => {
+    const service = await startServer(config, deps());
+    started.push(service);
+
+    const response = await fetch(`${wrap(service.server).baseUrl}${API_BASE_PATH}/health`);
+
+    expect(response.status).toBe(200);
+  });
+
+  it("should listen on the configured host and port", async () => {
+    const service = await startServer(config, deps());
+    started.push(service);
+
+    const address = service.server.address();
+
+    expect(address).not.toBeNull();
+    expect(typeof address).toBe("object");
+    expect((address as { address: string }).address).toBe("127.0.0.1");
+  });
+
+  it("should reject rather than hang when the port is already taken", async () => {
+    const first = await startServer(config, deps());
+    started.push(first);
+    const taken = (first.server.address() as { port: number }).port;
+
+    await expect(startServer({ ...config, port: taken }, deps())).rejects.toThrow(/EADDRINUSE/);
+  });
+
+  it("should put the websocket on the same port as the API", async () => {
+    // Same origin, same bearer token, one thing to expose over the tunnel.
+    const service = await startServer(config, deps());
+    started.push(service);
+    const port = (service.server.address() as { port: number }).port;
+
+    const client = await TestClient.connect(`ws://127.0.0.1:${port}${WS_PATH}`);
+    try {
+      expect((await client.next()).type).toBe("auth_challenge");
+    } finally {
+      client.close();
+    }
+  });
+});

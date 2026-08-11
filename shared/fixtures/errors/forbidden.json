@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "error": {
+    "code": "FORBIDDEN",
+    "message": "This endpoint needs a key with admin scope. Paired devices do not get one — mint it at the machine's own console with `npm run pair -- --admin`.",
+    "retryable": false,
+    "details": null,
+    "retryAfterMs": null
+  }
+}

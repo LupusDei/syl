@@ -11,13 +11,16 @@ if [[ "$BRANCH" == wip/* ]]; then
   exit 0
 fi
 
-echo "=== Step 1/3: Lint ==="
-npm run lint || { echo "FAILED: Lint errors found"; exit 1; }
+# The same three gates CI runs, in the same order. There is no lint step and no
+# build step: no linter is configured, and every tsconfig is noEmit, so the
+# typecheck *is* the build.
+echo "=== Step 1/3: Workspace test coverage ==="
+node scripts/check-workspaces-tested.mjs || { echo "FAILED: a workspace has source but no tests"; exit 1; }
 
-echo "=== Step 2/3: Build ==="
-npm run build || { echo "FAILED: Build errors found"; exit 1; }
+echo "=== Step 2/3: Typecheck ==="
+npm run typecheck || { echo "FAILED: type errors found"; exit 1; }
 
 echo "=== Step 3/3: Test ==="
-npm test || { echo "FAILED: Tests failed"; exit 1; }
+npm test || { echo "FAILED: tests failed"; exit 1; }
 
 echo "=== All checks passed ==="

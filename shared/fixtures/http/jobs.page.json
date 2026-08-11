@@ -1,0 +1,150 @@
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "syl:job:0198f2c4-0001-7000-8000-00000000e001",
+        "kind": "reminder_delivery",
+        "state": "pending",
+        "priority": "reminder",
+        "trigger": {
+          "type": "event",
+          "event": "reminder.due"
+        },
+        "deliveryClass": "at_least_once",
+        "catchUp": {
+          "policy": "never_expires"
+        },
+        "budget": {
+          "maxTurns": 0,
+          "maxWallClockMs": 5000,
+          "allowedTools": []
+        },
+        "lease": null,
+        "circuitBreaker": {
+          "state": "closed",
+          "consecutiveFailures": 0,
+          "openedAt": null
+        },
+        "nextRunAt": "2026-08-09T21:00:00.000Z",
+        "lastRunId": "syl:run:0198f2c7-0001-7000-8000-000000011001",
+        "speaks": true,
+        "createdAt": "2026-07-01T14:00:00.000Z",
+        "updatedAt": "2026-08-09T07:00:00.000Z"
+      },
+      {
+        "id": "syl:job:0198f2c4-0003-7000-8000-00000000e003",
+        "kind": "morning_agenda",
+        "state": "done",
+        "priority": "scheduled",
+        "trigger": {
+          "type": "wall_clock",
+          "wallTime": "07:00",
+          "tz": "America/Chicago",
+          "rrule": "FREQ=DAILY"
+        },
+        "deliveryClass": "at_least_once",
+        "catchUp": {
+          "policy": "grace_window",
+          "graceMs": 10800000
+        },
+        "budget": {
+          "maxTurns": 2,
+          "maxWallClockMs": 120000,
+          "allowedTools": [
+            "Read",
+            "Bash"
+          ]
+        },
+        "lease": null,
+        "circuitBreaker": {
+          "state": "closed",
+          "consecutiveFailures": 0,
+          "openedAt": null
+        },
+        "nextRunAt": "2026-08-10T12:00:00.000Z",
+        "lastRunId": "syl:run:0198f2c7-0002-7000-8000-000000011002",
+        "speaks": true,
+        "createdAt": "2026-07-01T14:00:00.000Z",
+        "updatedAt": "2026-08-09T12:00:14.000Z"
+      },
+      {
+        "id": "syl:job:0198f2c4-0002-7000-8000-00000000e002",
+        "kind": "research_brief",
+        "state": "running",
+        "priority": "background",
+        "trigger": {
+          "type": "manual"
+        },
+        "deliveryClass": "at_least_once_resumable",
+        "catchUp": {
+          "policy": "skip"
+        },
+        "budget": {
+          "maxTurns": 40,
+          "maxWallClockMs": 1800000,
+          "allowedTools": [
+            "WebSearch",
+            "WebFetch",
+            "Read",
+            "Write"
+          ]
+        },
+        "lease": {
+          "owner": "syl@iMac.local:41827",
+          "expiresAt": "2026-08-09T07:05:00.000Z"
+        },
+        "circuitBreaker": {
+          "state": "closed",
+          "consecutiveFailures": 0,
+          "openedAt": null
+        },
+        "nextRunAt": null,
+        "lastRunId": "syl:run:0198f2c7-0003-7000-8000-000000011003",
+        "speaks": true,
+        "createdAt": "2026-08-08T19:40:00.000Z",
+        "updatedAt": "2026-08-09T07:00:00.000Z"
+      },
+      {
+        "id": "syl:job:0198f2c4-0004-7000-8000-00000000e004",
+        "kind": "nightly_consolidation",
+        "state": "pending",
+        "priority": "background",
+        "trigger": {
+          "type": "wall_clock",
+          "wallTime": "02:30",
+          "tz": "America/Chicago",
+          "rrule": "FREQ=DAILY"
+        },
+        "deliveryClass": "once_per_window",
+        "catchUp": {
+          "policy": "once_per_window",
+          "windowStart": "01:00",
+          "windowEnd": "05:00"
+        },
+        "budget": {
+          "maxTurns": 30,
+          "maxWallClockMs": 2700000,
+          "allowedTools": [
+            "Read",
+            "Write",
+            "Bash"
+          ]
+        },
+        "lease": null,
+        "circuitBreaker": {
+          "state": "half_open",
+          "consecutiveFailures": 2,
+          "openedAt": "2026-08-07T07:31:00.000Z"
+        },
+        "nextRunAt": "2026-08-10T07:30:00.000Z",
+        "lastRunId": null,
+        "speaks": false,
+        "createdAt": "2026-07-01T14:00:00.000Z",
+        "updatedAt": "2026-08-09T07:30:00.000Z"
+      }
+    ],
+    "nextCursor": null,
+    "hasMore": false
+  }
+}

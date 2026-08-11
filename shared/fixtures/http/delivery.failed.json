@@ -1,0 +1,29 @@
+{
+  "success": true,
+  "data": {
+    "id": "syl:delivery:0198f2c6-0003-7000-8000-000000010003",
+    "channel": "apns",
+    "messageClass": "morning_agenda",
+    "reminderId": null,
+    "payload": {
+      "title": "Syl",
+      "body": "Two things today, and the design review moved to 14:00.",
+      "interruptionLevel": "active",
+      "categoryIdentifier": null,
+      "threadIdentifier": "agenda"
+    },
+    "idempotencyKey": "7b9c0d2e-41d8-4a6f-8c1d-3e5a7b9c0d2e",
+    "state": "pending",
+    "attempts": 3,
+    "nextAttemptAt": "2026-08-09T12:08:00.000Z",
+    "deliveredAt": null,
+    "ackedAt": null,
+    "engagement": null,
+    "late": false,
+    "scheduledFor": "2026-08-09T12:00:00.000Z",
+    "coalescedReminderIds": [],
+    "apnsUniqueId": null,
+    "lastError": "APNs 503 ServiceUnavailable; retrying with backoff",
+    "createdAt": "2026-08-09T12:00:00.020Z"
+  }
+}

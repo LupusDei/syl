@@ -5,17 +5,73 @@
   "type": "module",
   "description": "Syl — a personal assistant harness driving Claude Code over its native stream-json stdio protocol.",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
+  },
+  "workspaces": [
+    "backend",
+    "frontend",
+    "shared"
+  ],
+  "//overrides": [
+    "DO NOT BUMP onnxruntime-node. This pin is load-bearing on the Commander's",
+    "machine and on no other kind of machine, which is exactly why it looks",
+    "removable.",
+    "",
+    "The iMac is Intel — darwin-x64 — and onnxruntime-node shipped no darwin-x64",
+    "binary from 1.24.0 onward. 1.23.0 is the last release that has one.",
+    "@huggingface/transformers depends on an EXACT version above that (4.2.0",
+    "pins onnxruntime-node@1.24.3), so npm installs it NESTED under",
+    "node_modules/@huggingface/transformers/node_modules and a top-level",
+    "dependency is simply ignored. Only an override reaches it.",
+    "",
+    "Without this line, backend/src/memory/embed.ts dies at model load with",
+    "\"Cannot find module '../bin/napi-v6/darwin/x64/onnxruntime_binding.node'\"",
+    "— a message that reads like a broken install and names nothing that would",
+    "lead you here. Verified by installing both versions and importing them on",
+    "2026-08-09: 1.24.3 throws, 1.23.0 imports and runs.",
+    "",
+    "backend/package.json pins the same exact version as a direct dependency.",
+    "The two must stay identical: npm fails with EOVERRIDE if an override and a",
+    "direct dependency disagree. Change both or neither. See syl-005.2.1."
+  ],
+  "overrides": {
+    "onnxruntime-node": "1.23.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "check:node": "node scripts/check-node.mjs",
+    "check:deps": "node scripts/check-workspace-deps.mjs",
+    "check:secrets": "node scripts/check-no-secrets.mjs",
+    "check:env": "npm run check:node && npm run check:deps && npm run check:secrets",
+    "pretypecheck": "npm run check:env",
+    "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
+    "prebuild": "npm run check:env",
+    "build": "npm run build --workspaces --if-present",
+    "pretest": "npm run check:env",
     "test": "vitest run",
+    "pretest:gate": "npm run check:env",
+    "test:gate": "vitest run --reporter=default --reporter=json --outputFile.json=tests/.vitest-results.json; node scripts/check-expected-failures.mjs",
     "test:watch": "vitest",
-    "ping": "tsx src/cli/ping.ts",
-    "when": "tsx src/cli/when.ts"
+    "pretest:coverage": "npm run check:env",
+    "test:coverage": "vitest run --coverage --reporter=default --reporter=json --outputFile.json=tests/.vitest-results.json; node scripts/check-expected-failures.mjs && node scripts/check-coverage.mjs",
+    "verify": "npm run typecheck && npm run test:gate",
+    "premock": "npm run check:env",
+    "mock": "tsx shared/src/cli/mock.ts",
+    "contract:generate": "tsx shared/src/cli/generate.ts",
+    "preping": "npm run check:env",
+    "ping": "tsx backend/src/harness/cli/ping.ts",
+    "when": "tsx backend/src/harness/cli/when.ts",
+    "prepair": "npm run check:env",
+    "pair": "tsx backend/src/ops/cli/pair.ts",
+    "prelogs": "npm run check:env",
+    "logs": "tsx backend/src/ops/cli/logs.ts",
+    "prelaunchd": "npm run check:env",
+    "launchd": "tsx backend/src/ops/cli/launchd.ts",
+    "predeploy": "npm run check:env",
+    "deploy": "tsx backend/src/ops/cli/deploy.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@vitest/coverage-v8": "^2.1.9",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

@@ -1,0 +1,10 @@
+{
+  "text": "Call the pharmacy — the refill lapses today.",
+  "kind": "commitment",
+  "wallTime": "16:00",
+  "tz": "America/Chicago",
+  "date": "2026-08-09",
+  "rrule": null,
+  "todoId": "syl:todo:0198f2c2-0001-7000-8000-00000000c001",
+  "urgent": true
+}

@@ -1,0 +1,21 @@
+{
+  "success": true,
+  "data": {
+    "id": "syl:run:0198f2c7-0001-7000-8000-000000011001",
+    "jobId": "syl:job:0198f2c4-0001-7000-8000-00000000e001",
+    "kind": "reminder_delivery",
+    "triggerInstant": "2026-08-08T21:00:00.000Z",
+    "actualInstant": "2026-08-08T21:00:00.140Z",
+    "latenessMs": 140,
+    "outcome": "success",
+    "spoke": true,
+    "turns": 0,
+    "costUsd": 0,
+    "summary": null,
+    "error": null,
+    "attempts": 1,
+    "startedAt": "2026-08-08T21:00:00.140Z",
+    "finishedAt": "2026-08-08T21:00:00.610Z",
+    "steps": []
+  }
+}

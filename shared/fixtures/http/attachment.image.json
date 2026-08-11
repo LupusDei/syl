@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "data": {
+    "id": "syl:attachment:019feb2f-e5d5-7000-a413-12cbfbaa0c9d",
+    "kind": "image",
+    "mimeType": "image/png",
+    "bytes": 144559,
+    "width": 1600,
+    "height": 1200,
+    "durationMs": null,
+    "sha256": "be83826c43ad8ba054111a4a0b5e05c17dba46b68192b9d86a8f6c085d6f55ff",
+    "createdAt": "2026-08-10T10:20:12.630Z",
+    "hasThumbnail": true
+  }
+}

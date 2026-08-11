@@ -1,0 +1,775 @@
+/*
+ * Layout and component styling. Every value comes from a token in
+ * `theme/tokens.css` — there are no literal colours in this file, which is
+ * what makes the palette swappable.
+ *
+ * The look is an instrument panel: a dense grid, hairline rules instead of
+ * shadows, one accent used only for "you are here" and primary action, and
+ * monospace reserved for identifiers you might copy.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--syl-bg-base);
+  color: var(--syl-text-primary);
+  font-family: var(--syl-font-ui);
+  font-size: var(--syl-text-size);
+  line-height: var(--syl-line-height);
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+.mono {
+  font-family: var(--syl-font-mono);
+  font-size: var(--syl-text-size-small);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--syl-focus-ring);
+  border-radius: var(--syl-radius);
+}
+
+/* ---------------------------------------------------------------- chrome */
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.shell__header {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-4);
+  padding: var(--syl-space-2) var(--syl-space-4);
+  background: var(--syl-bg-panel);
+  border-bottom: var(--syl-border-width) solid var(--syl-border);
+  box-shadow: var(--syl-shadow-panel);
+}
+
+.shell__brand {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.shell__target {
+  color: var(--syl-text-muted);
+}
+
+.shell__spacer {
+  flex: 1;
+}
+
+.shell__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.shell__main {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: var(--syl-space-5);
+}
+
+/* ------------------------------------------------------------------- nav */
+
+.nav {
+  flex: 0 0 208px;
+  padding: var(--syl-space-3) var(--syl-space-2);
+  background: var(--syl-bg-panel);
+  border-right: var(--syl-border-width) solid var(--syl-border);
+  overflow: auto;
+}
+
+.nav__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav__link {
+  display: block;
+  padding: var(--syl-space-2) var(--syl-space-3);
+  border-radius: var(--syl-radius);
+  color: var(--syl-text-secondary);
+  text-decoration: none;
+}
+
+.nav__link:hover {
+  background: var(--syl-bg-raised);
+  color: var(--syl-text-primary);
+}
+
+.nav__link--active {
+  background: var(--syl-accent-soft);
+  color: var(--syl-accent);
+  font-weight: 600;
+}
+
+/* ----------------------------------------------------------------- views */
+
+.view {
+  max-width: 76rem;
+}
+
+.view__title {
+  margin: 0 0 var(--syl-space-2);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.view__lede {
+  margin: 0 0 var(--syl-space-5);
+  color: var(--syl-text-secondary);
+  max-width: 62ch;
+}
+
+.view--wide {
+  max-width: none;
+}
+
+.notice {
+  padding: var(--syl-space-3) var(--syl-space-4);
+  background: var(--syl-bg-panel);
+  border: var(--syl-border-width) solid var(--syl-border);
+  border-left: 3px solid var(--syl-state-pending);
+  border-radius: var(--syl-radius);
+  color: var(--syl-text-secondary);
+}
+
+/* A failed request and an empty result must never look alike — this is an
+   instrument, and "nothing to show" is a different fact from "we could not
+   ask". */
+.notice--fail {
+  border-left-color: var(--syl-state-fail);
+  margin-bottom: var(--syl-space-4);
+}
+
+.notice__head {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-3);
+  color: var(--syl-state-fail);
+}
+
+.notice__body {
+  margin: var(--syl-space-2) 0 0;
+  color: var(--syl-text-primary);
+}
+
+.notice__meta {
+  margin: var(--syl-space-1) 0 0;
+  color: var(--syl-text-muted);
+}
+
+.feedback {
+  margin: 0;
+  padding: var(--syl-space-4);
+  color: var(--syl-text-muted);
+}
+
+.feedback--empty {
+  border: var(--syl-border-width) dashed var(--syl-border);
+  border-radius: var(--syl-radius);
+}
+
+/* --------------------------------------------------------------- toolbar */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-3);
+  margin-bottom: var(--syl-space-3);
+}
+
+.toolbar__count {
+  margin-left: auto;
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+}
+
+/* ---------------------------------------------------------------- banner */
+
+/* The outbox answers its own question before a row is read: this sits above
+   the table and is toned by the worst standing on the page. */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--syl-space-4);
+  padding: var(--syl-space-3) var(--syl-space-4);
+  background: var(--syl-bg-panel);
+  border: var(--syl-border-width) solid var(--syl-border);
+  border-radius: var(--syl-radius);
+}
+
+.banner__counts {
+  color: var(--syl-text-muted);
+}
+
+/* ----------------------------------------------------------------- table */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--syl-bg-panel);
+  border: var(--syl-border-width) solid var(--syl-border);
+  border-radius: var(--syl-radius);
+}
+
+.table__caption {
+  text-align: left;
+  padding-bottom: var(--syl-space-2);
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: var(--syl-space-2) var(--syl-space-3);
+  border-bottom: var(--syl-border-width) solid var(--syl-border);
+  vertical-align: top;
+  font-weight: 400;
+}
+
+.table thead th {
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.table tbody th {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.table tbody tr:last-child th,
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table__prose {
+  color: var(--syl-text-secondary);
+}
+
+/* Density is the point of this surface: more rows visible beats more air. */
+.table--dense th,
+.table--dense td {
+  padding: var(--syl-space-1) var(--syl-space-3);
+  vertical-align: baseline;
+}
+
+.row:hover {
+  background: var(--syl-bg-raised);
+}
+
+.row--selected {
+  background: var(--syl-accent-soft);
+}
+
+.row--step {
+  background: var(--syl-bg-inset);
+}
+
+/* An unacknowledged delivery is the one thing on this surface that must never
+   be scanned past. */
+.row--unconfirmed th {
+  border-left: 3px solid var(--syl-state-warn);
+}
+
+.row__sub {
+  display: inline-block;
+  margin-left: var(--syl-space-2);
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+  font-weight: 400;
+}
+
+.cell--late {
+  color: var(--syl-state-warn);
+}
+
+.cell--error {
+  color: var(--syl-state-fail);
+}
+
+/* ----------------------------------------------------------- badge, link */
+
+.badge {
+  display: inline-block;
+  padding: 0 var(--syl-space-2);
+  border: var(--syl-border-width) solid currentcolor;
+  border-radius: var(--syl-radius);
+  font-size: var(--syl-text-size-small);
+  white-space: nowrap;
+}
+
+/* A button that reads as a link: the row action is a selection, not a
+   navigation the browser should treat as one. */
+.link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--syl-accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+/* ---------------------------------------------------------------- detail */
+
+.detail {
+  margin-top: var(--syl-space-5);
+  padding-top: var(--syl-space-4);
+  border-top: var(--syl-border-width) solid var(--syl-border-strong);
+}
+
+.detail__head {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-3);
+  margin-bottom: var(--syl-space-3);
+}
+
+.detail__title {
+  margin: 0;
+  margin-right: auto;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.detail__id {
+  color: var(--syl-text-muted);
+  font-weight: 400;
+}
+
+.detail__note {
+  margin: 0 0 var(--syl-space-3);
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+}
+
+/* Message text is prose and wraps; every other cell in these tables is a
+   value that must not. */
+.cell--wrap {
+  white-space: pre-wrap;
+  min-width: 24rem;
+}
+
+/* ---------------------------------------------------------------- status */
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--syl-space-2);
+  white-space: nowrap;
+}
+
+/* The dot's colour comes from a token named in TypeScript — see STATUS_TOKEN
+   in app/views.tsx. */
+.status__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--syl-state-pending);
+}
+
+/* --------------------------------------------------------------- control */
+
+.field {
+  display: inline-flex;
+  gap: var(--syl-space-2);
+  color: var(--syl-text-muted);
+}
+
+.field--inline {
+  align-items: center;
+}
+
+.field__label {
+  display: block;
+  margin-bottom: var(--syl-space-1);
+  color: var(--syl-text-secondary);
+}
+
+.field__input,
+.field__select {
+  background: var(--syl-bg-inset);
+  color: var(--syl-text-primary);
+  border: var(--syl-border-width) solid var(--syl-border-strong);
+  border-radius: var(--syl-radius);
+  padding: var(--syl-space-2) var(--syl-space-3);
+  font: inherit;
+}
+
+.field__input {
+  width: 100%;
+  font-family: var(--syl-font-mono);
+}
+
+.button {
+  background: var(--syl-bg-raised);
+  color: var(--syl-text-primary);
+  border: var(--syl-border-width) solid var(--syl-border-strong);
+  border-radius: var(--syl-radius);
+  padding: var(--syl-space-2) var(--syl-space-3);
+  font: inherit;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--syl-accent);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button--primary {
+  background: var(--syl-accent);
+  color: var(--syl-accent-contrast);
+  border-color: var(--syl-accent);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ gate */
+
+.gate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: var(--syl-space-5);
+}
+
+.gate__card {
+  width: min(28rem, 100%);
+  display: flex;
+  flex-direction: column;
+  padding: var(--syl-space-5);
+  background: var(--syl-bg-panel);
+  border: var(--syl-border-width) solid var(--syl-border);
+  border-radius: var(--syl-radius);
+  box-shadow: var(--syl-shadow-panel);
+}
+
+.gate__title {
+  margin: 0 0 var(--syl-space-2);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.gate__lede {
+  margin: 0 0 var(--syl-space-5);
+  color: var(--syl-text-secondary);
+}
+
+.gate__target {
+  margin: var(--syl-space-3) 0 var(--syl-space-5);
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+}
+
+/* ---------------------------------------------------------------- memory ---
+ *
+ * The memory viewer. Nothing here declares a colour: every value is an existing
+ * `--syl-*` token, because `tokens.test.ts` fails on a variable nobody
+ * references and on a reference nothing declares, in both directions.
+ *
+ * The two species of edge are distinguished by stroke SHAPE in the SVG itself
+ * (`GraphCanvas`), not by anything in this file — a distinction that lives in a
+ * stylesheet is a distinction that disappears from a screenshot.
+ */
+
+.graph {
+  margin: var(--syl-space-4) 0;
+  padding: var(--syl-space-3);
+  background: var(--syl-bg-panel);
+  border: var(--syl-border-width) solid var(--syl-border);
+  border-radius: var(--syl-radius);
+}
+
+.graph__svg {
+  inline-size: 100%;
+  block-size: auto;
+  display: block;
+}
+
+.graph__edge {
+  cursor: pointer;
+}
+
+.legend {
+  display: grid;
+  gap: var(--syl-space-2);
+  margin: var(--syl-space-3) 0 0;
+  padding-block-start: var(--syl-space-3);
+  border-block-start: var(--syl-border-width) solid var(--syl-border);
+  font-size: var(--syl-text-size-small);
+}
+
+.legend__item {
+  display: grid;
+  grid-template-columns: minmax(9rem, max-content) 1fr;
+  gap: var(--syl-space-3);
+  align-items: baseline;
+}
+
+.legend dt {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-2);
+  font-weight: 600;
+  color: var(--syl-text-primary);
+}
+
+.legend dd {
+  margin: 0;
+  color: var(--syl-text-secondary);
+}
+
+.species {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--syl-space-2);
+  color: var(--syl-text-secondary);
+}
+
+.verdict {
+  display: inline-flex;
+  gap: var(--syl-space-2);
+}
+
+.panel {
+  margin-block-start: var(--syl-space-5);
+  padding-block-start: var(--syl-space-4);
+  border-block-start: var(--syl-border-width) solid var(--syl-border);
+}
+
+.panel__title {
+  margin: 0 0 var(--syl-space-2);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.panel__subtitle {
+  margin: var(--syl-space-4) 0 var(--syl-space-2);
+  font-size: var(--syl-text-size);
+  font-weight: 600;
+  color: var(--syl-text-secondary);
+}
+
+.night {
+  margin-block-end: var(--syl-space-4);
+  padding: var(--syl-space-3);
+  background: var(--syl-bg-inset);
+  border-radius: var(--syl-radius);
+}
+
+.night__head {
+  display: flex;
+  align-items: center;
+  gap: var(--syl-space-3);
+}
+
+.night__counts {
+  margin: var(--syl-space-2) 0 0;
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+}
+
+/* A rate that is NOT a rate. Muted and italic so it can never be mistaken for a
+ * measured zero — which is the entire reason `metrics.ts` returns null. */
+.rate--undefined {
+  color: var(--syl-text-muted);
+  font-style: italic;
+}
+
+.histogram {
+  display: grid;
+  gap: var(--syl-space-1);
+  margin: var(--syl-space-2) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.histogram__bar {
+  display: grid;
+  grid-template-columns: 3rem 1fr 8rem;
+  gap: var(--syl-space-2);
+  align-items: center;
+}
+
+.histogram__fill {
+  display: block;
+  block-size: 0.75rem;
+  min-inline-size: 1px;
+  background: var(--syl-accent-soft);
+  border-inline-start: 2px solid var(--syl-accent);
+}
+
+.histogram__label,
+.histogram__count {
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+}
+
+/* ------------------------------------------------------------- narrow */
+
+/*
+ * The admin was built desktop-first and had ZERO media queries in 644 lines,
+ * which is how it arrived on his phone as a 208px sidebar beside a column of
+ * text wrapping at four words, with the Refresh button and half the legend
+ * off the right edge.
+ *
+ * Three rules hold everything below:
+ *
+ *   1. The MENU COSTS VERTICAL SPACE, NOT HORIZONTAL. A sidebar takes half of
+ *      a 390px screen forever; a scrolling tab strip takes 44px once. No
+ *      hamburger — that trades a tap and a piece of state for space we get
+ *      back anyway, and a menu you cannot see is a menu you forget is there.
+ *
+ *   2. THE PAGE NEVER SCROLLS SIDEWAYS. Anything genuinely wide — the graph,
+ *      a table, a code block — scrolls inside its own box. A body that scrolls
+ *      horizontally makes every vertical swipe feel broken.
+ *
+ *   3. FIXED COLUMN WIDTHS COLLAPSE TO STACKS. `minmax(9rem, …)` and `3rem 1fr
+ *      8rem` are reasonable on a laptop and are wider than the whole viewport
+ *      here. This is where the cut-off text in his screenshot came from.
+ */
+@media (max-width: 48rem) {
+  .shell__header {
+    flex-wrap: wrap;
+    gap: var(--syl-space-2);
+    padding: var(--syl-space-2) var(--syl-space-3);
+  }
+
+  /* Which backend we are pointed at is a desktop diagnostic. On a phone it is
+   * a line of monospace URL competing with the controls he came to use. */
+  .shell__target {
+    display: none;
+  }
+
+  .shell__spacer {
+    flex: 1;
+  }
+
+  .shell__body {
+    flex-direction: column;
+  }
+
+  /* The menu, as a strip. Sticky so it survives a long page without costing a
+   * scroll back to the top. */
+  .nav {
+    flex: 0 0 auto;
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 1;
+    padding: var(--syl-space-2);
+    border-right: none;
+    border-block-end: var(--syl-border-width) solid var(--syl-border);
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* Momentum without a visible bar eating 6px of a short strip. */
+    scrollbar-width: none;
+  }
+
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav__list {
+    flex-direction: row;
+    gap: var(--syl-space-1, 4px);
+    inline-size: max-content;
+  }
+
+  .nav__link {
+    white-space: nowrap;
+    padding: var(--syl-space-2) var(--syl-space-3);
+  }
+
+  /* The content is the point. It gets the width. */
+  .shell__main {
+    padding: var(--syl-space-3);
+  }
+
+  .view {
+    max-width: none;
+  }
+
+  /* Wide by nature — each scrolls in its own box rather than dragging the
+   * page sideways with it. */
+  .panel,
+  .view table,
+  .view pre {
+    max-inline-size: 100%;
+    overflow-x: auto;
+  }
+
+  /* Fixed columns become stacks. A label above its value reads fine and fits;
+   * a label beside its value does neither. */
+  .legend__item,
+  .histogram__bar {
+    grid-template-columns: 1fr;
+    gap: var(--syl-space-1, 4px);
+  }
+
+  /* Long ids and hashes must wrap rather than push the layout open. */
+  .mono,
+  code {
+    overflow-wrap: anywhere;
+  }
+
+  /*
+   * THE GRAPH PANS RATHER THAN SHRINKS, and it is the one thing on this page
+   * that must not obey rule 2 by fitting.
+   *
+   * `inline-size: 100%` scaled it to a 350px column, where the node labels —
+   * "Head of engineering at Slink", "his daughter" — became grey smears a few
+   * pixels tall. A picture of his memory that cannot be read is not a smaller
+   * version of the feature, it is the absence of it, and this is the view he
+   * asked for specifically so he could judge whether the inferred engine is
+   * any good.
+   *
+   * So the box scrolls and the drawing keeps a legible width. Panning a
+   * diagram is an ordinary thing to do with a finger; squinting is not.
+   */
+  .graph {
+    overflow-x: auto;
+    padding: var(--syl-space-2);
+  }
+
+  .graph__svg {
+    min-inline-size: 34rem;
+  }
+}

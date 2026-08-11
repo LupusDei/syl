@@ -1,0 +1,69 @@
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f",
+        "kind": "commitment",
+        "text": "Call the pharmacy — the refill lapses today.",
+        "todoId": "syl:todo:0198f2c2-0001-7000-8000-00000000c001",
+        "eventId": null,
+        "wallTime": "16:00",
+        "tz": "America/Chicago",
+        "rrule": null,
+        "scheduledFor": "2026-08-09T21:00:00.000Z",
+        "nextFireAt": "2026-08-09T21:00:00.000Z",
+        "urgent": true,
+        "late": false,
+        "deferredFrom": null,
+        "supersedesPrevious": false,
+        "deliveryState": "scheduled",
+        "createdAt": "2026-08-09T06:59:48.400Z",
+        "updatedAt": "2026-08-09T06:59:48.400Z",
+        "completedAt": null
+      },
+      {
+        "id": "syl:reminder:0198f2c1-6c5d-7d21-9f00-1a2b3c4d5e71",
+        "kind": "commitment",
+        "text": "Send the quarterly numbers to Priya.",
+        "todoId": null,
+        "eventId": null,
+        "wallTime": "23:30",
+        "tz": "America/Chicago",
+        "rrule": null,
+        "scheduledFor": "2026-08-09T04:30:00.000Z",
+        "nextFireAt": "2026-08-09T13:00:00.000Z",
+        "urgent": false,
+        "late": true,
+        "deferredFrom": "2026-08-09T04:30:00.000Z",
+        "supersedesPrevious": false,
+        "deliveryState": "deferred",
+        "createdAt": "2026-08-08T22:14:09.000Z",
+        "updatedAt": "2026-08-09T04:30:00.000Z",
+        "completedAt": null
+      },
+      {
+        "id": "syl:reminder:0198f2c1-5b4c-7d21-9f00-1a2b3c4d5e70",
+        "kind": "rhythm",
+        "text": "Morning agenda.",
+        "todoId": null,
+        "eventId": null,
+        "wallTime": "07:00",
+        "tz": "America/Chicago",
+        "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+        "scheduledFor": "2026-08-09T12:00:00.000Z",
+        "nextFireAt": "2026-08-10T12:00:00.000Z",
+        "urgent": false,
+        "late": false,
+        "deferredFrom": null,
+        "supersedesPrevious": true,
+        "deliveryState": "acknowledged",
+        "createdAt": "2026-07-01T14:05:00.000Z",
+        "updatedAt": "2026-08-09T12:00:02.010Z",
+        "completedAt": null
+      }
+    ],
+    "nextCursor": null,
+    "hasMore": false
+  }
+}

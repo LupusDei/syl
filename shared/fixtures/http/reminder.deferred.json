@@ -1,0 +1,23 @@
+{
+  "success": true,
+  "data": {
+    "id": "syl:reminder:0198f2c1-6c5d-7d21-9f00-1a2b3c4d5e71",
+    "kind": "commitment",
+    "text": "Send the quarterly numbers to Priya.",
+    "todoId": null,
+    "eventId": null,
+    "wallTime": "23:30",
+    "tz": "America/Chicago",
+    "rrule": null,
+    "scheduledFor": "2026-08-09T04:30:00.000Z",
+    "nextFireAt": "2026-08-09T13:00:00.000Z",
+    "urgent": false,
+    "late": true,
+    "deferredFrom": "2026-08-09T04:30:00.000Z",
+    "supersedesPrevious": false,
+    "deliveryState": "deferred",
+    "createdAt": "2026-08-08T22:14:09.000Z",
+    "updatedAt": "2026-08-09T04:30:00.000Z",
+    "completedAt": null
+  }
+}

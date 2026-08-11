@@ -1,0 +1,11 @@
+{
+  "type": "error",
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "Token expired mid-session.",
+    "retryable": false,
+    "details": null,
+    "retryAfterMs": null
+  },
+  "fatal": true
+}

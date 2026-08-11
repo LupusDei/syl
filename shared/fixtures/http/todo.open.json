@@ -1,0 +1,16 @@
+{
+  "success": true,
+  "data": {
+    "id": "syl:todo:0198f2c2-0001-7000-8000-00000000c001",
+    "text": "Call the pharmacy about the refill",
+    "goalId": null,
+    "dueAt": "2026-08-09T21:00:00.000Z",
+    "pinned": false,
+    "status": "open",
+    "source": "commander",
+    "delegatedJobId": null,
+    "createdAt": "2026-08-09T06:59:48.300Z",
+    "updatedAt": "2026-08-09T06:59:48.300Z",
+    "completedAt": null
+  }
+}

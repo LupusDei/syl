@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "data": {
+    "id": "syl:device:0198f2c5-0001-7000-8000-00000000f001",
+    "platform": "ios",
+    "environment": "production",
+    "tokenSuffix": "9c0d2e41",
+    "name": "Commander's iPhone",
+    "appVersion": "0.1.0 (14)",
+    "osVersion": "26.1",
+    "active": true,
+    "registeredAt": "2026-08-01T16:20:00.000Z",
+    "lastSeenAt": "2026-08-09T06:58:00.000Z"
+  }
+}

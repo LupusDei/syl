@@ -1,0 +1,15 @@
+{
+  "type": "chat_message",
+  "seq": 4488,
+  "ts": "2026-08-09T07:00:03.140Z",
+  "message": {
+    "id": "syl:message:0198f2c0-0002-7000-8000-00000000b002",
+    "conversationId": "syl:conversation:00000000-0000-7000-8000-000000000001",
+    "clientId": null,
+    "role": "assistant",
+    "text": "Done — 4:00 this afternoon. I'll be loud about it; you've moved this one twice.",
+    "createdAt": "2026-08-09T07:00:03.114Z",
+    "seq": 1284,
+    "attachments": []
+  }
+}

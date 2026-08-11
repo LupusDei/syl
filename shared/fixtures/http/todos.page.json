@@ -1,0 +1,48 @@
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "syl:todo:0198f2c2-0003-7000-8000-00000000c003",
+        "text": "Read up on local-first sync before the design review",
+        "goalId": "syl:goal:0198f2c3-0001-7000-8000-00000000d001",
+        "dueAt": "2026-08-12T14:00:00.000Z",
+        "pinned": true,
+        "status": "open",
+        "source": "commander",
+        "delegatedJobId": "syl:job:0198f2c4-0002-7000-8000-00000000e002",
+        "createdAt": "2026-08-08T19:39:00.000Z",
+        "updatedAt": "2026-08-08T19:40:00.000Z",
+        "completedAt": null
+      },
+      {
+        "id": "syl:todo:0198f2c2-0001-7000-8000-00000000c001",
+        "text": "Call the pharmacy about the refill",
+        "goalId": null,
+        "dueAt": "2026-08-09T21:00:00.000Z",
+        "pinned": false,
+        "status": "open",
+        "source": "commander",
+        "delegatedJobId": null,
+        "createdAt": "2026-08-09T06:59:48.300Z",
+        "updatedAt": "2026-08-09T06:59:48.300Z",
+        "completedAt": null
+      },
+      {
+        "id": "syl:todo:0198f2c2-0002-7000-8000-00000000c002",
+        "text": "Book the follow-up appointment",
+        "goalId": "syl:goal:0198f2c3-0001-7000-8000-00000000d001",
+        "dueAt": null,
+        "pinned": false,
+        "status": "proposed",
+        "source": "inferred",
+        "delegatedJobId": null,
+        "createdAt": "2026-08-08T18:22:00.000Z",
+        "updatedAt": "2026-08-08T18:22:00.000Z",
+        "completedAt": null
+      }
+    ],
+    "nextCursor": null,
+    "hasMore": false
+  }
+}

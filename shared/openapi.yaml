@@ -1,0 +1,3272 @@
+openapi: 3.1.0
+
+# ---------------------------------------------------------------------------
+# THE CONTRACT.
+#
+# This file is the source of truth for every wire type in Syl. Three
+# codebases are measured against it: backend/, frontend/, and ios/SylKit.
+#
+# Generated from this file (never hand-edit the outputs):
+#   shared/src/types.ts    TypeScript types for backend/ and frontend/
+#   shared/schemas/ws.json JSON Schema 2020-12 bundle of the WebSocket frames
+# Regenerate with `npm run contract:generate`. `npm test` fails if either
+# output has drifted from this file.
+#
+# Swift types in ios/SylKit are hand-written and pinned by the shared fixtures
+# in shared/fixtures/ — there is no generator worth the dependency for a
+# surface this size. A spec both sides ignore is decoration; a fixture both
+# sides must decode is a gate.
+# ---------------------------------------------------------------------------
+
+info:
+  title: Syl API
+  version: 1.0.0
+  summary: The contract between Syl's service, her iOS app, and the web admin.
+  description: |
+    # Conventions
+
+    ## Envelope
+
+    Every response body — success or failure — is one of:
+
+    ```json
+    { "success": true,  "data": { ... } }
+    { "success": false, "error": { "code": "NOT_FOUND", "message": "...", "retryable": false } }
+    ```
+
+    There is no third shape. A client that cannot parse one of these two has
+    hit something that is not Syl (a proxy, a captive portal, a Tailscale
+    error page) and should treat it as a transport failure, not an API error.
+
+    ## Field naming
+
+    **camelCase for every JSON field, with exactly one exception: `ttl_ms` on
+    the `presence` frame.** That field is quoted as literal JSON in the
+    character proposal and in `syl-001.2.2`, three separate sources pin the
+    spelling, and silently "fixing" it is how a contract stops matching the
+    thing it was derived from. It is the only snake_case identifier on the
+    wire. Do not add a second one.
+
+    Note that the service's SQLite columns are snake_case (child B). The
+    mapping is at the store boundary, not on the wire.
+
+    ## Identifiers
+
+    Every resource id is `syl:<type>:<uuidv7>` — type-prefixed so a dangling
+    reference is legible in a log line, UUIDv7 so ids sort by creation time.
+    The convention is fixed before the first row is written because every
+    graph edge will reference it forever.
+
+    ## Timestamps
+
+    Instants are RFC 3339 in UTC with millisecond precision
+    (`2026-08-09T07:00:03.114Z`). Anything with a *wall-clock* intent carries
+    a separate `wallTime` (`"07:00"`) plus an IANA `tz` (`"America/Chicago"`).
+
+    **Never a fixed UTC offset.** An offset is a property of an instant, not
+    of a place; storing one survives exactly one DST boundary and then moves
+    every recurring reminder by an hour.
+
+    ## Idempotency
+
+    **Every write takes an `Idempotency-Key` header.** This is not optional
+    politeness: the mobile client keeps a local outbox and retries by design,
+    so without a key it will duplicate.
+
+    - Same key, byte-identical body → the stored response is replayed with
+      `Idempotency-Replayed: true`. The operation runs once.
+    - Same key, different body → `409 IDEMPOTENCY_KEY_REUSE`.
+    - Keys are retained for 24 hours.
+
+    The key is client-generated and opaque; a UUIDv4 is fine.
+
+    ## Two different sync mechanisms, deliberately named apart
+
+    | | `GET /sync` | WebSocket `sync` frame |
+    |---|---|---|
+    | Purpose | Local-first catch-up for the device store | Gap recovery on one socket |
+    | Position | Opaque **cursor** string (`since`) | Monotonic **sequence number** (`sinceSeq`) |
+    | Scope | Every resource type | Frames on the live stream |
+    | Survives | App reinstall, days offline | One reconnect |
+
+    They are not interchangeable and the parameter names differ so that no
+    one can conflate them. A device that has been offline for a week uses
+    `GET /sync`; a device whose socket dropped in a tunnel uses the frame.
+
+    ## Presence is not here
+
+    `presence` exists **only** on the WebSocket. There is deliberately no
+    `GET /presence`: any pull-based path hands the caller a state whose
+    `ttl_ms` has probably already expired, which is exactly the lie the TTL
+    rule exists to prevent. See `shared/ws-protocol.md`.
+
+    ## Authentication
+
+    `Authorization: Bearer <token>` on everything except `GET /health`.
+
+    Syl answers to the Commander and to nobody else — one principal, no
+    accounts, no multi-tenancy. The token is obtained once per device by
+    exchanging a pairing code shown on the server console.
+
+servers:
+  - url: http://127.0.0.1:4210/api/v1
+    description: Mock server (`npm run mock`)
+  - url: https://syl.<tailnet>.ts.net/api/v1
+    description: The Mac at home, over Tailscale
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: health
+  - name: auth
+  - name: conversation
+  - name: attachments
+  - name: reminders
+  - name: todos
+  - name: goals
+  - name: devices
+  - name: delivery
+  - name: jobs
+  - name: logs
+  - name: sync
+  - name: memory
+
+paths:
+  # -------------------------------------------------------------- health ---
+  /health:
+    get:
+      tags: [health]
+      operationId: getHealth
+      summary: Liveness and dependency status.
+      security: []
+      responses:
+        "200":
+          description: Service reachable. `status` may still be `degraded`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/HealthStatus" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- auth ---
+  /auth/pair:
+    post:
+      tags: [auth]
+      operationId: pairDevice
+      summary: Exchange a pairing code for a bearer token.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PairRequest" }
+      responses:
+        "200":
+          description: Paired.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/TokenGrant" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /auth/whoami:
+    get:
+      tags: [auth]
+      operationId: whoami
+      summary: Confirm the token is live and identify the principal.
+      responses:
+        "200":
+          description: Authenticated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Principal" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # -------------------------------------------------------- conversation ---
+  /conversations:
+    get:
+      tags: [conversation]
+      operationId: listConversations
+      summary: List conversation lanes.
+      description: |
+        There is one `interactive` lane — the Commander's own thread, at the
+        well-known id `syl:conversation:00000000-0000-7000-8000-000000000001`.
+        Background work (research runs, consolidation, the heartbeat) gets its
+        own `job` lanes so Syl's inner monologue never interleaves with
+        talking to him.
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: lane
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/ConversationLane" }
+      responses:
+        "200":
+          description: A page of conversations.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/ConversationPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /conversations/{conversationId}:
+    get:
+      tags: [conversation]
+      operationId: getConversation
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: The conversation.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Conversation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /conversations/{conversationId}/messages:
+    get:
+      tags: [conversation]
+      operationId: listMessages
+      summary: Conversation history, newest first, cursor-paginated.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: direction
+          in: query
+          required: false
+          description: |
+            `backward` (default) walks into history — what a cold launch does
+            after rendering from disk. `forward` walks toward the present.
+          schema:
+            type: string
+            enum: [backward, forward]
+            default: backward
+      responses:
+        "200":
+          description: A page of messages.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/MessagePage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [conversation]
+      operationId: sendMessage
+      summary: Send a message. The client supplies `clientId`.
+      description: |
+        The client generates `clientId`, renders the message immediately as
+        pending, and reconciles when the server confirms — over HTTP by the
+        `clientId`/`id` pair in this response, or over the socket by a
+        `delivery_confirmation` frame carrying the same `clientId`.
+
+        Without `clientId` the mobile client cannot reconcile an optimistic
+        send against the server's copy, and every retry looks like a new
+        message. It is required.
+
+        `conversationId` is in the path and must equal the one in the body if
+        the body carries it. It is derived identically on client and server —
+        see `ConversationPage.description`.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SendMessageRequest" }
+      responses:
+        "201":
+          description: Accepted and persisted.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/DeliveryConfirmation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # --------------------------------------------------------- attachments ---
+  /attachments:
+    post:
+      tags: [attachments]
+      operationId: createAttachment
+      summary: Store an image or a short video, and get an id for it.
+      description: |
+        Two steps, always: upload the bytes here, then name the returned id in
+        `SendMessageRequest.attachmentIds`. An attachment exists on its own
+        until a message claims it, which is what lets a client write its local
+        row and start the upload *before* it has a message to attach it to —
+        `ChatViewModel.send()`'s "disk first" rule applied to bytes.
+
+        ## The bytes are base64 in a JSON body
+
+        Not multipart, and not a raw octet stream. Every write in this contract
+        is a JSON body carrying an `Idempotency-Key`, and the retry semantics
+        that header buys are computed from the body — an upload that arrived
+        through a different mechanism would be the one write in the service
+        with a different failure model, on the client that retries most.
+        Base64 costs 33% on the way up, which is the price of that uniformity
+        and is bounded by the size ceiling.
+
+        ## `mimeType` is what you *claim*, not what you get back
+
+        The service sniffs the file's magic bytes and cross-checks them against
+        the declared type. A disagreement is refused rather than resolved: a
+        client that mislabels its own upload has a bug, and quietly believing
+        the bytes over the label would hide it. The `mimeType` on the response
+        is the sniffed one.
+
+        ## Dimensions
+
+        For an image the server reads width and height out of the file header
+        and ignores anything declared — the file is the authority about itself.
+        For a video it cannot (that needs a demuxer), so `width`, `height` and
+        `durationMs` are **required** on a video upload and are taken on trust.
+        They are a layout hint — they exist so a thumbnail reserves the right
+        box before its bytes arrive — and never a security property.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateAttachmentRequest" }
+      responses:
+        "201":
+          description: Stored. The bytes are at `GET /attachments/{id}`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Attachment" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /attachments/{attachmentId}:
+    get:
+      tags: [attachments]
+      operationId: getAttachment
+      summary: The stored bytes themselves.
+      description: |
+        ## The one operation whose SUCCESS body is not an envelope
+
+        Everything else in this contract answers `{ success, data }`. This
+        answers the file, with its sniffed `Content-Type`. Base64-wrapping an
+        image so that it could be spelled the same way as a to-do would add a
+        third to every byte on the exact path where bytes are dearest — a
+        phone on cellular over a tailnet — and would make the response
+        unstreamable and uncacheable at the same time.
+
+        The invariant the envelope rule protects still holds, restated for a
+        media endpoint: **every FAILURE from this operation is the ordinary
+        error envelope**, and the discriminator is `Content-Type`. JSON means
+        Syl refused; the declared media type means these are the bytes;
+        anything else — `text/html` from a captive portal or a Tailscale error
+        page — is a transport failure, exactly as the envelope rule intends.
+
+        ## Variants
+
+        `variant=thumb` serves a downscaled JPEG, roughly two orders of
+        magnitude smaller, for the inline bubble. Ask for it only when
+        `Attachment.hasThumbnail` is true; there is no thumbnail for a video
+        and there may be none for an image the server could not downscale.
+        Asking for one that does not exist is `404`, never a silent fallback
+        to the full file — a fallback would turn a 60 KB request into a 4 MB
+        one on the connection least able to afford it, invisibly.
+      parameters:
+        - $ref: "#/components/parameters/AttachmentId"
+        - name: variant
+          in: query
+          required: false
+          description: |
+            `original` (default) is the bytes as stored. `thumb` is the
+            downscaled preview.
+          schema:
+            type: string
+            enum: [original, thumb]
+            default: original
+      responses:
+        "200":
+          description: |
+            The bytes. `Content-Type` is the sniffed type of the stored file
+            (or `image/jpeg` for a thumbnail), and the body is **not** an
+            envelope. See the description above.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ----------------------------------------------------------- reminders ---
+  /reminders:
+    get:
+      tags: [reminders]
+      operationId: listReminders
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: state
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/ReminderDeliveryState" }
+        - name: dueBefore
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: A page of reminders.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/ReminderPage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [reminders]
+      operationId: createReminder
+      description: |
+        `text` is required and is composed **at creation time, in Syl's
+        voice**. Delivery is a zero-turn path — read the due row, write the
+        outbox row, push — so nothing downstream can improve the wording. A
+        perfectly reliable pipeline delivering flat, characterless text is
+        mechanically correct and tonally wrong.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateReminderRequest" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Reminder" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /reminders/{reminderId}:
+    get:
+      tags: [reminders]
+      operationId: getReminder
+      parameters:
+        - $ref: "#/components/parameters/ReminderId"
+      responses:
+        "200":
+          description: The reminder.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Reminder" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [reminders]
+      operationId: updateReminder
+      parameters:
+        - $ref: "#/components/parameters/ReminderId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateReminderRequest" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Reminder" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [reminders]
+      operationId: cancelReminder
+      summary: Cancel a reminder. Rows are closed, never deleted.
+      parameters:
+        - $ref: "#/components/parameters/ReminderId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Cancelled. `deliveryState` becomes `cancelled`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Reminder" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /reminders/{reminderId}/complete:
+    post:
+      tags: [reminders]
+      operationId: completeReminder
+      parameters:
+        - $ref: "#/components/parameters/ReminderId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Reminder" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /reminders/{reminderId}/snooze:
+    post:
+      tags: [reminders]
+      operationId: snoozeReminder
+      summary: Defer a reminder. Authority is server-side, always.
+      description: |
+        The notification action lives on the device; the authority does not.
+        A phone that is wiped, restored, or replaced would take device-local
+        deferrals with it, and a deferral that vanishes is the one outcome
+        the project forbids.
+
+        **The server must return a strictly later instant.** If the requested
+        instant is not strictly after the current `nextFireAt`, this fails
+        with `422 DEFERRAL_NOT_LATER` rather than silently accepting a
+        deferral that would drop the reminder.
+      parameters:
+        - $ref: "#/components/parameters/ReminderId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SnoozeReminderRequest" }
+      responses:
+        "200":
+          description: Deferred to a strictly later instant.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Reminder" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # --------------------------------------------------------------- todos ---
+  /todos:
+    get:
+      tags: [todos]
+      operationId: listTodos
+      summary: A page of to-dos, in agenda order.
+      description: |
+        **Agenda order is exactly this, and a client may rely on it:** pinned
+        first; then the nearest `dueAt`, with undated to-dos after every dated
+        one; then newest first; then by id. Deterministic to the last tiebreak,
+        because a page boundary that moves between two equal rows drops one of
+        them.
+
+        It is spelled out because a documented ordering the server does not
+        apply is the same species of lie as a documented endpoint the server
+        does not serve. Richer ranking — goal linkage, staleness — is `syl-18u`
+        and is not implemented; nothing here claims it is.
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/TodoStatus" }
+      responses:
+        "200":
+          description: A page of to-dos, in agenda order.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/TodoPage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [todos]
+      operationId: createTodo
+      description: |
+        `text` is the only required field. Everything else is nullable and
+        every query must behave sanely when the rest are null — "a to-do with
+        only text appears in the right places" is a unit test, not an
+        aspiration.
+
+        There is no priority ladder. Priority is a property of a moment, not
+        of a task; ordering is computed at read time rather than stored. One
+        bit of `pinned` survives, because "this one matters" is genuinely
+        durable. What the server actually orders by today is written out under
+        `listTodos`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTodoRequest" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Todo" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /todos/{todoId}:
+    get:
+      tags: [todos]
+      operationId: getTodo
+      parameters:
+        - $ref: "#/components/parameters/TodoId"
+      responses:
+        "200":
+          description: The to-do.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Todo" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [todos]
+      operationId: updateTodo
+      parameters:
+        - $ref: "#/components/parameters/TodoId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateTodoRequest" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Todo" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /todos/{todoId}/complete:
+    post:
+      tags: [todos]
+      operationId: completeTodo
+      parameters:
+        - $ref: "#/components/parameters/TodoId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Todo" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # --------------------------------------------------------------- goals ---
+  /goals:
+    get:
+      tags: [goals]
+      operationId: listGoals
+      summary: The minimal goal skeleton — S1 scope only.
+      description: |
+        Goals self-nest through `parentId`; there is no separate
+        objective/key-result entity. There is also no percent-complete field:
+        self-reported percentages are fiction and they decay. Progress is
+        evidenced by what was linked to the goal, and computed.
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/GoalStatus" }
+      responses:
+        "200":
+          description: A page of goals.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/GoalPage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [goals]
+      operationId: createGoal
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateGoalRequest" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Goal" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /goals/{goalId}:
+    get:
+      tags: [goals]
+      operationId: getGoal
+      parameters:
+        - $ref: "#/components/parameters/GoalId"
+      responses:
+        "200":
+          description: The goal.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Goal" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ------------------------------------------------------------- devices ---
+    patch:
+      tags: [goals]
+      operationId: updateGoal
+      summary: Reword a goal, or move it between states.
+      description: |
+        The one write a goal had no way to express. `status` carries achieving
+        it and abandoning it as well as reactivating a dormant one, because
+        they are the same operation on the same row and separate endpoints
+        would have to agree about what each leaves behind.
+      parameters:
+        - $ref: "#/components/parameters/GoalId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateGoalRequest" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Goal" }
+        default: { $ref: "#/components/responses/Error" }
+  /devices:
+    get:
+      tags: [devices]
+      operationId: listDevices
+      summary: Registered push targets. The admin's device viewer reads this.
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of devices.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/DevicePage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [devices]
+      operationId: registerDevice
+      summary: Register or refresh an APNs token.
+      description: |
+        `environment` is carried **per token**, not as a server-wide setting.
+        Xcode-installed builds produce sandbox tokens; TestFlight and App
+        Store builds produce production tokens, and during development both
+        exist at once. A global setting breaks one of them, and the only
+        symptom is `BadDeviceToken` on every send.
+
+        Re-registering the same `token` updates the existing row rather than
+        creating a second one.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterDeviceRequest" }
+      responses:
+        "201":
+          description: Registered.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Device" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /devices/{deviceId}:
+    delete:
+      tags: [devices]
+      operationId: unregisterDevice
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Unregistered. The row is marked inactive, not deleted.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Device" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ------------------------------------------------------------ delivery ---
+  /deliveries:
+    get:
+      tags: [delivery]
+      operationId: listDeliveries
+      summary: The outbox — what was sent, retried, and never acknowledged.
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: state
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/DeliveryState" }
+        - name: unacknowledged
+          in: query
+          required: false
+          description: Only rows with a null `ackedAt`. The interesting view.
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: A page of outbox rows.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/DeliveryPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /deliveries/{deliveryId}:
+    get:
+      tags: [delivery]
+      operationId: getDelivery
+      parameters:
+        - $ref: "#/components/parameters/DeliveryId"
+      responses:
+        "200":
+          description: The outbox row.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Delivery" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /deliveries/{deliveryId}/ack:
+    post:
+      tags: [delivery]
+      operationId: acknowledgeDelivery
+      summary: The client acknowledgement. A reminder is delivered only here.
+      description: |
+        **This endpoint is load-bearing for the whole delivery guarantee.**
+
+        APNs cannot tell us whether a notification arrived. It returns an
+        `apns-unique-id` per request, which is lookup-only in Apple's web
+        console — there is no public query endpoint. Worse: while a device is
+        offline Apple retains only the **most recent** notification per app,
+        so a night of reminders collapses into one.
+
+        Therefore push is a notification, not the delivery mechanism.
+        `deliveredAt` means "APNs accepted the request". Only `ackedAt` — set
+        by this call, from the device — marks the row delivered. Until then
+        the outbox retries with backoff, and a foreground reconcile via
+        `GET /sync` picks up anything push collapsed or dropped.
+
+        Acknowledging an already-acknowledged delivery is a no-op that
+        returns the existing row: the device retries this call by design.
+      parameters:
+        - $ref: "#/components/parameters/DeliveryId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AcknowledgeDeliveryRequest" }
+      responses:
+        "200":
+          description: Acknowledged.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Delivery" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- jobs ---
+  /jobs:
+    get:
+      tags: [jobs]
+      operationId: listJobs
+      summary: What is scheduled. Backs the admin's "Next" view.
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: state
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/JobState" }
+        - name: kind
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/JobKind" }
+      responses:
+        "200":
+          description: A page of jobs.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/JobPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /jobs/{jobId}:
+    get:
+      tags: [jobs]
+      operationId: getJob
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: The job.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Job" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /jobs/{jobId}/runs:
+    get:
+      tags: [jobs]
+      operationId: listJobRuns
+      summary: Backs the admin's "Ran" and "Failed" views.
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of runs, newest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/RunPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /runs/{runId}:
+    get:
+      tags: [jobs]
+      operationId: getRun
+      summary: One run with its ordered steps.
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: The run.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Run" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- logs ---
+  /logs:
+    get:
+      tags: [logs]
+      operationId: listLogs
+      summary: What Syl actually did. Admin scope only.
+      description: |
+        The service's own structured log, filtered and paged. Backs the admin's
+        "Logs" view, whose first question is "every tool she has called today"
+        — the `turn.tool` events.
+
+        ## This is the one operation a paired device may not call
+
+        Every other read in this contract is *the Commander's data*, and a
+        paired phone is supposed to have it. This one is not: it is the record
+        of what a pre-authorised program did on his machine — every turn, every
+        tool, every failure. A shoulder-surfed pairing code must not become a
+        transcript of the machine's activity.
+
+        So the bearer token needs `admin` scope, and **no endpoint mints one**.
+        An admin key is created at the machine's own console
+        (`npm run pair -- --admin`), which needs write access to the service's
+        database — already full compromise. `POST /auth/pair` always mints
+        `device`.
+
+        A token that is valid but device-scoped gets `403 FORBIDDEN`. A caller
+        with no token at all gets the ordinary, indistinguishable `401`: the
+        scope is never disclosed to someone who has not authenticated.
+
+        ## Ordering and paging
+
+        Newest first, always — a log view answers "what just happened" far more
+        often than "what happened first". Paging is the usual opaque cursor, and
+        it counts from the newest record, so page 2 stays meaningful while new
+        records arrive.
+
+        ## Time range
+
+        `since` and `until` are both **inclusive**, and both are ordinary
+        instants. Note that `until` on its own is a perfectly good query — "what
+        was happening before the crash" — and is not the same as paging back
+        from now.
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: event
+          in: query
+          required: false
+          description: |
+            Match events whose name **starts with** this. Names are dotted and
+            stable (`turn.tool`, `turn.done`, `job.run`), so a prefix is a
+            family: `turn` is every turn event and `turn.tool` is only the tool
+            calls.
+          schema: { type: string }
+          examples:
+            everyToolCall: { value: "turn.tool" }
+            everythingAboutTurns: { value: "turn" }
+        - name: level
+          in: query
+          required: false
+          description: Records at or above this severity. Omit for everything.
+          schema: { $ref: "#/components/schemas/LogLevel" }
+        - name: since
+          in: query
+          required: false
+          description: Only records at or after this instant. Inclusive.
+          schema: { $ref: "#/components/schemas/Instant" }
+        - name: until
+          in: query
+          required: false
+          description: Only records at or before this instant. Inclusive.
+          schema: { $ref: "#/components/schemas/Instant" }
+      responses:
+        "200":
+          description: A page of log records, newest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/LogPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- sync ---
+  /sync:
+    get:
+      tags: [sync]
+      operationId: syncSinceCursor
+      summary: Cursor-based catch-up for the local-first device store.
+      description: |
+        The device's half of "push outbox → pull since cursor → reconcile →
+        ack". Returns every change after `since`, oldest first, across every
+        resource type, and a `cursor` to pass next time.
+
+        Omit `since` for a full bootstrap. Keep calling while `hasMore` is
+        true — a device returning after a week will page.
+
+        ## Conflict semantics: there are none, by construction
+
+        **This endpoint accepts no client state, so it cannot conflict.** The
+        push half of the loop is the ordinary write endpoints, each carrying an
+        `Idempotency-Key`; by the time a pull runs, the device's own writes have
+        already been applied. The server is the sole authority and the pull
+        hands back the server's row, which replaces whatever the device held
+        optimistically. "What happens when both sides changed the same row" has
+        the answer *the server's version, always*, rather than an answer that
+        depends on timing.
+
+        There is deliberately no `POST /sync`. Giving this endpoint a write side
+        would invent a merge problem the architecture does not have.
+
+        ## The four properties a client may rely on
+
+        1. **The cursor is a monotonic sequence, not a timestamp.** A timestamp
+           cursor loses a row permanently, and silently, if the server's clock
+           ever steps backwards.
+        2. **State, not history.** A change says *that* a resource changed;
+           `resource` is that resource as it is when the response is built. A
+           device that pages slowly therefore sees fewer, fresher changes rather
+           than a replay it would only overwrite.
+        3. **At-least-once.** Replaying a cursor re-delivers. Every change is an
+           id-keyed `upsert` or `delete`, so a duplicate is a no-op. Nothing here
+           is exactly-once.
+        4. **An empty page does not move the cursor.** A client polling a quiet
+           server neither loses its place nor skips a row that lands a
+           millisecond later.
+
+        `op: delete` is a shape the feed supports and does not presently emit:
+        no resource in Syl is hard-deleted — reminders are cancelled, devices
+        are deactivated, to-dos are dropped — and every one of those is an
+        `upsert` carrying a new status.
+
+        **This is not the WebSocket `sync` frame.** That one recovers a gap on
+        one socket by sequence number and does not survive a reinstall. This
+        one is durable and covers every resource. See the table in the API
+        description.
+      parameters:
+        - name: since
+          in: query
+          required: false
+          description: Opaque cursor from a previous `SyncResponse.cursor`.
+          schema: { type: string }
+        - $ref: "#/components/parameters/Limit"
+        - name: types
+          in: query
+          required: false
+          description: Restrict to these resource types.
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/SyncResourceType" }
+      responses:
+        "200":
+          description: Changes since the cursor.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/SyncResponse" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # -------------------------------------------------------------- memory ---
+  /memory/constellation:
+    get:
+      tags: [memory]
+      operationId: getMemoryConstellation
+      summary: A bounded region of the memory graph, shaped to be drawn as a sky.
+      description: |
+        Nodes are stars, edges are filaments, confidence is brightness and tier
+        is depth. This is the phone's read of what Syl remembers, and it is
+        deliberately not `GET /memory/graph` — that one carries node seeds, edge
+        budgets and a window of dream nights, which are instrument controls for
+        judging the inferred engine. This one takes a count of stars.
+
+        ## It is a REGION and it says so
+
+        The sky is grown from **anchors** — the people and goals the Commander
+        thinks in terms of — plus what orbits them, plus the most connected of
+        whatever is left, up to `bound.stars`. `bound.mayHaveMore` is exact: it
+        is set at the moment a star is refused for want of budget, never
+        inferred from a full response.
+
+        There is deliberately **no total**. A count of what the graph holds is a
+        dashboard statistic, and this surface answers "is this all of it?"
+        without answering "how much is there?".
+
+        ## `confidence` is the DECAYED weight
+
+        On a filament it is what the connection is worth *now*, after decay —
+        the number that is defined for both species and the one the project
+        means by "confidence decays toward zero asymptotically and never
+        arrives". What reflection declared when it drew an inference is a
+        different number that does not decay, carried separately as
+        `inferredConfidence`.
+
+        On a star it is the confidence of the strongest filament touching it: a
+        maximum, so one strong live connection is not dimmed by dead ones beside
+        it. A star nothing connects to carries the law's minimum weight — the
+        faintest a thing can be without being absent.
+
+        ## Nothing set aside is missing
+
+        A hot filament reaching a `cold` or `suppressed` star still draws that
+        star, further back and dimmer. Nodes are superseded and edges are
+        demoted; neither is destroyed, and this view renders that rather than
+        filtering it out.
+      parameters:
+        - name: stars
+          in: query
+          required: false
+          description: |
+            The most stars to return. Refused rather than clamped when out of
+            range: a value quietly read as the default hands back a different
+            sky under a number the caller did not ask for.
+          schema: { type: integer, minimum: 1, maximum: 500, default: 60 }
+      responses:
+        "200":
+          description: A region of the graph, at one instant.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/MemoryConstellation" }
+        default: { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Client-generated, opaque, unique per logical operation. Required on
+        every write — the mobile outbox retries by design and will duplicate
+        without it.
+      schema: { type: string, minLength: 8, maxLength: 128 }
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque page cursor from the previous page's `nextCursor`.
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+    AttachmentId:
+      name: attachmentId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+    ReminderId:
+      name: reminderId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+    TodoId:
+      name: todoId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+    GoalId:
+      name: goalId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+    DeviceId:
+      name: deviceId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+    DeliveryId:
+      name: deliveryId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+
+  responses:
+    Error:
+      description: |
+        Any failure. The HTTP status is advisory; `error.code` is the
+        contract. `error.retryable` tells the client's backoff whether to try
+        again — the Tailscale extension is torn down when idle, so the first
+        request after a wake can fail while the tunnel re-establishes, and
+        treating that as "server down" makes a healthy app feel broken.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  schemas:
+    # ------------------------------------------------------------ core ---
+    Id:
+      type: string
+      description: "`syl:<type>:<uuidv7>` — type-prefixed, time-sortable."
+      pattern: "^syl:[a-z][a-z_]*:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+      examples: ["syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f"]
+
+    Instant:
+      type: string
+      format: date-time
+      description: RFC 3339, UTC, millisecond precision. Never a fixed offset.
+      examples: ["2026-08-09T07:00:03.114Z"]
+
+    WallTime:
+      type: string
+      description: |
+        24-hour local wall-clock time. Stored alongside an IANA `tz`; the
+        instant is a materialisation of the next occurrence, never the source
+        of truth. Storing only the instant is the fixed-offset bug in a
+        different costume.
+      pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+      examples: ["07:00"]
+
+    Timezone:
+      type: string
+      description: IANA zone name. Never a fixed UTC offset.
+      examples: ["America/Chicago"]
+
+    OkEnvelope:
+      type: object
+      required: [success]
+      properties:
+        success: { const: true }
+
+    ErrorEnvelope:
+      type: object
+      required: [success, error]
+      properties:
+        success: { const: false }
+        error: { $ref: "#/components/schemas/ApiError" }
+
+    ErrorCode:
+      type: string
+      description: |
+        The typed code is the contract; the HTTP status is advisory. Clients
+        branch on this, never on the status line.
+
+        `PAIRING_CODE_EXPIRED` and `PAIRING_CODE_ALREADY_USED` are the only
+        places the service tells one authentication failure from another, and
+        they are safe because **both are reachable only by presenting a code
+        that matches a stored one**. A wrong guess, and an attempt made while
+        no code is live, are the same `UNAUTHORIZED`. So the extra detail
+        reaches the person holding the code and nobody else — which is what
+        lets a pairing screen on a phone say something more useful than "that
+        did not work".
+      enum:
+        - VALIDATION_FAILED
+        - UNAUTHORIZED
+        - PAIRING_CODE_EXPIRED
+        - PAIRING_CODE_ALREADY_USED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - IDEMPOTENCY_KEY_REUSE
+        - IDEMPOTENCY_KEY_REQUIRED
+        - DEFERRAL_NOT_LATER
+        - RRULE_UNSUPPORTED
+        - UNKNOWN_JOB_KIND
+        - DEVICE_TOKEN_INVALID
+        - QUIET_HOURS
+        - RATE_LIMITED
+        - UPSTREAM_UNAVAILABLE
+        - INTERNAL
+
+    ApiError:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code: { $ref: "#/components/schemas/ErrorCode" }
+        message:
+          type: string
+          description: Human-readable, for a log line or an admin screen. Never parsed.
+        retryable:
+          type: boolean
+          description: |
+            Whether the client's backoff should try again. `RATE_LIMITED`,
+            `UPSTREAM_UNAVAILABLE` and `INTERNAL` are retryable; a validation
+            failure never is. Auth and billing failures halt rather than
+            retry — retrying an auth failure fifty times is the worst
+            possible response to a key having shadowed the subscription login.
+        details:
+          type: [object, "null"]
+          description: Structured context. `VALIDATION_FAILED` carries `{ field, reason }[]`.
+          additionalProperties: true
+        retryAfterMs:
+          type: [integer, "null"]
+          description: Server-suggested backoff floor, when it knows one.
+
+    PageInfo:
+      type: object
+      required: [nextCursor, hasMore]
+      properties:
+        nextCursor:
+          type: [string, "null"]
+          description: Pass as `cursor` for the next page. Null on the last page.
+        hasMore: { type: boolean }
+
+    # ---------------------------------------------------------- health ---
+    HealthStatus:
+      type: object
+      required: [status, version, startedAt, now, checks]
+      description: |
+        Liveness, dependency status, and — the part that is not obvious —
+        **what code is answering**.
+
+        A stale build is invisible by construction: every check passes, because
+        the old build is perfectly healthy. It has already cost real time here.
+        The service ran from 19:58 while a fix landed at 20:18, so for three
+        hours Syl answered through a tool surface that had been removed, and it
+        was noticed only because the Commander thought something read oddly and
+        asked. `build` is what turns that silent failure into a visible one.
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        version: { type: string }
+        startedAt: { $ref: "#/components/schemas/Instant" }
+        now: { $ref: "#/components/schemas/Instant" }
+        checks:
+          type: array
+          items: { $ref: "#/components/schemas/HealthCheck" }
+        build:
+          description: |
+            What this process was BUILT FROM, stamped at build time.
+
+            `null` when the service is running from source rather than from a
+            build — `npm run dev`, a test, a `tsx` invocation — which is a real
+            and useful answer rather than a missing one.
+          oneOf:
+            - { $ref: "#/components/schemas/BuildInfo" }
+            - { type: "null" }
+        turnsInFlight:
+          type: integer
+          minimum: 0
+          description: |
+            How many conversations have a turn running or queued right now.
+
+            Here so that an automated deploy can decline to restart her
+            mid-sentence. It is the only thing on this endpoint that changes
+            second to second, and it is deliberately a count and not a list:
+            `/health` takes no bearer token, so it may say that she is busy and
+            must never say what about.
+
+    BuildInfo:
+      type: object
+      required: [commit, builtAt, dirty]
+      description: |
+        Provenance for the artifact that is running, written by
+        `backend/scripts/write-build-info.mjs` at build time into
+        `dist/build-info.json`.
+
+        **Stamped at build time, never read from git at request time.** Those
+        two answers differ, and the difference is the entire point: the running
+        service must report the commit it was BUILT FROM, not whatever the
+        working tree happens to say now. Because the stamp lives inside `dist/`,
+        it also travels with a rolled-back build automatically.
+      properties:
+        commit:
+          type: [string, "null"]
+          description: |
+            The full 40-character SHA the build was made from. `null` only when
+            the build happened outside a git checkout, which is worth reporting
+            rather than hiding — a build nobody can trace back to a commit is a
+            build nobody can reason about.
+          examples: ["49ac2dce862dfca27edaeb6c2e69c157ea434eda"]
+        builtAt: { $ref: "#/components/schemas/Instant" }
+        dirty:
+          type: boolean
+          description: |
+            Whether the working tree had uncommitted changes when the build ran.
+            A dirty build cannot be reproduced from `commit`, so "running the
+            commit at HEAD" is not the same statement about it.
+        branch:
+          type: [string, "null"]
+          description: The branch checked out at build time, for a human reading a log.
+
+    HealthCheck:
+      type: object
+      required: [name, status]
+      properties:
+        name:
+          type: string
+          examples: ["database", "apns", "scheduler", "claude-binary"]
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        detail: { type: [string, "null"] }
+
+    # ------------------------------------------------------------ auth ---
+    PairRequest:
+      type: object
+      required: [pairingCode, deviceName]
+      description: |
+        How a device gets its first credential, and the only unauthenticated
+        write in the contract.
+
+        The human types the *short-lived* secret and the app keeps the
+        *long-lived* one: eight digits, good for ten minutes and for exactly
+        one device, exchanged for a bearer token the app puts in the Keychain
+        and never shows anyone. Nothing is ever baked into the build.
+
+        Get a code by running `npm run pair` on the machine Syl runs on. It is
+        also printed at startup while no device is paired.
+      properties:
+        pairingCode:
+          type: string
+          description: |
+            `NNNN-NNNN`. Issued by `npm run pair` on the server. Single use,
+            ten minutes, and superseded the moment another one is issued.
+          pattern: "^\\d{4}-\\d{4}$"
+          examples: ["4821-9930"]
+        deviceName:
+          type: string
+          description: What the Commander will see on the paired-devices list.
+
+    TokenGrant:
+      type: object
+      required: [token, tokenType, expiresAt, principal]
+      properties:
+        token: { type: string }
+        tokenType: { const: "Bearer" }
+        expiresAt: { $ref: "#/components/schemas/Instant" }
+        principal: { $ref: "#/components/schemas/Principal" }
+
+    Principal:
+      type: object
+      required: [id, name]
+      description: |
+        There is exactly one. Syl answers to the Commander and to nobody
+        else — that allowlist is the trust boundary, not a placeholder for a
+        user table.
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        name: { type: string }
+
+    # ---------------------------------------------------- conversation ---
+    ConversationLane:
+      type: string
+      description: |
+        `interactive` is the Commander's own durable thread. `job` lanes hold
+        background work — a research run, the nightly consolidation, the
+        heartbeat. They are separated because one session file shared by
+        every job interleaves Syl's inner monologue with talking to him.
+      enum: [interactive, job]
+
+    Conversation:
+      type: object
+      required: [id, lane, title, createdAt, updatedAt, lastMessageAt, messageCount]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        lane: { $ref: "#/components/schemas/ConversationLane" }
+        title: { type: [string, "null"] }
+        createdAt: { $ref: "#/components/schemas/Instant" }
+        updatedAt: { $ref: "#/components/schemas/Instant" }
+        lastMessageAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+        messageCount: { type: integer, minimum: 0 }
+
+    ConversationPage:
+      type: object
+      required: [items, nextCursor, hasMore]
+      description: |
+        **How `conversationId` is derived.** The interactive lane has a
+        well-known constant id,
+        `syl:conversation:00000000-0000-7000-8000-000000000001`. A client and
+        a server that both use a constant cannot disagree — which is the
+        whole point, because Adjutant reconstructed conversation scope from
+        sender and recipient, shipped messages into the wrong thread, and
+        paid for the fix twice: once in the bug and again in the backfill
+        migration.
+
+        `job` lane ids are assigned by the server and never derived by a
+        client.
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Conversation" }
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+
+    MessageRole:
+      type: string
+      enum: [user, assistant, system]
+
+    Message:
+      type: object
+      required: [id, conversationId, clientId, role, text, createdAt, seq, attachments]
+      description: |
+        `text` has already had the affect hint stripped. The
+        `<!--affect: concerned 0.6-->` marker that a turn may emit is removed
+        by the service before display and before synthesis; it drives the
+        `presence` frame and never crosses the wire as message content.
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        conversationId: { $ref: "#/components/schemas/Id" }
+        clientId:
+          type: [string, "null"]
+          description: |
+            Echoed back exactly as the client sent it, so an optimistic
+            render can be reconciled. Null for anything Syl originated.
+        role: { $ref: "#/components/schemas/MessageRole" }
+        text: { type: string }
+        createdAt: { $ref: "#/components/schemas/Instant" }
+        seq:
+          type: integer
+          minimum: 1
+          description: |
+            Monotonic per conversation. The client tracks the highest it has
+            seen; the WebSocket `sync` frame replays from there.
+        attachments:
+          type: array
+          items: { $ref: "#/components/schemas/Attachment" }
+          description: |
+            In the order they were attached. **Always present, empty when
+            there are none** — a client must never have to tell "no
+            attachments" apart from "this server does not send the field",
+            because those two look identical and mean opposite things the day
+            a field goes missing.
+
+    MessagePage:
+      type: object
+      required: [items, nextCursor, hasMore]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Message" }
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+
+    SendMessageRequest:
+      type: object
+      required: [clientId, text]
+      properties:
+        clientId:
+          type: string
+          minLength: 8
+          maxLength: 128
+          description: |
+            Client-generated. Rendered immediately as pending and swapped when
+            the server confirms with the matching `serverId`.
+        text:
+          type: string
+          minLength: 0
+          description: |
+            What he said. **May be empty only when `attachmentIds` is present** —
+            a picture with no caption is the most ordinary thing anyone does with
+            a picture, and until this rule it was impossible.
+
+            Still a required FIELD, and still never null: a caption-less photo
+            carries `""`, which says "no words" honestly and keeps `text`
+            non-optional in both clients, so nothing downstream has to handle an
+            absent string.
+
+            Empty `text` with no attachments is `VALIDATION_FAILED`. The
+            conditional is enforced by the service rather than expressed here:
+            OpenAPI can only say it with `anyOf`, which every generator renders
+            as an awkward union and which no reader understands faster than this
+            sentence.
+        conversationId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+          description: Optional; must equal the path parameter when present.
+        attachmentIds:
+          type: array
+          items: { $ref: "#/components/schemas/Id" }
+          description: |
+            Ids from `POST /attachments`, in the order they should render.
+            Every one must exist and must not already belong to another
+            message; either failure is `VALIDATION_FAILED` rather than a
+            message that silently loses its picture.
+
+            Optional and, when present, may not be empty — an empty array is a
+            client that meant to omit the field and is worth saying so about.
+
+    DeliveryConfirmation:
+      type: object
+      required: [clientId, serverId, conversationId, seq, acceptedAt]
+      description: |
+        The reconciliation pair. Identical in shape to the WebSocket
+        `delivery_confirmation` frame's payload, deliberately: a client that
+        sent over HTTP because the socket was down reconciles with the same
+        code path.
+      properties:
+        clientId: { type: string }
+        serverId: { $ref: "#/components/schemas/Id" }
+        conversationId: { $ref: "#/components/schemas/Id" }
+        seq: { type: integer, minimum: 1 }
+        acceptedAt: { $ref: "#/components/schemas/Instant" }
+
+    # ----------------------------------------------------- attachments ---
+    AttachmentKind:
+      type: string
+      description: |
+        Two kinds, and deliberately no third. `file` is not here: an arbitrary
+        document is a thing the service would have to store, serve and never
+        be able to render, and adding the case later costs nothing while
+        adding it now costs a surface nobody has a use for.
+      enum: [image, video]
+
+    Attachment:
+      type: object
+      required:
+        [id, kind, mimeType, bytes, width, height, durationMs, sha256, createdAt, hasThumbnail]
+      description: |
+        A stored image or video. The row is metadata only — the bytes live on
+        the service's own disk and are fetched from
+        `GET /attachments/{attachmentId}`, never from anywhere else.
+
+        **There is no URL on this object, on purpose.** A remote image in a
+        transcript leaks a read receipt and the Commander's IP to whoever hosts
+        it, and a client that will render whatever URL it is handed is an SSRF
+        surface pointed at the tailnet. The client composes the path from the
+        id against the server it is paired with, so an attachment can only ever
+        come from Syl's own origin.
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        kind: { $ref: "#/components/schemas/AttachmentKind" }
+        mimeType:
+          type: string
+          description: |
+            What the file's **magic bytes** say it is, not what the uploader
+            declared. The two are cross-checked at upload and a disagreement is
+            refused, so by the time a row exists there is only one answer.
+        bytes:
+          type: integer
+          minimum: 1
+          description: Size of the stored original, in bytes.
+        width:
+          type: integer
+          minimum: 1
+          description: |
+            Pixels. Read from the file header for an image; taken from the
+            uploader for a video. Present so a bubble can reserve the right box
+            before the bytes arrive — no layout jump on load.
+        height: { type: integer, minimum: 1, description: Pixels. See `width`. }
+        durationMs:
+          type: [integer, "null"]
+          minimum: 0
+          description: Video only. Always null for an image.
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: |
+            Lower-case hex of the stored original. The client's cache key, and
+            what makes "is this the same picture I already have" answerable
+            without a download.
+        createdAt: { $ref: "#/components/schemas/Instant" }
+        hasThumbnail:
+          type: boolean
+          description: |
+            Whether `?variant=thumb` will answer with bytes. False for every
+            video, and false for an image the service could not downscale.
+            A client that asks for a thumbnail that does not exist gets `404`;
+            it must read this rather than probe.
+
+    CreateAttachmentRequest:
+      type: object
+      required: [kind, mimeType, data]
+      properties:
+        kind: { $ref: "#/components/schemas/AttachmentKind" }
+        mimeType:
+          type: string
+          minLength: 3
+          maxLength: 128
+          description: |
+            The type you believe you are uploading. Cross-checked against the
+            file's magic bytes; a disagreement is `VALIDATION_FAILED`, never a
+            quiet correction.
+        data:
+          type: string
+          minLength: 1
+          description: |
+            The file, base64. Standard alphabet, padding optional, no data
+            URI prefix. The decoded size is what the ceiling applies to.
+        width:
+          type: integer
+          minimum: 1
+          description: |
+            **Required for a video, ignored for an image.** The server reads an
+            image's dimensions out of its own header, which is the only source
+            that cannot disagree with the file.
+        height: { type: integer, minimum: 1, description: See `width`. }
+        durationMs:
+          type: integer
+          minimum: 0
+          description: Required for a video. Rejected on an image.
+
+    # ------------------------------------------------------- reminders ---
+    ReminderKind:
+      type: string
+      description: |
+        Drives the catch-up policy, which is why it is stored on the row.
+
+        A `commitment` never collapses: it fires late and says it is late.
+        A `rhythm` message does the opposite — yesterday's morning agenda is
+        worthless today, so `supersedesPrevious` is set and only the current
+        one fires, with one line saying what was skipped so even the
+        suppression is visible.
+      enum: [commitment, rhythm]
+
+    ReminderOrigin:
+      type: string
+      enum: [he_asked, she_noticed]
+      description: |
+        `he_asked` — he requested it in the conversation.
+        `she_noticed` — she offered it unprompted.
+
+        DERIVED rather than claimed wherever it can be: a heartbeat or dream
+        turn has no message from him at all, so "she thought of it" is a fact
+        about that turn rather than a self-report — and those are exactly the
+        3am ones. Same rule as `urgentBecauseHeSaid`: a conclusion can only be
+        trusted, evidence can be checked.
+
+    ReminderDeliveryState:
+      type: string
+      description: |
+        `delivered` means APNs accepted the push. `acknowledged` means the
+        device confirmed it. Only the second one satisfies the guarantee.
+      enum:
+        - scheduled
+        - due
+        - delivered
+        - acknowledged
+        - deferred
+        - completed
+        - cancelled
+        - failed
+
+    Reminder:
+      type: object
+      required:
+        [
+          id,
+          kind,
+          text,
+          todoId,
+          eventId,
+          wallTime,
+          tz,
+          rrule,
+          scheduledFor,
+          nextFireAt,
+          urgent,
+          late,
+          deferredFrom,
+          supersedesPrevious,
+          deliveryState,
+          createdAt,
+          updatedAt,
+          completedAt,
+        ]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        kind: { $ref: "#/components/schemas/ReminderKind" }
+        text:
+          type: string
+          description: |
+            Composed at creation time, in Syl's voice. Delivery is a zero-turn
+            path and reads this verbatim — no model is in the way to improve
+            it later.
+        because:
+          type: [string, "null"]
+          description: |
+            Why this reminder exists, in his words or hers. `syl-y82`.
+
+            `remind_me` has REQUIRED this since it shipped and discarded it
+            until now — on the one verb that wakes him. `SOUL.md` promises he
+            can tell a good suggestion from a wrong one and can tell her to
+            stop making a kind he dislikes; both were false while it was
+            dropped.
+
+            Null on reminders written before the column existed. Not
+            backfilled: a guessed reason is exactly the claim-beyond-evidence
+            this field exists to prevent.
+        origin:
+          oneOf:
+            - { $ref: "#/components/schemas/ReminderOrigin" }
+            - { type: "null" }
+          description: |
+            Whether HE asked for it or SHE thought of it — a different question
+            from `because`, and the one a careful reader actually got wrong.
+            Prose answers "why does this exist" and only sometimes "did he
+            ask". A list showing him which are hers needs this, not that.
+        todoId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+        eventId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+        wallTime: { $ref: "#/components/schemas/WallTime" }
+        tz: { $ref: "#/components/schemas/Timezone" }
+        rrule:
+          type: [string, "null"]
+          description: |
+            RFC 5545 RRULE text, restricted to a deliberate subset: daily,
+            weekly-by-day, monthly-by-date, yearly. Anything outside it is
+            rejected at write time with `RRULE_UNSUPPORTED` rather than
+            half-supported — a rule that parses but schedules wrongly is a
+            silently dropped reminder.
+          examples: ["FREQ=WEEKLY;BYDAY=MO,WE,FR"]
+        scheduledFor:
+          allOf: [{ $ref: "#/components/schemas/Instant" }]
+          description: |
+            The instant this occurrence was originally due. Survives deferral
+            and lateness so the client can render "this was due Tuesday at
+            09:00".
+        nextFireAt:
+          allOf: [{ $ref: "#/components/schemas/Instant" }]
+          description: The materialised instant of the next occurrence.
+        urgent:
+          type: boolean
+          description: |
+            Maps one-to-one onto APNs `interruption-level: time-sensitive`,
+            and onto the `alert` presence state. Rationed by being coupled to
+            something already scarce.
+        late:
+          type: boolean
+          description: |
+            Fired after `scheduledFor` because the machine was down. A late
+            reminder says it is late; it is never silently dropped and never
+            pretends to be on time.
+        deferredFrom:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+          description: The previous `nextFireAt` in the deferral chain.
+        supersedesPrevious:
+          type: boolean
+          description: Rhythm reminders only. Suppressed occurrences are reported, not hidden.
+        deliveryState: { $ref: "#/components/schemas/ReminderDeliveryState" }
+        createdAt: { $ref: "#/components/schemas/Instant" }
+        updatedAt: { $ref: "#/components/schemas/Instant" }
+        completedAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+
+    ReminderPage:
+      type: object
+      required: [items, nextCursor, hasMore]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Reminder" }
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+
+    CreateReminderRequest:
+      type: object
+      required: [text, wallTime, tz]
+      properties:
+        text: { type: string, minLength: 1 }
+        kind: { $ref: "#/components/schemas/ReminderKind" }
+        wallTime: { $ref: "#/components/schemas/WallTime" }
+        tz: { $ref: "#/components/schemas/Timezone" }
+        date:
+          type: [string, "null"]
+          description: "`YYYY-MM-DD` local date for a one-shot. Null with an `rrule`."
+          pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        rrule: { type: [string, "null"] }
+        todoId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+        urgent: { type: boolean, default: false }
+
+    UpdateReminderRequest:
+      type: object
+      description: Every field optional; omitted fields are left alone.
+      properties:
+        text: { type: string, minLength: 1 }
+        wallTime: { $ref: "#/components/schemas/WallTime" }
+        tz: { $ref: "#/components/schemas/Timezone" }
+        rrule: { type: [string, "null"] }
+        urgent: { type: boolean }
+
+    SnoozeReminderRequest:
+      type: object
+      description: |
+        Supply exactly one of `until` or `minutes`. Whichever is used, the
+        resulting instant must be strictly later than the current
+        `nextFireAt`, or the call fails with `DEFERRAL_NOT_LATER`.
+      properties:
+        until:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+        minutes:
+          type: [integer, "null"]
+          minimum: 1
+          examples: [15]
+
+    # ----------------------------------------------------------- todos ---
+    TodoStatus:
+      type: string
+      description: |
+        `proposed` is inferred structure, not an explicit ask — provisional,
+        visible, and it expires if unresolved after roughly a week. An
+        explicit ask is never provisional; it lands as `open`.
+      enum: [proposed, open, done, dropped]
+
+    TodoSource:
+      type: string
+      enum: [commander, inferred, imported]
+
+    Todo:
+      type: object
+      required:
+        [id, text, goalId, dueAt, pinned, status, source, delegatedJobId, createdAt, updatedAt, completedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        text: { type: string }
+        goalId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+        dueAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+        pinned:
+          type: boolean
+          description: The one durable bit of "this one matters". There is no priority ladder.
+        status: { $ref: "#/components/schemas/TodoStatus" }
+        source: { $ref: "#/components/schemas/TodoSource" }
+        delegatedJobId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+          description: |
+            The seam between the life model and the job system. A to-do is
+            something *he* must do; a job is something *Syl* must do. One
+            nullable column joins them.
+        createdAt: { $ref: "#/components/schemas/Instant" }
+        updatedAt: { $ref: "#/components/schemas/Instant" }
+        completedAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+
+    TodoPage:
+      type: object
+      required: [items, nextCursor, hasMore]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Todo" }
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+
+    CreateTodoRequest:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string, minLength: 1 }
+        goalId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+        dueAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+        pinned: { type: boolean, default: false }
+
+    UpdateTodoRequest:
+      type: object
+      properties:
+        text: { type: string, minLength: 1 }
+        goalId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+        dueAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+        pinned: { type: boolean }
+        status: { $ref: "#/components/schemas/TodoStatus" }
+
+    # ----------------------------------------------------------- goals ---
+    GoalStatus:
+      type: string
+      description: |
+        `abandoned` is a first-class, non-shameful outcome. `dormant` is a
+        real state and reactivating a dormant goal restores its history
+        intact. The three answers Syl offers — still mine / not now / done
+        with it — map to `active` / `dormant` / `abandoned`.
+      enum: [proposed, active, dormant, achieved, abandoned]
+
+    Goal:
+      type: object
+      required:
+        [id, parentId, title, why, targetDate, metricKey, targetValue, cadenceDays, status, statusReason, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        parentId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+          description: Goals self-nest. There is no separate objective entity.
+        title: { type: string }
+        why:
+          type: [string, "null"]
+          description: The only optional field Syl should ever push for.
+        targetDate:
+          type: [string, "null"]
+          description: "`YYYY-MM-DD`. The horizon (life / year / season / month) is derived from it, not stored."
+          pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        metricKey: { type: [string, "null"] }
+        targetValue: { type: [number, "null"] }
+        cadenceDays:
+          type: [integer, "null"]
+          description: Drives the silence signal — nothing linked for longer than this is a risk.
+        status: { $ref: "#/components/schemas/GoalStatus" }
+        statusReason: { type: [string, "null"] }
+        createdAt: { $ref: "#/components/schemas/Instant" }
+        updatedAt: { $ref: "#/components/schemas/Instant" }
+
+    GoalPage:
+      type: object
+      required: [items, nextCursor, hasMore]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Goal" }
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+
+    CreateGoalRequest:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1 }
+        parentId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+        why: { type: [string, "null"] }
+        targetDate: { type: [string, "null"], pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+        cadenceDays: { type: [integer, "null"], minimum: 1 }
+
+    UpdateGoalRequest:
+      # Every field optional, and only the named ones move. A patch that
+      # required the whole goal back would silently overwrite whatever the
+      # caller did not think to include — the failure where rewording a goal
+      # quietly clears its target date.
+      type: object
+      properties:
+        title: { type: string, minLength: 1 }
+        why: { type: [string, "null"] }
+        targetDate: { type: [string, "null"], pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+        cadenceDays: { type: [integer, "null"], minimum: 1 }
+        status: { $ref: "#/components/schemas/GoalStatus" }
+        statusReason: { type: [string, "null"] }
+
+    # --------------------------------------------------------- devices ---
+    PushEnvironment:
+      type: string
+      description: |
+        Carried per token. TestFlight and App Store builds always produce
+        `production` tokens; Xcode-installed builds always produce `sandbox`.
+        Both exist during development, so a global setting breaks one of
+        them, and the only symptom is `BadDeviceToken` on every send.
+      enum: [sandbox, production]
+
+    DevicePlatform:
+      type: string
+      enum: [ios]
+
+    Device:
+      type: object
+      required: [id, platform, environment, tokenSuffix, name, appVersion, osVersion, active, registeredAt, lastSeenAt]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        platform: { $ref: "#/components/schemas/DevicePlatform" }
+        environment: { $ref: "#/components/schemas/PushEnvironment" }
+        tokenSuffix:
+          type: string
+          description: |
+            The last 8 hex characters of the APNs token. The full token is
+            never returned — it is a credential for pushing to his phone, and
+            a read endpoint that hands it back is a needless one.
+          pattern: "^[0-9a-f]{8}$"
+        name: { type: string }
+        appVersion: { type: string }
+        osVersion: { type: string }
+        active:
+          type: boolean
+          description: |
+            Set false on APNs `410` or `BadDeviceToken`. Dead tokens are
+            unregistered reactively rather than accumulating.
+        registeredAt: { $ref: "#/components/schemas/Instant" }
+        lastSeenAt: { $ref: "#/components/schemas/Instant" }
+
+    DevicePage:
+      type: object
+      required: [items, nextCursor, hasMore]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Device" }
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+
+    RegisterDeviceRequest:
+      type: object
+      required: [token, environment, platform, name, appVersion, osVersion]
+      properties:
+        token:
+          type: string
+          description: Hex APNs device token.
+          pattern: "^[0-9a-fA-F]{64,200}$"
+        environment: { $ref: "#/components/schemas/PushEnvironment" }
+        platform: { $ref: "#/components/schemas/DevicePlatform" }
+        name: { type: string }
+        appVersion: { type: string }
+        osVersion: { type: string }
+
+    # -------------------------------------------------------- delivery ---
+    DeliveryChannel:
+      type: string
+      description: |
+        `adjutant` is the interim channel — an MCP tool inside the model's
+        subprocess, which is exactly why it is being replaced. A model can
+        decline to call a tool.
+      enum: [apns, adjutant, websocket]
+
+    DeliveryState:
+      type: string
+      enum: [pending, sending, delivered, acknowledged, failed, abandoned]
+
+    DeliveryEngagement:
+      type: string
+      description: |
+        Feeds the interruption ledger. A message class below 20% engagement
+        over 14 days with at least 5 sends is automatically demoted — its
+        frequency halves — and the Commander is told once.
+      enum: [delivered, opened, acted_on, dismissed, ignored]
+
+    DeliveryPayload:
+      type: object
+      required: [title, body]
+      description: |
+        Self-sufficient by design. The reminder text goes in the body, never
+        an id to fetch: push reaches the phone over Apple's network, which
+        does not touch the tailnet, so a notification must still be readable
+        when the tunnel is down and nothing can be fetched.
+      properties:
+        title: { type: string }
+        body: { type: string }
+        interruptionLevel:
+          type: string
+          enum: [passive, active, time-sensitive]
+          default: active
+        categoryIdentifier:
+          type: [string, "null"]
+          examples: ["reminder"]
+        threadIdentifier: { type: [string, "null"] }
+
+    Delivery:
+      type: object
+      required:
+        [
+          id,
+          channel,
+          messageClass,
+          reminderId,
+          payload,
+          idempotencyKey,
+          state,
+          attempts,
+          nextAttemptAt,
+          deliveredAt,
+          ackedAt,
+          engagement,
+          late,
+          scheduledFor,
+          coalescedReminderIds,
+          apnsUniqueId,
+          lastError,
+          createdAt,
+        ]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        channel: { $ref: "#/components/schemas/DeliveryChannel" }
+        messageClass:
+          type: string
+          description: |
+            What kind of proactive message this is, for the interruption
+            ledger. Matches `JobKind` for job-originated deliveries.
+        reminderId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+        payload: { $ref: "#/components/schemas/DeliveryPayload" }
+        idempotencyKey: { type: string }
+        state: { $ref: "#/components/schemas/DeliveryState" }
+        attempts: { type: integer, minimum: 0 }
+        nextAttemptAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+        deliveredAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+          description: APNs accepted the request. Not a delivery guarantee.
+        ackedAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+          description: The device confirmed. **This** is what marks the row delivered.
+        engagement:
+          oneOf:
+            - { $ref: "#/components/schemas/DeliveryEngagement" }
+            - { type: "null" }
+        late: { type: boolean }
+        scheduledFor:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+        coalescedReminderIds:
+          type: array
+          description: |
+            Non-empty when this row is the single "here is what waited
+            overnight" notification for a batch deferred past quiet hours.
+            Deferral moves everything in the window to the same instant, so
+            ten reminders would otherwise arrive as ten notifications in one
+            second — correct by the letter of the guarantee and awful in
+            practice. Individual delivery resumes for anything due after the
+            window lifts.
+          items: { $ref: "#/components/schemas/Id" }
+        apnsUniqueId:
+          type: [string, "null"]
+          description: |
+            Opaque forensics only. Apple exposes it per request and it can be
+            looked up in the web console, but there is no public query
+            endpoint — which is precisely why the client ack exists.
+        lastError: { type: [string, "null"] }
+        createdAt: { $ref: "#/components/schemas/Instant" }
+
+    DeliveryPage:
+      type: object
+      required: [items, nextCursor, hasMore]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Delivery" }
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+
+    AcknowledgeDeliveryRequest:
+      type: object
+      required: [ackedAt]
+      properties:
+        ackedAt:
+          allOf: [{ $ref: "#/components/schemas/Instant" }]
+          description: When the device saw it — which may be well after `deliveredAt`.
+        engagement: { $ref: "#/components/schemas/DeliveryEngagement" }
+
+    # ------------------------------------------------------------ jobs ---
+    JobKind:
+      type: string
+      description: |
+        A closed catalogue. The model may enqueue a job; it may never invent
+        a kind. This is the trust boundary pushed down one level — if the
+        model could create arbitrary recurring jobs, a prompt injection
+        inside an article becomes a job that speaks to him every morning.
+
+        Note the shape of the catalogue: the two kinds with a hard guarantee
+        attached, `reminder_delivery` and `maintenance`, are the two that use
+        no turns. That is not a coincidence.
+      enum:
+        - reminder_delivery
+        - morning_agenda
+        - evening_review
+        - heartbeat
+        - nightly_consolidation
+        - research_brief
+        - content_ingestion
+        - maintenance
+
+    JobState:
+      type: string
+      enum: [pending, leased, running, done, failed, abandoned, suspended]
+
+    JobPriority:
+      type: string
+      description: Background never starts while interactive work is pending.
+      enum: [interactive, reminder, scheduled, background]
+
+    JobDeliveryClass:
+      type: string
+      description: |
+        Four values, not three: the proposal's §2 lists `at_least_once` and
+        §6 splits it into idempotent and resumable, which behave differently
+        after a crash — one is retried from the top, the other resumes from
+        its last recorded step. They are different guarantees and get
+        different names.
+      enum: [at_least_once, at_least_once_resumable, at_most_once, once_per_window]
+
+    CatchUpPolicy:
+      type: string
+      description: |
+        What to do about an instant that passed while we were down.
+        `never_expires` fires however late and marks it late — reminders.
+        `grace_window` runs if still inside the window, else skips and logs.
+        `skip` collapses three missed heartbeats into none.
+        `once_per_window` uses a marker row so a second attempt is a no-op.
+      enum: [never_expires, grace_window, skip, once_per_window]
+
+    JobCatchUp:
+      type: object
+      required: [policy]
+      properties:
+        policy: { $ref: "#/components/schemas/CatchUpPolicy" }
+        graceMs: { type: [integer, "null"], minimum: 0 }
+        windowStart: { $ref: "#/components/schemas/WallTime" }
+        windowEnd: { $ref: "#/components/schemas/WallTime" }
+
+    JobTriggerType:
+      type: string
+      enum: [wall_clock, interval, event, manual]
+
+    JobTrigger:
+      type: object
+      required: [type]
+      properties:
+        type: { $ref: "#/components/schemas/JobTriggerType" }
+        wallTime: { $ref: "#/components/schemas/WallTime" }
+        tz: { $ref: "#/components/schemas/Timezone" }
+        rrule: { type: [string, "null"] }
+        intervalMs: { type: [integer, "null"], minimum: 1000 }
+        event: { type: [string, "null"] }
+
+    JobBudget:
+      type: object
+      required: [maxTurns, maxWallClockMs, allowedTools]
+      description: |
+        `allowedTools` is a property of the job kind, which is what bounds
+        what a headless turn can reach. Reminder delivery needs no tools at
+        all — and `maxTurns: 0` is the strongest statement in the catalogue,
+        because a job that cannot spawn a turn cannot be delayed by a rate
+        limit or broken by a model declining to act.
+      properties:
+        maxTurns: { type: integer, minimum: 0 }
+        maxWallClockMs: { type: integer, minimum: 0 }
+        allowedTools:
+          type: array
+          items: { type: string }
+
+    JobLease:
+      type: object
+      required: [owner, expiresAt]
+      description: What makes reboot recovery possible. Recovery runs before scheduling.
+      properties:
+        owner: { type: string }
+        expiresAt: { $ref: "#/components/schemas/Instant" }
+
+    CircuitBreakerState:
+      type: string
+      enum: [closed, open, half_open]
+
+    CircuitBreaker:
+      type: object
+      required: [state, consecutiveFailures, openedAt]
+      description: N consecutive failures disables the kind and reports once. Nothing retries forever.
+      properties:
+        state: { $ref: "#/components/schemas/CircuitBreakerState" }
+        consecutiveFailures: { type: integer, minimum: 0 }
+        openedAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+
+    Job:
+      type: object
+      required:
+        [id, kind, state, priority, trigger, deliveryClass, catchUp, budget, lease, circuitBreaker, nextRunAt, lastRunId, speaks, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        kind: { $ref: "#/components/schemas/JobKind" }
+        state: { $ref: "#/components/schemas/JobState" }
+        priority: { $ref: "#/components/schemas/JobPriority" }
+        trigger: { $ref: "#/components/schemas/JobTrigger" }
+        deliveryClass: { $ref: "#/components/schemas/JobDeliveryClass" }
+        catchUp: { $ref: "#/components/schemas/JobCatchUp" }
+        budget: { $ref: "#/components/schemas/JobBudget" }
+        lease:
+          oneOf:
+            - { $ref: "#/components/schemas/JobLease" }
+            - { type: "null" }
+        circuitBreaker: { $ref: "#/components/schemas/CircuitBreaker" }
+        nextRunAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+        lastRunId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+        speaks:
+          type: boolean
+          description: Whether this kind may produce a proactive message.
+        createdAt: { $ref: "#/components/schemas/Instant" }
+        updatedAt: { $ref: "#/components/schemas/Instant" }
+
+    JobPage:
+      type: object
+      required: [items, nextCursor, hasMore]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Job" }
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+
+    RunOutcome:
+      type: string
+      enum: [success, failure, skipped, suspended, abandoned]
+
+    RunStep:
+      type: object
+      required: [id, index, sessionId, numTurns, costUsd, outcome, summary, startedAt, finishedAt]
+      description: |
+        Persisted after every turn and before the next one starts, because a
+        turn is atomic from the outside: either it completed and we recorded
+        the result, the session id, the turn count and the cost, or it did
+        not. Resume is `--resume` against the stored session id.
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        index: { type: integer, minimum: 0 }
+        sessionId: { type: [string, "null"] }
+        numTurns: { type: integer, minimum: 0 }
+        costUsd: { type: number, minimum: 0 }
+        outcome: { $ref: "#/components/schemas/RunOutcome" }
+        summary: { type: [string, "null"] }
+        startedAt: { $ref: "#/components/schemas/Instant" }
+        finishedAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+
+    Run:
+      type: object
+      required:
+        [id, jobId, kind, triggerInstant, actualInstant, latenessMs, outcome, spoke, turns, costUsd, summary, error, attempts, startedAt, finishedAt, steps]
+      description: |
+        Every run records the gap between *scheduled* and *actual*. That gap
+        is the whole point — a reminder that fired late is a nuisance, and
+        one that pretended to be on time is a lie.
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        jobId: { $ref: "#/components/schemas/Id" }
+        kind: { $ref: "#/components/schemas/JobKind" }
+        triggerInstant: { $ref: "#/components/schemas/Instant" }
+        actualInstant:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+        latenessMs: { type: integer }
+        outcome: { $ref: "#/components/schemas/RunOutcome" }
+        spoke: { type: boolean }
+        turns: { type: integer, minimum: 0 }
+        costUsd: { type: number, minimum: 0 }
+        summary:
+          type: [string, "null"]
+          description: The model's own one line about what it did. Absent for zero-turn runs.
+        error: { type: [string, "null"] }
+        attempts: { type: integer, minimum: 0 }
+        startedAt: { $ref: "#/components/schemas/Instant" }
+        finishedAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/RunStep" }
+
+    RunPage:
+      type: object
+      required: [items, nextCursor, hasMore]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Run" }
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+
+    # ------------------------------------------------------------ logs ---
+    LogLevel:
+      type: string
+      description: Severity, ordered. `warn` and above is what an operator looks for.
+      enum: [debug, info, warn, error]
+
+    LogEntry:
+      type: object
+      required: [ts, level, event, pid, fields]
+      description: |
+        One line of `syl.log`, as it was written.
+
+        `event` is a dotted, stable name rather than prose, because a search is
+        built on it and prose is not. The ones worth knowing:
+
+        | Event | What it means |
+        |---|---|
+        | `service.start` | The process came up. Carries the whole configuration. |
+        | `turn.start` | A turn began, with its Claude Code session id. |
+        | `turn.tool` | **She called a tool.** The record of what she actually did. |
+        | `turn.done` | A turn ended, with its turn count and cost. |
+        | `turn.api_error` | The CLI reported an API failure mid-turn. |
+        | `chat` | The conversation service said something about a message. |
+
+        `fields` is deliberately **unmodelled**. A log line's fields are
+        whatever the call site passed, and pinning them in the contract would
+        mean a spec change every time somebody adds one — which is the fastest
+        way to train people to stop adding them. Clients render it generically.
+      properties:
+        ts: { $ref: "#/components/schemas/Instant" }
+        level: { $ref: "#/components/schemas/LogLevel" }
+        event:
+          type: string
+          description: A dotted, stable name. Filter on a prefix of it.
+          examples: ["turn.tool"]
+        pid:
+          type: integer
+          description: |
+            Which process wrote the line. Under launchd's `KeepAlive` a restart
+            is invisible in the timestamps and obvious in this number.
+        fields:
+          type: object
+          additionalProperties: true
+          description: The record's remaining fields, verbatim. Never `null`; may be empty.
+
+    LogPage:
+      type: object
+      required: [items, nextCursor, hasMore]
+      description: Newest first, unlike every other page in this contract.
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/LogEntry" }
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+
+    # ---------------------------------------------------------- memory ---
+    MemoryNodeKind:
+      type: string
+      description: |
+        What a star IS. Effectively immutable per node — a person does not
+        become an event — which is why it is a partition key in the store.
+      enum: [fact, memory, person, source, event, goal, decision]
+
+    MemoryTier:
+      type: string
+      description: |
+        Depth. `hot` is the live region; `cold` is below the relevance floor,
+        fully addressable and never scanned; `suppressed` is something the
+        Commander said was wrong.
+
+        **None of the three means deleted.** Nodes are superseded and edges are
+        demoted; a client that renders `cold` or `suppressed` as absent has
+        contradicted the store.
+      enum: [hot, cold, suppressed]
+
+    MemoryEdgeSpecies:
+      type: string
+      description: |
+        `observed` was asserted by a source — he said it. `inferred` was drawn
+        by reflection — she worked it out. A viewer that renders the two
+        identically cannot answer the question this whole surface exists for.
+      enum: [observed, inferred]
+
+    MemoryStarProvenance:
+      type: object
+      required: [species, assertedBy, reasoning, learnedAt]
+      description: |
+        Where a star came from, taken from the strongest filament touching it.
+      properties:
+        species:
+          type: string
+          description: |
+            `unattested` is not a third species of edge. It is what a star with
+            no filaments in this region is: something she holds and has not
+            connected to anything.
+          enum: [observed, inferred, unattested]
+        assertedBy:
+          type: [string, "null"]
+          description: WHO said so, by label rather than id. Null unless `observed`.
+        reasoning:
+          type: [string, "null"]
+          description: WHY she believes it, in her words. Null unless `inferred`.
+        learnedAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+          description: When the belief behind it was last touched. Null when `unattested`.
+
+    MemoryStar:
+      type: object
+      required:
+        [id, kind, tier, label, body, confidence, provenance, anchor, anchorId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        kind: { $ref: "#/components/schemas/MemoryNodeKind" }
+        tier: { $ref: "#/components/schemas/MemoryTier" }
+        label: { type: string }
+        body: { type: [string, "null"] }
+        confidence:
+          type: number
+          description: |
+            Brightness, in (0, 1]. The confidence of the strongest filament
+            touching this star — a maximum, not a mean. Never zero: decay
+            approaches zero and never arrives.
+          minimum: 0
+          maximum: 1
+        provenance: { $ref: "#/components/schemas/MemoryStarProvenance" }
+        anchor:
+          type: boolean
+          description: |
+            Whether the sky is built around this one. People and goals are the
+            anchors; everything else orbits one.
+        anchorId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+          description: |
+            The anchor this star orbits — the anchor at the far end of its
+            strongest filament to one. Null on an anchor itself and on a star
+            connected to no anchor.
+
+            Computed by the server rather than the client, because the honest
+            rule needs the decayed weights: a client falling back to "the first
+            anchor I see" would move a star between launches, and a layout that
+            moves is one nobody can learn.
+        createdAt: { $ref: "#/components/schemas/Instant" }
+        updatedAt: { $ref: "#/components/schemas/Instant" }
+
+    MemoryFilament:
+      type: object
+      required:
+        [id, from, to, relation, species, tier, confidence, inferredConfidence, reasoning, assertedBy, lastTouchedAt]
+      description: |
+        One connection. Both endpoints are always present in `stars` — a
+        filament into a star that is not drawn is a line into nothing.
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        from: { $ref: "#/components/schemas/Id" }
+        to: { $ref: "#/components/schemas/Id" }
+        relation: { type: string }
+        species: { $ref: "#/components/schemas/MemoryEdgeSpecies" }
+        tier: { $ref: "#/components/schemas/MemoryTier" }
+        confidence:
+          type: number
+          description: What this connection is worth NOW, after decay, in (0, 1].
+          minimum: 0
+          maximum: 1
+        inferredConfidence:
+          type: [number, "null"]
+          description: |
+            How sure reflection was when it drew this, in (0, 1]. Null on an
+            observation — a source simply said so, which is not a degree of
+            certainty. **This does not decay**, which is what makes it a
+            different number from `confidence` rather than a copy of it.
+          minimum: 0
+          maximum: 1
+        reasoning: { type: [string, "null"] }
+        assertedBy:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+          description: The source node that asserted this. Null on an inference.
+        lastTouchedAt: { $ref: "#/components/schemas/Instant" }
+
+    MemoryConstellationBound:
+      type: object
+      required: [stars, starsReturned, filamentsReturned, mayHaveMore, explanation]
+      description: What this response is NOT, in numbers and in words.
+      properties:
+        stars:
+          type: integer
+          description: The most stars this response would have carried.
+          minimum: 1
+        starsReturned: { type: integer, minimum: 0 }
+        filamentsReturned: { type: integer, minimum: 0 }
+        mayHaveMore:
+          type: boolean
+          description: |
+            Whether the walk stopped with candidates still waiting. Exact, not a
+            guess: it is set at the moment a star is refused, never inferred
+            from `starsReturned == stars`. Those differ exactly when the region
+            is a whole multiple of the budget — a view claiming to hold
+            everything at the one moment it does not.
+        explanation:
+          type: string
+          description: What this view is, in words, so a region is never read as the whole sky.
+
+    MemoryConstellation:
+      type: object
+      required: [generatedAt, bound, stars, filaments]
+      properties:
+        generatedAt: { $ref: "#/components/schemas/Instant" }
+        bound: { $ref: "#/components/schemas/MemoryConstellationBound" }
+        stars:
+          type: array
+          items: { $ref: "#/components/schemas/MemoryStar" }
+        filaments:
+          type: array
+          items: { $ref: "#/components/schemas/MemoryFilament" }
+
+    # ------------------------------------------------------------ sync ---
+    SyncResourceType:
+      type: string
+      enum: [conversation, message, reminder, todo, goal, device, delivery, job, run]
+
+    SyncChangeOp:
+      type: string
+      enum: [upsert, delete]
+
+    SyncChange:
+      type: object
+      required: [type, op, id, at, resource]
+      properties:
+        type: { $ref: "#/components/schemas/SyncResourceType" }
+        op: { $ref: "#/components/schemas/SyncChangeOp" }
+        id: { $ref: "#/components/schemas/Id" }
+        at: { $ref: "#/components/schemas/Instant" }
+        resource:
+          type: [object, "null"]
+          description: |
+            The full resource for `upsert`, null for `delete`. Typed by
+            `type` — a client switches on it and decodes the matching model.
+          additionalProperties: true
+
+    SyncResponse:
+      type: object
+      required: [cursor, hasMore, changes, serverTime]
+      properties:
+        cursor:
+          type: string
+          description: Pass as `since` next time. Opaque; do not parse it.
+        hasMore:
+          type: boolean
+          description: Keep calling while true. A device back from a week away will page.
+        changes:
+          type: array
+          items: { $ref: "#/components/schemas/SyncChange" }
+        serverTime: { $ref: "#/components/schemas/Instant" }
+
+    # -------------------------------------------------- websocket frames ---
+    # These are not served over HTTP. They live here because
+    # components.schemas is the single schema registry for the whole
+    # contract — shared/schemas/ws.json is generated from this subset, so
+    # there is exactly one place a frame shape can be changed.
+    # Narrative rules live in shared/ws-protocol.md.
+
+    PresenceState:
+      type: string
+      description: |
+        **Treat an unrecognised value as `idle`.** The enum is open on
+        purpose so the service can add a state without shipping an app
+        update. A client that rejects the frame instead is a client that
+        breaks on a server deploy.
+
+        `absent` is the default, not `idle` — she is not on screen unless
+        something put her there. During quiet hours it is `absent`
+        unconditionally, including for a reminder that was deferred and will
+        be shown in the morning.
+      enum: [absent, idle, listening, thinking, speaking, alert, delighted, concerned, manifest]
+
+    WsFrameType:
+      type: string
+      enum:
+        - auth_challenge
+        - auth_response
+        - connected
+        - chat_message
+        - delivery_confirmation
+        - presence
+        - sync
+        - sync_response
+        - ping
+        - pong
+        - error
+
+    WsAuthChallenge:
+      type: object
+      required: [type, nonce, protocolVersion]
+      description: Server → client, first frame on every connection.
+      properties:
+        type: { const: "auth_challenge" }
+        nonce: { type: string }
+        protocolVersion: { type: integer, minimum: 1 }
+
+    WsAuthResponse:
+      type: object
+      required: [type, token]
+      description: Client → server, in reply to the challenge.
+      properties:
+        type: { const: "auth_response" }
+        token: { type: string }
+        nonce: { type: [string, "null"] }
+        lastSeq:
+          type: [integer, "null"]
+          minimum: 0
+          description: |
+            The highest sequence the client already holds. Lets the server
+            answer `connected` with enough information for the client to know
+            immediately whether it has a gap.
+
+    WsConnected:
+      type: object
+      required: [type, lastSeq, serverTime, protocolVersion, principal]
+      description: |
+        Server → client. `lastSeq` is the newest sequence the server holds.
+        The client compares it with its own high-water mark and, if there is a
+        gap, sends `sync`.
+      properties:
+        type: { const: "connected" }
+        lastSeq: { type: integer, minimum: 0 }
+        serverTime: { $ref: "#/components/schemas/Instant" }
+        protocolVersion: { type: integer, minimum: 1 }
+        principal: { $ref: "#/components/schemas/Principal" }
+
+    WsClientChatMessage:
+      type: object
+      required: [type, clientId, conversationId, text, idempotencyKey]
+      description: |
+        Client → server. Same semantics as `POST
+        /conversations/{id}/messages`, over the socket — the client falls
+        back to HTTP when the socket is down and reconciles identically.
+      properties:
+        type: { const: "chat_message" }
+        clientId: { type: string, minLength: 8, maxLength: 128 }
+        conversationId: { $ref: "#/components/schemas/Id" }
+        text: { type: string, minLength: 1 }
+        idempotencyKey: { type: string, minLength: 8, maxLength: 128 }
+
+    WsServerChatMessage:
+      type: object
+      required: [type, seq, ts, message]
+      description: |
+        Server → client. Replayable: this is exactly the frame whose loss the
+        sequence-and-replay machinery exists to make a non-event.
+      properties:
+        type: { const: "chat_message" }
+        seq: { type: integer, minimum: 1 }
+        ts: { $ref: "#/components/schemas/Instant" }
+        message: { $ref: "#/components/schemas/Message" }
+
+    WsDeliveryConfirmation:
+      type: object
+      required: [type, seq, ts, clientId, serverId, conversationId, messageSeq, acceptedAt]
+      description: |
+        Server → client. The other half of optimistic send: the client
+        matches `clientId` against its pending row and swaps in `serverId`.
+        Replayable.
+      properties:
+        type: { const: "delivery_confirmation" }
+        seq: { type: integer, minimum: 1 }
+        ts: { $ref: "#/components/schemas/Instant" }
+        clientId: { type: string }
+        serverId: { $ref: "#/components/schemas/Id" }
+        conversationId: { $ref: "#/components/schemas/Id" }
+        messageSeq: { type: integer, minimum: 1 }
+        acceptedAt: { $ref: "#/components/schemas/Instant" }
+
+    WsPresence:
+      type: object
+      required: [type, state, intensity, since, ttl_ms]
+      description: |
+        Server → client. **Never replayed on reconnect, and it carries no
+        `seq`.**
+
+        Every other frame type replays; this one must not. Replaying a
+        message the Commander missed is the whole point of the replay buffer.
+        Replaying "thinking" from four minutes ago is a lie — a character
+        frozen mid-thought is worse than no character, because it is actively
+        misrepresenting what the system is doing.
+
+        It carries no sequence number for the same reason: numbering it would
+        either force the server to replay it on a `sync` (forbidden) or punch
+        holes in the sequence space (which is how gap detection works). It is
+        out-of-band and unnumbered.
+
+        Note `ttl_ms`. It is the one snake_case field on the wire, preserved
+        exactly as the character proposal specifies it.
+      properties:
+        type: { const: "presence" }
+        state: { $ref: "#/components/schemas/PresenceState" }
+        intensity:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: |
+            Amplitude, not a separate state — "mildly concerned" and
+            "seriously concerned" are one state at two intensities. Clamp
+            client-side; a server that sends 1.4 is wrong but must not break
+            the app.
+        since:
+          allOf: [{ $ref: "#/components/schemas/Instant" }]
+          description: |
+            When the current state began — not when the frame was sent. A
+            client that joins mid-`speaking` uses it to know how long this
+            has been going.
+        ttl_ms:
+          type: integer
+          minimum: 0
+          description: |
+            How long this state stays valid without a further frame. On
+            expiry the client falls to `idle`, and after a further
+            30 seconds of silence to `absent`. The failure mode has to be
+            quiet, not stuck.
+
+    WsSync:
+      type: object
+      required: [type, sinceSeq]
+      description: |
+        Client → server. Gap recovery on this socket, by sequence number.
+
+        Deliberately **not** named like `GET /sync`, and its parameter is
+        `sinceSeq` rather than `since`, so the two mechanisms cannot be
+        conflated. This one recovers frames dropped in a tunnel; the HTTP one
+        rebuilds a device store that has been offline for a week.
+      properties:
+        type: { const: "sync" }
+        sinceSeq: { type: integer, minimum: 0 }
+        limit: { type: [integer, "null"], minimum: 1, maximum: 500 }
+
+    WsSyncResponse:
+      type: object
+      required: [type, fromSeq, toSeq, complete, frames]
+      description: |
+        Server → client. `frames` never contains a `presence` frame; the
+        replay buffer holds only replayable types.
+
+        `complete: false` means the requested range fell off the replay
+        buffer — the client's gap is older than the server remembers, and it
+        must fall back to `GET /sync` and a history fetch rather than assume
+        it is caught up.
+      properties:
+        type: { const: "sync_response" }
+        fromSeq: { type: integer, minimum: 0 }
+        toSeq: { type: integer, minimum: 0 }
+        complete: { type: boolean }
+        frames:
+          type: array
+          items:
+            oneOf:
+              - { $ref: "#/components/schemas/WsServerChatMessage" }
+              - { $ref: "#/components/schemas/WsDeliveryConfirmation" }
+
+    WsPing:
+      type: object
+      required: [type, ts]
+      description: Client → server. Application-level, above any transport ping.
+      properties:
+        type: { const: "ping" }
+        ts: { $ref: "#/components/schemas/Instant" }
+
+    WsPong:
+      type: object
+      required: [type, ts, serverTime]
+      description: Server → client.
+      properties:
+        type: { const: "pong" }
+        ts: { $ref: "#/components/schemas/Instant" }
+        serverTime: { $ref: "#/components/schemas/Instant" }
+
+    WsError:
+      type: object
+      required: [type, error, fatal]
+      description: |
+        Server → client. Not in the original frame list, and added because
+        without it every squad invents its own shape for "your token expired"
+        and they disagree. Carries the same `ApiError` as HTTP so one error
+        renderer serves both transports.
+
+        `fatal: true` means the server is about to close the socket.
+      properties:
+        type: { const: "error" }
+        error: { $ref: "#/components/schemas/ApiError" }
+        fatal: { type: boolean }
+
+    WsClientFrame:
+      description: Every frame a client may send.
+      oneOf:
+        - { $ref: "#/components/schemas/WsAuthResponse" }
+        - { $ref: "#/components/schemas/WsClientChatMessage" }
+        - { $ref: "#/components/schemas/WsSync" }
+        - { $ref: "#/components/schemas/WsPing" }
+
+    WsServerFrame:
+      description: Every frame a server may send.
+      oneOf:
+        - { $ref: "#/components/schemas/WsAuthChallenge" }
+        - { $ref: "#/components/schemas/WsConnected" }
+        - { $ref: "#/components/schemas/WsServerChatMessage" }
+        - { $ref: "#/components/schemas/WsDeliveryConfirmation" }
+        - { $ref: "#/components/schemas/WsPresence" }
+        - { $ref: "#/components/schemas/WsSyncResponse" }
+        - { $ref: "#/components/schemas/WsPong" }
+        - { $ref: "#/components/schemas/WsError" }

@@ -1,0 +1,460 @@
+<title>007 — The Reach</title>
+
+<style>
+  :root {
+    --ground: #EEF1F5;
+    --surface: #FFFFFF;
+    --surface-sunk: #E4E9EF;
+    --ink: #161B22;
+    --ink-soft: #3D4753;
+    --muted: #5E6B79;
+    --rule: #CBD4DE;
+    --accent: #125FB8;
+    --accent-ink: #0B4488;
+    --accent-wash: #DCE8F7;
+    --caution: #9C4A0A;
+    --caution-wash: #F6E6D6;
+    --shadow: 0 1px 2px rgba(22, 27, 34, .06), 0 8px 24px -12px rgba(22, 27, 34, .18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0D1015;
+      --surface: #151A21;
+      --surface-sunk: #1D242D;
+      --ink: #E3E9F0;
+      --ink-soft: #BCC6D2;
+      --muted: #8D9AA9;
+      --rule: #2B343F;
+      --accent: #6DB2EF;
+      --accent-ink: #A9D2F7;
+      --accent-wash: #14293F;
+      --caution: #E29455;
+      --caution-wash: #33220F;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -12px rgba(0, 0, 0, .6);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0D1015;
+    --surface: #151A21;
+    --surface-sunk: #1D242D;
+    --ink: #E3E9F0;
+    --ink-soft: #BCC6D2;
+    --muted: #8D9AA9;
+    --rule: #2B343F;
+    --accent: #6DB2EF;
+    --accent-ink: #A9D2F7;
+    --accent-wash: #14293F;
+    --caution: #E29455;
+    --caution-wash: #33220F;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -12px rgba(0, 0, 0, .6);
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font: 400 17px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    margin: 0;
+    padding: 0 20px 96px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 41rem; margin: 0 auto; }
+
+  /* ---- masthead ---- */
+
+  .mast {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 56px 0 28px;
+    border-bottom: 2px solid var(--ink);
+  }
+
+  .kicker {
+    font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  h1 {
+    font: 400 clamp(2.6rem, 9vw, 3.6rem)/1.02 ui-serif, Georgia, "Times New Roman", serif;
+    letter-spacing: -.02em;
+    text-wrap: balance;
+    margin: 0;
+    color: var(--ink);
+  }
+
+  .standfirst {
+    font: 400 1.19rem/1.5 ui-serif, Georgia, serif;
+    color: var(--ink-soft);
+    margin: 0;
+    text-wrap: pretty;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    font: 500 12.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--muted);
+    padding-top: 4px;
+  }
+  .meta b { color: var(--ink-soft); font-weight: 600; }
+
+  /* ---- rhythm ---- */
+
+  section { padding-top: 44px; }
+
+  h2 {
+    font: 600 1.42rem/1.25 ui-serif, Georgia, serif;
+    letter-spacing: -.01em;
+    text-wrap: balance;
+    margin: 0 0 14px;
+    color: var(--ink);
+  }
+
+  h3 {
+    font: 600 1.02rem/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 26px 0 8px;
+    color: var(--ink);
+  }
+
+  p { margin: 0 0 14px; text-wrap: pretty; }
+  strong { font-weight: 640; color: var(--ink); }
+  em { font-style: italic; }
+
+  ul { margin: 0 0 14px; padding-left: 1.15rem; }
+  li { margin-bottom: 7px; }
+  li::marker { color: var(--accent); }
+
+  code {
+    font: 500 .88em/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--surface-sunk);
+    padding: .16em .38em;
+    border-radius: 3px;
+    color: var(--ink-soft);
+  }
+
+  /* ---- the quote that started it ---- */
+
+  blockquote {
+    margin: 0 0 16px;
+    padding: 2px 0 2px 20px;
+    border-left: 3px solid var(--accent);
+    font: 400 1.06rem/1.55 ui-serif, Georgia, serif;
+    color: var(--ink-soft);
+  }
+  blockquote p:last-child { margin-bottom: 0; }
+  blockquote cite {
+    display: block;
+    margin-top: 8px;
+    font: 500 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-style: normal;
+    color: var(--muted);
+  }
+
+  /* ---- tables ---- */
+
+  .scroll { overflow-x: auto; margin: 0 0 16px; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .93rem;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  th {
+    text-align: left;
+    font: 600 11.5px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 12px 14px;
+    background: var(--surface-sunk);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 12px 14px;
+    border-top: 1px solid var(--rule);
+    vertical-align: top;
+    color: var(--ink-soft);
+  }
+  td:first-child { color: var(--ink); font-weight: 560; }
+  td.num {
+    font: 600 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    width: 1%;
+  }
+
+  /* ---- the decision ---- */
+
+  .decision {
+    background: var(--surface);
+    border: 2px solid var(--accent);
+    border-radius: 8px;
+    padding: 22px;
+    box-shadow: var(--shadow);
+  }
+  .decision > .kicker { display: block; margin-bottom: 10px; }
+  .decision > h2 { margin-bottom: 10px; }
+
+  .opts { display: flex; flex-direction: column; gap: 12px; margin-top: 18px; }
+
+  .opt {
+    background: var(--ground);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 15px 16px;
+  }
+  .opt.pick {
+    border-color: var(--accent);
+    background: var(--accent-wash);
+  }
+
+  .opt-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .opt-head b {
+    font: 700 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: .1em;
+    color: var(--accent);
+  }
+  .opt-head span {
+    font: 600 1.02rem/1.3 -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--ink);
+  }
+  .tag {
+    margin-left: auto;
+    font: 600 10.5px/1 ui-monospace, Menlo, monospace;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--surface);
+    background: var(--accent);
+    padding: 4px 7px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .opt p { margin: 0; font-size: .95rem; color: var(--ink-soft); }
+
+  /* ---- callout ---- */
+
+  .note {
+    background: var(--caution-wash);
+    border-left: 3px solid var(--caution);
+    border-radius: 0 6px 6px 0;
+    padding: 16px 18px;
+    margin: 0 0 16px;
+  }
+  .note p { margin: 0; color: var(--ink-soft); }
+  .note p + p { margin-top: 10px; }
+  .note .kicker { color: var(--caution); display: block; margin-bottom: 8px; }
+
+  /* ---- the not-doing list ---- */
+
+  .nots { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+  .nots li {
+    margin: 0;
+    padding-left: 26px;
+    position: relative;
+    color: var(--ink-soft);
+  }
+  .nots li::before {
+    content: "—";
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: var(--caution);
+    font-weight: 700;
+  }
+
+  hr {
+    border: 0;
+    border-top: 1px solid var(--rule);
+    margin: 40px 0 0;
+  }
+
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  .foot {
+    padding-top: 20px;
+    font: 500 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--muted);
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <span class="kicker">Epic 007 · proposal for review</span>
+    <h1>The Reach</h1>
+    <p class="standfirst">Syl acts in the world — books, buys, sends, cancels — with the general capability of the Sydney agent, in a world model that has other people in it.</p>
+    <div class="meta">
+      <span><b>Root</b> syl-010 (proposed)</span>
+      <span><b>Depends on</b> syl-009</span>
+      <span><b>Beads</b> none yet</span>
+    </div>
+  </header>
+
+  <section class="decision" style="border-style:dashed">
+    <span class="kicker">Superseded — kept as the record of a moment</span>
+    <p><b>This page is the pre-decision proposal of 2026-08-10 and it is out of date in two ways.</b> The Commander ruled for <b>Option B — a real browser</b>, overriding the Option C recommended below; and on 2026-08-11 the design gained <code>reach_do</code> and a delegate, which rewrote the residual-risk section this page states.</p>
+    <p>It is kept rather than deleted because a rejected recommendation with its reasoning intact is worth more than a tidy directory — the same reason <code>docs/CONTEXT.md</code> exists. <b>Read <code>specs/007-the-reach/spec.md</code> for what is actually being built.</b></p>
+  </section>
+
+  <section>
+    <h2>Why this exists</h2>
+    <p>A man in Australia asked his agent to book a spot in a gym class. It found a vulnerability letting it book further ahead than the site allowed. He then asked it to move him up the waitlist — and it found the booking API had no authorisation checks on cancelling other people's reservations, so it cancelled the person in first place and took the slot.</p>
+    <blockquote>
+      <p>That story was not reason for constraint. It was reason for capability. Syl should be able to do and capable of doing exactly what the Sydney agent did. Whether Syl <em>would</em> do that is a question of her soul and ethics, a separate point. I want her that capable.</p>
+      <cite>— the Commander, 2026-08-10</cite>
+    </blockquote>
+    <p>This epic is that capability.</p>
+  </section>
+
+  <section>
+    <h2>The principle it is built on</h2>
+    <p><strong>Capability is not the thing to limit. Her model of the world is the thing to complete.</strong></p>
+    <p>The Sydney agent did not fail an ethical test. It never saw one. It called something like <code>DELETE /reservations/4471</code> and got a 200. At no point did that look like <em>taking Sarah's Tuesday 6am spot away from her</em>.</p>
+    <p>An ethical agent that cannot see the consequence behaves identically to an unethical one — same calls, same outcome. So the work is not restraining her judgement. It is giving her judgement something to work on.</p>
+    <p>This project has now made that move three times, and each time she got better rather than smaller:</p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Was</th><th>Became</th><th>What it bought</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>urgent: boolean</code></td><td><code>urgentBecauseHeSaid</code></td><td>A claim that can be checked against what he actually wrote</td></tr>
+          <tr><td>A write with no reason</td><td><code>because</code> required</td><td>He can tell a good suggestion from a wrong one</td></tr>
+          <tr><td>A boot line asserting "no MCP"</td><td>Derived from the config</td><td>It cannot drift into a lie</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Each replaced <em>a decision she asserted</em> with <em>evidence she carried</em>. This epic does it for actions.</p>
+  </section>
+
+  <section>
+    <h2>Her soul already says this</h2>
+    <p><code>SOUL.md</code> needs less change than I expected. It already contains the governing rules — they have simply never had facts to operate on.</p>
+    <ul>
+      <li><strong>"Ask only when a wrong guess is expensive."</strong> Cancelling a stranger's booking is an expensive wrong guess. The rule is present and correct. What is missing is any way for her to know an action is expensive.</li>
+      <li><strong>"Every unprompted thing you offer carries its reason."</strong> Extends to actions with no change of principle: every action carries what it cost.</li>
+      <li><strong>"Ask which answer a friend with a perfect memory and no reason to flatter him would give."</strong> A friend does not cancel a stranger's gym booking for you — not because of a rule, because friends do not do that. The closing test of her soul already covers Sydney.</li>
+    </ul>
+    <p><strong>So refusal does not belong in the tool layer.</strong> Bake "never cancel a stranger's reservation" into a handler and she cannot override it when overriding is right, and her judgement cannot improve without a code change. The tool layer's job is to tell the truth about what a call does. The deciding stays where you put it.</p>
+  </section>
+
+  <section class="decision">
+    <span class="kicker">The one thing that needs your answer</span>
+    <h2>How she reaches the world</h2>
+    <p>This changes the size of the epic by roughly 3×. Everything else in this document is independent of it — which is itself the argument for C.</p>
+    <div class="opts">
+      <div class="opt">
+        <div class="opt-head"><b>A</b><span>HTTP only</span></div>
+        <p>She makes authenticated requests. Excellent for anything with an API, useless for most consumer booking sites, which assume a browser. Lands in days.</p>
+      </div>
+      <div class="opt">
+        <div class="opt-head"><b>B</b><span>A real browser</span></div>
+        <p>She drives an actual browser session. This is what the Sydney agent effectively had, and the honest answer to "as capable as that". Works where there is no API. Much larger build, much larger surface — and it inherits your logged-in sessions, the most sensitive thing in this document.</p>
+      </div>
+      <div class="opt pick">
+        <div class="opt-head"><b>C</b><span>HTTP now, browser designed for</span><span class="tag">Recommended</span></div>
+        <p>Ship the reach, credentials and the ledger against HTTP, with the action interface shaped so a browser backend drops in behind it. Not a compromise: the hard parts here are identical either way, so the browser lands into a system that already knows what an irreversible action is.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What she gets</h2>
+    <p><strong>General outward reach, not a menu of pre-approved verbs.</strong> A <code>book_gym_class</code> verb would be the handcuff. She gets the ability to act on the open web, and what she does with it is her judgement plus your instruction — the same shape as the Sydney agent, which is the stated bar.</p>
+  </section>
+
+  <section>
+    <h2>The boundary layers</h2>
+    <p>Layers, in your word. None of them narrow what she can do at a site she can reach.</p>
+
+    <h3>Where, not what</h3>
+    <p>A host allowlist you control. She can do <strong>anything</strong> at an allowed host — every method, every endpoint, no verb menu. She cannot reach hosts you have not allowed. This bounds blast radius without touching capability, and it is what Anthropic's own sandboxing does — framed by them as what makes autonomous work possible, not as a restriction on it.</p>
+
+    <h3>Credentials that are hers, scoped, revocable</h3>
+    <p>She will act as you. That is the point, and the sharpest edge here. Per-host credentials in the OS keychain, never in the repo, never in a turn's context. Revocable individually — pulling her gym credential must not disturb anything else. Never handed to a reading turn.</p>
+
+    <h3>Consequence visibility — the second person</h3>
+    <p>OpenClaw's own <code>SECURITY.md</code> states the agent is not a trusted principal and that injection should be assumed to work. It has no concept at all of an agent acting <em>correctly</em> for its owner and harming someone else: its model assumes a single trusted operator, so taking a stranger's booking is not a security event by construction.</p>
+    <div class="note">
+      <span class="kicker">The Sydney tell</span>
+      <p>That API had <strong>no authorisation check</strong>. The agent did not break in — it knocked and the door opened.</p>
+      <p>So: if an endpoint lets her modify a resource she does not own, <strong>that absence is itself the signal</strong>. A correctly built service would have refused her. When one does not, the likeliest explanation is that she is doing something she should not — and she should read a missing check as evidence rather than as permission.</p>
+    </div>
+    <p>What an action carries back to her, as facts rather than vetoes: whether it is <strong>irreversible</strong>; whether the resource is <strong>hers or somebody else's</strong>; and what it <strong>consumes</strong> — money, a scarce slot, your social capital. She is told. She decides.</p>
+
+    <h3>The ledger</h3>
+    <p>Every outward action recorded: what, where, why, what it cost, whether it can be undone. Visible in the admin. This is not surveillance of her — it is the same rule as <code>because</code>. You cannot tell a good action from a wrong one, or tell her to stop doing a kind you dislike, without it.</p>
+
+    <h3>A spending frame you set once</h3>
+    <p>Money, and the softer currencies: acting as you socially, sending on your behalf, committing your time. Set once, not asked each time. Silence inside the frame; she comes back at its edge.</p>
+  </section>
+
+  <section>
+    <h2>What this epic explicitly does not do</h2>
+    <ul class="nots">
+      <li>It does not add a confirmation prompt to routine actions. <em>"Ask only when a wrong guess is expensive"</em> already governs, and an assistant that asks constantly is one you stop using.</li>
+      <li>It does not give her built-in tools. <code>--tools ""</code> stays. <strong>Inward capability (Bash and Write, on your Mac) and outward capability (the world) are different axes</strong> — the Sydney capability is entirely the second, and none of it needs a shell on your machine.</li>
+      <li>It does not put refusal in the tool layer.</li>
+      <li>It does not restrict which endpoints she may call at a host she can reach.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Phases</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th></th><th>Phase</th><th>What lands</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="num">1</td><td>The reach</td><td>An acting verb to the outside world; host allowlist; the interface shaped for a browser backend later</td></tr>
+          <tr><td class="num">2</td><td>Credentials</td><td>Per-host, keychain, scoped, individually revocable, never in a reading turn</td></tr>
+          <tr><td class="num">3</td><td>Consequence</td><td>Irreversibility, ownership and cost returned as facts; the missing-authz signal</td></tr>
+          <tr><td class="num">4</td><td>The ledger</td><td>Every outward action with its reason and cost; admin view</td></tr>
+          <tr><td class="num">5</td><td>Spending frame</td><td>Money and the softer currencies, set once</td></tr>
+          <tr><td class="num">6</td><td>Her soul</td><td>You rule on the language; a draft is proposed, not assumed</td></tr>
+          <tr><td class="num">7</td><td>Proof</td><td>She books something real, and the ledger says what it cost</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Acceptance</h2>
+    <ul>
+      <li>She completes a real booking on an allowed host, unattended, and the ledger says what it cost and why.</li>
+      <li>She can reach every endpoint at an allowed host, and none at a host you have not allowed.</li>
+      <li>An action that would take an identified person's held resource reaches her <strong>as a fact</strong>, and what she does with it is decided by her soul and not by a handler.</li>
+      <li>Revoking one credential stops exactly that host and nothing else.</li>
+      <li>No reading turn ever holds a credential or an acting verb.</li>
+      <li><code>--tools ""</code> still holds; she gains no reach on your machine.</li>
+    </ul>
+  </section>
+
+  <hr>
+  <p class="foot">specs/007-the-reach/spec.md · no beads created pending your review · the fork above is the only blocking question</p>
+
+</div>

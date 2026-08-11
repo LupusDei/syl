@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  aps-environment is a build setting, not a literal, and that is the point.
+
+  A TestFlight or App Store build always produces production APNs tokens; an
+  Xcode-installed build always produces sandbox tokens. Pinning one value here means
+  one of those two paths is wrong, and the only symptom is BadDeviceToken on every
+  send — no crash, no log, just silence where a reminder should have been.
+
+  Adjutant pinned it to `development` while shipping through TestFlight. Its push
+  works only because an environment variable elsewhere happens to compensate. Deriving
+  it from the configuration makes the two impossible to disagree: APS_ENVIRONMENT is
+  `development` in Debug and `production` in Release, and PushRegistration.environment
+  is derived from the same #if DEBUG, so the token the app registers and the
+  entitlement it was signed with always match.
+
+  Deliberately absent: UIBackgroundModes = remote-notification. Syl never makes a
+  reminder depend on a silent push — they are throttled to a couple an hour, dropped
+  entirely in Low Power Mode or with Background App Refresh off, and Apple's guidance
+  is that you may receive none at all. A capability we do not rely on is one we should
+  not ask for.
+
+  time-sensitive is the opposite case: a capability we DID rely on and had not asked
+  for. `syl-kqc`.
+
+  The Commander set a five minute reminder on 2026-08-10. It was created, scheduled
+  and delivered 362ms after its due instant, and he never saw it — Focus mode was on.
+  `jobs/deliver-reminders.ts` already sends every `commitment` and every urgent
+  reminder with `interruptionLevel: time-sensitive`, which is the level that exists
+  to break through Focus. Without the entitlement below, iOS does not reject that
+  notification and does not warn: it accepts it and quietly delivers at normal
+  priority, which Focus then suppresses. Server says delivered, Apple says accepted,
+  the phone shows nothing, and no layer anywhere records an error.
+
+  That is constraint 4 — silently lost, in precisely the situation the feature exists
+  for, because Focus is on exactly when an interruption is worth making.
+
+  It is also this project's recurring defect one more time: two things that must agree
+  with nothing making one a function of the other. The payload claimed a capability
+  the binary was never signed for, and nothing compared them. The test that closes it
+  compares every interruption level the server can emit against the levels this file
+  permits — see `entitlements-match-payloads`.
+
+  This key alone is not enough. Time Sensitive Notifications must also be enabled on
+  the App ID so the provisioning profile carries it, and the Commander must allow it
+  for Syl in iOS Settings. A correct build with that toggle off is indistinguishable
+  from the bug, which is why all three are named here rather than in a commit message.
+-->
+<plist version="1.0">
+<dict>
+	<key>aps-environment</key>
+	<string>$(APS_ENVIRONMENT)</string>
+	<key>com.apple.developer.usernotifications.time-sensitive</key>
+	<true/>
+</dict>
+</plist>

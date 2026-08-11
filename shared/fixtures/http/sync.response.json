@@ -1,0 +1,58 @@
+{
+  "success": true,
+  "data": {
+    "cursor": "eyJhdCI6IjIwMjYtMDgtMDlUMDc6MDA6MDMuMTE0WiJ9",
+    "hasMore": false,
+    "changes": [
+      {
+        "type": "message",
+        "op": "upsert",
+        "id": "syl:message:0198f2c0-0002-7000-8000-00000000b002",
+        "at": "2026-08-09T07:00:03.114Z",
+        "resource": {
+          "id": "syl:message:0198f2c0-0002-7000-8000-00000000b002",
+          "conversationId": "syl:conversation:00000000-0000-7000-8000-000000000001",
+          "clientId": null,
+          "role": "assistant",
+          "text": "Done — 4:00 this afternoon. I'll be loud about it; you've moved this one twice.",
+          "createdAt": "2026-08-09T07:00:03.114Z",
+          "seq": 1284
+        }
+      },
+      {
+        "type": "reminder",
+        "op": "upsert",
+        "id": "syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f",
+        "at": "2026-08-09T06:59:48.400Z",
+        "resource": {
+          "id": "syl:reminder:0198f2c1-4a3b-7d21-9f00-1a2b3c4d5e6f",
+          "kind": "commitment",
+          "text": "Call the pharmacy — the refill lapses today.",
+          "todoId": "syl:todo:0198f2c2-0001-7000-8000-00000000c001",
+          "eventId": null,
+          "wallTime": "16:00",
+          "tz": "America/Chicago",
+          "rrule": null,
+          "scheduledFor": "2026-08-09T21:00:00.000Z",
+          "nextFireAt": "2026-08-09T21:00:00.000Z",
+          "urgent": true,
+          "late": false,
+          "deferredFrom": null,
+          "supersedesPrevious": false,
+          "deliveryState": "scheduled",
+          "createdAt": "2026-08-09T06:59:48.400Z",
+          "updatedAt": "2026-08-09T06:59:48.400Z",
+          "completedAt": null
+        }
+      },
+      {
+        "type": "todo",
+        "op": "delete",
+        "id": "syl:todo:0198f2c2-0002-7000-8000-00000000c002",
+        "at": "2026-08-09T06:30:00.000Z",
+        "resource": null
+      }
+    ],
+    "serverTime": "2026-08-09T07:00:05.000Z"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "name": "@syl/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Syl's Node service: the Claude Code harness, stores, jobs and HTTP/WebSocket surface.",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs && node scripts/write-build-info.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "//onnxruntime-node": [
+    "Pinned EXACTLY, and mirrored by an \"overrides\" entry in the root",
+    "package.json which carries the full explanation. Short version: 1.24.0",
+    "dropped darwin-x64 and this machine is an Intel iMac. The two must stay",
+    "identical or npm fails with EOVERRIDE. Do not widen this to a caret range."
+  ],
+  "//sqlite-vec": [
+    "The vec0 loadable extension, for the memory graph's vector search.",
+    "",
+    "The binary does NOT come from this package. `sqlite-vec` is a few lines of",
+    "path resolution, and the actual .dylib/.so/.dll lives in one of five",
+    "per-platform packages listed as OPTIONAL dependencies. That is the trap:",
+    "on a platform with no binary, npm installs nothing, prints no warning and",
+    "exits 0 — so the failure is a resolution error at first use, on a machine",
+    "where `npm install` said everything was fine.",
+    "",
+    "`sqliteVecPath()` in backend/src/memory/store.ts resolves the platform",
+    "package itself, through createRequire rather than the package's own",
+    "`load()` helper, and turns a miss into an error that names the platform.",
+    "Keyword search (FTS5, built into node:sqlite) keeps working without it;",
+    "vector search does not. See syl-005.2.2."
+  ],
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@syl/shared": "*",
+    "express": "^5.2.1",
+    "onnxruntime-node": "1.23.0",
+    "sqlite-vec": "^0.1.9",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/ws": "^8.5.13"
+  }
+}

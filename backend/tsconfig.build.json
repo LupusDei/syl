@@ -1,0 +1,17 @@
+// Emit configuration. `tsconfig.json` is `noEmit` for editors and typecheck;
+// this one is what `npm run build -w backend` uses.
+//
+// Tests are deliberately excluded from the emitted output, and `scripts/` is
+// deliberately not compiled: build tooling stays plain .mjs so it can run
+// before, and independently of, anything tsc produces.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "sourceMap": true,
+    "declaration": false
+  },
+  "include": ["src/**/*.ts"]
+}

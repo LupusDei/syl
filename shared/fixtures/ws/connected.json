@@ -1,0 +1,10 @@
+{
+  "type": "connected",
+  "lastSeq": 4488,
+  "serverTime": "2026-08-09T07:00:05.000Z",
+  "protocolVersion": 1,
+  "principal": {
+    "id": "syl:principal:0198f100-0000-7000-8000-000000000001",
+    "name": "The Commander"
+  }
+}

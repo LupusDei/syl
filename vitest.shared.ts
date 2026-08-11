@@ -1,0 +1,170 @@
+import { cpus } from "node:os";
+
+import type { UserConfig } from "vitest/config";
+
+/**
+ * The one vitest configuration every workspace merges. Coverage thresholds are
+ * constitution rule 1 and are deliberately expressed here rather than per
+ * workspace, so no workspace can quietly lower its own bar.
+ */
+export const sharedTestConfig = {
+  test: {
+    environment: "node",
+    include: ["tests/**/*.test.ts"],
+    /**
+     * Longer than vitest's 5s default, because a real subprocess is not a
+     * mocked one.
+     *
+     * `session.test.ts`, `reader.test.ts`, `intake.test.ts`, `us2` and `us4`
+     * spawn an actual `node` per turn — see `tests/helpers/fake-claude.ts` for
+     * why the fake is an executable rather than a stubbed `spawn`. Each takes
+     * ~300-600ms alone, and vitest runs files in parallel across every core. On
+     * a busy machine a spawn is starved long enough to blow a 5s budget, and
+     * the suite goes red in a DIFFERENT PLACE each run with nothing wrong in it.
+     *
+     * Measured twice, independently, by two people who each arrived at 20s: the
+     * same commit produced 0, 1, 11 and 24 failures on consecutive runs; and a
+     * separate pass saw five failures on one run and a different five on the
+     * next — including the `ANTHROPIC_API_KEY` stripping test. A flaky guard on
+     * the billing constraint is worse than no guard, because a red that moves
+     * around teaches everyone to re-run until green.
+     *
+     * A timeout is a deadlock breaker, not a latency budget — the same
+     * reasoning as `DEFAULT_TURN_TIMEOUT_MS`. A test that genuinely hangs still
+     * fails; it takes twenty seconds to say so, which is a fair price for a
+     * green run meaning something. Tests needing longer still pass their own
+     * value (the launchd entrypoint asks for 90s).
+     *
+     * `hookTimeout` matches, because a `beforeAll` that builds the backend is
+     * subject to exactly the same starvation as the tests it prepares.
+     */
+    // THE SUITE COMPETES WITH ITSELF BEFORE THE MACHINE IS EVEN BUSY.
+    //
+    // vitest forks one worker per core, and this suite's heaviest files then
+    // fork a REAL node each — the fake `claude` binary, the launchd entrypoint,
+    // a live service. So the spawn-heavy tests are racing the rest of the suite
+    // for the same cores before anything else on the machine is counted.
+    //
+    // Measured: on a full run the failures moved every time — us5 + Devices,
+    // then session twice, then us2 + us5, then fourteen at once, all "Test timed
+    // out in 20000ms" — while the same files passed 66/66 in isolation. Capped
+    // at three workers the whole suite went green twice consecutively, 3129
+    // passed, at the same fleet load.
+    //
+    // That is why raising the timeout was not enough on its own: the tests were
+    // not slow, they were starved. A timeout treats the symptom; this removes
+    // the contention.
+    //
+    // `maxWorkers` alone throws "minThreads and maxThreads must not conflict",
+    // so both are set.
+    minWorkers: 1,
+    // THREE WAS MEASURED ON A 20-CORE DEV MACHINE AND CI HAS TWO. `syl-g4u`.
+    //
+    // The cap fixed the pathological local case and CI went on failing on a
+    // different test every run — service-lifecycle's SIGKILL, then us2's
+    // resume, then verify-script — each passing in isolation. The number was
+    // right for where it was measured and was never true anywhere else:
+    // `ubuntu-latest` is a 2-4 vCPU runner, so three workers is oversubscribed
+    // BEFORE the heavy files fork a real node each on top.
+    //
+    // Same shape as every other defect this week: a measurement taken in one
+    // context, hard-coded, and applied in another where it means something
+    // different. The fix is to state the INTENT — leave the machine a core to
+    // breathe with, and never take more than three — and let the number follow
+    // from the machine it is actually running on.
+    maxWorkers: Math.max(1, Math.min(3, cpus().length - 1)),
+    /**
+     * THE SPAWN-HEAVY FILES RUN ONE AT A TIME. `syl-6yl`.
+     *
+     * Capping workers at three fixed the pathological case and left a
+     * residual: acceptance and integration files each fork a REAL node — the
+     * fake `claude`, the launchd entrypoint, a live service, an MCP server —
+     * so three of THOSE running abreast still starve each other, while the
+     * unit tests they are racing cost almost nothing.
+     *
+     * The residual stopped being a nuisance and became a blocker on
+     * 2026-08-10. `decideDeploy` ships only a commit whose checks passed and
+     * refuses to move the checkout backwards to an older green one, so a
+     * single flaky file on HEAD strands the running service on an old build
+     * INDEFINITELY, with every other signal green. Three consecutive CI runs
+     * failed on three different tests: service-lifecycle's SIGKILL, then us2's
+     * resume, then another. Each passes in isolation.
+     *
+     * So the heavy files go to their own pool with `singleFork`, which runs
+     * them sequentially in one process. The cheap majority keeps its three
+     * workers. One spawning file at a time instead of three, and the light
+     * tests are not what starves anything.
+     *
+     * DELIBERATELY NOT A RETRY. Four "flaky" tests in this project turned out
+     * to be real races, and the whole value of the cap is that a red run means
+     * something. A suite that goes green on the second attempt teaches
+     * everyone to press the button twice, and then it is not a gate.
+     */
+    poolMatchGlobs: [
+      ["**/tests/acceptance/**", "forks"],
+      ["**/tests/integration/**", "forks"],
+    ],
+    poolOptions: {
+      forks: { singleFork: true },
+    },
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
+    coverage: {
+      provider: "v8",
+      // `json-summary` is what `scripts/check-coverage.mjs` reads. Coverage has to
+      // be judged SEPARATELY from whether tests passed, because `vitest run
+      // --coverage` exits 1 for a failed test and a missed threshold
+      // indistinguishably — harmless under "zero failures", useless under
+      // "failures == declared".
+      reporter: ["text", "lcov", "json-summary"],
+      // Report coverage even when tests FAIL, which is now the normal state.
+      //
+      // vitest writes no coverage report at all on a failed run — no table, no
+      // summary file. That was harmless while the gate was "zero failures":
+      // a red run had a bigger problem than its coverage. Under "failures ==
+      // declared" it is a hole, because a declared acceptance test is red on
+      // PURPOSE and permanently, so the coverage floor would quietly stop being
+      // enforced and nothing would say so.
+      //
+      // Found by building the split check and discovering there was no summary
+      // to read. The floor is constitution rule 1; it must not lapse because a
+      // test is red for a reason we chose.
+      reportOnFailure: true,
+      // Thin argv/stdout entry points. They are exercised by `npm run ping`,
+      // not by unit tests, and counting them only dilutes the signal from the
+      // logic that does have tests.
+      //
+      // `dist/` and `coverage/` are excluded because v8 coverage runs with
+      // `all: true`: a local build before a coverage run otherwise counts the
+      // emitted artifacts as uncovered source and tanks the gate. Measured at
+      // 92.7% -> 73.9% lines from build output alone (syl-3bi). CI never builds
+      // before the coverage step, so it was safe by accident rather than by
+      // design — and a frontend workspace makes local builds routine.
+      exclude: [
+        "**/cli/**",
+        "**/tests/**",
+        "**/*.config.ts",
+        "**/vitest.shared.ts",
+        "**/dist/**",
+        "**/coverage/**",
+        // AGENT WORKTREES, which are full copies of this repository living
+        // inside it. v8 coverage runs with `all: true`, so every file in every
+        // worktree was counted as uncovered source: 3,427 of the 3,698 files
+        // measured, against roughly 135 real ones. Coverage read 3.6% lines
+        // with 3,039 tests passing.
+        //
+        // It was invisible because vitest writes NO coverage report when a run
+        // fails, and something was usually failing. Two faults hiding each
+        // other: the gate was not running, and when it did it was measuring the
+        // wrong thing.
+        "**/.claude/**",
+        "**/worktrees/**",
+      ],
+      thresholds: {
+        lines: 80,
+        branches: 70,
+        functions: 60,
+      },
+    },
+  },
+} as const satisfies UserConfig;

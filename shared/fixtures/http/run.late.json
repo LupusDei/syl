@@ -1,0 +1,44 @@
+{
+  "success": true,
+  "data": {
+    "id": "syl:run:0198f2c7-0002-7000-8000-000000011002",
+    "jobId": "syl:job:0198f2c4-0003-7000-8000-00000000e003",
+    "kind": "morning_agenda",
+    "triggerInstant": "2026-08-09T12:00:00.000Z",
+    "actualInstant": "2026-08-09T12:06:31.000Z",
+    "latenessMs": 391000,
+    "outcome": "success",
+    "spoke": true,
+    "turns": 2,
+    "costUsd": 0.0412,
+    "summary": "Two commitments today; flagged that the design review moved.",
+    "error": null,
+    "attempts": 1,
+    "startedAt": "2026-08-09T12:06:31.000Z",
+    "finishedAt": "2026-08-09T12:06:45.800Z",
+    "steps": [
+      {
+        "id": "syl:step:0198f2c8-0001-7000-8000-000000012001",
+        "index": 0,
+        "sessionId": "1f4c9a2b-7d31-4e88-b0a5-6c2e9f0d3a17",
+        "numTurns": 1,
+        "costUsd": 0.0198,
+        "outcome": "success",
+        "summary": "Read today's reminders and open to-dos.",
+        "startedAt": "2026-08-09T12:06:31.000Z",
+        "finishedAt": "2026-08-09T12:06:38.200Z"
+      },
+      {
+        "id": "syl:step:0198f2c8-0002-7000-8000-000000012002",
+        "index": 1,
+        "sessionId": "1f4c9a2b-7d31-4e88-b0a5-6c2e9f0d3a17",
+        "numTurns": 1,
+        "costUsd": 0.0214,
+        "outcome": "success",
+        "summary": "Composed the agenda.",
+        "startedAt": "2026-08-09T12:06:38.300Z",
+        "finishedAt": "2026-08-09T12:06:45.800Z"
+      }
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "success": true,
+  "data": {
+    "status": "degraded",
+    "version": "0.1.0",
+    "startedAt": "2026-08-09T05:12:44.001Z",
+    "now": "2026-08-09T07:04:11.900Z",
+    "checks": [
+      {
+        "name": "database",
+        "status": "ok",
+        "detail": null
+      },
+      {
+        "name": "scheduler",
+        "status": "ok",
+        "detail": null
+      },
+      {
+        "name": "apns",
+        "status": "down",
+        "detail": "BadDeviceToken on 1 of 2 tokens; outbox retrying"
+      },
+      {
+        "name": "claude-binary",
+        "status": "ok",
+        "detail": null
+      }
+    ],
+    "build": null
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "success": true,
+  "data": {
+    "id": "syl:run:0198f2c7-0003-7000-8000-000000011003",
+    "jobId": "syl:job:0198f2c4-0002-7000-8000-00000000e002",
+    "kind": "research_brief",
+    "triggerInstant": "2026-08-08T19:40:00.000Z",
+    "actualInstant": "2026-08-08T19:40:01.000Z",
+    "latenessMs": 1000,
+    "outcome": "suspended",
+    "spoke": false,
+    "turns": 40,
+    "costUsd": 0.8814,
+    "summary": "Hit the 40-turn ceiling mid-synthesis. Suspended rather than killed; asking before spending more.",
+    "error": null,
+    "attempts": 1,
+    "startedAt": "2026-08-08T19:40:01.000Z",
+    "finishedAt": null,
+    "steps": [
+      {
+        "id": "syl:step:0198f2c8-0003-7000-8000-000000012003",
+        "index": 0,
+        "sessionId": "6b2e9f0d-3a17-4c88-9d31-1f4c9a2b7d31",
+        "numTurns": 12,
+        "costUsd": 0.2401,
+        "outcome": "success",
+        "summary": "Gathered sources on local-first sync.",
+        "startedAt": "2026-08-08T19:40:01.000Z",
+        "finishedAt": "2026-08-08T19:52:44.000Z"
+      },
+      {
+        "id": "syl:step:0198f2c8-0004-7000-8000-000000012004",
+        "index": 1,
+        "sessionId": "6b2e9f0d-3a17-4c88-9d31-1f4c9a2b7d31",
+        "numTurns": 28,
+        "costUsd": 0.6413,
+        "outcome": "suspended",
+        "summary": "Reached the budget ceiling.",
+        "startedAt": "2026-08-08T19:52:45.000Z",
+        "finishedAt": "2026-08-08T20:11:52.400Z"
+      }
+    ]
+  }
+}

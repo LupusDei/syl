@@ -1,0 +1,182 @@
+{
+  "success": true,
+  "data": {
+    "generatedAt": "2026-08-11T00:11:21.422Z",
+    "bound": {
+      "stars": 12,
+      "starsReturned": 7,
+      "filamentsReturned": 3,
+      "mayHaveMore": false,
+      "explanation": "A region of the live graph: the people and goals she knows, what connects to them, and the most connected of what is left, up to 12 stars. Every filament drawn has both ends in this region. This is NOT everything she remembers — memories nothing has touched recently are still held, and still addressable, and are simply not in this sky."
+    },
+    "stars": [
+      {
+        "id": "syl:memory_node:019fee28-d5c6-7000-928a-d7de11af34be",
+        "kind": "person",
+        "tier": "hot",
+        "label": "The Commander",
+        "body": null,
+        "confidence": 0.9999999969437955,
+        "provenance": {
+          "species": "observed",
+          "assertedBy": "settings.json",
+          "reasoning": null,
+          "learnedAt": "2026-08-11T00:11:21.414Z"
+        },
+        "anchor": true,
+        "anchorId": null,
+        "createdAt": "2026-08-11T00:11:21.414Z",
+        "updatedAt": "2026-08-11T00:11:21.414Z"
+      },
+      {
+        "id": "syl:memory_node:019fee28-d5c8-7000-9655-f993841667f4",
+        "kind": "fact",
+        "tier": "hot",
+        "label": "Prefers Central time",
+        "body": null,
+        "confidence": 0.9999999969437955,
+        "provenance": {
+          "species": "observed",
+          "assertedBy": "settings.json",
+          "reasoning": null,
+          "learnedAt": "2026-08-11T00:11:21.414Z"
+        },
+        "anchor": false,
+        "anchorId": "syl:memory_node:019fee28-d5c6-7000-928a-d7de11af34be",
+        "createdAt": "2026-08-11T00:11:21.414Z",
+        "updatedAt": "2026-08-11T00:11:21.414Z"
+      },
+      {
+        "id": "syl:memory_node:019fee28-d5c8-7002-92d3-a35675a12175",
+        "kind": "memory",
+        "tier": "cold",
+        "label": "A memory since set aside",
+        "body": null,
+        "confidence": 0.39999999877751824,
+        "provenance": {
+          "species": "observed",
+          "assertedBy": "settings.json",
+          "reasoning": null,
+          "learnedAt": "2026-08-11T00:11:21.414Z"
+        },
+        "anchor": false,
+        "anchorId": "syl:memory_node:019fee28-d5c6-7000-928a-d7de11af34be",
+        "createdAt": "2026-08-11T00:11:21.414Z",
+        "updatedAt": "2026-08-11T00:11:21.414Z"
+      },
+      {
+        "id": "syl:memory_node:019fee28-d5c7-7000-a61d-8e0b5611cac0",
+        "kind": "goal",
+        "tier": "hot",
+        "label": "Ship the constellation",
+        "body": null,
+        "confidence": 0.7999999975550365,
+        "provenance": {
+          "species": "inferred",
+          "assertedBy": null,
+          "reasoning": "They both slipped the same week, and the second explains the first.",
+          "learnedAt": "2026-08-11T00:11:21.414Z"
+        },
+        "anchor": true,
+        "anchorId": null,
+        "createdAt": "2026-08-11T00:11:21.414Z",
+        "updatedAt": "2026-08-11T00:11:21.414Z"
+      },
+      {
+        "id": "syl:memory_node:019fee28-d5c8-7001-8562-474554888abf",
+        "kind": "event",
+        "tier": "hot",
+        "label": "The dream that never ran",
+        "body": null,
+        "confidence": 0.7999999975550365,
+        "provenance": {
+          "species": "inferred",
+          "assertedBy": null,
+          "reasoning": "They both slipped the same week, and the second explains the first.",
+          "learnedAt": "2026-08-11T00:11:21.414Z"
+        },
+        "anchor": false,
+        "anchorId": "syl:memory_node:019fee28-d5c7-7000-a61d-8e0b5611cac0",
+        "createdAt": "2026-08-11T00:11:21.414Z",
+        "updatedAt": "2026-08-11T00:11:21.414Z"
+      },
+      {
+        "id": "syl:memory_node:019fee28-d5c7-7001-b7ac-b1ad59f383c5",
+        "kind": "source",
+        "tier": "hot",
+        "label": "settings.json",
+        "body": null,
+        "confidence": 1e-9,
+        "provenance": {
+          "species": "unattested",
+          "assertedBy": null,
+          "reasoning": null,
+          "learnedAt": null
+        },
+        "anchor": false,
+        "anchorId": null,
+        "createdAt": "2026-08-11T00:11:21.414Z",
+        "updatedAt": "2026-08-11T00:11:21.414Z"
+      },
+      {
+        "id": "syl:memory_node:019fee28-d5ca-7000-8b11-33527dd9cb53",
+        "kind": "decision",
+        "tier": "hot",
+        "label": "Something she has only just heard of",
+        "body": null,
+        "confidence": 1e-9,
+        "provenance": {
+          "species": "unattested",
+          "assertedBy": null,
+          "reasoning": null,
+          "learnedAt": null
+        },
+        "anchor": false,
+        "anchorId": null,
+        "createdAt": "2026-08-11T00:11:21.414Z",
+        "updatedAt": "2026-08-11T00:11:21.414Z"
+      }
+    ],
+    "filaments": [
+      {
+        "id": "syl:memory_edge:019fee28-d5c9-7000-a96d-3b402e5db536",
+        "from": "syl:memory_node:019fee28-d5c6-7000-928a-d7de11af34be",
+        "to": "syl:memory_node:019fee28-d5c8-7000-9655-f993841667f4",
+        "relation": "asserts",
+        "tier": "hot",
+        "confidence": 0.9999999969437955,
+        "lastTouchedAt": "2026-08-11T00:11:21.414Z",
+        "species": "observed",
+        "inferredConfidence": null,
+        "reasoning": null,
+        "assertedBy": "syl:memory_node:019fee28-d5c7-7001-b7ac-b1ad59f383c5"
+      },
+      {
+        "id": "syl:memory_edge:019fee28-d5c9-7002-a333-2c8e4194d0e2",
+        "from": "syl:memory_node:019fee28-d5c6-7000-928a-d7de11af34be",
+        "to": "syl:memory_node:019fee28-d5c8-7002-92d3-a35675a12175",
+        "relation": "remembers",
+        "tier": "hot",
+        "confidence": 0.39999999877751824,
+        "lastTouchedAt": "2026-08-11T00:11:21.414Z",
+        "species": "observed",
+        "inferredConfidence": null,
+        "reasoning": null,
+        "assertedBy": "syl:memory_node:019fee28-d5c7-7001-b7ac-b1ad59f383c5"
+      },
+      {
+        "id": "syl:memory_edge:019fee28-d5c9-7001-bcb2-eb5cbc3c3c6c",
+        "from": "syl:memory_node:019fee28-d5c7-7000-a61d-8e0b5611cac0",
+        "to": "syl:memory_node:019fee28-d5c8-7001-8562-474554888abf",
+        "relation": "blocked_by",
+        "tier": "hot",
+        "confidence": 0.7999999975550365,
+        "lastTouchedAt": "2026-08-11T00:11:21.414Z",
+        "species": "inferred",
+        "inferredConfidence": 0.7,
+        "reasoning": "They both slipped the same week, and the second explains the first.",
+        "assertedBy": null
+      }
+    ]
+  }
+}

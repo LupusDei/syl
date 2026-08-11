@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "No reminder with that id.",
+    "retryable": false,
+    "details": null,
+    "retryAfterMs": null
+  }
+}

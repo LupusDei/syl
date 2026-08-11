@@ -1,0 +1,33 @@
+{
+  "success": true,
+  "data": {
+    "id": "syl:delivery:0198f2c6-0002-7000-8000-000000010002",
+    "channel": "apns",
+    "messageClass": "reminder_delivery",
+    "reminderId": null,
+    "payload": {
+      "title": "Syl",
+      "body": "Three things came in overnight. They're in the app when you're ready.",
+      "interruptionLevel": "active",
+      "categoryIdentifier": "reminder",
+      "threadIdentifier": "reminders"
+    },
+    "idempotencyKey": "a041c9d1-0e44-4b77-8f30-2ab5c9d10e44",
+    "state": "delivered",
+    "attempts": 1,
+    "nextAttemptAt": null,
+    "deliveredAt": "2026-08-09T13:00:00.310Z",
+    "ackedAt": null,
+    "engagement": null,
+    "late": true,
+    "scheduledFor": "2026-08-09T13:00:00.000Z",
+    "coalescedReminderIds": [
+      "syl:reminder:0198f2c1-6c5d-7d21-9f00-1a2b3c4d5e71",
+      "syl:reminder:0198f2c1-7d6e-7d21-9f00-1a2b3c4d5e72",
+      "syl:reminder:0198f2c1-8e7f-7d21-9f00-1a2b3c4d5e73"
+    ],
+    "apnsUniqueId": "2C3D4E5F-6071-4829-AB3C-4D5E6F708192",
+    "lastError": null,
+    "createdAt": "2026-08-09T13:00:00.050Z"
+  }
+}

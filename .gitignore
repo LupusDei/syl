@@ -1,2 +1,46 @@
 .syl/
 node_modules/
+coverage/
+dist/
+
+# The build a deploy can roll back to. Same shape as dist/, kept beside it
+# rather than inside it so a build cannot copy the previous one into the new
+# one recursively. Machine state, never source.
+.dist-previous/
+
+# Agent worktrees live inside the repo. Never track them: committing a
+# worktree's contents is how adj-204 broke the entire Adjutant fleet — a
+# node_modules symlink pointing into a peer worktree got committed to main,
+# and every fresh checkout recreated it broken.
+worktrees/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+# A leading path segment anchors a pattern to the repo root, so this only ever
+# matched a run started from here — and `npm run verify` writes the file into
+# whichever WORKSPACE it ran in. `backend/tests/.vitest-results.json` therefore
+# showed up as untracked for anyone who ran the gate the documented way.
+**/tests/.vitest-results.json
+
+# Apple signing and push keys. NEVER commit these.
+#
+# The Commander copied AuthKey_XXTN5423K8.p8 into this directory so the launchd
+# install can reference it locally. It is an APNs auth key: whoever holds it can
+# send push notifications to every app in the team, and Apple's limit is TWO KEYS
+# PER TEAM, so a leak is expensive to remediate as well as dangerous.
+#
+# Broad by extension rather than by filename, because the next key will have a
+# different name and a .gitignore that only knows about today's is a guard that
+# stops working the moment it matters.
+*.p8
+*.p12
+*.cer
+*.mobileprovision
+*.keystore
+
+# Source media for the app. Large, and the encoded copies that ship live in
+# ios/Syl/Resources — keeping both in git would double the weight for no gain.
+assets/*.mp4
