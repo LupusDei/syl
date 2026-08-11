@@ -1938,3 +1938,44 @@ The generalisation is larger than merges: **a file path is a shared namespace,
 and so is an export name.** `INFERRED_RELATIONS` was exported from two modules
 for one database column, and the migration-number discipline — check ORIGIN, not
 your branch — applies to both, unchecked by anyone for a day.
+
+### Absence is not a comparison (2026-08-11)
+
+Two people independently automated the merge-loss check above. **Both scripts
+reported a confident all-clear on a loss constructed by hand**, for two different
+reasons, and the second one is the lesson.
+
+    cause 1   `git diff-tree` on a merge lists NO files by default, so the loop
+              iterated an empty set. The detector ate its own input.
+    cause 2   when a file is absent from the result, `git rev-parse "$m:$f"`
+              FAILS — and both scripts caught that and `continue`d. **The
+              loudest possible finding, "the file is gone entirely", was read as
+              "nothing to compare here, move on."**
+
+Cause 1 discards the input; cause 2 discards the answer. Same output either way:
+a clean run nobody has reason to doubt.
+
+**The word doing the damage is "compare".** Both detectors were built to compare
+two versions of a thing, and neither handled one version not existing — because
+absence is not a comparison, and nothing about the framing prompts the question.
+The positive case to construct is therefore not *"a file differs"* but *"a file
+is absent"*, and `git merge -s ours` builds it in four commands.
+
+Two more things the corrected run established, over thirty merges:
+
+- **729 wholesale takes.** The screen alone is not merely noisy, it is unusable —
+  and no amount of discipline survives a signal at that volume. Only step 2
+  makes it an answer.
+- **Four files vanished, none lost** — three renumbered migrations and a spec
+  directory renamed. Verified by BLOB hash across HEAD, not by path, because
+  **a rename and a deletion are identical to a path-based check.**
+
+The procedure that survives, by hand:
+
+    screen    git diff --name-only m^1 m^2      (never diff-tree)
+    absent    result blob missing while a parent has it -> the finding, not a skip
+    rename    resolve by blob across HEAD before calling anything lost
+    answer    discarded side's it(...) titles or exports, minus the result's
+
+**Automate it when someone can watch it fail first.** Both of us would have
+committed a decoration on the strength of a true negative.
