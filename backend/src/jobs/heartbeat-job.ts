@@ -63,13 +63,19 @@ export const HEARTBEAT_INTERVAL_MS = 60 * 60_000;
 /**
  * How often the hour may put something in front of him, per local day.
  *
- * His ruling, via `specs/008-she-can-show-him`: *"two or three immediately, and
- * then twice a day I think."* **A rate, not a timetable.** A ceiling she spends
- * when she has something, never a quota she fills because an hour arrived — and
- * an unspent day does not accumulate, because a rate that banks is a timetable
- * with extra steps.
+ * **A rate, not a timetable.** A ceiling she spends when she has something,
+ * never a quota she fills because an hour arrived — and an unspent day does not
+ * accumulate, because a rate that banks is a timetable with extra steps.
+ *
+ * Four rather than two, raised once the first day's behaviour was visible: two
+ * is spent by lunchtime, and a ceiling reached early leaves the rest of the day
+ * unable to say anything, which turns a rate back into a schedule from the
+ * other end. Raise it again if she is still running out with things worth
+ * saying; lower it if she is filling it. **The number to watch is whether she
+ * ever ends a day under the ceiling** — a rate that is always exhausted is not
+ * bounding her judgement, it is replacing it.
  */
-export const SENDINGS_PER_DAY = 2;
+export const SENDINGS_PER_DAY = 4;
 
 /**
  * The verbs that put something in front of him.

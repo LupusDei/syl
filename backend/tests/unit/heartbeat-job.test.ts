@@ -249,7 +249,10 @@ describe("the prompt she is woken with", () => {
   it("should say what is left when some of it is spent", () => {
     const prompt = heartbeatPrompt({ ...moment, spentToday: 1 });
 
-    expect(prompt).toMatch(/1 of 2|one of (the )?two/i);
+    // Derived, not spelled. This assertion used to read `/1 of 2|one of two/`
+    // and broke the day the allowance changed — a test stating the number it is
+    // guarding cannot survive the number moving.
+    expect(prompt).toMatch(new RegExp(`1 of ${String(SENDINGS_PER_DAY)}`, "i"));
   });
 
   it("should say the day is spent, without treating it as a failure", () => {
@@ -366,7 +369,7 @@ describe("the hour itself", () => {
 
     await handler(contextFor(jobs, job, MORNING));
 
-    expect(heard.prompts[0]).toMatch(/1 of 2|one of (the )?two/i);
+    expect(heard.prompts[0]).toMatch(new RegExp(`1 of ${String(SENDINGS_PER_DAY)}`, "i"));
   });
 
   it("should count a day in HIS zone, so a late evening is not tomorrow already", async () => {
@@ -376,8 +379,12 @@ describe("the hour itself", () => {
     // quietly four.
     const { jobs, job } = ready();
     const evening = Date.UTC(2026, 7, 12, 2, 30); // 21:30 CDT on the 11th
-    pastRun(jobs, job, MORNING, true);
-    pastRun(jobs, job, MORNING + 60 * 60_000, true);
+    // Spend the whole allowance, whatever it is. Seeding a fixed number of runs
+    // encodes the allowance in the fixture, which is how this test broke when
+    // the ceiling moved from two to four.
+    for (let spent = 0; spent < SENDINGS_PER_DAY; spent += 1) {
+      pastRun(jobs, job, MORNING + spent * 60 * 60_000, true);
+    }
     const heard = voice();
     const handler = createHeartbeatHandler({ voice: heard, jobs, tz: TZ, quiet: QUIET });
 
@@ -387,8 +394,12 @@ describe("the hour itself", () => {
   });
 
   it("should not let an unspent day accumulate into tomorrow", async () => {
-    // Two missed sendings do not make four. A rate that banks is a timetable
-    // with extra steps.
+    // An unspent day does not double tomorrow's ceiling. A rate that banks is a
+    // timetable with extra steps.
+    //
+    // The forbidden number is DERIVED — it used to be the literal `4`, chosen
+    // when the allowance was two, and it became the allowance itself the day
+    // that changed. A magic number is only impossible until it is not.
     const { jobs, job } = ready();
     const heard = voice();
     const handler = createHeartbeatHandler({ voice: heard, jobs, tz: TZ, quiet: QUIET });
@@ -396,7 +407,7 @@ describe("the hour itself", () => {
     await handler(contextFor(jobs, job, NEXT_MORNING));
 
     expect(heard.prompts[0]).toContain(String(SENDINGS_PER_DAY));
-    expect(heard.prompts[0]).not.toContain("4");
+    expect(heard.prompts[0]).not.toContain(String(SENDINGS_PER_DAY * 2));
   });
 
   it("should not carry yesterday's spending into today's ledger", async () => {
@@ -416,8 +427,11 @@ describe("the hour itself", () => {
     // breaker: an hour that overspends is recorded as a failed run, and five in
     // a row take the hour away from her. He is told nothing either way.
     const { jobs, job } = ready();
-    pastRun(jobs, job, MORNING - 2 * 60 * 60_000, true);
-    pastRun(jobs, job, MORNING - 60 * 60_000, true);
+    // Spend the ceiling exactly, whatever it is — seeding a fixed count encodes
+    // the allowance in the fixture and stops testing the bound the day it moves.
+    for (let spent = 0; spent < SENDINGS_PER_DAY; spent += 1) {
+      pastRun(jobs, job, MORNING - (spent + 1) * 60 * 60_000, true);
+    }
     const handler = createHeartbeatHandler({
       voice: voice(said("One more thing.", [mcpToolName("remind_me")])),
       jobs,
@@ -429,7 +443,9 @@ describe("the hour itself", () => {
 
     expect(result.outcome).toBe("failure");
     expect(result.spoke).toBe(true);
-    expect(result.error ?? "").toMatch(/2 of 2|ceiling|allowance/i);
+    expect(result.error ?? "").toMatch(
+      new RegExp(`${String(SENDINGS_PER_DAY)} of ${String(SENDINGS_PER_DAY)}|ceiling|allowance`, "i"),
+    );
   });
 
   it("should still run inside quiet hours, because she is allowed to think", async () => {
