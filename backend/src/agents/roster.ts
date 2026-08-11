@@ -50,7 +50,7 @@ export const ROSTER: readonly RosterEntry[] = [
   {
     id: "treasurer",
     good_for:
-      "his real money: accounts, bills, what a thing actually costs",
+      "his money: accounts, bills, what things cost",
   },
   {
     id: "artanis",
@@ -62,11 +62,11 @@ export const ROSTER: readonly RosterEntry[] = [
   },
   {
     id: "raynor",
-    good_for: "building software, when he wants a thing made",
+    good_for: "building software",
   },
   {
     id: "adjutant-coordinator",
-    good_for: "who is working on what, when you do not know who to ask",
+    good_for: "who is working on what",
   },
 ];
 

@@ -474,6 +474,62 @@ struct LocalStore: Sendable {
         }
     }
 
+    // MARK: - Sendings
+
+    /// Store a fetched page of sendings.
+    ///
+    /// **Replaces each row it names, and removes none that it does not.** The page is
+    /// the newest few, so a sending missing from it has scrolled off rather than gone —
+    /// nothing in this system deletes a sending, and a store that mirrored the page by
+    /// deleting the difference would be the one thing acceptance item 6 forbids, dressed
+    /// as a cache.
+    ///
+    /// Replacing by id is what carries the one write the service permits: a `pending`
+    /// row becomes `ready` when the render lands, and the device finds out by asking.
+    func replaceSendings(_ page: SendingPage) throws {
+        guard !page.items.isEmpty else { return }
+        try database.queue.write { db in
+            for sending in page.items {
+                try SendingRecord(sending).save(db)
+            }
+        }
+    }
+
+    /// What she has sent him, **newest first**.
+    ///
+    /// The order is the service's own — `createdAt DESC`, ties broken on the id — and it
+    /// is asserted here rather than inherited from the order a page happened to arrive
+    /// in. The mock served this list unsorted for a while and was schema-conformant the
+    /// whole time, because ordering is not something a schema can say.
+    ///
+    /// Every state is returned. A `pending` or `failed` sending is a complete row: the
+    /// words reached him whatever became of the video, and filtering those out would
+    /// hide the half of the feature that is guaranteed to have arrived.
+    func sendings(limit: Int = 200) throws -> [Sending] {
+        try database.queue.read { db in
+            try SendingRecord
+                .order(literal: "createdAt DESC, id DESC")
+                .limit(limit)
+                .fetchAll(db)
+                .map { try $0.model() }
+        }
+    }
+
+    /// The ids of every sending still waiting on its video.
+    ///
+    /// The video lands minutes after the words, and no frame arrives to say so — the
+    /// phone learns by asking. This is what tells a foreground pass whether there is
+    /// anything to ask about.
+    func pendingSendingIDs() throws -> [SylID] {
+        try database.queue.read { db in
+            try SylID.fetchAll(
+                db,
+                sql: "SELECT id FROM sending WHERE state = ?",
+                arguments: [SendingState.pending.rawValue]
+            )
+        }
+    }
+
     /// The to-dos linked to a goal — **every one of them, closed included**.
     ///
     /// This is the read a goal's progress is evidenced from, and most evidence is
@@ -821,6 +877,12 @@ struct LocalStore: Sendable {
         case .reminder: return "reminder"
         case .todo: return "todo"
         case .goal: return "goal"
+        // **`.sending` is nil on purpose, and it is not the same "nil" as the four
+        // below.** Those are resources the phone does not keep. A sending it does keep —
+        // this is the delete path, and a sending is never deleted, by the service or by
+        // anything here. Naming the table would make acceptance item 6 true only for as
+        // long as no `op: "delete"` ever arrived for one.
+        case .sending: return nil
         case .device, .delivery, .job, .run: return nil
         }
     }

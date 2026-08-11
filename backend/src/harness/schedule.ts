@@ -177,6 +177,23 @@ export function nextDailyOccurrence(spec: string, from: Date, timeZone: string):
   return resolveLocalDateTime(addLocalDays(today, 1), time, timeZone);
 }
 
+/**
+ * The calendar date an instant falls on, in a zone, as `YYYY-MM-DD`.
+ *
+ * For anything counted "per day" — a ceiling on how often she reaches him, a
+ * ledger that must not bank what yesterday did not spend. A day counted in UTC
+ * turns over at 19:00 or 18:00 local, so his whole evening lands on tomorrow's
+ * tally and a twice-a-day rate quietly becomes four.
+ *
+ * Zero-padded, so the strings compare and sort exactly as the dates do and no
+ * caller ever has to parse one back.
+ */
+export function localDate(instant: Date, timeZone: string): string {
+  const p = partsInZone(instant, timeZone);
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${String(p.year).padStart(4, "0")}-${pad(p.month)}-${pad(p.day)}`;
+}
+
 function minutesOfDay(instant: Date, timeZone: string): number {
   const p = partsInZone(instant, timeZone);
   return p.hour * 60 + p.minute;

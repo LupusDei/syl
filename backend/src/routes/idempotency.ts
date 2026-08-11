@@ -67,6 +67,47 @@ export function runIdempotent<T>(
   request: Request,
   produce: () => { readonly status: number; readonly data: T },
 ): IdempotentOutcome<T> {
+  const ledger = beginIdempotent<T>(store, request);
+  if (ledger.replayed !== null) return ledger.replayed;
+
+  const produced = produce();
+  ledger.record(produced.status, produced.data);
+  return { status: produced.status, data: produced.data, replayed: false };
+}
+
+/**
+ * The same rule, for a write that has to wait for something.
+ *
+ * A separate function rather than one that accepts both, because the shared
+ * shape would be `Promise<T> | T` and every caller would have to be read twice
+ * to know which it was. The *ledger* is shared — see {@link beginIdempotent} —
+ * so there is exactly one place that decides what a replay is.
+ *
+ * `POST /renders` is the first caller and it is the case that motivates the
+ * function existing: a retried render submission that ran twice would be two
+ * charges on the Commander's Runway account for one intention.
+ */
+export async function runIdempotentAsync<T>(
+  store: IdempotencyStore,
+  request: Request,
+  produce: () => Promise<{ readonly status: number; readonly data: T }>,
+): Promise<IdempotentOutcome<T>> {
+  const ledger = beginIdempotent<T>(store, request);
+  if (ledger.replayed !== null) return ledger.replayed;
+
+  const produced = await produce();
+  ledger.record(produced.status, produced.data);
+  return { status: produced.status, data: produced.data, replayed: false };
+}
+
+/** The half of the rule that does not depend on how the write is produced. */
+function beginIdempotent<T>(
+  store: IdempotencyStore,
+  request: Request,
+): {
+  readonly replayed: IdempotentOutcome<T> | null;
+  record(status: number, data: T): void;
+} {
   const key = requireIdempotencyKey(request);
   const fingerprint = fingerprintOf(
     request.method,
@@ -76,9 +117,9 @@ export function runIdempotent<T>(
     request.body ?? null,
   );
 
-  let replayed;
+  let found;
   try {
-    replayed = store.lookup(key, fingerprint);
+    found = store.lookup(key, fingerprint);
   } catch (error) {
     if (error instanceof IdempotencyConflict) {
       throw new ApiFailure("IDEMPOTENCY_KEY_REUSE", error.message, {
@@ -88,15 +129,17 @@ export function runIdempotent<T>(
     throw error;
   }
 
-  if (replayed !== null) {
-    // Safe assertion: the body was stored by this same call site, whose
-    // `produce` is typed to return `T`.
-    return { status: replayed.status, data: replayed.body as T, replayed: true };
-  }
-
-  const produced = produce();
-  store.save(key, fingerprint, produced.status, produced.data);
-  return { status: produced.status, data: produced.data, replayed: false };
+  return {
+    replayed:
+      found === null
+        ? null
+        : // Safe assertion: the body was stored by this same call site, whose
+          // `produce` is typed to return `T`.
+          { status: found.status, data: found.body as T, replayed: true },
+    record: (status, data) => {
+      store.save(key, fingerprint, status, data);
+    },
+  };
 }
 
 /** Send an idempotent outcome, flagging a replay so the client can see it. */

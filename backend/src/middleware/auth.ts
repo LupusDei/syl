@@ -332,7 +332,13 @@ export const AGENT_SURFACES: readonly AgentSurface[] = [
   { path: "/reminders", says: "reminders" },
   { path: "/todos", says: "to-dos" },
   { path: "/goals", says: "goals" },
-  { path: "/memory/recall", says: "her own memory, to search it and read it back" },
+  // No comma inside a `says`: these are spliced into one sentence, and an
+  // internal comma turns "her own memory, to search it and read it back, her
+  // own renders" into a list nobody can parse. The derivation exposed it — the
+  // hand-written sentence never had to survive being joined to anything.
+  { path: "/memory/recall", says: "her own memory" },
+  { path: "/renders", says: "her own renders" },
+  { path: "/sendings", says: "the things she has sent him" },
 ];
 
 export const AGENT_SURFACE: readonly string[] = AGENT_SURFACES.map((surface) => surface.path);

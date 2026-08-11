@@ -390,7 +390,7 @@ final class GoalSurfaceTests: XCTestCase {
         path.append(.goals)
 
         XCTAssertEqual(path, [.goals])
-        XCTAssertEqual(Set(HomeView.Destination.allDestinations).count, 3)
+        XCTAssertEqual(Set(HomeView.Destination.allDestinations).count, 4)
     }
 
     // MARK: - Helpers
@@ -404,5 +404,5 @@ extension HomeView.Destination {
     /// Only used by the test above, to assert the enum is hashable in the way a navigation
     /// path needs. Kept beside the test rather than on the type, so nothing in the app
     /// starts iterating destinations as though they were a menu.
-    static var allDestinations: [HomeView.Destination] { [.goals, .memory, .today] }
+    static var allDestinations: [HomeView.Destination] { [.goals, .memory, .fromSyl, .today] }
 }

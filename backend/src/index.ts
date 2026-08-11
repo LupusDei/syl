@@ -19,6 +19,11 @@ import {
   ensureNightlyDreamJob,
   type NightDreamer,
 } from "./jobs/dream-job.js";
+import {
+  createHeartbeatHandler,
+  describeHeartbeat,
+  ensureHeartbeatJob,
+} from "./jobs/heartbeat-job.js";
 import { createDeliveryRuntime, describeRuntime, type DeliveryRuntime } from "./jobs/runtime.js";
 import { AdjutantClient } from "./agents/adjutant-client.js";
 import { loadConfig, type SylConfig } from "./config.js";
@@ -52,15 +57,27 @@ import { createLogger, toolArgumentsForLog, type Logger } from "./ops/logging.js
 import { assessPower, describePower } from "./ops/power.js";
 import { installShutdownHandlers } from "./ops/shutdown.js";
 import { tailnetCertProbe } from "./ops/tailnet-cert.js";
+import { RenderService } from "./render/render-service.js";
+import { RunwayClient } from "./render/runway.js";
+import { ensureReference, studioAt, studioRootFrom } from "./render/studio.js";
 import { createGoalRouter } from "./routes/goals.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
 import { createJobRouter } from "./routes/jobs.js";
 import { createLogRouter } from "./routes/logs.js";
 import { createMemoryRouter, type MemoryViews } from "./routes/memory.js";
 import { createReminderRouter } from "./routes/reminders.js";
+import { createRenderRouter } from "./routes/renders.js";
+import { createSendingRouter } from "./routes/sendings.js";
 import { createSyncRouter } from "./routes/sync.js";
 import { createTodoRouter } from "./routes/todos.js";
-import { fileSessionStore, LANES, memorySessionStore, SylAgent, type Lane } from "./harness/agent.js";
+import {
+  fileSessionStore,
+  LANES,
+  LANES_WITH_HANDS,
+  memorySessionStore,
+  SylAgent,
+  type Lane,
+} from "./harness/agent.js";
 import { runTurn, type TurnOptions, type TurnRunner } from "./harness/session.js";
 import {
   mcpToolName,
@@ -96,6 +113,8 @@ import { MessageStore } from "./services/message-store.js";
 import { Outbox } from "./services/outbox.js";
 import { PresenceService } from "./services/presence.js";
 import { ReminderService } from "./services/reminder-service.js";
+import { SendingService } from "./services/sending-service.js";
+import { SendingStore } from "./services/sending-store.js";
 import { SyncService, type SyncResolvers } from "./services/sync-service.js";
 import { TodoService } from "./services/todo-service.js";
 import { SylSocketServer, WS_PATH } from "./services/ws-server.js";
@@ -273,6 +292,29 @@ export interface AppDependencies {
    * one file.
    */
   readonly attachments: AttachmentStore;
+  /**
+   * Her renders of herself, and the ledger of what they cost.
+   *
+   * Not a store: the records live in the toolkit checkout beside the videos
+   * they describe, because `assets/*.mp4` is gitignored here for a reason and a
+   * sidecar that is not beside its video is a sidecar somebody moves the video
+   * away from. A machine with no `RUNWAYML_API_SECRET` still gets one of these
+   * — it refuses with a sentence rather than being absent, which is the same
+   * decision `ToolContext.fleet` makes about a missing Adjutant.
+   */
+  readonly renders: RenderService;
+  /**
+   * The things she chose to give him: her words, and the video of her saying
+   * them.
+   *
+   * Two objects rather than one, and the split is the feature. `sendings` is
+   * the store every read goes through; `composer` is the only thing that can
+   * make one, and it delivers the words before it looks at a render. Handing a
+   * route the store alone makes it structurally unable to compose, which is
+   * what keeps the ordering out of reach of a future caller.
+   */
+  readonly sendings: SendingStore;
+  readonly composer: SendingService;
   /** Extra health probes. The billing check is always present. */
   readonly probes?: readonly HealthProbe[];
   /**
@@ -347,6 +389,9 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     intake,
     memory,
     attachments,
+    renders,
+    sendings,
+    composer,
     probes,
     clock,
   } = deps;
@@ -404,6 +449,13 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   api.use(createReminderRouter({ reminders, idempotency, authenticate }));
   api.use(createTodoRouter({ todos, idempotency, authenticate }));
   api.use(createGoalRouter({ goals, idempotency, authenticate }));
+  // Her own face. On `AGENT_SURFACE` deliberately — see `middleware/auth.ts`
+  // for the argument, which is that this is the first surface she reaches for
+  // herself rather than for him, and that it reaches nothing of his.
+  api.use(createRenderRouter({ renders, idempotency, authenticate }));
+  // What she has already given him. Unlike `/renders` this is his surface, so
+  // it takes an ordinary `device` token.
+  api.use(createSendingRouter({ sendings, composer, idempotency, authenticate }));
   // Read-only, so no idempotency ledger: there is nothing here to run twice.
   api.use(createSyncRouter({ sync, authenticate }));
   api.use(createJobRouter({ jobs, authenticate }));
@@ -734,6 +786,16 @@ export interface BootstrapOptions {
   readonly runner?: TurnRunner;
   /** Standing orders. Defaults to `SOUL.md` at the repo root, when there is one. */
   readonly soul?: string;
+  /**
+   * The environment the boot reads configuration out of. Defaults to the real one.
+   *
+   * Exists for `RUNWAYML_API_SECRET`, and the reason is worth stating: that
+   * variable is the only one in this bootstrap whose presence causes the
+   * service to construct something that can **spend metered money**. A test
+   * that wants a service with no way to render says so here rather than hoping
+   * the machine it runs on has no grant configured.
+   */
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 /** What `bootstrap` produces: the store, the services, and Syl's own key. */
@@ -862,6 +924,10 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     blobDir: config.attachmentDir,
   });
   const messages = new MessageStore({ db: database.handle, clock, attachments });
+  // The rows behind "From Syl". Built here beside the two stores it joins; the
+  // service that COMPOSES a sending is built further down, because it needs the
+  // render service and that needs the studio.
+  const sendings = new SendingStore({ db: database.handle, clock, attachments });
   const devices = new DeviceTokenService({ db: database.handle, clock });
   const idempotency = new IdempotencyStore({ db: database.handle, clock });
   // From the config, not from `process.env`. `loadConfig` has already refused
@@ -876,7 +942,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // than mapping rows a second time. A second mapping is a second place for
   // the wire shape to drift, and drift between the contract and the service is
   // the bug this whole endpoint was blocked behind (`syl-c1m`).
-  const sync = new SyncService({ db: database.handle, clock, resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs }) });
+  const sync = new SyncService({ db: database.handle, clock, resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings }) });
   // One zone for the whole service, and the one `loadConfig` has already
   // checked is a place rather than an offset. The quiet *window* stays
   // presence's own: `absent` is about whether Syl shows a character, which
@@ -952,9 +1018,16 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   const { mcpConfig: overriddenHands, ...turnOverrides } = options.turn ?? {};
   const commanderHands = overriddenHands ?? handsPath;
 
-  /** The declaration a lane is given by name, or nothing at all. */
+  /**
+   * The declaration a lane is given by name, or nothing at all.
+   *
+   * The list lives in `harness/agent.ts`, beside the lanes it names, so that
+   * this wiring and the boot notice in `ops/container.ts` cannot disagree about
+   * which lanes can act. Widening it is a one-line edit there with the argument
+   * attached, and two canaries go red until it is made deliberately.
+   */
   const handsFor = (lane: Lane): string | undefined =>
-    lane === LANES.commander ? commanderHands : undefined;
+    LANES_WITH_HANDS.includes(lane) ? commanderHands : undefined;
 
   /**
    * Write down what he said, for the one check that cannot be made without it.
@@ -968,11 +1041,30 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
    *
    * Only for a turn carrying a declaration, so no lane without hands leaves a
    * trace of his messages on disk for a reader that does not exist.
+   *
+   * **And only for HIS lane**, which used to be the same statement and is not
+   * any more. `mcpConfig !== undefined` meant "the commander lane" while the
+   * commander lane was the only tooled one; since the hourly self-ping was given
+   * hands it would also be true of a heartbeat, and writing a heartbeat's prompt
+   * here would be two failures at once. She could quote the prompt she was woken
+   * with to satisfy `harness/urgency.ts` and wake him at 03:00 with words he
+   * never said — and an hourly write would clobber his real message, so an
+   * urgent reminder he genuinely asked for could be refused because a background
+   * turn landed in the same second.
+   *
+   * So a heartbeat leaves this file alone, and the tool server therefore reads
+   * whatever he last actually said. That is the *safe* direction and it is what
+   * makes "she cannot reach him during quiet hours" structural rather than
+   * instructed: the Outbox already holds every non-urgent notification until the
+   * window ends, and urgency is the only way past it.
    */
   const recordHisWords =
     (runner: TurnRunner): TurnRunner =>
     async (prompt, turnOptions) => {
-      if (home !== undefined && turnOptions.mcpConfig !== undefined) {
+      // Identified by the LANE rather than by "has any declaration at all" —
+      // the property this was always about. The two lanes with hands share one
+      // declaration, so the path cannot tell them apart and only the name can.
+      if (home !== undefined && turnOptions.lane === LANES.commander) {
         writeTurnMessage(home, prompt);
       }
       return runner(prompt, turnOptions);
@@ -1226,6 +1318,63 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
             : { projectRoot: config.adjutant.projectRoot }),
         });
 
+  // Her renders. The secret is read once, here, and lives nowhere else in the
+  // process: `RunwayClient` holds it and never puts it in a message, a log line
+  // or a sidecar. **Absent is the ordinary case** — a machine with no Runway
+  // grant is not misconfigured, it is a machine where she cannot render — so
+  // this degrades to a service that refuses with a sentence rather than to a
+  // boot that fails. Same decision as a missing Adjutant.
+  const runwaySecret = (options.env ?? process.env)["RUNWAYML_API_SECRET"]?.trim() ?? "";
+  // Her renders go in HER home — `sylHome`, the same answer her turns and her
+  // hands are given, rather than a second one computed here. The Commander's
+  // ruling of 2026-08-11: *"her videos should be generated and placed within
+  // her context I think. certainly not in temp or in the runway project."*
+  // `render/studio.ts` has the rest of why.
+  const studio = studioAt(studioRootFrom(options.env ?? process.env, home));
+  if (home !== undefined) {
+    // Her likeness, placed on first boot and never overwritten after. It is the
+    // only thing holding her face still between shots, and it must not live in
+    // a checkout that belongs to a different project.
+    const placed = ensureReference(studio);
+    if (placed === "unplaced") {
+      console.warn(
+        `[syl] WARNING: there is no reference picture at ${studio.reference()} and none could ` +
+          `be placed — she will refuse to render rather than render somebody else.`,
+      );
+    }
+  }
+  const renders = new RenderService({
+    studio,
+    backend: runwaySecret === "" ? null : new RunwayClient({ secret: runwaySecret }),
+    clock,
+  });
+  // A render the last process was mid-poll on. Without this the sidecar says
+  // `rendering` forever and she tells him something is coming that never was —
+  // constraint 4 wearing a different hat.
+  renders.resume();
+
+  // Composing a sending needs the renders (to find the clip), the attachments
+  // (to store the compressed copy) and the outbox (to carry her sentence), so
+  // it is built last. `workDir` is under her home and is NEVER the studio
+  // directory: the compressed copy is derived and regenerable, the render is
+  // the record, and writing one next to the other invites a cleanup job that
+  // cannot tell them apart.
+  const composer = new SendingService({
+    sendings,
+    // Her words go out through the same object the socket subscribes to, so a
+    // sending appears in an open chat window the moment it is composed.
+    chat,
+    attachments,
+    outbox,
+    renders,
+    workDir: join(config.attachmentDir, "sendings"),
+  });
+  // A sending the last process was mid-video on. The promise chasing the clip
+  // lived in that process's memory, so without this the row says `pending`
+  // forever while her words have already told him something is coming —
+  // constraint 4, one noun along from `renders.resume()` above.
+  composer.resume();
+
   const intakeQueue = new IntakeQueue();
   const intakeStore = new IntakeStore({ db: database.handle, clock });
   const intake = new ArticleIntake({ store: intakeStore, clock, scheduler: intakeQueue });
@@ -1257,6 +1406,9 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       memory,
       memoryRuntime,
       attachments,
+      renders,
+      sendings,
+      composer,
       presence,
       intakeQueue,
       // The same clock every store above was built on — not a second one. See
@@ -1270,6 +1422,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
 /** The stores `GET /sync` reads each resource type through. */
 export interface SyncSources {
   readonly messages: MessageStore;
+  readonly sendings: SendingStore;
   readonly reminders: ReminderService;
   readonly todos: TodoService;
   readonly goals: GoalService;
@@ -1290,7 +1443,7 @@ export interface SyncSources {
  * what `op: "delete"` is derived from.
  */
 export function syncResolvers(sources: SyncSources): SyncResolvers {
-  const { messages, reminders, todos, goals, devices, outbox, jobs } = sources;
+  const { messages, reminders, todos, goals, devices, outbox, jobs, sendings } = sources;
   // Safe assertion: each store returns the contract type for that resource,
   // and `SyncChange.resource` is that same object seen as an open record.
   const as = <T>(value: T | null): Record<string, unknown> | null =>
@@ -1306,6 +1459,11 @@ export function syncResolvers(sources: SyncSources): SyncResolvers {
     delivery: (id) => as(outbox.get(id)),
     job: (id) => as(jobs.get(id)),
     run: (id) => as(jobs.run(id)),
+    // On the feed because a sending CHANGES after its message is written: the
+    // video lands minutes later and nothing about the message moves when it
+    // does. Without this a device that had already synced the words would
+    // never learn the video arrived.
+    sending: (id) => as(sendings.get(id)),
   };
 }
 
@@ -1463,7 +1621,7 @@ export async function startSyl(
   config: SylConfig,
   options: StartSylOptions = {},
 ): Promise<RunningSyl> {
-  const { database, deps: bootstrapped, agentKey, hands } = bootstrap(config, options);
+  const { database, deps: bootstrapped, agent, agentKey, hands } = bootstrap(config, options);
   const delivery = options.delivery ?? {};
   const clock = delivery.clock ?? options.clock ?? systemClock;
 
@@ -1541,6 +1699,11 @@ export async function startSyl(
   // next gap rather than spending turns at breakfast.
   const dreamSchedule = { tz: config.quietHours.tz, quiet: config.quietHours.quiet };
   const dreamJob = ensureNightlyDreamJob(deps.jobs, dreamSchedule, clock());
+  // The hourly self-ping, which `LANES.heartbeat` has been waiting for since the
+  // harness was written. An interval rather than a wall clock, so it never
+  // becomes a third fixed slot beside the morning agenda and the evening review.
+  const heartbeatSchedule = { tz: config.quietHours.tz, quiet: config.quietHours.quiet };
+  const heartbeatJob = ensureHeartbeatJob(deps.jobs, heartbeatSchedule, clock());
 
   const runtime = createDeliveryRuntime({
     jobs: deps.jobs,
@@ -1563,6 +1726,22 @@ export async function startSyl(
           log: deps.memory.dreams,
           ...dreamSchedule,
           judge: () => buildDreamJudge(config, deps, clock, options),
+        }),
+      ],
+      [
+        "heartbeat",
+        createHeartbeatHandler({
+          // The lane, bound once. It carries the same MCP declaration the
+          // commander lane does — see `LANES_WITH_HANDS` — because an hour that
+          // could not act would be an hour that could only report to nobody.
+          voice: agent.forLane(LANES.heartbeat),
+          // The ledger is the runs table: how often she has reached him today
+          // is a query over runs of this very job, in his zone, resetting with
+          // the local day for free. No new store, and nothing to migrate.
+          jobs: deps.jobs,
+          ...heartbeatSchedule,
+          // A failed hour is silent to him and loud here.
+          ...(options.logger === undefined ? {} : { log: options.logger }),
         }),
       ],
     ]),
@@ -1606,6 +1785,9 @@ export async function startSyl(
       // Re-read: `ensureNightlyDreamJob` returns the row as it was found, and
       // the runner's first tick has already run since then.
       ...describeDream(deps.jobs.get(dreamJob.id) ?? dreamJob, dreamSchedule),
+      // Re-read for the same reason the dream is: the runner's first tick has
+      // already run since `ensureHeartbeatJob` returned the row.
+      ...describeHeartbeat(deps.jobs.get(heartbeatJob.id) ?? heartbeatJob, heartbeatSchedule),
       ...describePushEnvironment(push, { pushConfigured: runtime.pushEnabled }),
       ...describePower(power),
       ...describeAdmin(admin),

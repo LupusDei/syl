@@ -32,14 +32,23 @@ struct ConstellationLayout: Sendable {
     /// The area the sky is drawn into.
     var size: CGSize
 
-    /// Room at the top for the navigation bar and her title, and at the foot for the home
-    /// indicator. A star tucked under a chrome element is a star he cannot see or touch.
-    var topInset: CGFloat = 104
-    var bottomInset: CGFloat = 72
+    /// Room at the top for the navigation bar and her title, and at the foot for the tab bar
+    /// and the home indicator. A star tucked under a chrome element is a star he cannot see
+    /// or touch.
+    ///
+    /// **These were two constants and the Commander could see it.** 104 and 72 were measured
+    /// against a navigation bar and a home indicator, before this screen lived in a tab bar —
+    /// and a tab bar takes 83 points, so the lowest star in the field was drawn beneath it.
+    /// They are now derived from the chrome the view actually measured, with the old numbers
+    /// kept as floors so a sky with no chrome at all still has margins.
+    var topInset: CGFloat
+    var bottomInset: CGFloat
     var sideInset: CGFloat = 46
 
-    init(size: CGSize) {
+    init(size: CGSize, chrome: ConstellationChrome = .none) {
         self.size = size
+        topInset = max(104, chrome.top + ConstellationChrome.clearance)
+        bottomInset = max(72, chrome.bottom + ConstellationChrome.clearance)
     }
 
     // MARK: - The field

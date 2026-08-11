@@ -39,23 +39,60 @@ jobs:
       # TestFlight build per commit is not worth that; a build per version bump is.
       #
       # The iOS test workflow deliberately does NOT share this gate — see ios.yml.
-      - name: Compare MARKETING_VERSION with the previous commit
+      # **Ask whether this build has ever been uploaded — not whether it differs from
+      # one arbitrary neighbouring commit.**
+      #
+      # This gate used to diff `MARKETING_VERSION` against `HEAD~1`, and it silently
+      # dropped a release. Build 17 carried the fix for a bug the Commander was
+      # actively hitting; the bump landed in one commit and reached `main` inside a
+      # merge, so `HEAD~1` was the branch being merged — which already had 0.9.6.
+      # Current equalled previous, the job reported success, and **nothing shipped.**
+      # Every check was green and no build existed.
+      #
+      # `HEAD~1` is not a meaningful question. It is a different commit depending on
+      # whether the tip is a merge, a squash, a revert or a rebase, and on which side
+      # of a merge git happens to call the first parent. The question actually worth
+      # answering has one true answer: *is this build number already on TestFlight?*
+      #
+      # A tag pushed after a successful upload records exactly that, and it is immune
+      # to merges, re-runs, reordering and to a second agent committing in between.
+      # It also fails SAFE in the direction that matters: an upload whose tag push
+      # fails gets retried and rejected by App Store Connect as a duplicate build,
+      # which is noisy and harmless. The old gate failed silent, which is neither.
+      - name: Has this build already been uploaded?
         if: github.event_name == 'push'
         id: diff
         run: |
           # Every occurrence, sorted and deduplicated, not just the first. Debug and
           # Release each carry one, and `head -1` reads whichever configuration happens
           # to appear first in the pbxproj — which changes when Xcode rewrites the file.
-          extract() { grep 'MARKETING_VERSION' | sed 's/.*= *//;s/;.*//' | sort -u | tr '\n' ' '; }
-          CURRENT=$(extract < ios/Syl.xcodeproj/project.pbxproj)
-          PREVIOUS=$(git show HEAD~1:ios/Syl.xcodeproj/project.pbxproj 2>/dev/null | extract || echo "")
-          echo "current=$CURRENT previous=$PREVIOUS"
-          if [ "$CURRENT" != "$PREVIOUS" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Version changed: $PREVIOUS -> $CURRENT"
-          else
+          extract() { grep "$1" | sed 's/.*= *//;s/;.*//' | sort -u | tr -d '\n '; }
+          VERSION=$(extract MARKETING_VERSION < ios/Syl.xcodeproj/project.pbxproj)
+          echo "version=$VERSION"
+
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not read MARKETING_VERSION from the project."
+            exit 1
+          fi
+
+          # **Keyed on the MARKETING_VERSION, and never on CURRENT_PROJECT_VERSION.**
+          #
+          # The build number in the project file is not the build number that ships:
+          # `fastlane beta` calls `increment_build_number(latest_testflight_build_number
+          # + 1)`, so App Store Connect's own counter decides it and the repository's
+          # copy is ignored at build time. The first version of this gate keyed on it
+          # and tagged `testflight/24` for a commit whose project file said 18 — a tag
+          # that could never match what the gate would look up next time, which would
+          # have quietly restored the build-per-commit this job exists to avoid.
+          #
+          # The marketing version is the one the repository actually controls, and "a
+          # build per version bump" was always the intent.
+          if git ls-remote --exit-code --tags origin "refs/tags/testflight/v$VERSION" >/dev/null 2>&1; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Version unchanged ($CURRENT) — skipping the TestFlight deploy"
+            echo "$VERSION is already on TestFlight — nothing to do."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "$VERSION has never been uploaded — shipping it."
           fi
 
   deploy:
@@ -67,6 +104,14 @@ jobs:
     # build and a successful sign, so the failure arrives at the end of the slowest
     # step in the pipeline with nothing before it having complained.
     runs-on: macos-26
+
+    # For the `testflight/<build>` tag, and for nothing else. The default token is
+    # read-only, and the tag push failed `403` on the first real run — *after* a
+    # successful upload, which is the whole design working: the gate now fails toward
+    # a duplicate upload App Store Connect will reject loudly, never toward silence.
+    permissions:
+      contents: write
+
     defaults:
       run:
         working-directory: ios
@@ -158,6 +203,25 @@ jobs:
 
       - name: Build and upload to TestFlight
         run: bundle exec fastlane beta
+
+      # **The record that this build shipped, and the thing the gate above reads.**
+      #
+      # After the upload, never before: a tag written first would mark a build that
+      # failed to ship as shipped, which is the silent failure this whole change
+      # exists to remove — in the one direction where it costs a release rather than
+      # a duplicate-build rejection.
+      #
+      # `git tag` on the runner's checkout, pushed to origin. It is deliberately not
+      # annotated: this is a machine-readable fact about what exists in App Store
+      # Connect, not a milestone anybody reads.
+      - name: Record that this build is on TestFlight
+        working-directory: ${{ github.workspace }}
+        run: |
+          extract() { grep "$1" | sed 's/.*= *//;s/;.*//' | sort -u | tr -d '\n '; }
+          VERSION=$(extract MARKETING_VERSION < ios/Syl.xcodeproj/project.pbxproj)
+          git tag "testflight/v$VERSION"
+          git push origin "testflight/v$VERSION"
+          echo "Tagged $VERSION as uploaded."
 
       - name: Remove the credentials
         # `always()`: a failed build must not leave a decoded signing key on the

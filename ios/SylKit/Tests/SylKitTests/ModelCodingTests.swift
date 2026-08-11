@@ -189,6 +189,32 @@ final class ModelCodingTests: XCTestCase {
         XCTAssertThrowsError(try change.decodeResource(as: Todo.self))
     }
 
+    /// **A resource type this enum does not know takes the whole page down with it.**
+    ///
+    /// `SyncChange.type` is a non-optional enum, so one unknown value fails the decode
+    /// of the array, which fails the decode of `SyncResponse`, which fails the sync —
+    /// not the one change, all of it, on every pass, for as long as the row exists. The
+    /// contract added `sending` to `SyncResourceType` when the sendings backend landed,
+    /// and until this test the phone would simply have stopped synchronising the first
+    /// time she sent him something.
+    func testShouldDecodeEveryResourceTypeTheContractCanPutOnTheSyncFeed() throws {
+        // Straight from `SyncResourceType` in `shared/openapi.yaml`.
+        let contractTypes = [
+            "conversation", "message", "reminder", "todo", "goal",
+            "device", "delivery", "job", "run", "sending",
+        ]
+
+        for type in contractTypes {
+            let json = """
+                {"type":"\(type)","op":"delete","id":"syl:\(type):0198f2c2-0002-7000-8000-00000000c002",
+                 "at":"2026-08-09T06:30:00.000Z","resource":null}
+                """
+            XCTAssertNoThrow(
+                try SylJSON.decoder().decode(SyncChange.self, from: Data(json.utf8)),
+                "a \(type) change on the feed must not fail the whole page")
+        }
+    }
+
     // MARK: - Frame unions
 
     func testShouldDecodeAServerFrameByItsTypeDiscriminator() throws {
@@ -329,6 +355,101 @@ final class ModelCodingTests: XCTestCase {
             createdAt: Date(timeIntervalSince1970: 0),
             hasThumbnail: false
         )
+    }
+
+    // MARK: - Sendings
+
+    /// A sending whose video never arrived is a complete sending, and the model has to
+    /// be able to hold one. `video` and `reason` are nullable-and-present rather than
+    /// optional, so a decoder that treats a missing key as null would hide a server that
+    /// had stopped sending the field at all.
+    func testShouldDecodeASendingWhoseRenderFailedWithNoVideoAndAReason() throws {
+        let json = """
+        {
+          "id": "syl:sending:019feb2f-e654-7000-ac0e-3f825d6a3180",
+          "words": "I found a version of me I actually like today.",
+          "because": "He said he wanted to see what I look like.",
+          "messageId": "syl:message:019feb2f-e654-7000-ac0e-3f825d6a3181",
+          "state": "failed",
+          "renderName": "syl-2026-08-11-a",
+          "video": null,
+          "reason": "The render finished but the file was empty.",
+          "createdAt": "2026-08-11T04:20:00.000Z",
+          "updatedAt": "2026-08-11T04:21:00.000Z"
+        }
+        """
+
+        let sending = try SylJSON.decoder().decode(Sending.self, from: Data(json.utf8))
+
+        XCTAssertEqual(sending.state, .failed)
+        XCTAssertNil(sending.video)
+        XCTAssertEqual(sending.reason, "The render finished but the file was empty.")
+        XCTAssertFalse(sending.words.isEmpty, "the words are never contingent on the video")
+    }
+
+    /// The one place in the contract a video carries a thumbnail. The poster is what
+    /// makes the From Syl list show her face rather than a play triangle, and a client
+    /// that reads `hasThumbnail` as false for every video pulls the whole clip instead.
+    func testShouldDecodeAReadySendingWhoseVideoCarriesAPoster() throws {
+        let json = """
+        {
+          "id": "syl:sending:019feb2f-e654-7000-ac0e-3f825d6a3182",
+          "words": "Good morning.",
+          "because": "It is his first morning back.",
+          "messageId": "syl:message:019feb2f-e654-7000-ac0e-3f825d6a3183",
+          "state": "ready",
+          "renderName": "syl-2026-08-11-b",
+          "video": {
+            "id": "syl:attachment:019feb2f-e654-7000-ac0e-3f825d6a3184",
+            "kind": "video",
+            "mimeType": "video/mp4",
+            "bytes": 1743210,
+            "width": 720,
+            "height": 1280,
+            "durationMs": 9000,
+            "sha256": "\(String(repeating: "b", count: 64))",
+            "createdAt": "2026-08-11T04:22:00.000Z",
+            "hasThumbnail": true
+          },
+          "reason": null,
+          "createdAt": "2026-08-11T04:20:00.000Z",
+          "updatedAt": "2026-08-11T04:22:00.000Z"
+        }
+        """
+
+        let sending = try SylJSON.decoder().decode(Sending.self, from: Data(json.utf8))
+
+        XCTAssertEqual(sending.state, .ready)
+        XCTAssertEqual(sending.video?.kind, .video)
+        XCTAssertEqual(sending.video?.hasThumbnail, true)
+        XCTAssertNil(sending.reason)
+    }
+
+    /// Null rather than absent, in the write direction too. A `Sending` re-encoded with
+    /// its nulls dropped is a body the contract does not describe, and the round trip in
+    /// `ContractTests` is what would otherwise catch it one layer later.
+    func testShouldEncodeASendingsAbsentVideoAsAnExplicitNull() throws {
+        let json = """
+        {
+          "id": "syl:sending:019feb2f-e654-7000-ac0e-3f825d6a3185",
+          "words": "Still working on this one.",
+          "because": "He asked what I was up to.",
+          "messageId": "syl:message:019feb2f-e654-7000-ac0e-3f825d6a3186",
+          "state": "pending",
+          "renderName": null,
+          "video": null,
+          "reason": null,
+          "createdAt": "2026-08-11T04:20:00.000Z",
+          "updatedAt": "2026-08-11T04:20:00.000Z"
+        }
+        """
+        let sending = try SylJSON.decoder().decode(Sending.self, from: Data(json.utf8))
+
+        let object = try encodeToObject(sending)
+
+        XCTAssertTrue(object["video"] is NSNull)
+        XCTAssertTrue(object["reason"] is NSNull)
+        XCTAssertTrue(object["renderName"] is NSNull)
     }
 
     // MARK: - Helpers

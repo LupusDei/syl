@@ -75,6 +75,17 @@ const UNDECLARED: readonly string[] = [
   // acquire a second caller, and `shared/openapi.yaml` is where that caller
   // would look first.
   "GET /memory/recall",
+  // `/renders` joins them, and with the smallest debt of the three: nothing
+  // else consumes this surface. Her tool server is the only client, it lives in
+  // this repository, and its request and response shapes are pinned by
+  // `tests/unit/render-verbs.test.ts` against the same fakes. What the contract
+  // would add is a *second* client being able to reach it — which is exactly
+  // what a phone screen showing her renders would need, and is why this is
+  // listed rather than left to be noticed then. Note which one is a write.
+  "GET /renders",
+  "POST /renders",
+  "GET /renders/{name}",
+  "GET /renders/{name}/frames",
 ];
 
 /** Path parameters that are syntactically valid but name nothing. */
@@ -84,6 +95,7 @@ const ABSENT_IDS: Readonly<Record<string, string>> = {
   reminderId: "syl:reminder:00000000-0000-7000-8000-0000000000ff",
   todoId: "syl:todo:00000000-0000-7000-8000-0000000000ff",
   goalId: "syl:goal:00000000-0000-7000-8000-0000000000ff",
+  sendingId: "syl:sending:00000000-0000-7000-8000-0000000000ff",
   deviceId: "syl:device:00000000-0000-7000-8000-0000000000ff",
   deliveryId: "syl:delivery:00000000-0000-7000-8000-0000000000ff",
   jobId: "syl:job:00000000-0000-7000-8000-0000000000ff",

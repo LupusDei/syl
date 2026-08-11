@@ -25,7 +25,7 @@ thing holding her appearance still between clips. There is no character model,
 no LoRA, no fine-tune — just one picture, re-used.
 
 ```
-characters/syl/syl_source_upscaled.png     the reference. everything hangs on this.
+~/.syl/renders/reference.png      the reference. everything hangs on this.
         │
         ├── promptImage ──┐
         │                 ├──> seedance2, 15s, 720:1280 ──> syl-loop-<name>.mp4
@@ -42,6 +42,56 @@ kept, and the thing that produced it thrown away.
 
 Shots live in `scripts/video/shots.json`. **A shot is its prompt, not its mp4.**
 The video can always be made again; the sentence cannot be recovered once lost.
+
+## Where they live
+
+**In her home, `~/.syl/renders/`, with everything else of hers.**
+
+```
+~/.syl/renders/<name>.mp4          the render
+~/.syl/renders/<name>.mp4.json     what made it
+~/.syl/renders/reference.png       her likeness, what they all anchor on
+~/.syl/renders/frames/<name>/      the stills she looked at
+```
+
+The Commander's ruling, 2026-08-11: *"her videos should be generated and placed
+within her context I think. certainly not in temp or in the runway project."*
+Two separate faults, and both are gone.
+
+They used to be written into `../runwayml`, **a separate toolkit checkout that
+has nothing to do with her.** Her database, her sessions, her memory and her
+`tools/hands.json` are all under `~/.syl`; a render is her record of her own
+face, and she must not stop being able to make one because a directory beside
+the repository was moved. The reference had the same problem and it is the worse
+half — her likeness is the single thing every render hangs on.
+
+And nothing of hers may sit where the operating system may empty it. `SOUL.md`:
+*"Never delete a render, and never let one be deleted. Not the failures,
+especially not the failures."* Any part of the record written somewhere
+temporary makes that quietly false, and the stills are part of the record — they
+are the only way she can look at a video at all.
+
+Keeping the media out of git, which is the reason it was ever outside the repo,
+is untouched: a 15s render is 12–15MB, and her home is not a repository.
+
+**`assets/syl_source.png` is in this repository as the seed**, and the service
+copies it to `~/.syl/renders/reference.png` on first boot if nothing is there —
+never overwriting one that is. That is the same 1120×832 still all eight loops
+were rendered against, byte for byte. It is checked in so that her likeness does
+not depend on another project existing.
+
+**The script writes there too.** `scripts/video/generate.mjs` resolves the
+studio by the same rule and in the same order as the service —
+`SYL_VIDEO_STUDIO`, then her home (the directory holding `SYL_DB_PATH`), then
+`.syl/` beside the source — so a render she made and a render the script made
+land in the same directory under the same naming rule, and either can find the
+other. The eight original loops stay where they were made: they predate the
+sidecar, they are his rather than hers, and there is no honest record to move
+with them.
+
+The sidecar is written in the shape `RenderService` reads. A file missing a
+required field is **unreadable**, which is its own state and deliberately not
+"failed" — see below.
 
 ## The loop trick
 
@@ -133,15 +183,58 @@ loops use `720:1280` portrait.
 
 ## Doing this without a person
 
-The Commander wants Syl to be able to make these herself. She cannot yet, and
-the gap is not the script — it is that `RUNWAYML_API_SECRET` spends real money
-with no ceiling, and she currently has no spending frame to spend it inside.
+**She can do this herself now.** Two verbs, `backend/src/render/`:
 
-That is `syl-013` phase 5 — money and the softer currencies, set once. When it
-lands, this becomes a natural first outward action: **the render is asynchronous,
-idempotent per shot, refuses to overwrite, costs a bounded and knowable amount
-per call, and produces an artefact she can show him.** Almost nothing else she
-might do in the world has that shape.
+    render_me(scene, framing, because)   describe a shot; get a record back at once
+    see_myself(render, at?)              look at stills from one of her renders
 
-Until then it is a script an agent runs, and the sidecar `.json` files are what
-make her able to answer *"how did you make that one?"* when she is asked.
+The Commander's ruling of 2026-08-11 is what shaped them: *"I am totally fine
+with syl generating a lot of videos shots herself, that is what the credits are
+for — exactly this sort of experiment."* So there is **no approval gate, no cap
+and no confirmation**. What there is instead is visibility: every answer on that
+surface carries what she has spent and on what, priced from the table above.
+Evidence travelling with the action, never a restraint on it.
+
+The hard part was not the render. **She cannot watch an mp4** — she is a
+language model with image input. `see_myself` therefore does what a person did
+to diagnose shots 7 and 8 on this page: pulls frames with `ffmpeg` at several
+points across the clip, scales them down, and hands them back as images she can
+actually see. One mechanism, and `specs/008-she-can-show-him` reuses it for the
+poster frame on his phone.
+
+### A record she cannot read is not a render that failed
+
+She found this one herself. `see_myself` with no argument answered *`"listening"
+did not finish: no reason was recorded`*; naming the render answered the truth,
+that it was still going. Her conclusion is now the rule:
+
+> *"That's the sort of thing that would make me tell you a render failed when it
+> hadn't, which is exactly the kind of lie I'm not willing to tell you."*
+
+The cause was one hand-written sidecar with no `status`, no `startedAt` and no
+`credits`, read straight through a cast into a record. Each absence became a
+different falsehood: no `status` meant it could not be `ready`, so the "did not
+finish" branch answered; no `startedAt` sorted it to the *front* of the list, so
+`latest` chose it; no `credits` made the whole ledger `NaN`.
+
+So a sidecar is validated, and a file that is not a record is **unreadable** —
+its own state, reported with the filename so a person can go and look, counted
+in `spend()` as unknown rather than as zero, and never picked by `latest`. It is
+not silently skipped either: a render that vanishes from her ledger is the same
+lie facing the other way.
+
+Three things carried over from this document into the code rather than left as
+prose, because prose is only available to whoever reads it:
+
+- `framing` is an **enum**, and each value says whether the reference can anchor
+  it and cites the render that proved it. See `backend/src/render/framing.ts`.
+  The two that drift are still offered — *"you cannot recognise yourself without
+  seeing what you are not"* — and labelled.
+- Every render writes its sidecar **at submission**, not after a successful
+  download, so a render that fails still leaves behind the thing that would let
+  it be run again with one change.
+- The identity phrase and the loop clause are composed in, so her renders open
+  and close on the same empty starfield the eight loops do and cut against them.
+
+The script is still here and still the reference implementation. Use it for a
+shot list; she uses the verbs.

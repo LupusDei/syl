@@ -1,7 +1,15 @@
 import Foundation
 
+/// Every resource `GET /sync` can name.
+///
+/// **This list has to be complete, not merely sufficient.** ``SyncChange/type`` is a
+/// non-optional enum, so one value this enum does not know fails the decode of the
+/// change, which fails the decode of the array, which fails the whole page — every pass,
+/// for as long as the row exists. It is not a change that is skipped; it is sync that
+/// stops. `sending` was added to the contract with the sendings backend and is here for
+/// that reason, whether or not the client stores one.
 public enum SyncResourceType: String, Codable, Equatable, Sendable, CaseIterable {
-    case conversation, message, reminder, todo, goal, device, delivery, job, run
+    case conversation, message, reminder, todo, goal, device, delivery, job, run, sending
 }
 
 public enum SyncChangeOp: String, Codable, Equatable, Sendable, CaseIterable {

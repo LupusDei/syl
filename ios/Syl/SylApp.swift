@@ -86,7 +86,8 @@ struct RootView: View {
                         // The seam both constellation squads stopped short of. Without it
                         // the Memory door opens onto an empty field that looks exactly
                         // like the truth.
-                        sky: SkyFromMemory.source(appDelegate.constellation)
+                        sky: SkyFromMemory.source(appDelegate.constellation),
+                        sendings: appDelegate.sendings
                     )
                 } else {
                     unopenableStore
@@ -101,10 +102,6 @@ struct RootView: View {
                     unopenableStore
                 }
             }
-            // The paired origin and the credentialed fetcher, for any bubble carrying a
-            // picture. Read from the delegate on every evaluation rather than captured,
-            // so re-pairing moves the attachments with everything else.
-            .environment(\.attachmentContext, appDelegate.attachmentContext)
             .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
 
             StatusView(
@@ -119,6 +116,18 @@ struct RootView: View {
             )
             .tabItem { Label("Settings", systemImage: "gearshape") }
         }
+        // **At the root, not on the tab that happened to need it first.**
+        //
+        // The paired origin and the credentialed fetcher, for anything anywhere that
+        // fetches bytes: a picture in a bubble, and now her face on a From Syl row. It
+        // sat on the Chat tab alone until `syl-015.4.8`, and a screen added outside that
+        // subtree does not fail loudly — every attachment on it reports *Blocked*, which
+        // is a security-shaped word for a wiring mistake. One application at the top is a
+        // guarantee no future surface can be outside it.
+        //
+        // Read from the delegate on every evaluation rather than captured, so re-pairing
+        // moves the attachments with everything else.
+        .environment(\.attachmentContext, appDelegate.attachmentContext)
         .tint(SylTheme.Colour.accent)
         .task {
             network.start()

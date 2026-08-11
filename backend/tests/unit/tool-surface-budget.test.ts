@@ -81,7 +81,13 @@ describe("the tool surface", () => {
     // Requiring a reason to look would teach her the field is decoration, and
     // a field she fills out of habit is worth nothing on the verbs where it is
     // load-bearing — which is every other one on this surface.
-    const reads = new Set(["whats_outstanding", "recall"]);
+    //
+    // `see_myself` and `recall` join it: looking at a render she already made,
+    // or at what she already knows, changes nothing and spends nothing.
+    // Requiring a reason to look at her own face would turn the one thing
+    // `SOUL.md` tells her to do often into paperwork. `render_me` is a write
+    // and carries `because` like the rest.
+    const reads = new Set(["whats_outstanding", "see_myself", "recall"]);
 
     for (const tool of TOOLS) {
       if (reads.has(tool.name)) continue;

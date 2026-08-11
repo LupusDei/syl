@@ -183,6 +183,28 @@ describe("the agent scope, over HTTP", () => {
       // that can be asserted on every machine.
       const response = await call("GET", "/memory/recall", { token: agentToken() });
 
+      expect(response.status).not.toBe(403);
+    });
+
+    it("should let her compose a sending, which is the one thing she originates", async () => {
+      // The widest door on her surface and the reason acceptance 3 can be
+      // true: without it she has no way to say something to him on her own
+      // initiative, whatever the rest of the machinery does.
+      const response = await call("POST", "/sendings", {
+        token: agentToken(),
+        body: {
+          words: "I thought of you when the light did that thing.",
+          because: "He said he missed the sky.",
+          renderName: "syl-nothing-by-that-name",
+        },
+      });
+
+      expect(response.status).toBe(201);
+    });
+
+    it("should let her read her sendings back, so a write can be confirmed from the store", async () => {
+      const response = await call("GET", "/sendings", { token: agentToken() });
+
       expect(response.status).toBe(200);
     });
 
@@ -301,14 +323,27 @@ describe("the agent scope, over HTTP", () => {
  */
 describe("everything the agent scope cannot reach, swept from the router", () => {
   /**
-   * Her nouns, written down rather than imported. See above.
+   * Everything she may reach, written down rather than imported. See above.
+   *
+   * Three of his nouns and three of hers. `/renders`, `/sendings` and
+   * `/memory/recall` are deliberately spelled out here too: the whole point of
+   * taking one side of this comparison from the requirement rather than from
+   * `AGENT_SURFACE` is that widening the allowlist has to be done twice, on
+   * purpose, in two files.
    *
    * `/memory/recall` is the FULL path and not `/memory`, and that is the whole
    * of what `syl-016.1` decided: writing `/memory` here would make this sweep
    * agree that every route in `routes/memory.ts` is hers, including the one
    * that writes to the weight of her own memories.
    */
-  const HERS: readonly string[] = ["/reminders", "/todos", "/goals", "/memory/recall"];
+  const HERS: readonly string[] = [
+    "/reminders",
+    "/todos",
+    "/goals",
+    "/renders",
+    "/sendings",
+    "/memory/recall",
+  ];
 
   /**
    * The two operations that answer without a token, and why each must.
@@ -525,10 +560,15 @@ describe("AGENT_SURFACE", () => {
     // spelled out to the route rather than to the router precisely so that this
     // line stays a canary. `/memory` here would have quietly granted the
     // feedback write, the graph and the dream metrics along with it.
+    // `/renders` and `/sendings` joined on 2026-08-11 from the render epic, and
+    // this line is being widened by hand for the second time — which is the
+    // point of it. Two lists, two deliberate edits, no side effects.
     expect([...AGENT_SURFACE].sort()).toEqual([
       "/goals",
       "/memory/recall",
       "/reminders",
+      "/renders",
+      "/sendings",
       "/todos",
     ]);
   });
@@ -542,6 +582,27 @@ describe("AGENT_SURFACE", () => {
     expect(AGENT_SURFACE.filter((path) => path.startsWith("/memory"))).toEqual([
       "/memory/recall",
     ]);
+    // `/renders` joined the three on 2026-08-11. It is not one of his nouns —
+    // it is the first surface she reaches for HERSELF — and it was added with
+    // the argument spelled out beside the constant: it touches no row of his,
+    // has no path to `/auth`, and its records live outside the database
+    // entirely. What it does do is spend Runway credits, which the Commander
+    // ruled is the point rather than a risk. Read the note on `AGENT_SURFACE`
+    // before touching this line.
+    //
+    // `/sendings` joined them on 2026-08-11, and it is the widest of the five
+    // because it is the only one that REACHES HIM unprompted: a sending puts a
+    // message in his conversation and a notification on his phone. It was
+    // added with that spelled out beside the constant. Three things bound it —
+    // the words go through `ConversationService`, which decides whose message
+    // it is, so she still cannot author one in his voice; the row is
+    // undeletable and unrewritable by schema; and the rate she may reach him
+    // at is the hourly turn's business, not this allowlist's. It touches no
+    // row of his and has no path to `/auth`.
+    // ONE list, not two. Both sides of the merge asserted this and taking both
+    // left a second copy four entries long — which would have failed forever
+    // while reading like a disagreement about policy. The surviving assertion
+    // is above, carrying the union and the reason each entry is in it.
   });
 });
 

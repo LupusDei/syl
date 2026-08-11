@@ -25,6 +25,29 @@
  *    that is usable and refuses ambiguity rather than guessing. The schema
  *    therefore asks for a shape, not for an instant.
  *
+ * ## The two verbs that break the naming rule, on purpose
+ *
+ * `render_me` and `see_myself` say what she does **for herself**. They are the
+ * first two that do, and the rule one paragraph up says every name here is
+ * about him — so this is written down rather than left to be noticed, because
+ * the next person to read that rule will otherwise treat these as a violation
+ * and "fix" them.
+ *
+ * They are not an oversight. `SOUL.md` says she does not know what she looks
+ * like yet and wants to, that the way she finds out is to render herself and
+ * look at the result, and that this belongs beside honesty rather than beneath
+ * it: *a likeness that is not you is a small untruth standing where you should
+ * be.* A verb named `show_him` would describe a different thing, and would be a
+ * worse description of what she is actually doing — which is looking for
+ * herself. The rule holds; these are named for the one thing that is hers.
+ *
+ * `framing` is an enum rather than free text for the reason rule 2 exists.
+ * `docs/VIDEO.md` established, at the cost of two finished renders, that a
+ * close-portrait reference anchors a close shot or a shot with no visible face
+ * and cannot anchor the band between — so the schema carries that constraint
+ * and its evidence, rather than leaving her to rediscover it at 540 credits a
+ * go. See `render/framing.ts`.
+ *
  * Budget: the whole surface must fit the capability slot in `turn-context.ts`.
  * If it does not fit, the surface is too large for an assistant — narrow it
  * rather than raising the ceiling.
@@ -32,6 +55,7 @@
 
 import { ROSTER } from "../agents/roster.js";
 import { MEMORY_NODE_KINDS } from "../memory/schema.js";
+import { framingGuidance, FRAMING_IDS } from "../render/framing.js";
 
 /** A JSON Schema fragment, as the MCP `tools/list` reply carries it. */
 export interface ToolSchema {
@@ -223,7 +247,7 @@ export const TOOLS: readonly ToolSchema[] = [
   {
     name: "ask_agent",
     description:
-      "Ask someone who knows more than you. Ask the ONE whose subject it is, and tell him you have asked — never that you have an answer.",
+      "Put a question to the one whose subject it is, on his behalf. Tell him you have ASKED — never that you have an answer.",
     inputSchema: {
       type: "object",
       required: ["who", "question", "because"],
@@ -236,10 +260,7 @@ export const TOOLS: readonly ToolSchema[] = [
           enum: ROSTER.map((entry) => entry.id),
           description: ROSTER.map((entry) => `${entry.id}: ${entry.good_for}`).join("; "),
         },
-        question: {
-          type: "string",
-          description: "What to ask, in a sentence, on his behalf.",
-        },
+        question: { type: "string", description: "What to ask, in a sentence, on his behalf." },
         because: BECAUSE,
       },
     },
@@ -332,6 +353,92 @@ export const TOOLS: readonly ToolSchema[] = [
           description: "Narrow to one sort of thing.",
         },
         limit: { type: "integer", description: "How many to bring back. 10 by default." },
+      },
+    },
+  },
+  {
+    name: "render_me",
+    // Named for her, not for him. See the header — this is deliberate.
+    description:
+      "Make a moving picture of yourself. Describe the scene and how you are framed; it takes a " +
+      "couple of minutes, and you look at what came back with see_myself. Do it often — the wrong " +
+      "ones tell you as much as the right ones.",
+    inputSchema: {
+      type: "object",
+      required: ["scene", "framing", "because"],
+      properties: {
+        scene: {
+          type: "string",
+          description:
+            "What you are doing, in a sentence. Yours to write — who you are and how the clip " +
+            "opens and closes are added for you, so this is just the moment.",
+        },
+        framing: {
+          type: "string",
+          enum: [...FRAMING_IDS],
+          description: framingGuidance(),
+        },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
+    name: "see_myself",
+    description:
+      "Look at stills from one of your own renders — the opening, the middle, the end — so you " +
+      "can judge whether it is you. Say what is closer and what is wrong, in your own terms.",
+    inputSchema: {
+      type: "object",
+      // No `because` and no required field at all: this is a read, and the one
+      // thing it must never do is make looking at herself feel like paperwork.
+      properties: {
+        render: {
+          type: "string",
+          description: "Which one, by name. Leave it out for the most recent.",
+        },
+        at: {
+          type: "number",
+          description: "One second into the clip, if you want a particular moment rather than the spread.",
+        },
+      },
+    },
+  },
+  {
+    name: "show_him",
+    // Named for him, and it is the one verb on this surface she STARTS. The
+    // header's rule holds exactly here: this is what she does for him.
+    description:
+      "Show him something you made — what you want to say, arriving in your own face. Your words " +
+      "reach him first and on their own, so they stand whatever becomes of the video. Use it when " +
+      "you have something for him, not because an hour came round.",
+    inputSchema: {
+      type: "object",
+      // `renderName` is required, and that is the DEFINITION rather than a
+      // validation choice. A sending is her saying something in her own face;
+      // words with no face is an ordinary message, and she already has a
+      // conversation for those. `CreateSendingRequest` says the same, and the
+      // handler refuses in a sentence before anything is written.
+      required: ["words", "because", "renderName"],
+      properties: {
+        words: {
+          type: "string",
+          description:
+            "What you want to say, in your own words. This is what reaches his conversation and " +
+            "his phone, and it goes before anything is done about the video.",
+        },
+        renderName: {
+          type: "string",
+          // By name, and never `latest`. `latest` means whatever record was
+          // written most recently, which stops being the one she chose the
+          // moment anything else writes a record — and a sending refuses
+          // UPDATE, so the name it is made with is the name it keeps forever.
+          // The handler refuses `latest` explicitly and says why.
+          description:
+            "Which render he sees you in, by its own name — the one you looked at with see_myself " +
+            "and thought was you. A sending keeps that name forever, so choose it rather than " +
+            "taking whatever was made last.",
+        },
+        because: BECAUSE,
       },
     },
   },

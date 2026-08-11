@@ -218,14 +218,63 @@ export const MEMORY_FENCE_END = "--- END OF WHAT YOU REMEMBER ---";
  * was `SOUL.md` gaining a paragraph, where the temptation is to write a worse
  * paragraph rather than to ask whether the number is still right.
  *
- * 24,000 restores the margin it was built to have. `tools/schemas.ts` says
+ * 24,000 restored the margin it was built to have. `tools/schemas.ts` says
  * "narrow the surface rather than raise the ceiling", and that is right for a
  * surface that is too large FOR AN ASSISTANT — nine verbs covering reminders,
  * to-dos, goals and memory is not that. Raise it when the intended contributors
  * outgrow it; narrow the contributor when one of them is bloated. The two rules
  * are not in conflict, they are answers to different questions.
+ *
+ * ## 30,000, on 2026-08-11
+ *
+ * The tripwire fired, exactly where it was designed to and on exactly the case
+ * the paragraphs above say is grounds for raising it: **two intended
+ * contributors grew for reviewed reasons on the same day.**
+ *
+ * | contributor | before | after | why |
+ * |---|---|---|---|
+ * | `SOUL.md` | 8,553 | 10,644 | she does not know what she looks like and wants to; keep every render and every reason |
+ * | tool schemas | 7,623 | 9,562 | `render_me` and `see_myself`, which are what make the first true |
+ *
+ * Neither is bloat and neither can be narrowed without making the other a lie:
+ * `SOUL.md` now tells her she can render herself and look at the result, and a
+ * character file that describes a capability the surface does not carry is the
+ * exact defect `schemas.ts` rule 2 exists to prevent. Trimming either is the
+ * quiet behavioural regression this module refuses to make.
+ *
+ * 30,000 leaves about 2,950 bytes of margin against a declared sum of 27,051 —
+ * ten times what 24,000 had left by the end, and chosen that way on purpose:
+ * `SOUL.md` moved 2,100 bytes in a single day, so a margin sized to today's
+ * contributors is a margin that fires again next week on a paragraph rather
+ * than on a runaway. Still nothing against a 200k window; still a tripwire and
+ * not a token economy.
  */
-export const DEFAULT_CONTEXT_BUDGET_BYTES = 24_000;
+/**
+ * RAISED AGAIN, 30,000 -> 40,000, and the repetition is itself the finding.
+ *
+ * Nothing ran away. Two contributors the Commander asked for both grew while
+ * this branch was elsewhere: `SOUL.md` 8,361 -> 11,954 (render, voice and
+ * expressions) and the tool schemas 8,410 -> 11,370 (the render verbs, and
+ * `recall`). With working memory at 4,000 and replies at 2,800 that is 30,124
+ * against a 30,000 ceiling — over by a hundred bytes of deliberate content.
+ *
+ * I trimmed prose until it fitted with FOUR BYTES to spare, and that is what
+ * made me stop. Shaving words off a description to satisfy a number is the
+ * guard editing the code rather than the code answering to the guard, and a
+ * turn that fits by four bytes fails on the next honest sentence anyone writes.
+ *
+ * Three raises in two days is the signature of a number being asked to do a job
+ * it cannot: set by hand, containing four contributors that each move on their
+ * own. `agent/fenix` reached 56,000 independently by the same road, neither of
+ * us knowing the other was walking it — two people editing one tripwire in two
+ * places, which is `CONTEXT.md` §8 wearing the guard's own uniform.
+ *
+ * 40,000 is today plus real margin. Deliberately NOT sized for `syl-ulf`'s
+ * working-memory raise to 32,000: picking a number to fit an unlanded branch is
+ * how a ceiling stops meaning anything. When that lands, ONE number gets set
+ * ONCE by whoever lands it, in conversation with the others.
+ */
+export const DEFAULT_CONTEXT_BUDGET_BYTES = 40_000;
 
 /** A contributor was wired up wrong. A programming error, not a runtime condition. */
 export class TurnContextError extends Error {

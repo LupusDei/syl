@@ -159,6 +159,48 @@ describe("SylApiClient, against her own service", () => {
     expect(second.ok && second.replayed).toBe(true);
   });
 
+  it("should reach her own sendings, which is the one surface she ORIGINATES on", async () => {
+    // Every other write on this client answers something he started. This one
+    // is her saying something, so it is also the assertion that `/sendings`
+    // was actually added to what her credential reaches — without that this
+    // comes back 403 and the verb above it is a capability she does not have.
+    const result = await client.post<{ id: string; messageId: string; state: string }>("/sendings", {
+      words: "I thought of you when the light did that thing.",
+      because: "He said he missed the sky.",
+      // A name nothing answers to. The words go anyway — that is the feature —
+      // and this test is about the door, not about the video.
+      renderName: "syl-nothing-by-that-name",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.status).toBe(201);
+    // From the stores this process owns, not from the answer: her words are in
+    // his conversation before anything about a video has been decided.
+    const stored = built.deps.sendings.get(result.data.id);
+    expect(stored?.words).toBe("I thought of you when the light did that thing.");
+    expect(built.deps.messages.get(stored?.messageId ?? "")?.text).toBe(
+      "I thought of you when the light did that thing.",
+    );
+  });
+
+  it("should read a sending back, so a write can be confirmed from the store", async () => {
+    const created = await client.post<{ id: string }>("/sendings", {
+      words: "Hello.",
+      because: "Testing.",
+      renderName: "syl-nothing-by-that-name",
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const read = await client.get<{ id: string }>(
+      `/sendings/${encodeURIComponent(created.data.id)}`,
+    );
+
+    expect(read.ok).toBe(true);
+    if (read.ok) expect(read.data.id).toBe(created.data.id);
+  });
+
   it("should not send an Idempotency-Key on a read", async () => {
     const seen: (string | null)[] = [];
     const spy = clientWith(async (url, init) => {
@@ -241,7 +283,7 @@ describe("SylApiClient, when the service refuses", () => {
     // client that rewrote refusals would be a second opinion that drifts.
     const failure = failureOf(await client.get("/logs"));
 
-    expect(failure.message).toMatch(/reminders, to-dos, goals and her own memory/u);
+    expect(failure.message).toMatch(/reminders, to-dos, goals, her own memory/u);
     expect(failure.message).not.toMatch(/credential is no longer accepted/u);
   });
 

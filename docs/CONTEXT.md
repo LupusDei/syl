@@ -912,6 +912,67 @@ Constitution Rule 1 and it has already paid for itself.
 **Fail loudly on auth and billing.** These are the failures that would quietly
 change what the Commander is paying, or quietly stop the assistant working.
 
+**A mechanism that explains the observation perfectly, and describes something
+that never happened, reads as insight rather than as a guess.** That is what
+makes it dangerous. A wild guess gets challenged; a coherent account of *why*
+gets relayed onward as a finding. Three false diagnoses reached the Commander as
+fact on 2026-08-10–11 — "extraction produces containers rather than facts", "the
+service writes frames to /tmp", "every planning commit exists twice on main" —
+and each one had a tidy mechanism attached. All three were withdrawn. **Before
+reporting a cause, name the one command that would disprove it, and run that.**
+
+**Relaying is not verifying.** A claim does not become checked by passing
+through another agent, and it does not become checked by being detailed. Every
+one of those three reached the Commander because somebody competent had said it
+first and said it well — which is the only reason it got past anyone. When you
+pass on a finding you did not verify, say so in the same sentence, or verify it.
+
+**A worked example, because it was repeated about twenty times in one session
+and told to four agents as fact.** "`npm run verify` reports exit 0 while
+actually failing" was said all night, written into a memory, and put in briefs
+as *the harness lies about exit codes*. It does not. **A pipeline's exit status
+is the last command's** — every one of those runs was `npm run verify | sed |
+grep`, so the 0 belonged to `grep`. Provable in one line: `false | tail -1; echo
+$?` prints `0`, and `set -o pipefail` makes it `1`.
+
+The advice survives and the reason changes: read the output and confirm real
+test counts, but the actual remedy is `set -o pipefail`, or not piping the
+command whose status you mean to read. A wrong mechanism attached to correct
+advice is the most durable kind of error — nobody challenges it, because the
+advice keeps working.
+
+**And the remedy is not more diligence.** Two agents produced false claims the
+same night by opposite routes: one invented a mechanism it had never run, the
+other ran `git branch --show-current`, got the right answer, and reported the
+session header instead. Checking harder does not save you from discarding a
+value you already had. What does is that **a claim about a mutable fact should
+carry the command that produced it** — cheap for branch names, paths and merge
+status, not worth it for everything. A claim carries no evidence of how it was
+obtained, so two claims of identical confidence can differ entirely in whether
+anyone looked.
+
+Two specific forms of it, both bought the same night:
+
+- **A merge-status claim has a shelf life of minutes in a shared checkout.**
+  Re-verify at the moment you report it, not from a check you ran earlier. Main
+  moves under a running agent constantly, and "not on main" is true until it is
+  not.
+- **`git show --stat` on a merge commit is not evidence of what that commit
+  introduced.** It shows the combined diff against the first parent, so a merge
+  bringing in a large file reads exactly like a re-add. Use a path-filtered
+  `git log`, or look at `%p`. A subject line is not topology.
+- **A dependency on a parent epic hides every descendant from `bd ready`**,
+  whatever the descendant's own edges say — and `bd dep cycles` reports nothing,
+  because a parent blocker is not a cycle. It cost a re-plan on `syl-013` and
+  hid an entire phase of `syl-015`. After wiring dependencies, run `bd ready` and
+  confirm the beads you believe are independent actually appear. Asserting the
+  graph is right is not the same as asking it.
+
+**A planning document that has gone stale is worse than one that never made the
+claim**, because it reads as current. When the tree moves under a plan — an edge
+cut, a phase unblocked, a branch merged — the plan is wrong until it is
+corrected, and the next agent has no way to know which parts aged.
+
 **If a property can be STATED, it can be forgotten. If it can be DERIVED, it
 cannot.** artanis's line, and the through-line under most of what follows —
 worth reading before the individual cases, because we rediscovered it about
@@ -1223,3 +1284,188 @@ The lesson is not "don't script it". It is that **an additive resolve is safe
 for declarations and unsafe for call sites**: two branches adding a field each
 to the same initialiser produce two complete calls, and concatenating them is
 never what you want. Resolve declarations by union, and call sites by hand.
+
+### The sky chased a third of a point (2026-08-11)
+
+*"Whenever I click on a node, the screen starts kind of zooming in and moving up on its
+own and is hard to stop."*
+
+`ConstellationViewModel.resize(to:)` guarded with `size != preparedFor` — exact `CGSize`
+equality. The card's arrival perturbs the geometry by a fraction of a point, that counted
+as a new screen, and **the sky's layout is a function of its size**, so every star was
+placed again. Which closed a ring: a re-laid sky has a new `size`, which sets
+`ConstellationBand.tallestCard(in:)`, which decides what the card fits into, which
+perturbs the geometry — back to the start. The whole field slowly scaling and sliding,
+with no gesture that could catch it.
+
+**Every line in that ring is correct on its own**, which is why nothing caught it: the
+resize guard, the band, the card's fitting, the reveal — each is right, and each test of
+each one passes. The defect exists only in the cycle. A unit test per component cannot
+see it, and the test that does had to be about *stillness* rather than about any one
+function's output: read at a size, wobble it by tenths of a point, assert the sky does
+not move.
+
+Two rules:
+
+1. **Compare geometry with a tolerance, never with `==`.** A point is the threshold,
+   because below it nothing on screen can change, so there is nothing to compute. Exact
+   float equality on a measured value is a promise no layout system makes.
+2. **When a value both derives from layout and feeds back into it, that ring is the
+   feature's real risk surface** — write the test that runs it round.
+
+Worth noting what the diagnosis cost: I read the pan maths three times looking for a
+compounding zoom, because "zooming" sounds like a scale bug. Nothing in the transform
+touched scale. The zoom was the *layout* rescaling, and the symptom named the wrong
+subsystem — I found it by testing the invariant he described (**the sky should be still**)
+rather than by hunting the mechanism he guessed at.
+
+### A green TestFlight run that shipped nothing, again (2026-08-11)
+
+Build 17 carried the fix for a bug the Commander was actively hitting. The workflow ran,
+reported success, and **uploaded nothing.**
+
+The gate compared `MARKETING_VERSION` against `HEAD~1`. The bump landed in one commit and
+reached `main` inside a merge, so `HEAD~1` was the branch being merged — which already
+carried 0.9.6. Current equalled previous, the job went green, and no build existed.
+
+`HEAD~1` is not a meaningful question. It is a different commit depending on whether the
+tip is a merge, a squash, a revert or a rebase, and on which side of a merge git calls the
+first parent. The question with one true answer is *is this build already on TestFlight?*,
+and the gate now answers exactly that by checking for a `testflight/<build>` tag pushed
+**after** a successful upload. Immune to merges, re-runs, reordering, and to another agent
+committing in between. `testflight/16` was backfilled so the record starts honest.
+
+Note which way each design fails. The tag gate fails toward a **duplicate upload**, which
+App Store Connect rejects loudly and which costs runner minutes. The old gate failed
+toward **silence**, which costs a release nobody knows is missing. Given a check that
+cannot be perfect, choose the noisy failure — and this is the third entry in this file
+where the defect was something reporting green while doing nothing, which is now the
+project's single most common failure shape.
+
+**And the reason it was caught at all**: the Commander asked *"merged and pushed with a new
+version for a new app release?"* — a question about the outcome, not about my actions. I
+had said "pushed as 0.9.6" and that was true and irrelevant. Verifying the outcome he
+asked about took one log read. **Report what shipped, not what you did.**
+
+**Postscript, same day.** The new gate's first live run uploaded build 17 successfully and
+then failed `403` pushing its own tag — the default `GITHUB_TOKEN` is read-only, so the
+job needs `permissions: contents: write`. Fixed, and the tag backfilled by hand.
+
+It is worth being clear about what that failure demonstrated. **The design worked.** A
+missing tag means the next push re-uploads and App Store Connect rejects a duplicate
+build: loud, harmless, obvious. The old gate's equivalent slip lost a release in silence.
+When choosing where a check is allowed to break, choose the side that makes noise.
+
+### The sky grew fifty-two points a pass, and everything he reported followed from it (2026-08-11)
+
+> *"If I tap the base node I get the memory to pop up. But if I tap another node, no memory
+> pops up and the whole thing starts zooming in without end."*
+
+Three symptoms, one cause, and the cause is a layout ring with a **gain of exactly one**.
+
+`ConstellationView` measured its own size with a `GeometryReader` **inside** its `ZStack` —
+which is a measurement of the stack, not of the screen. The card was a member of that stack
+and reserved its band with `.padding(.top, sky.size.height − tallestCard(sky.size))`. So:
+the card's height derived from the sky's height, the stack grew by the difference, the reader
+reported the larger number, the sky was laid out for it, and the band grew again. Measured
+through real SwiftUI layout in a real window: **852 → 904 → 956 → 1008 → 1060 → 1112 → 1164**,
++52 every pass, no bound.
+
+`ConstellationLayout`'s field is `(height − insets) / 2`, so the whole star field spread as
+the number grew. **That is what "zooming in without end" was** — not the transform.
+`maximumScale` is 4 and the sky he photographed was spread about ten times, which is the
+arithmetic that rules the transform out and it was available before any code was read.
+
+And the missed taps are the same fault, not a second one. The drawing and the hit test both
+read one `PreparedSky`, so they cannot disagree about where a star is; what they can both be
+is wrong about where it was a second ago. Measured on the original code: **opening one card
+moves stars 60 to 193 points on the first pass.** A finger is 22. So the first tap of a
+session lands and every tap after it arrives where the star used to be — exactly "the base
+node works and nothing else does".
+
+Three rules out of it:
+
+1. **Measure the screen at the root, never inside the stack.** A `GeometryReader` reports the
+   size it was *proposed*, so a reader at the root of a screen is a measurement of the glass
+   and nothing drawn inside it can move the number. One rung below that it is a measurement of
+   its own siblings.
+2. **A card is drawn over the sky, not added to it.** It is an `.overlay` now, which is
+   proposed its host's size and cannot change it — the ring is impossible rather than merely
+   unlikely.
+3. **"It converges" is not the property you want.** The first fix attempt had a gain of ½ and
+   settled — at 1045 points on an 852-point screen, with the field spread off every edge. The
+   assertion that catches that is *the sky is laid out for the size of the screen*, not *the
+   sky stops changing*.
+
+Note the relationship to the entry above it. That one fixed a ring driven by a **third of a
+point** and added a 1pt tolerance to `resize(to:)`. This ring steps 52 points at a time, so
+the tolerance never had a chance — and the tolerance was still right. **A guard sized for
+jitter is not a defence against feedback.** Fixing the small ring made the big one the only
+one left, which is why it surfaced looking like a regression.
+
+#### And the sky had never been told about the tab bar
+
+The two remaining things he could see were the same omission from both sides.
+`ConstellationLayout` inset the field by 104 and 72 — measured against a navigation bar and a
+home indicator, before this screen was in a tab bar. A tab bar takes 83, so the lowest star in
+the field was drawn under it. `ConstellationBand.cardTop` had the mirror image: it put the
+card's top edge at `size.height − cardHeight − step`, measuring from the bottom of the
+**glass**, while the card sits above the **tab bar** — 83 points higher. So the sky panned a
+selection to a line it believed was clear and the card came up over it.
+
+Both are now one `ConstellationChrome` carried **on the sky**, so the layout that placed the
+stars and the arithmetic that decides where the card's edge falls cannot answer differently.
+
+**The render harness had no bars in it, which is why no image ever showed either defect.** It
+has them now — `safeAreaInset` for the real geometry, and translucent fills drawn on top so a
+human can see what is covered. An offscreen render of a pleasanter rectangle than the one he
+is holding is a consistency check.
+
+#### One more, from the same screenshot
+
+His graph hangs entirely off a single `source` node, *"Conversation with the Commander"*,
+which asserts everything — including itself. Its card read the title and then *"Conversation
+with the Commander said so."* **A thing is not its own evidence.** `ConstellationWords`
+compares the asserter to the star's own label and says what the node *is* instead. Compared by
+label rather than by kind, so a source something else genuinely cited still says so.
+
+#### The fixture was the whole reason none of this was caught
+
+Everything this feature was accepted on was looked at through `ConstellationSnapshot.fixture`:
+seven anchors, real entity-to-entity edges, six clusters. **His graph has none of that.** 33
+nodes and 32 edges, every edge `stated`/`observed` from the one source node — a hub and
+spokes, with nothing relating to anything else, and therefore `anchorId: nil` on every star
+and no clusters at all. `ConstellationSnapshot.hubAndSpokes` is that shape, measured off
+`~/.syl/syl.db`, and every render and every new test runs against it.
+
+This is the standing fixture rule — *build fixtures from captured reality, never from our own
+types* — arriving on a screen rather than on a wire format. A fixture that is prettier than
+production is a consistency check with good art direction.
+
+### The build number in the project file is not the build number that ships (2026-08-11)
+
+The gate I had just rewritten to key on `CURRENT_PROJECT_VERSION` shipped 0.9.7 and then
+logged **"Tagged build 24 as uploaded"** for a commit whose project file said **18**.
+
+`fastlane beta` calls `increment_build_number(latest_testflight_build_number + 1)`. App
+Store Connect's own counter decides the build number; the repository's copy is read by
+nobody. So every "bump the build number" commit in this project's history was theatre —
+the *marketing version* is the only part of that ritual that does anything.
+
+The tag was therefore keyed on a value the gate could never look up again: next push
+reads 18 from the project, finds no `testflight/18`, and ships — restoring the
+build-per-commit the job exists to avoid, on a 10x-billed runner. Now keyed on
+`MARKETING_VERSION` as `testflight/v0.9.7`, which is what the repository actually
+controls and what "a build per version bump" always meant. Tags backfilled for v0.9.5,
+v0.9.6 and v0.9.7; the three build-numbered ones deleted so there is one scheme.
+
+**Three consecutive fixes to this one gate in one morning, each revealing the next.** The
+`HEAD~1` comparison dropped a release silently; its replacement could not push its own tag
+(`403`, read-only token); and that fixed version tagged the wrong identifier. Every one of
+them was found by reading the run log rather than the conclusion — and the conclusion was
+**green** for the first and third. The rule this file keeps re-learning: *a workflow's
+exit status tells you it finished, not that it did the thing.*
+
+There is a happier reading, though. Each failure was louder than the one before: silence,
+then a red step, then a wrong-looking string in a log. That is what designing the failure
+direction buys — the bugs got easier to see even as they got subtler.
