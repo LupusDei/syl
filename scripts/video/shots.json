@@ -37,51 +37,51 @@
       "name": "1-emerge",
       "reconstructed": true,
       "framing": "face_turned_away",
-      "prompt": "A luminous spirit woman of living starlight drifts into view against a deep blue starfield, seen from behind and three-quarters, her face turned away toward the stars. Long silver-white hair and a translucent flowing gown trail like ribbons of light. She turns slowly, weightless, as motes of light spiral around her. Begins and ends on empty starfield as the ribbon of light vanishes."
+      "prompt": "A luminous spirit woman of living starlight drifts into view against a deep blue starfield, seen from behind and three-quarters, her face turned away toward the stars. Long silver-white hair and a translucent flowing gown trail like ribbons of light. She turns slowly, weightless, as motes of light spiral around her. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
     },
     {
       "name": "2-dance",
       "reconstructed": true,
       "framing": "face_turned_away",
-      "prompt": "A luminous spirit woman of living starlight dances weightlessly in deep space, silver-white hair and translucent gown streaming behind her in ribbons. She spins and arcs with joy, trailing motes of light. Seen from behind and in profile, face mostly turned from the camera. Begins and ends on empty starfield as the ribbon of light vanishes."
+      "prompt": "A luminous spirit woman of living starlight dances weightlessly in deep space, silver-white hair and translucent gown streaming behind her in ribbons. She spins and arcs with joy, trailing motes of light. Seen from behind and in profile, face mostly turned from the camera. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
     },
     {
       "name": "3-spiral",
       "reconstructed": true,
       "framing": "face_turned_away",
-      "prompt": "A luminous spirit woman of living starlight spirals upward through a deep blue starfield, her translucent gown and silver-white hair drawing a helix of light behind her. Seen from below and behind. Motes of starlight follow her path. Begins and ends on empty starfield as the ribbon of light vanishes."
+      "prompt": "A luminous spirit woman of living starlight spirals upward through a deep blue starfield, her translucent gown and silver-white hair drawing a helix of light behind her. Seen from below and behind. Motes of starlight follow her path. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
     },
     {
       "name": "4-playful",
       "reconstructed": true,
       "framing": "face_turned_away",
-      "prompt": "A luminous spirit woman of living starlight tumbles and plays in zero gravity, laughing, silver-white hair and translucent gown swirling around her. Seen from behind and above. She darts between drifting motes of light. Begins and ends on empty starfield as the ribbon of light vanishes."
+      "prompt": "A luminous spirit woman of living starlight tumbles and plays in zero gravity, laughing, silver-white hair and translucent gown swirling around her. Seen from behind and above. She darts between drifting motes of light. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
     },
     {
       "name": "5-stillness",
       "reconstructed": true,
       "framing": "face_turned_away",
-      "prompt": "A luminous spirit woman of living starlight comes to rest, floating almost motionless in deep space, silver-white hair and translucent gown settling slowly around her. Seen in profile, face turned toward the stars. Only the motes of light move. Begins and ends on empty starfield as the ribbon of light vanishes."
+      "prompt": "A luminous spirit woman of living starlight comes to rest, floating almost motionless in deep space, silver-white hair and translucent gown settling slowly around her. Seen in profile, face turned toward the stars. Only the motes of light move. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
     },
     {
       "name": "6-constellation",
       "reconstructed": true,
       "framing": "face_turned_away",
-      "prompt": "A luminous spirit woman of living starlight traces her hand through the stars and leaves a constellation drawn in light behind her fingertips. Seen from behind, face turned away. Silver-white hair and translucent gown drift weightlessly. Begins and ends on empty starfield as the ribbon of light vanishes."
+      "prompt": "A luminous spirit woman of living starlight traces her hand through the stars and leaves a constellation drawn in light behind her fingertips. Seen from behind, face turned away. Silver-white hair and translucent gown drift weightlessly. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
     },
     {
       "name": "7-twin",
       "reconstructed": true,
       "framing": "wide_face_visible",
       "knownProblem": "Face toward camera at full-body distance. Too few pixels for her features to resolve, so the model invents a generic face. See docs/VIDEO.md — the anchoring band.",
-      "prompt": "A luminous spirit woman of living starlight faces the viewer, arms outstretched, floating in a deep blue starfield. A second identical figure of light mirrors her movement. Silver-white hair and translucent gown drift weightlessly. Begins and ends on empty starfield as the ribbon of light vanishes."
+      "prompt": "A luminous spirit woman of living starlight faces the viewer, arms outstretched, floating in a deep blue starfield. A second identical figure of light mirrors her movement. Silver-white hair and translucent gown drift weightlessly. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
     },
     {
       "name": "8-descent",
       "reconstructed": true,
       "framing": "mid_face_visible",
       "knownProblem": "Face toward camera at mid distance — large enough to read as a face, not close enough to match the reference. Renders as a visibly different woman. See docs/VIDEO.md.",
-      "prompt": "A luminous spirit woman of living starlight descends slowly toward the viewer through a deep blue starfield, arms open, wings of light spreading behind her. Silver-white hair streams upward as she falls. Begins and ends on empty starfield as the ribbon of light vanishes."
+      "prompt": "A luminous spirit woman of living starlight descends slowly toward the viewer through a deep blue starfield, arms open, wings of light spreading behind her. Silver-white hair streams upward as she falls. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
     }
   ]
 }

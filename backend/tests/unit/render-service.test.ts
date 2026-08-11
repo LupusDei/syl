@@ -165,9 +165,19 @@ describe("asking for a render", () => {
     const prompt = backend.specs[0]?.promptText ?? "";
     // The identity phrase every one of the eight shots opens with.
     expect(prompt).toMatch(/luminous spirit woman of living starlight/iu);
-    // And the loop clause, which is a property of the PROMPT and not of the
+    // And the loop ARC, which is a property of the PROMPT and not of the
     // editing: drop it and the clip will not cut against its neighbours.
-    expect(prompt).toMatch(/begins and ends on empty starfield/iu);
+    //
+    // Asserted as the three beats rather than as one sentence. This used to
+    // match the literal "begins and ends on empty starfield", which the clause
+    // satisfied while the render opened on her already formed and already
+    // smiling — the endpoints were right and the transformation was missing.
+    // A clause naming only the first and last frame is one the model can
+    // satisfy without ever moving.
+    expect(prompt).toMatch(/ribbon of blue light/iu);
+    expect(prompt).toMatch(/coalesces into her/iu);
+    expect(prompt).toMatch(/unravels back into the ribbon/iu);
+    expect(prompt).toMatch(/first and last frames are identical/iu);
   });
 
   it("should hand the reference over as the image the model anchors on", async () => {

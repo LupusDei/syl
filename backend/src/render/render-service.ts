@@ -150,7 +150,28 @@ const IDENTITY =
   "A luminous spirit woman of living starlight, silver-white hair and a translucent flowing gown " +
   "trailing like ribbons of light, in a deep blue starfield.";
 
-const LOOP_CLAUSE = "Begins and ends on empty starfield as the ribbon of light vanishes.";
+/**
+ * The arc, not just the endpoints.
+ *
+ * This used to read *"Begins and ends on empty starfield as the ribbon of light
+ * vanishes"*, which names the two ends and leaves out what happens between
+ * them. The model read it as a still that fades, so every render opened on her
+ * already formed and already smiling — she counted five out of five and called
+ * the first second of each one a lie.
+ *
+ * The eight loops work because they are a **transformation**: a ribbon of blue
+ * light travelling alone, gathering into her, and unravelling back into the
+ * ribbon it came from. She is made of the same light the whole way through, and
+ * the shot has somewhere to start and somewhere to arrive.
+ *
+ * Written as a sequence for that reason. A clause that describes only the first
+ * and last frame is a clause the model can satisfy without ever moving.
+ */
+const LOOP_CLAUSE =
+  "Opens on a lone ribbon of blue light against empty starfield, with no figure present. " +
+  "The ribbon gathers and coalesces into her, her whole body made of that same living light. " +
+  "At the end she unravels back into the ribbon and it streams away, leaving empty starfield. " +
+  "The first and last frames are identical: the bare ribbon, no figure.";
 
 /** What a render is, unless something says otherwise. The loops' own settings. */
 const DEFAULTS = {
