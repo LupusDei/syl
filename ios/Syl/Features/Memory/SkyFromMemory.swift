@@ -76,7 +76,18 @@ enum SkyFromMemory {
                     // Nil on an anchor is correct — it orbits nothing. Nil on an orphan is
                     // also correct, and the layout places it rather than dropping it.
                     anchorId: star.anchorId,
-                    learnedAt: star.createdAt
+                    learnedAt: star.createdAt,
+                    body: star.body,
+                    // **Carried whole, and this is the only thing the card is made of.**
+                    // Provenance is the answer to the only question that matters about a
+                    // memory; a client that dropped it on the floor here would leave the
+                    // card with nothing to say but the label it already drew.
+                    provenance: ConstellationProvenance(
+                        species: species(of: star.provenance.species),
+                        assertedBy: star.provenance.assertedBy,
+                        reasoning: star.provenance.reasoning,
+                        learnedAt: star.provenance.learnedAt
+                    )
                 )
             },
             edges: wire.filaments.map { filament in
@@ -85,7 +96,13 @@ enum SkyFromMemory {
                     from: filament.from,
                     to: filament.to,
                     species: species(of: filament.species),
-                    confidence: max(filament.confidence, faintestVisible)
+                    confidence: max(filament.confidence, faintestVisible),
+                    relation: filament.relation,
+                    // Verbatim. Her reasoning is the one place the inference engine ever
+                    // explains itself to him, and it is shown as she wrote it — not
+                    // truncated here, not summarised, not turned into a field.
+                    reasoning: filament.reasoning,
+                    touchedAt: filament.lastTouchedAt
                 )
             },
             // The server's own stamp, not the moment the phone read it. A sky drawn from
@@ -131,6 +148,19 @@ enum SkyFromMemory {
         switch species {
         case .observed: return .observed
         case .inferred: return .inferred
+        }
+    }
+
+    /// A star's species keeps its third case.
+    ///
+    /// `unattested` is not a species of edge — it is a star nothing connects to — and
+    /// flattening it into `observed` would have the card claim he said something nobody
+    /// said. See `MemoryStarProvenance`, which makes the same point from the wire's side.
+    private static func species(of species: MemoryStarSpecies) -> ConstellationStarSpecies {
+        switch species {
+        case .observed: return .observed
+        case .inferred: return .inferred
+        case .unattested: return .unattested
         }
     }
 }

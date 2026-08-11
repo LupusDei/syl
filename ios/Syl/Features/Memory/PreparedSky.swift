@@ -27,10 +27,30 @@ struct PreparedSky: Equatable, Sendable {
     /// Carried through from the snapshot: the read failed outright, rather than finding
     /// nothing. See ``ConstellationSnapshot/unreachable``.
     var unreachable: Bool = false
+    /// Everything there is to look at, in sky coordinates. **The leash on wandering.**
+    ///
+    /// ``ConstellationTransform/clamped(within:viewSize:)`` keeps the centre of the screen
+    /// inside this rectangle, which is the whole bound on pan and zoom: he can bring any
+    /// star to the middle of the screen and no further, so the sky can never be pushed away
+    /// and lost.
+    ///
+    /// **It always contains the centre of ``size``**, even when every star is off to one
+    /// side, so that ``ConstellationTransform/identity`` is a legal transform for every
+    /// possible sky. Without that guarantee the clamp would nudge the sky the instant it
+    /// appeared — and a sky that moves on its own the moment you look at it is exactly the
+    /// failure deterministic layout exists to prevent.
+    var contentBounds: CGRect = .zero
 
     static let empty = PreparedSky()
 
     var isEmpty: Bool { stars.isEmpty }
+
+    /// Below this a thing contributes no visible pixels, so the drawing skips it — and so
+    /// does the hit test, because a tap must never land on something that is not there.
+    ///
+    /// One constant rather than two literals: the two rules have to agree or the sky grows
+    /// invisible holes that swallow taps.
+    static let faintestDrawn: Double = 0.004
 }
 
 /// One star, ready to draw.
@@ -54,6 +74,10 @@ struct PreparedStar: Equatable, Sendable, Identifiable {
     /// Whether this star gets diffraction spikes — the detail that makes a point of light
     /// read as a *star* rather than as a dot. Rare on purpose.
     var hasSpikes: Bool
+    /// What the card says when he touches it: her longer words, when she learned it, and
+    /// **from what**. Nothing draws this; it costs a few pointers and it is the entire
+    /// reason a star is worth touching.
+    var detail: ConstellationStarDetail = .unknown
 }
 
 /// One filament, ready to draw.
@@ -66,6 +90,11 @@ struct PreparedFilament: Equatable, Sendable, Identifiable {
     var id: String
     var from: CGPoint
     var to: CGPoint
+    /// The stars at either end, by id. Carried so a selection can work out what it lights
+    /// without going back to the snapshot the sky was built from — the `Canvas` is handed a
+    /// finished value, and so is the emphasis.
+    var fromId: String = ""
+    var toId: String = ""
     var fromSeed: Int
     var toSeed: Int
     var fromDepth: Double
@@ -79,6 +108,9 @@ struct PreparedFilament: Equatable, Sendable, Identifiable {
     /// A straight line between two stars reads as a diagram. A slight bow reads as
     /// something suspended.
     var bow: Double
+    /// What the card says when he touches it: what it relates, how sure she is, and — when
+    /// she inferred it — her reasoning, verbatim.
+    var detail: ConstellationFilamentDetail = .unknown
 }
 
 /// What colour a star burns.
@@ -108,7 +140,12 @@ struct SkyPreparer: Sendable {
 
     func prepare(_ snapshot: ConstellationSnapshot, size: CGSize) -> PreparedSky {
         guard size.width > 1, size.height > 1, !snapshot.nodes.isEmpty else {
-            return PreparedSky(size: size, unreachable: snapshot.unreachable)
+
+            // An empty sky still gets bounds, and they still contain the centre. A gesture
+            // on a sky with nothing in it must be a no-op, not a fall through a hole.
+            return PreparedSky(
+                stars: [], filaments: [], size: size,
+                contentBounds: Self.bounds(of: [], in: size))
         }
 
         let layout = ConstellationLayout(size: size)
@@ -137,7 +174,20 @@ struct SkyPreparer: Sendable {
                     isAnchor: placement.isAnchor,
                     tint: tint(for: node),
                     hasSpikes: placement.isAnchor
-                        || (node.tier == .hot && node.confidence >= 0.88)
+                        || (node.tier == .hot && node.confidence >= 0.88),
+                    detail: ConstellationStarDetail(
+                        body: node.body,
+                        kind: node.kind,
+                        tier: node.tier,
+                        species: node.provenance.species,
+                        assertedBy: node.provenance.assertedBy,
+                        reasoning: node.provenance.reasoning,
+                        // The provenance date when there is one — it is when the *belief*
+                        // was last touched, which is what "when did you learn this" means —
+                        // and the node's own otherwise. Depth still comes from the node's,
+                        // always, because this one is nil for every unattested star.
+                        learnedAt: node.provenance.learnedAt ?? node.learnedAt
+                    )
                 )
             )
         }
@@ -148,10 +198,12 @@ struct SkyPreparer: Sendable {
 
         var depths: [String: Double] = [:]
         var seeds: [String: Int] = [:]
+        var labels: [String: String] = [:]
         depths.reserveCapacity(stars.count)
         for star in stars {
             depths[star.id] = star.depth
             seeds[star.id] = star.seed
+            labels[star.id] = star.label
         }
 
         var filaments: [PreparedFilament] = []
@@ -174,6 +226,8 @@ struct SkyPreparer: Sendable {
                     id: edge.id,
                     from: from.point,
                     to: to.point,
+                    fromId: edge.from,
+                    toId: edge.to,
                     fromSeed: seeds[edge.from] ?? from.seed,
                     toSeed: seeds[edge.to] ?? to.seed,
                     fromDepth: fromDepth,
@@ -183,7 +237,17 @@ struct SkyPreparer: Sendable {
                         species: edge.species, confidence: strength, haze: haze,
                         betweenAnchors: from.isAnchor && to.isAnchor),
                     width: edge.species == .observed ? 1.15 : 0.75,
-                    bow: (Scatter.hash(bowSeed) - 0.5) * 0.30
+                    bow: (Scatter.hash(bowSeed) - 0.5) * 0.30,
+                    detail: ConstellationFilamentDetail(
+                        relation: edge.relation,
+                        // Labels, not ids. An id on the card would be a debug field, and
+                        // the card is the one place she is meant to sound like herself.
+                        fromLabel: labels[edge.from] ?? edge.from,
+                        toLabel: labels[edge.to] ?? edge.to,
+                        confidence: edge.confidence,
+                        reasoning: edge.reasoning,
+                        touchedAt: edge.touchedAt
+                    )
                 )
             )
         }
@@ -198,6 +262,25 @@ struct SkyPreparer: Sendable {
             size: size,
             unreachable: snapshot.unreachable
         )
+            contentBounds: Self.bounds(of: stars, in: size)
+        )
+    }
+
+    /// Everything worth looking at, plus the centre of the screen.
+    ///
+    /// The union with the centre is not a rounding-up: it is what makes
+    /// ``ConstellationTransform/identity`` legal for every sky, including a sky whose stars
+    /// all sit in one corner. Without it the clamp would move the sky before he had touched
+    /// anything.
+    static func bounds(of stars: [PreparedStar], in size: CGSize) -> CGRect {
+        let centre = CGRect(x: size.width / 2, y: size.height / 2, width: 0, height: 0)
+        guard let first = stars.first else { return centre }
+
+        var rect = CGRect(origin: first.anchor, size: .zero)
+        for star in stars.dropFirst() {
+            rect = rect.union(CGRect(origin: star.anchor, size: .zero))
+        }
+        return rect.union(centre)
     }
 
     /// How strongly a filament is drawn.
