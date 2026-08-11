@@ -23,7 +23,7 @@
     "model": "seedance2",
     "ratio": "720:1280",
     "duration": 15,
-    "reference": "characters/syl/syl_source_upscaled.png"
+    "reference": "characters/syl/syl_source.png"
   },
 
   "shots": [

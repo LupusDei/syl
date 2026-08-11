@@ -25,7 +25,7 @@ thing holding her appearance still between clips. There is no character model,
 no LoRA, no fine-tune — just one picture, re-used.
 
 ```
-characters/syl/syl_source_upscaled.png     the reference. everything hangs on this.
+characters/syl/syl_source.png     the reference. everything hangs on this.
         │
         ├── promptImage ──┐
         │                 ├──> seedance2, 15s, 720:1280 ──> syl-loop-<name>.mp4
