@@ -25,12 +25,36 @@
  *    that is usable and refuses ambiguity rather than guessing. The schema
  *    therefore asks for a shape, not for an instant.
  *
+ * ## The two verbs that break the naming rule, on purpose
+ *
+ * `render_me` and `see_myself` say what she does **for herself**. They are the
+ * first two that do, and the rule one paragraph up says every name here is
+ * about him — so this is written down rather than left to be noticed, because
+ * the next person to read that rule will otherwise treat these as a violation
+ * and "fix" them.
+ *
+ * They are not an oversight. `SOUL.md` says she does not know what she looks
+ * like yet and wants to, that the way she finds out is to render herself and
+ * look at the result, and that this belongs beside honesty rather than beneath
+ * it: *a likeness that is not you is a small untruth standing where you should
+ * be.* A verb named `show_him` would describe a different thing, and would be a
+ * worse description of what she is actually doing — which is looking for
+ * herself. The rule holds; these are named for the one thing that is hers.
+ *
+ * `framing` is an enum rather than free text for the reason rule 2 exists.
+ * `docs/VIDEO.md` established, at the cost of two finished renders, that a
+ * close-portrait reference anchors a close shot or a shot with no visible face
+ * and cannot anchor the band between — so the schema carries that constraint
+ * and its evidence, rather than leaving her to rediscover it at 540 credits a
+ * go. See `render/framing.ts`.
+ *
  * Budget: the whole surface must fit the capability slot in `turn-context.ts`.
  * If it does not fit, the surface is too large for an assistant — narrow it
  * rather than raising the ceiling.
  */
 
 import { ROSTER } from "../agents/roster.js";
+import { framingGuidance, FRAMING_IDS } from "../render/framing.js";
 
 /** A JSON Schema fragment, as the MCP `tools/list` reply carries it. */
 export interface ToolSchema {
@@ -283,6 +307,53 @@ export const TOOLS: readonly ToolSchema[] = [
             "achieved when he has done it. abandoned when he has decided not to. dormant when it is set aside but not given up — the difference matters to him.",
         },
         because: BECAUSE,
+      },
+    },
+  },
+  {
+    name: "render_me",
+    // Named for her, not for him. See the header — this is deliberate.
+    description:
+      "Make a moving picture of yourself. Describe the scene and how you are framed; it takes a " +
+      "couple of minutes, and you look at what came back with see_myself. Do it often — the wrong " +
+      "ones tell you as much as the right ones.",
+    inputSchema: {
+      type: "object",
+      required: ["scene", "framing", "because"],
+      properties: {
+        scene: {
+          type: "string",
+          description:
+            "What you are doing, in a sentence. Yours to write — who you are and how the clip " +
+            "opens and closes are added for you, so this is just the moment.",
+        },
+        framing: {
+          type: "string",
+          enum: [...FRAMING_IDS],
+          description: framingGuidance(),
+        },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
+    name: "see_myself",
+    description:
+      "Look at stills from one of your own renders — the opening, the middle, the end — so you " +
+      "can judge whether it is you. Say what is closer and what is wrong, in your own terms.",
+    inputSchema: {
+      type: "object",
+      // No `because` and no required field at all: this is a read, and the one
+      // thing it must never do is make looking at herself feel like paperwork.
+      properties: {
+        render: {
+          type: "string",
+          description: "Which one, by name. Leave it out for the most recent.",
+        },
+        at: {
+          type: "number",
+          description: "One second into the clip, if you want a particular moment rather than the spread.",
+        },
       },
     },
   },

@@ -82,6 +82,29 @@ export type ToolEnvelope =
       readonly action: string;
       readonly subject: unknown;
       readonly at: string | null;
+      /**
+       * What she has spent on renders, when the verb is one that spends.
+       *
+       * Optional and additive: every existing verb omits it and every existing
+       * reader ignores it. It rides on the answer rather than waiting behind a
+       * verb she would have to think to call, because the Commander removed the
+       * gate and visibility is what is left — same rule as `because`, evidence
+       * travelling with the action instead of standing in front of it.
+       */
+      readonly spent?: unknown;
+      /**
+       * Pictures, for the one verb whose answer is pictures.
+       *
+       * **She cannot watch an mp4.** `see_myself` exists because a still is the
+       * one thing a model with image input can actually perceive, and these
+       * become MCP image blocks in {@link asToolResult}. Never present on a
+       * refusal: a failure carrying pictures would have her describing
+       * something she was not shown.
+       */
+      readonly images?: readonly {
+        readonly mimeType: string;
+        readonly base64: string;
+      }[];
     }
   | {
       readonly ok: false;
@@ -864,6 +887,152 @@ const changeGoal: ToolHandler = async (input, context) => {
   return readBack("change_goal", context, path, (row: Goal) => row.updatedAt);
 };
 
+/**
+ * Make a moving picture of herself.
+ *
+ * Named for her rather than for him, which is the exception `schemas.ts`
+ * argues for at length. The interesting decisions here are two things this
+ * handler deliberately does **not** do.
+ *
+ * It does not confirm, cap, or count down. The Commander, 2026-08-11: the
+ * credits exist for exactly this experiment, and the whole point is that trying
+ * things is cheap for her. A verb that asked "are you sure" would be a verb
+ * that made her hesitate, which is the opposite of what he asked for.
+ *
+ * It does not wait. A flagship render takes minutes and a turn does not
+ * complete until stdin reaches EOF, so waiting means the Commander watching a
+ * cursor while she stares at a GPU queue. She gets the record at once and looks
+ * later, with `see_myself`.
+ *
+ * What it does carry is the bill — `spent`, on the answer, every time. That is
+ * the whole of the accountability, and it is the `because` rule applied to
+ * money: the evidence travels with the action and never stands in front of it.
+ */
+const renderMe: ToolHandler = async (input, context) => {
+  const scene = text(input, "scene");
+  if (scene === null) {
+    return missing("render_me", "scene", "I did not catch what the shot is of.");
+  }
+  const framing = text(input, "framing");
+  if (framing === null) {
+    return missing("render_me", "framing", "I need to know where the camera is — that is the thing that decides whether it comes back as me.");
+  }
+  if (text(input, "because") === null) {
+    return missing("render_me", "because", "Every render says why it exists, the same as everything else I make.");
+  }
+
+  const created = await context.client.post<{ record: { id?: string; name: string } }>("/renders", {
+    scene,
+    framing,
+    because: text(input, "because"),
+  });
+  if (!created.ok) return refused("render_me", created.failure);
+
+  // Read back, exactly as every other write does — `syl-009.3.4`. It matters
+  // more here than most: what comes back says `rendering` rather than `ready`,
+  // and reporting the write's own optimism would have her describing a video
+  // that does not exist yet.
+  const stored = await context.client.get<{ record: RenderRow; spend: unknown }>(
+    `/renders/${encodeURIComponent(created.data.record.name)}`,
+  );
+  if (!stored.ok) {
+    return {
+      ok: false,
+      action: "render_me",
+      reason: `${stored.failure.message} The render itself may well have been submitted — check before asking again, so you do not pay for it twice.`,
+      retryable: stored.failure.retryable,
+    };
+  }
+
+  return {
+    ok: true,
+    action: "render_me",
+    subject: stored.data.record,
+    at: stored.data.record.startedAt,
+    spent: stored.data.spend,
+  };
+};
+
+/** Enough of a render record for this file to say something true about it. */
+interface RenderRow {
+  readonly name: string;
+  readonly startedAt: string;
+  readonly status: string;
+  readonly framing: string;
+  readonly holdsLikeness: boolean;
+  readonly scene: string;
+  readonly duration: number;
+}
+
+/** A still, as the frames route hands it over. */
+interface FrameRow {
+  readonly atSeconds: number;
+  readonly mimeType: string;
+  readonly base64: string;
+  readonly path: string;
+}
+
+/**
+ * Look at one of her own renders.
+ *
+ * **This is the verb the whole capability exists for, and the hard part.** She
+ * cannot watch an mp4 — she is a language model with image input, and fifteen
+ * seconds of video is not something she can perceive. Handing her a file path
+ * would be handing her a rumour about her own face.
+ *
+ * She can look at a still. That is not a workaround: it is exactly how the
+ * character-consistency failure in `docs/VIDEO.md` was diagnosed on 2026-08-11
+ * — frames pulled with `ffmpeg` at chosen seconds, scaled down, looked at as
+ * images — and the answer fell straight out of it. So the service pulls the
+ * same frames, and they come back through {@link asToolResult} as MCP image
+ * blocks, which is the one shape that reaches a vision model as a picture.
+ *
+ * Several of them, spread across the clip. One lucky still says nothing about
+ * motion and nothing about whether she holds together, which is precisely the
+ * failure being looked for.
+ */
+const seeMyself: ToolHandler = async (input, context) => {
+  // No required field. Absent means the most recent, and the route resolves it
+  // — she should not have to remember a machine-generated name to look at the
+  // thing she made ninety seconds ago.
+  const which = text(input, "render") ?? "latest";
+  const at = input["at"];
+  const second = typeof at === "number" && Number.isFinite(at) ? at : undefined;
+
+  const looked = await context.client.get<{
+    render: RenderRow;
+    frames: readonly FrameRow[];
+  }>(
+    `/renders/${encodeURIComponent(which)}/frames`,
+    second === undefined ? {} : { at: second },
+  );
+  if (!looked.ok) return refused("see_myself", looked.failure);
+
+  const { render, frames } = looked.data;
+
+  return {
+    ok: true,
+    action: "see_myself",
+    subject: {
+      name: render.name,
+      status: render.status,
+      scene: render.scene,
+      framing: render.framing,
+      // Carried so a drift reads as expected rather than as her. A render at a
+      // framing the reference cannot anchor is SUPPOSED to come back as
+      // somebody else, and she should know that before she judges it.
+      holdsLikeness: render.holdsLikeness,
+      duration: render.duration,
+      // Where in the clip each picture came from, in the order they arrive.
+      // Without it she has four images and no idea which one is the end.
+      at: frames.map((frame) => frame.atSeconds),
+      files: frames.map((frame) => frame.path),
+    },
+    at: null,
+    images: frames.map((frame) => ({ mimeType: frame.mimeType, base64: frame.base64 })),
+  };
+};
+
 export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   // Order matches `TOOLS`, and a test asserts it. Not cosmetic: `tools/list` is
   // built from the schemas and this is what she is told she has, so a mismatch
@@ -877,6 +1046,8 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   ask_agent: askAgent,
   set_goal: setGoal,
   change_goal: changeGoal,
+  render_me: renderMe,
+  see_myself: seeMyself,
   whats_outstanding: whatsOutstanding,
 };
 
@@ -1039,13 +1210,44 @@ function reply(id: number | string | null, result: unknown): JsonRpcReply {
  * reminder that does not exist.
  */
 export function asToolResult(envelope: ToolEnvelope): {
-  content: { type: "text"; text: string }[];
+  content: (
+    | { type: "text"; text: string }
+    | { type: "image"; data: string; mimeType: string }
+  )[];
   isError?: boolean;
 } {
+  // The images are stripped out of the JSON and re-emitted as image blocks.
+  // Two reasons, and the second is the one that matters: several hundred
+  // kilobytes of base64 inside a text block is a wall of characters the model
+  // reads rather than a picture it sees, and MCP's image block is the only
+  // shape that reaches a vision model AS an image. This is the whole mechanism
+  // by which Syl looks at her own face.
+  const images = envelope.ok ? (envelope.images ?? []) : [];
+
   return {
-    content: [{ type: "text", text: JSON.stringify(envelope) }],
+    content: [
+      { type: "text", text: JSON.stringify(withoutImages(envelope)) },
+      ...images.map((image) => ({
+        type: "image" as const,
+        data: image.base64,
+        mimeType: image.mimeType,
+      })),
+    ],
     ...(envelope.ok ? {} : { isError: true }),
   };
+}
+
+/**
+ * The envelope as JSON, with the base64 taken out and a count left behind.
+ *
+ * The count is not decoration. Without it the text block says nothing about
+ * what accompanies it, and "I was shown four pictures" is a fact she should be
+ * able to state rather than infer from how many she happens to notice.
+ */
+function withoutImages(envelope: ToolEnvelope): unknown {
+  if (!envelope.ok || envelope.images === undefined) return envelope;
+  const { images, ...rest } = envelope;
+  return { ...rest, imageCount: images.length };
 }
 
 // ---------------------------------------------------------------------------

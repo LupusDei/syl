@@ -52,12 +52,16 @@ import { createLogger, toolArgumentsForLog, type Logger } from "./ops/logging.js
 import { assessPower, describePower } from "./ops/power.js";
 import { installShutdownHandlers } from "./ops/shutdown.js";
 import { tailnetCertProbe } from "./ops/tailnet-cert.js";
+import { RenderService } from "./render/render-service.js";
+import { RunwayClient } from "./render/runway.js";
+import { studioAt, studioRootFrom } from "./render/studio.js";
 import { createGoalRouter } from "./routes/goals.js";
 import { createHealthRouter, databaseProbe, type HealthProbe } from "./routes/health.js";
 import { createJobRouter } from "./routes/jobs.js";
 import { createLogRouter } from "./routes/logs.js";
 import { createMemoryRouter, type MemoryViews } from "./routes/memory.js";
 import { createReminderRouter } from "./routes/reminders.js";
+import { createRenderRouter } from "./routes/renders.js";
 import { createSyncRouter } from "./routes/sync.js";
 import { createTodoRouter } from "./routes/todos.js";
 import { fileSessionStore, LANES, memorySessionStore, SylAgent, type Lane } from "./harness/agent.js";
@@ -273,6 +277,17 @@ export interface AppDependencies {
    * one file.
    */
   readonly attachments: AttachmentStore;
+  /**
+   * Her renders of herself, and the ledger of what they cost.
+   *
+   * Not a store: the records live in the toolkit checkout beside the videos
+   * they describe, because `assets/*.mp4` is gitignored here for a reason and a
+   * sidecar that is not beside its video is a sidecar somebody moves the video
+   * away from. A machine with no `RUNWAYML_API_SECRET` still gets one of these
+   * — it refuses with a sentence rather than being absent, which is the same
+   * decision `ToolContext.fleet` makes about a missing Adjutant.
+   */
+  readonly renders: RenderService;
   /** Extra health probes. The billing check is always present. */
   readonly probes?: readonly HealthProbe[];
   /**
@@ -347,6 +362,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     intake,
     memory,
     attachments,
+    renders,
     probes,
     clock,
   } = deps;
@@ -404,6 +420,10 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   api.use(createReminderRouter({ reminders, idempotency, authenticate }));
   api.use(createTodoRouter({ todos, idempotency, authenticate }));
   api.use(createGoalRouter({ goals, idempotency, authenticate }));
+  // Her own face. On `AGENT_SURFACE` deliberately — see `middleware/auth.ts`
+  // for the argument, which is that this is the first surface she reaches for
+  // herself rather than for him, and that it reaches nothing of his.
+  api.use(createRenderRouter({ renders, idempotency, authenticate }));
   // Read-only, so no idempotency ledger: there is nothing here to run twice.
   api.use(createSyncRouter({ sync, authenticate }));
   api.use(createJobRouter({ jobs, authenticate }));
@@ -734,6 +754,16 @@ export interface BootstrapOptions {
   readonly runner?: TurnRunner;
   /** Standing orders. Defaults to `SOUL.md` at the repo root, when there is one. */
   readonly soul?: string;
+  /**
+   * The environment the boot reads configuration out of. Defaults to the real one.
+   *
+   * Exists for `RUNWAYML_API_SECRET`, and the reason is worth stating: that
+   * variable is the only one in this bootstrap whose presence causes the
+   * service to construct something that can **spend metered money**. A test
+   * that wants a service with no way to render says so here rather than hoping
+   * the machine it runs on has no grant configured.
+   */
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 /** What `bootstrap` produces: the store, the services, and Syl's own key. */
@@ -1215,6 +1245,23 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
             : { projectRoot: config.adjutant.projectRoot }),
         });
 
+  // Her renders. The secret is read once, here, and lives nowhere else in the
+  // process: `RunwayClient` holds it and never puts it in a message, a log line
+  // or a sidecar. **Absent is the ordinary case** — a machine with no Runway
+  // grant is not misconfigured, it is a machine where she cannot render — so
+  // this degrades to a service that refuses with a sentence rather than to a
+  // boot that fails. Same decision as a missing Adjutant.
+  const runwaySecret = (options.env ?? process.env)["RUNWAYML_API_SECRET"]?.trim() ?? "";
+  const renders = new RenderService({
+    studio: studioAt(studioRootFrom(options.env ?? process.env)),
+    backend: runwaySecret === "" ? null : new RunwayClient({ secret: runwaySecret }),
+    clock,
+  });
+  // A render the last process was mid-poll on. Without this the sidecar says
+  // `rendering` forever and she tells him something is coming that never was —
+  // constraint 4 wearing a different hat.
+  renders.resume();
+
   const intakeQueue = new IntakeQueue();
   const intakeStore = new IntakeStore({ db: database.handle, clock });
   const intake = new ArticleIntake({ store: intakeStore, clock, scheduler: intakeQueue });
@@ -1246,6 +1293,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       memory,
       memoryRuntime,
       attachments,
+      renders,
       presence,
       intakeQueue,
       // The same clock every store above was built on — not a second one. See

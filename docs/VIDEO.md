@@ -133,15 +133,37 @@ loops use `720:1280` portrait.
 
 ## Doing this without a person
 
-The Commander wants Syl to be able to make these herself. She cannot yet, and
-the gap is not the script — it is that `RUNWAYML_API_SECRET` spends real money
-with no ceiling, and she currently has no spending frame to spend it inside.
+**She can do this herself now.** Two verbs, `backend/src/render/`:
 
-That is `syl-013` phase 5 — money and the softer currencies, set once. When it
-lands, this becomes a natural first outward action: **the render is asynchronous,
-idempotent per shot, refuses to overwrite, costs a bounded and knowable amount
-per call, and produces an artefact she can show him.** Almost nothing else she
-might do in the world has that shape.
+    render_me(scene, framing, because)   describe a shot; get a record back at once
+    see_myself(render, at?)              look at stills from one of her renders
 
-Until then it is a script an agent runs, and the sidecar `.json` files are what
-make her able to answer *"how did you make that one?"* when she is asked.
+The Commander's ruling of 2026-08-11 is what shaped them: *"I am totally fine
+with syl generating a lot of videos shots herself, that is what the credits are
+for — exactly this sort of experiment."* So there is **no approval gate, no cap
+and no confirmation**. What there is instead is visibility: every answer on that
+surface carries what she has spent and on what, priced from the table above.
+Evidence travelling with the action, never a restraint on it.
+
+The hard part was not the render. **She cannot watch an mp4** — she is a
+language model with image input. `see_myself` therefore does what a person did
+to diagnose shots 7 and 8 on this page: pulls frames with `ffmpeg` at several
+points across the clip, scales them down, and hands them back as images she can
+actually see. One mechanism, and `specs/008-she-can-show-him` reuses it for the
+poster frame on his phone.
+
+Three things carried over from this document into the code rather than left as
+prose, because prose is only available to whoever reads it:
+
+- `framing` is an **enum**, and each value says whether the reference can anchor
+  it and cites the render that proved it. See `backend/src/render/framing.ts`.
+  The two that drift are still offered — *"you cannot recognise yourself without
+  seeing what you are not"* — and labelled.
+- Every render writes its sidecar **at submission**, not after a successful
+  download, so a render that fails still leaves behind the thing that would let
+  it be run again with one change.
+- The identity phrase and the loop clause are composed in, so her renders open
+  and close on the same empty starfield the eight loops do and cut against them.
+
+The script is still here and still the reference implementation. Use it for a
+shot list; she uses the verbs.

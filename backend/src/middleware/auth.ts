@@ -282,7 +282,43 @@ export const anyAuthenticatedDevice: RequestHandler = (_request, _response, next
   next();
 };
 
-export const AGENT_SURFACE: readonly string[] = ["/reminders", "/todos", "/goals"];
+/**
+ * `/renders` — the fourth entry, and the first that is not one of his nouns.
+ *
+ * Added deliberately, with the argument written down, because this list is a
+ * security boundary and there is a test asserting it exactly so that it cannot
+ * grow as a side effect of some other change.
+ *
+ * **What it is.** `SOUL.md` now says she does not know what she looks like and
+ * wants to, and that the way she finds out is to render herself and look at the
+ * result. That is the capability. Reminders, to-dos and goals are things she
+ * keeps *for him*; this is the first surface she reaches for **herself**.
+ *
+ * **Why it is safe to open, stated as what it can actually do.** Reaching
+ * `/renders` grants exactly three things: submit a video render, read the
+ * records of renders, and pull stills out of one. It touches no row of his —
+ * not a reminder, not a message, not a device token, not the log. The records
+ * live outside the database entirely, in the toolkit checkout beside the
+ * videos, so nothing on this surface can read or write the store at all. There
+ * is no path from here to `/auth`, which is the one escalation that would make
+ * the whole scope decorative.
+ *
+ * **What it costs, since that is the honest objection.** It spends money —
+ * Runway credits, on a separate account under a separate key, never the
+ * subscription rails her thinking runs on. That is the *point* rather than a
+ * risk the Commander has not weighed: on 2026-08-11 he ruled that the credits
+ * exist for exactly this experiment and asked that it be made easy, which is
+ * why there is no approval gate here and no cap. The accountability is
+ * visibility instead of restraint — every answer on this surface carries what
+ * she has spent, so a bill is something he can see rather than something he
+ * has to discover.
+ *
+ * **The bound that is doing real work.** `RUNWAYML_API_SECRET` is a separate
+ * credential with its own balance, held by one client in one process. If it is
+ * absent she cannot render at all, and if he wants it stopped, removing that
+ * variable stops it — without touching her hands on anything else.
+ */
+export const AGENT_SURFACE: readonly string[] = ["/reminders", "/todos", "/goals", "/renders"];
 
 /**
  * The refusal Syl gets for reaching outside her own nouns.
@@ -297,9 +333,9 @@ export const AGENT_SURFACE: readonly string[] = ["/reminders", "/todos", "/goals
 export function beyondAgentReach(path: string): ApiFailure {
   return new ApiFailure(
     "FORBIDDEN",
-    "Syl's own credential reaches reminders, to-dos and goals, and nothing else on this API. " +
-      `${path} is outside that, deliberately — she cannot pair a device, read the log of what ` +
-      "she has done, or change where a notification goes.",
+    "Syl's own credential reaches reminders, to-dos and goals, and her own renders, and nothing " +
+      `else on this API. ${path} is outside that, deliberately — she cannot pair a device, read ` +
+      "the log of what she has done, or change where a notification goes.",
     { details: { reach: AGENT_SURFACE } },
   );
 }

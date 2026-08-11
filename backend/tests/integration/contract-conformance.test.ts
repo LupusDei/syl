@@ -67,6 +67,17 @@ const UNDECLARED: readonly string[] = [
   "GET /memory/graph",
   "GET /memory/metrics",
   "POST /memory/edges/{edgeId}/feedback",
+  // `/renders` joins them, and with the smallest debt of the three: nothing
+  // else consumes this surface. Her tool server is the only client, it lives in
+  // this repository, and its request and response shapes are pinned by
+  // `tests/unit/render-verbs.test.ts` against the same fakes. What the contract
+  // would add is a *second* client being able to reach it — which is exactly
+  // what a phone screen showing her renders would need, and is why this is
+  // listed rather than left to be noticed then. Note which one is a write.
+  "GET /renders",
+  "POST /renders",
+  "GET /renders/{name}",
+  "GET /renders/{name}/frames",
 ];
 
 /** Path parameters that are syntactically valid but name nothing. */
