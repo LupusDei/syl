@@ -37,17 +37,22 @@ final class ConstellationViewModel: ObservableObject {
 
     private let source: SkySource
     private var snapshot: ConstellationSnapshot = .empty
-    private var preparedFor: CGSize = .zero
+    private var preparedFor: ConstellationGlass = .none
 
     init(source: @escaping SkySource) {
         self.source = source
     }
 
-    /// Read the graph, then build the sky for this size.
-    func read(size: CGSize) async {
+    /// Read the graph, then build the sky for this glass.
+    func read(glass: ConstellationGlass) async {
         snapshot = await source()
         hasRead = true
-        await prepare(size: size)
+        await prepare(glass: glass)
+    }
+
+    /// The same, for a screen with no chrome — a preview, a render, a pure test.
+    func read(size: CGSize) async {
+        await read(glass: ConstellationGlass(size: size))
     }
 
     /// Rebuild for a new size — a rotation, or a split view.
@@ -67,9 +72,19 @@ final class ConstellationViewModel: ObservableObject {
     /// A point is the right threshold because it is the smallest change that can move a
     /// pixel on any screen we run on. Below it there is nothing to redraw, so there is
     /// nothing to compute.
+    ///
+    /// **The tolerance was necessary and it was not sufficient.** It stops the sky chasing a
+    /// fraction of a point; it cannot stop a ring whose every step is fifty-two points, which
+    /// is what the card's reservation actually was. That one is closed at its source — see
+    /// ``ConstellationGlass`` — and this guard is back to doing the job it was written for.
+    func resize(to glass: ConstellationGlass) async {
+        guard !glass.isWithinAPoint(of: preparedFor) else { return }
+        await prepare(glass: glass)
+    }
+
+    /// The same, for a screen with no chrome.
     func resize(to size: CGSize) async {
-        guard !size.isWithinAPoint(of: preparedFor) else { return }
-        await prepare(size: size)
+        await resize(to: ConstellationGlass(size: size))
     }
 
     /// **Off the main actor, always.**
@@ -83,16 +98,16 @@ final class ConstellationViewModel: ObservableObject {
     /// `SkyPreparer` is a `Sendable` struct holding no view, no view model and no store, so
     /// this genuinely leaves the main actor rather than being hopped straight back by an
     /// implicit capture.
-    private func prepare(size: CGSize) async {
-        guard size.width > 1, size.height > 1 else { return }
+    private func prepare(glass: ConstellationGlass) async {
+        guard glass.size.width > 1, glass.size.height > 1 else { return }
 
         let snapshot = self.snapshot
         let now = Date.now
         let prepared = await Task.detached(priority: .userInitiated) {
-            SkyPreparer(now: now).prepare(snapshot, size: size)
+            SkyPreparer(now: now).prepare(snapshot, size: glass.size, chrome: glass.chrome)
         }.value
 
-        preparedFor = size
+        preparedFor = glass
         sky = prepared
     }
 }

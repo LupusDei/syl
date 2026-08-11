@@ -1325,3 +1325,89 @@ It is worth being clear about what that failure demonstrated. **The design worke
 missing tag means the next push re-uploads and App Store Connect rejects a duplicate
 build: loud, harmless, obvious. The old gate's equivalent slip lost a release in silence.
 When choosing where a check is allowed to break, choose the side that makes noise.
+
+### The sky grew fifty-two points a pass, and everything he reported followed from it (2026-08-11)
+
+> *"If I tap the base node I get the memory to pop up. But if I tap another node, no memory
+> pops up and the whole thing starts zooming in without end."*
+
+Three symptoms, one cause, and the cause is a layout ring with a **gain of exactly one**.
+
+`ConstellationView` measured its own size with a `GeometryReader` **inside** its `ZStack` —
+which is a measurement of the stack, not of the screen. The card was a member of that stack
+and reserved its band with `.padding(.top, sky.size.height − tallestCard(sky.size))`. So:
+the card's height derived from the sky's height, the stack grew by the difference, the reader
+reported the larger number, the sky was laid out for it, and the band grew again. Measured
+through real SwiftUI layout in a real window: **852 → 904 → 956 → 1008 → 1060 → 1112 → 1164**,
++52 every pass, no bound.
+
+`ConstellationLayout`'s field is `(height − insets) / 2`, so the whole star field spread as
+the number grew. **That is what "zooming in without end" was** — not the transform.
+`maximumScale` is 4 and the sky he photographed was spread about ten times, which is the
+arithmetic that rules the transform out and it was available before any code was read.
+
+And the missed taps are the same fault, not a second one. The drawing and the hit test both
+read one `PreparedSky`, so they cannot disagree about where a star is; what they can both be
+is wrong about where it was a second ago. Measured on the original code: **opening one card
+moves stars 60 to 193 points on the first pass.** A finger is 22. So the first tap of a
+session lands and every tap after it arrives where the star used to be — exactly "the base
+node works and nothing else does".
+
+Three rules out of it:
+
+1. **Measure the screen at the root, never inside the stack.** A `GeometryReader` reports the
+   size it was *proposed*, so a reader at the root of a screen is a measurement of the glass
+   and nothing drawn inside it can move the number. One rung below that it is a measurement of
+   its own siblings.
+2. **A card is drawn over the sky, not added to it.** It is an `.overlay` now, which is
+   proposed its host's size and cannot change it — the ring is impossible rather than merely
+   unlikely.
+3. **"It converges" is not the property you want.** The first fix attempt had a gain of ½ and
+   settled — at 1045 points on an 852-point screen, with the field spread off every edge. The
+   assertion that catches that is *the sky is laid out for the size of the screen*, not *the
+   sky stops changing*.
+
+Note the relationship to the entry above it. That one fixed a ring driven by a **third of a
+point** and added a 1pt tolerance to `resize(to:)`. This ring steps 52 points at a time, so
+the tolerance never had a chance — and the tolerance was still right. **A guard sized for
+jitter is not a defence against feedback.** Fixing the small ring made the big one the only
+one left, which is why it surfaced looking like a regression.
+
+#### And the sky had never been told about the tab bar
+
+The two remaining things he could see were the same omission from both sides.
+`ConstellationLayout` inset the field by 104 and 72 — measured against a navigation bar and a
+home indicator, before this screen was in a tab bar. A tab bar takes 83, so the lowest star in
+the field was drawn under it. `ConstellationBand.cardTop` had the mirror image: it put the
+card's top edge at `size.height − cardHeight − step`, measuring from the bottom of the
+**glass**, while the card sits above the **tab bar** — 83 points higher. So the sky panned a
+selection to a line it believed was clear and the card came up over it.
+
+Both are now one `ConstellationChrome` carried **on the sky**, so the layout that placed the
+stars and the arithmetic that decides where the card's edge falls cannot answer differently.
+
+**The render harness had no bars in it, which is why no image ever showed either defect.** It
+has them now — `safeAreaInset` for the real geometry, and translucent fills drawn on top so a
+human can see what is covered. An offscreen render of a pleasanter rectangle than the one he
+is holding is a consistency check.
+
+#### One more, from the same screenshot
+
+His graph hangs entirely off a single `source` node, *"Conversation with the Commander"*,
+which asserts everything — including itself. Its card read the title and then *"Conversation
+with the Commander said so."* **A thing is not its own evidence.** `ConstellationWords`
+compares the asserter to the star's own label and says what the node *is* instead. Compared by
+label rather than by kind, so a source something else genuinely cited still says so.
+
+#### The fixture was the whole reason none of this was caught
+
+Everything this feature was accepted on was looked at through `ConstellationSnapshot.fixture`:
+seven anchors, real entity-to-entity edges, six clusters. **His graph has none of that.** 33
+nodes and 32 edges, every edge `stated`/`observed` from the one source node — a hub and
+spokes, with nothing relating to anything else, and therefore `anchorId: nil` on every star
+and no clusters at all. `ConstellationSnapshot.hubAndSpokes` is that shape, measured off
+`~/.syl/syl.db`, and every render and every new test runs against it.
+
+This is the standing fixture rule — *build fixtures from captured reality, never from our own
+types* — arriving on a screen rather than on a wire format. A fixture that is prettier than
+production is a consistency check with good art direction.

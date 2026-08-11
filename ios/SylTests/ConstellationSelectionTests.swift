@@ -363,4 +363,47 @@ final class ConstellationSelectionTests: XCTestCase {
             ConstellationWords.hint(for: ConstellationStarSpecies.inferred)
                 .lowercased().contains("why"))
     }
+
+    // MARK: - A thing is not its own evidence
+
+    /// **The hub must not cite itself.**
+    ///
+    /// The Commander's graph hangs entirely off one `source` node called *"Conversation with
+    /// the Commander"*, and that node asserts everything — including itself. So its card read
+    /// *"Conversation with the Commander"* in the title and *"Conversation with the Commander
+    /// said so."* underneath: redundant, and slightly absurd.
+    func testShouldNotHaveAStarCiteItselfAsItsOwnSource() {
+        let hub = "Conversation with the Commander"
+        let sentence = ConstellationWords.provenance(
+            species: .observed, assertedBy: hub, describing: hub)
+
+        XCTAssertFalse(
+            sentence.contains(hub),
+            "a star whose asserter is itself must not repeat its own title back at him")
+        XCTAssertFalse(sentence.isEmpty, "and it must still say what the node is")
+    }
+
+    /// The other half, or the rule would silently swallow every real attribution.
+    func testShouldStillNameTheSourceWhenSomethingElseAssertedIt() {
+        XCTAssertEqual(
+            ConstellationWords.provenance(
+                species: .observed, assertedBy: "Conversation with the Commander",
+                describing: "Lives in Buda, TX"),
+            "Conversation with the Commander said so.")
+    }
+
+    /// And it holds through the whole prepared sky, which is where the card actually reads it.
+    func testShouldNotCiteItselfAnywhereInHisOwnSky() {
+        let sky = SkyPreparer(now: ConstellationFixture.now)
+            .prepare(.hubAndSpokes, size: phone, chrome: .phone)
+
+        for star in sky.stars {
+            let sentence = ConstellationWords.provenance(
+                species: star.detail.species, assertedBy: star.detail.assertedBy,
+                describing: star.label)
+            XCTAssertFalse(
+                sentence.contains(star.label),
+                "\(star.id) cites itself: \(sentence)")
+        }
+    }
 }

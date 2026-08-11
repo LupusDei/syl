@@ -37,13 +37,22 @@ final class ConstellationSnapshotRendering: XCTestCase {
 
     private let phone = CGSize(width: 393, height: 852)
 
+    /// **The chrome the device really has.** A render without it is a picture of a pleasanter
+    /// rectangle than the one he is holding — and the two defects he photographed on
+    /// 2026-08-11, a star under the tab bar and a card over the star it described, were both
+    /// invisible in every image this harness had produced until it was told about the bars.
+    private let chrome = ConstellationChrome.phone
+
     func testRenderTheSky() throws {
         try XCTSkipUnless(enabled, "set SYL_RENDER_SNAPSHOTS=1 to produce design images")
         let directory = try XCTUnwrap(outputDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         print("SYL_SNAPSHOTS_AT \(directory.path)")
 
-        let sky = SkyPreparer(now: ConstellationFixture.now).prepare(.fixture, size: phone)
+        try renderHisSky(into: directory)
+
+        let sky = SkyPreparer(now: ConstellationFixture.now)
+            .prepare(.fixture, size: phone, chrome: chrome)
 
         for scheme in [ColorScheme.dark, .light] {
             let suffix = scheme == .dark ? "night" : "day"
@@ -137,6 +146,49 @@ final class ConstellationSnapshotRendering: XCTestCase {
             named: "sky-edge-night", scheme: .dark, in: directory)
     }
 
+    // MARK: - His own sky
+
+    /// **The pictures that matter, because this is the graph he actually has.**
+    ///
+    /// Thirty-three stars, one hub, thirty-two identical threads, and not one relation between
+    /// two things she knows. Everything this feature was accepted on was looked at through
+    /// ``ConstellationSnapshot/fixture``, which has seven anchors and six clusters — a shape
+    /// his data does not have and may not have for months. See
+    /// ``ConstellationSnapshot/hubAndSpokes``.
+    private func renderHisSky(into directory: URL) throws {
+        let sky = SkyPreparer(now: ConstellationFixture.now)
+            .prepare(.hubAndSpokes, size: phone, chrome: chrome)
+
+        for scheme in [ColorScheme.dark, .light] {
+            let suffix = scheme == .dark ? "night" : "day"
+
+            try render(
+                ConstellationView(sky: sky, time: .frozen(6.4)),
+                named: "his-sky-\(suffix)", scheme: scheme, in: directory)
+
+            // The hub, touched. Two things to look at: the card must not be over the star it
+            // describes, and it must not say "Conversation with the Commander said so."
+            if let hub = sky.stars.first(where: { $0.id == "source.conversation" }) {
+                try render(
+                    ConstellationView(
+                        sky: sky, time: .frozen(6.4),
+                        opensWith: .star(hub.id),
+                        opensAt: clearing(hub.anchor, in: sky)),
+                    named: "his-hub-\(suffix)", scheme: scheme, in: directory)
+            }
+
+            // And an ordinary spoke — the case he says does nothing at all.
+            if let star = sky.stars.first(where: { $0.id == "person.father" }) {
+                try render(
+                    ConstellationView(
+                        sky: sky, time: .frozen(6.4),
+                        opensWith: .star(star.id),
+                        opensAt: clearing(star.anchor, in: sky)),
+                    named: "his-star-\(suffix)", scheme: scheme, in: directory)
+            }
+        }
+    }
+
     /// The transform the device arrives at when a card of the height this one settles at
     /// rises over a selection. Same function, same numbers.
     /// The point the screen clears for a thread: the lowest of its two ends and its middle,
@@ -149,8 +201,9 @@ final class ConstellationSnapshotRendering: XCTestCase {
     private func clearing(_ point: CGPoint, in sky: PreparedSky) -> ConstellationTransform {
         ConstellationTransform.identity.revealing(
             point,
-            between: ConstellationBand.headroom,
-            and: ConstellationBand.skyline(forCardOf: Self.typicalCardHeight, in: sky.size),
+            between: ConstellationBand.headroom(sky.chrome),
+            and: ConstellationBand.skyline(
+                forCardOf: Self.typicalCardHeight, in: sky.size, chrome: sky.chrome),
             within: sky.contentBounds,
             viewSize: sky.size)
     }
@@ -176,11 +229,30 @@ final class ConstellationSnapshotRendering: XCTestCase {
         // `GoalSnapshotRendering` after every image in its first run came back yellow. The
         // toolbar title is therefore absent from these images and present on the device;
         // what is being looked at here is the sky.
+        // **The bars are in the picture, and that is the whole point of this harness now.**
+        //
+        // `safeAreaInset` gives the hosted view real safe-area insets, so `ConstellationView`
+        // measures the same chrome the device has and lays the card out above the same line.
+        // The translucent fills are drawn on top so a human looking at the image can see what
+        // the tab bar covers — which is how the clipped star was found, and it was invisible
+        // in every earlier render because every earlier render had no bars in it.
         let hosted = view
+            .safeAreaInset(edge: .top, spacing: 0) {
+                Color.clear.frame(height: chrome.top)
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Color.clear.frame(height: chrome.bottom)
+            }
+            .overlay(alignment: .top) {
+                bar(height: chrome.top, scheme: scheme)
+            }
+            .overlay(alignment: .bottom) {
+                bar(height: chrome.bottom, scheme: scheme)
+            }
             .frame(width: phone.width, height: phone.height)
             .environment(\.colorScheme, scheme)
 
-        let renderer = ImageRenderer(content: hosted)
+        let renderer = ImageRenderer(content: hosted.ignoresSafeArea())
         renderer.scale = 2
 
         guard let image = renderer.uiImage, let data = image.pngData() else {
@@ -189,5 +261,14 @@ final class ConstellationSnapshotRendering: XCTestCase {
         }
 
         try data.write(to: directory.appendingPathComponent("\(name).png"))
+    }
+
+    /// A stand-in for a navigation bar or a tab bar: translucent, so what is behind it is
+    /// still visible in the image and can be judged rather than merely inferred.
+    private func bar(height: CGFloat, scheme: ColorScheme) -> some View {
+        Rectangle()
+            .fill((scheme == .dark ? Color.white : Color.black).opacity(0.10))
+            .frame(height: height)
+            .allowsHitTesting(false)
     }
 }
