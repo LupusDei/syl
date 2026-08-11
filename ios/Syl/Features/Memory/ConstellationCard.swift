@@ -49,8 +49,14 @@ extension PreparedSky {
 struct ConstellationCard: View {
     var subject: ConstellationSubject
 
-    /// The tallest this card may grow before it starts scrolling inside itself. The screen
-    /// sets it from its own height; the default is a sane phone.
+    /// The tallest this card may grow, **in total and including its own padding**, before it
+    /// starts scrolling inside itself. The screen sets it from its own height; the default is
+    /// a sane phone.
+    ///
+    /// Total rather than content-only, because the screen reserves room by subtracting this
+    /// number from the glass — so a card that answered it with `ceiling` of scrolling content
+    /// *plus* a gutter at each end would stand forty points into space nobody set aside. See
+    /// ``ConstellationBand/tallestCard(in:chrome:)``.
     var ceiling: CGFloat = 460
 
     /// Closing it. Tapping empty sky does the same thing; this is the one that is visible.
@@ -81,7 +87,12 @@ struct ConstellationCard: View {
                 content
             }
             .scrollIndicators(.hidden)
-            .frame(height: ceiling)
+            // **The gutter comes out of the ceiling, not on top of it.** ``ceiling`` is a
+            // budget for the whole card and the padding below is applied *outside* this
+            // frame, so a scrolling card set to the full ceiling finished forty points over
+            // it — measured at 240 against a ceiling of 200, 340 against 300, 371 against
+            // 331. `ConstellationRunawayTests` asserts it rather than trusting it.
+            .frame(height: max(0, ceiling - SylTheme.Metric.gutter * 2))
         }
         .padding(SylTheme.Metric.gutter)
         .frame(maxWidth: SylTheme.Metric.proseMeasure, alignment: .leading)
@@ -361,6 +372,14 @@ enum ConstellationBand {
     /// screen by fifty-two points, and then by fifty-two more, without limit; the field
     /// spread with it, which is what "zooming in without end" actually was. The card is now
     /// an **overlay**, which is proposed the stack's size and can never change it.
+    ///
+    /// **The arithmetic is the other half, and the overlay does not excuse it.** This number
+    /// bounds the card's *whole* height, its own padding included — the scrolling branch in
+    /// ``ConstellationCard`` therefore takes the gutter out of it rather than adding it on
+    /// top. Structurally the ring is already broken and stays broken; but a card that
+    /// overruns this still overhangs its band on the glass, and the height it reports back
+    /// through `onHeight` is what ``skyline(forCardOf:in:chrome:)`` pans against, so the sky
+    /// would lift a selection further than it needs to.
     static func tallestCard(in size: CGSize, chrome: ConstellationChrome = .none) -> CGFloat {
         max(200, size.height / 2 - chrome.bottom - SylTheme.Metric.step)
     }

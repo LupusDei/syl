@@ -170,4 +170,63 @@ final class ConstellationRunawayTests: XCTestCase {
             withCard.height, without.height, accuracy: 1,
             "a card is drawn over the sky, not added to it")
     }
+
+    // MARK: - The arithmetic the structure is standing in for
+
+    /// **A card never comes back taller than the ceiling it was given.**
+    ///
+    /// The unit-sized statement of the same defect, and the half the overlay does *not* fix.
+    /// ``ConstellationBand/tallestCard(in:chrome:)`` is a budget for the **whole** card, and
+    /// the screen reserves room by subtracting it from the glass — so a card that answers
+    /// with a ceiling of scrolling content *plus* a gutter at each end is forty points into
+    /// space nobody set aside.
+    ///
+    /// Since ``ConstellationView`` made the card an overlay in a fixed band, that overrun can
+    /// no longer grow the sky — the ring is broken structurally and stays broken. But it is
+    /// still wrong twice over: the card overhangs its band on the glass, and the height it
+    /// reports through `onHeight` is the number ``ConstellationBand/skyline(forCardOf:in:chrome:)``
+    /// pans against, so the sky lifts a selection forty points further than it needs to.
+    ///
+    /// Keeping this assertion separate from the structure is deliberate. The overlay means a
+    /// future padding change cannot bring the runaway back; this means the arithmetic is not
+    /// quietly allowed to drift just because nothing catastrophic happens when it does.
+    @MainActor
+    func testShouldNeverComeBackTallerThanItsCeiling() {
+        let sky = SkyPreparer(now: ConstellationFixture.now)
+            .prepare(.fixture, size: phone, chrome: .phone)
+        let wordiest = sky.stars.first { $0.id == "memory.dad.workshop" }!
+
+        let window = UIWindow(frame: CGRect(origin: .zero, size: phone))
+
+        for ceiling in [200.0, 300.0, ConstellationBand.tallestCard(in: phone, chrome: .phone)] {
+            var measured: CGFloat = 0
+            let host = UIHostingController(
+                rootView: ConstellationCard(
+                    subject: .star(wordiest),
+                    ceiling: ceiling,
+                    onHeight: { measured = $0 }
+                )
+                // Bounded the way the screen bounds it, and then offered a whole screen to
+                // grow into — so a card that ignores its ceiling has somewhere to do it and
+                // this measures the card rather than the clamp around it.
+                .frame(maxHeight: ceiling, alignment: .bottom)
+                .frame(width: 369, height: phone.height, alignment: .bottom)
+                .environment(\.colorScheme, .dark))
+
+            window.rootViewController = host
+            window.isHidden = false
+            window.layoutIfNeeded()
+            host.view.setNeedsLayout()
+            window.layoutIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+            XCTAssertGreaterThan(measured, 0, "the card was never measured at \(ceiling)")
+            XCTAssertLessThanOrEqual(
+                measured, ceiling,
+                "a card given a ceiling of \(ceiling) came back \(measured) tall")
+        }
+
+        window.rootViewController = nil
+        window.isHidden = true
+    }
 }
