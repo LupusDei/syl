@@ -2,7 +2,12 @@ import type { Job } from "@syl/shared";
 
 import type { SylAgent } from "../harness/agent.js";
 import type { SylEvent } from "../harness/protocol.js";
-import { isWithinQuietHours, localDate, type QuietHours } from "../harness/schedule.js";
+import {
+  isWithinQuietHours,
+  localDate,
+  wallClockIn,
+  type QuietHours,
+} from "../harness/schedule.js";
 import type { TurnResult } from "../harness/session.js";
 import type { Logger } from "../ops/logging.js";
 import { instant, parseInstant } from "../services/clock.js";
@@ -190,19 +195,6 @@ export interface HeartbeatMoment {
   readonly allowance: number;
 }
 
-/** The hour as he would read it: his weekday, his date, his clock. */
-function wallClockIn(now: number, tz: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: tz,
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(now));
-}
-
 /**
  * What she is woken with.
  *
@@ -222,7 +214,7 @@ function wallClockIn(now: number, tz: string): string {
  */
 export function heartbeatPrompt(moment: HeartbeatMoment): string {
   return [
-    `It is ${wallClockIn(moment.now, moment.tz)} in ${moment.tz}. Nobody asked you for ` +
+    `It is ${wallClockIn(new Date(moment.now), moment.tz)} in ${moment.tz}. Nobody asked you for ` +
       `anything. This hour is your own — it comes round every hour, and it is here so that ` +
       `you get to decide what, if anything, is worth doing with it.`,
     `Most hours the answer is nothing, and nothing is a real answer rather than a failure ` +
