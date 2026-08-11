@@ -1507,3 +1507,47 @@ And a mutation that survived is worth recording: a faithfulness test compared th
 memo against a fresh parse, so corrupting both produced two wrong answers that
 agreed. **A correspondence check between two things that share an implementation
 is a consistency check.** Only breaking it on purpose showed that.
+
+### An empty grep is the most confident-looking wrong answer available (2026-08-11)
+
+Asked whether `show_him` notifies him, I searched the sending route and service
+for `push`, `notif`, `apns`. **Zero matches in both files.** One message away
+from reporting that From Syl delivers videos in silence — a broken flagship
+feature, and one that fit his oldest open complaint about a reminder that never
+buzzed, which is what made it feel confirmed rather than merely found.
+
+The mechanism is called **`outbox`**. `sending-service.ts` enqueues an APNS
+notification with her sentence as the body, keyed on the sending id, and the
+file contains the word "push" nowhere.
+
+**A search proves something about your vocabulary, never about the system's.**
+This is worse than a stale measurement, because every other kind of wrong answer
+hands you something to be suspicious of: a bad number still looks like a number,
+a bad diagnosis has an argument you can attack. **Nothing looks like certainty.**
+
+The remedy is not a longer list of synonyms. **Verify the positive** — find
+where a notification *is* sent and see whether this path reaches it. A negative
+about behaviour cannot be established by failing to find a string.
+
+### A comment is not a mechanism (2026-08-11)
+
+`REACHES_HIM` decides which verbs count as reaching him, and bounds
+`SENDINGS_PER_DAY`. Its own comment said, in as many words, *"when the sending
+verb lands it belongs in here."* The verb landed as `show_him`. Nobody added it.
+
+So every hour in which she sent him a video was recorded as **an hour that
+reached nobody**, the allowance was never spent, and twenty-four a day was
+permitted by the code. **Thirty-six heartbeat tests passed over it**, because
+they assert the list matches itself — a tautology in test form, which is the
+shape a test takes when it is written from the implementation.
+
+**If the next change must update something, a test has to fail when it doesn't.**
+A note addressed to a future reader is a hope, not a constraint.
+
+The repair generalises past this constant, and `AGENT_SURFACE` is the worked
+example: its refusal sentence used to be written *beside* the list, so widening
+the list would have had her claiming she cannot do the thing she had just been
+given. Deriving the sentence from the list closed that — and within the hour the
+derivation exposed a second defect that could not have existed before, since
+entries are spliced into one sentence and **a `says` may not contain a comma**.
+A hand-written sentence never had to survive being joined to anything.
