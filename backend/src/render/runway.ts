@@ -53,11 +53,41 @@ export type RunwayResult<T> =
   | { readonly ok: true; readonly data: T }
   | { readonly ok: false; readonly failure: RunwayFailure };
 
+/**
+ * One picture and where in the clip it is pinned.
+ *
+ * Runway takes `promptImage` either as a bare URI — the first frame — or as an
+ * array of these, which pins the first and last frames independently. Each
+ * position may be used once; a repeat is a 400 naming `promptImage`, which is
+ * how the array was confirmed to be validated rather than ignored.
+ */
+export interface PositionedImage {
+  /** A data URI, or any URI Runway accepts. */
+  readonly uri: string;
+  readonly position: "first" | "last";
+}
+
+/**
+ * The picture or pictures the video is built from.
+ *
+ * A bare string is frame one and nothing else. The array form is what lets a
+ * clip open on the ribbon and still arrive at her face — see
+ * `framing.ts`'s `LikenessAnchor`.
+ */
+export type PromptImage = string | readonly PositionedImage[];
+
 /** What Runway is asked for. Mirrors `POST /image_to_video`. */
 export interface SubmitSpec {
   readonly model: string;
-  /** The reference, as a data URI. This is what holds her face still. */
-  readonly promptImage: string;
+  /**
+   * The frames Runway is given, as data URIs.
+   *
+   * **Not a style hint.** Whatever is at `first` is literally frame one, and
+   * seedance2 takes the video's aspect from it — measured 2026-08-11, and it
+   * silently overrules `ratio`. When a `last` picture is sent too it is fitted
+   * into that same shape rather than changing it.
+   */
+  readonly promptImage: PromptImage;
   readonly promptText: string;
   readonly ratio: string;
   readonly duration: number;

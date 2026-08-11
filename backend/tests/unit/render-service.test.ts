@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fixedClock } from "../../src/services/clock.js";
 import { RenderService } from "../../src/render/render-service.js";
 import type { RenderBackend, RunwayResult, RunwayTask, SubmitSpec } from "../../src/render/runway.js";
-import { DEFAULT_OPENING, studioAt } from "../../src/render/studio.js";
+import { DEFAULT_OPENING, DEFAULT_REFERENCE, studioAt } from "../../src/render/studio.js";
 
 /**
  * Syl rendering herself, and being able to say what it cost.
@@ -49,6 +49,25 @@ const OPENING_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 /** What a `data:` URI carries, back as bytes, so a spec can be checked against a file. */
 function bytesOf(dataUri: string): Buffer {
   return Buffer.from(dataUri.slice(dataUri.indexOf(",") + 1), "base64");
+}
+
+/**
+ * Frame one, whether one picture was sent or two.
+ *
+ * `promptImage` is a bare data URI for the framings that need no anchor and an
+ * array of positioned pictures for the ones that do. Every caller here is
+ * asking the same question of both shapes — what does the video open on — so
+ * the shape is unwrapped once rather than at each assertion.
+ */
+function firstFrameOf(sent: SubmitSpec["promptImage"] | undefined): string {
+  if (typeof sent === "string") return sent;
+  return sent?.find((image) => image.position === "first")?.uri ?? "";
+}
+
+/** The pinned closing frame, or `""` where nothing anchors one. */
+function lastFrameOf(sent: SubmitSpec["promptImage"] | undefined): string {
+  if (typeof sent === "string" || sent === undefined) return "";
+  return sent.find((image) => image.position === "last")?.uri ?? "";
 }
 
 afterEach(() => {
@@ -171,7 +190,11 @@ describe("asking for a render", () => {
     const backend = fakeBackend();
     const service = serviceWith(backend);
 
-    await service.start(ASK);
+    // The reel framing, because the recipe under test is the LOOP recipe: it is
+    // what the eight were made with, and it is the one whose clip has to end
+    // back on the bare ribbon. An anchored framing closes on her face instead
+    // and is covered by its own test.
+    await service.start({ ...ASK, framing: "face_turned_away" });
 
     const prompt = backend.specs[0]?.promptText ?? "";
     // The identity phrase every one of the eight shots opens with.
@@ -210,10 +233,117 @@ describe("asking for a render", () => {
 
     await service.start(ASK);
 
-    const sent = backend.specs[0]?.promptImage ?? "";
-    expect(sent).toMatch(/^data:image\/png;base64,/u);
-    expect(bytesOf(sent)).toEqual(OPENING_BYTES);
-    expect(bytesOf(sent)).not.toEqual(REFERENCE_BYTES);
+    // `ASK` is `close_portrait`, which sends two pictures — so the requirement
+    // is about the FIRST of them. Frame one is the ribbon whichever path runs.
+    expect(bytesOf(firstFrameOf(backend.specs[0]?.promptImage))).toEqual(OPENING_BYTES);
+    expect(bytesOf(firstFrameOf(backend.specs[0]?.promptImage))).not.toEqual(REFERENCE_BYTES);
+  });
+
+  it("should send the ribbon alone for the reel framing, so the clip ends where it began", async () => {
+    // The template and all eight of the Commander's favourites. Its likeness
+    // holds because no face is ever toward the camera, so it needs no anchor —
+    // and pinning a closing frame would break the loop, whose whole trick is
+    // that the first and last frames are the same bare ribbon.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+
+    await service.start({ ...ASK, framing: "face_turned_away" });
+
+    const sent = backend.specs[0]?.promptImage;
+    expect(typeof sent).toBe("string");
+    expect(sent as string).toMatch(/^data:image\/png;base64,/u);
+    expect(bytesOf(sent as string)).toEqual(OPENING_BYTES);
+  });
+
+  it("should pin her face to the closing frame when the shot is her face", async () => {
+    // The fix for `syl-63v`, and it is an API feature rather than a wording.
+    // Probed on seedance2, 2026-08-11: `promptImage` takes an array of
+    // `{uri, position}` with position first|last, and a request carrying both
+    // is accepted — the duplicate-position rule fires, which is how we know the
+    // array is validated rather than ignored.
+    //
+    // So the ribbon still opens the shot and something of her now ends it. That
+    // is the only thing holding her likeness at a framing where her face is
+    // toward the camera, now that `promptImage` is no longer her headshot.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+
+    await service.start({ ...ASK, framing: "close_portrait" });
+
+    const sent = backend.specs[0]?.promptImage;
+    expect(Array.isArray(sent)).toBe(true);
+    const images = sent as readonly { readonly uri: string; readonly position: string }[];
+    expect(images.map((image) => image.position)).toEqual(["first", "last"]);
+    expect(bytesOf(images[0]?.uri ?? "")).toEqual(OPENING_BYTES);
+    expect(bytesOf(images[1]?.uri ?? "")).toEqual(REFERENCE_BYTES);
+  });
+
+  it("should keep asking for the loops' portrait shape even though the anchor is landscape", async () => {
+    // The obvious failure mode of two inputs, and it was tested deliberately
+    // rather than reasoned about: `reference.png` is 1120x832 landscape and the
+    // ribbon is 834x1112 portrait, and seedance2 takes aspect from
+    // `promptImage`. Two pictures disagreeing about shape is the way to get a
+    // video shaped like neither.
+    //
+    // Measured on 2026-08-11, one 4s render each way: BOTH came back 834x1112.
+    // The opening frame decides the shape and the closing picture is fitted
+    // into it — the landscape anchor was centre-cropped and her likeness
+    // survived the crop. So the anchor does not need re-cutting, and `ratio`
+    // does not move.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+
+    await service.start({ ...ASK, framing: "close_portrait" });
+
+    expect(backend.specs[0]?.ratio).toBe("834:1112");
+  });
+
+  it("should not promise a bare ribbon at the end of a clip whose end frame is her face", async () => {
+    // The same defect as the one that cost the portrait fix, facing the other
+    // way. `LOOP_CLAUSE` says the first and last frames are identical and hold
+    // no figure; pinning her portrait as the last frame contradicts it in the
+    // one place a sentence cannot win. Whichever closing text is sent has to
+    // agree with the frame that is actually pinned.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+
+    const anchored = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(anchored.ok).toBe(true);
+    if (!anchored.ok) return;
+
+    expect(anchored.record.prompt).not.toMatch(/first and last frames are identical/iu);
+    expect(anchored.record.prompt).not.toMatch(/leaving empty starfield/iu);
+    // And it must say what it does end on, so the model is told rather than
+    // left to reconcile a pinned frame against silence.
+    expect(anchored.record.prompt).toMatch(/looking (straight )?at (the viewer|you)|meets his eyes/iu);
+
+    // The reel framing keeps the clause that makes it cut against the eight.
+    const loop = await service.start({ ...ASK, framing: "face_turned_away" });
+    expect(loop.ok).toBe(true);
+    if (!loop.ok) return;
+    expect(loop.record.prompt).toMatch(/first and last frames are identical/iu);
+  });
+
+  it("should record the anchor it sent, so an anchored render can be made again", async () => {
+    // The sidecar's whole job, applied to the second picture. A record naming
+    // one input when the render was made from two is a record that cannot
+    // reproduce it — which is the lost-prompt failure wearing a new hat.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+
+    const anchored = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(anchored.ok).toBe(true);
+    if (!anchored.ok) return;
+
+    expect(anchored.record.reference).toBe(DEFAULT_OPENING);
+    expect(anchored.record.anchor).toBe(DEFAULT_REFERENCE);
+
+    // And a framing that sends one picture records no anchor rather than a
+    // path to something it did not send.
+    const loop = await service.start({ ...ASK, framing: "face_turned_away" });
+    expect(loop.ok).toBe(true);
+    if (!loop.ok) return;
+    expect(loop.record.anchor).toBeNull();
   });
 
   it("should ask for the portrait shape the eight loops are, not a landscape one", async () => {
@@ -248,8 +378,14 @@ describe("asking for a render", () => {
     if (!started.ok) return;
 
     expect(started.record.reference).toBe(DEFAULT_OPENING);
-    expect(bytesOf(backend.specs[0]?.promptImage ?? "")).toEqual(
+    expect(bytesOf(firstFrameOf(backend.specs[0]?.promptImage))).toEqual(
       readFileSync(join(root, started.record.reference)),
+    );
+    // And the second picture too, when there is one — a record that names one
+    // input for a render made from two cannot reproduce it.
+    expect(started.record.anchor).not.toBeNull();
+    expect(bytesOf(lastFrameOf(backend.specs[0]?.promptImage))).toEqual(
+      readFileSync(join(root, started.record.anchor as string)),
     );
   });
 
@@ -334,6 +470,37 @@ describe("what a render refuses", () => {
     expect(refused.reason).toMatch(/ribbon|opening/iu);
     expect(refused.reason).toContain(studio.opening());
     expect(refused.retryable).toBe(false);
+  });
+
+  it("should refuse a face-on shot with no likeness to anchor it, rather than render a stranger", async () => {
+    // The whole point of anchoring, stated as a refusal. A close portrait with
+    // nothing pinning her face is the `8-descent` failure by construction — the
+    // model interpolates and returns a visibly different woman — and it costs
+    // 540 credits to find out. Refused before a credit is spent, and only for
+    // the framings that actually need the picture.
+    rmSync(studio.reference(), { force: true });
+    const service = serviceWith(fakeBackend());
+
+    const refused = await service.start({ ...ASK, framing: "close_portrait" });
+
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.reason).toContain(studio.reference());
+    expect(refused.retryable).toBe(false);
+  });
+
+  it("should still render the reel framing when her likeness is missing, because it never needed one", async () => {
+    // The other half, and the reason the check is per-framing rather than at
+    // the top of `start`. `face_turned_away` holds because there is no face to
+    // get wrong, so a missing likeness must not take down the template that
+    // every one of the eight loops is in.
+    rmSync(studio.reference(), { force: true });
+    const service = serviceWith(fakeBackend());
+
+    const started = await service.start({ ...ASK, framing: "face_turned_away" });
+
+    expect(started.ok).toBe(true);
+    await service.drain();
   });
 });
 

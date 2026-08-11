@@ -76,6 +76,16 @@ export interface RenderRecord {
    * one indirection further out.
    */
   readonly reference: string;
+  /**
+   * The picture pinned as the video's LAST frame, relative to her home.
+   *
+   * `null` for a framing that sends one picture, which is most of them — and
+   * `null` rather than absent, so "no anchor was sent" and "this sidecar
+   * predates anchoring" read the same way rather than one of them looking like
+   * a missing field. Every sidecar written before 2026-08-11 is in the second
+   * case and stays readable.
+   */
+  readonly anchor: string | null;
   readonly framing: Framing;
   /** The composed prompt, exactly as it was sent. Reproducible from this alone. */
   readonly prompt: string;
@@ -188,6 +198,28 @@ const LOOP_CLAUSE =
   "The ribbon gathers and coalesces into her, her whole body made of that same living light. " +
   "At the end she unravels back into the ribbon and it streams away, leaving empty starfield. " +
   "The first and last frames are identical: the bare ribbon, no figure.";
+
+/**
+ * The arc for a shot that ends on her face rather than on the empty starfield.
+ *
+ * **A closing clause has to agree with the frame that is pinned**, and this is
+ * that rule applied in the direction the portrait fix opened up. An anchored
+ * render sends her likeness as `position: "last"`, so the last frame is her
+ * face; sending {@link LOOP_CLAUSE} alongside it would tell the model the clip
+ * ends on a bare ribbon with no figure, which is the exact contradiction that
+ * cost a day — a sentence arguing with a pinned frame, and losing.
+ *
+ * So it opens the way every clip opens and closes where the pinned frame
+ * actually is. **This one does not loop**, and that is a real cost rather than
+ * an oversight: a clip that ends on her face cannot cut against the eight,
+ * whose whole trick is beginning and ending on the same ribbon. `framing.ts`
+ * says so in the evidence for `close_portrait`, so the trade is visible at the
+ * point she chooses, not discovered afterwards.
+ */
+const ARRIVAL_CLAUSE =
+  "Opens on a lone ribbon of blue light against empty starfield, with no figure present. " +
+  "The ribbon gathers and coalesces into her, her whole body made of that same living light. " +
+  "The shot settles and holds on her face, near and still, looking straight at the viewer.";
 
 /**
  * What a render is, unless something says otherwise. The loops' own settings.
@@ -346,20 +378,53 @@ export class RenderService {
       };
     }
 
+    // The picture that pins her face, for the framings that need one. A shot
+    // whose subject is her face and which has nothing holding that face is the
+    // `8-descent` failure by construction — a visibly different woman, at full
+    // price — so it is refused here rather than discovered on the other side.
+    // Only for the framings that need it: `face_turned_away` holds without a
+    // face at all, and must not stop working because a likeness is missing.
+    const anchor = framing.anchor === "none" ? null : this.#studio.reference();
+    if (anchor !== null && !existsSync(anchor)) {
+      return {
+        ok: false,
+        reason:
+          `This shot is my face, and the picture that holds my likeness is not where it should ` +
+          `be (${anchor}). Without it the model has nothing to copy and would give you somebody ` +
+          "else. Nothing has been spent.",
+        retryable: false,
+      };
+    }
+
     const now = this.#clock();
     const name = this.#nameFor(now, framing.id);
-    const prompt = `${IDENTITY} ${scene} ${framing.clause} ${LOOP_CLAUSE}`;
+    const prompt = `${IDENTITY} ${scene} ${framing.clause} ${
+      anchor === null ? LOOP_CLAUSE : ARRIVAL_CLAUSE
+    }`;
     const credits = creditsFor({ model: DEFAULTS.model, ratio: DEFAULTS.ratio, seconds: DEFAULTS.duration });
 
     const submitted = await this.#backend.submit({
       model: DEFAULTS.model,
-      // **The first frame of the video, not a style hint.** This used to be her
+      // **The frames of the video, not a style hint.** `first` used to be her
       // reference — a smiling headshot — so every render opened on her face,
       // already formed and already smiling, while `LOOP_CLAUSE` was busy
       // describing an empty starfield. The clause was rewritten twice and could
       // not have worked: no wording moves a frame that an image input pins.
       // `studio.ts` has the measurements.
-      promptImage: this.#dataUri(opening),
+      //
+      // A second picture at `last` is what gives a face-on shot its likeness
+      // back, now that frame one carries no face. Measured on seedance2,
+      // 2026-08-11: the clip opens on the ribbon and arrives at her, and the
+      // video keeps the opening frame's 834x1112 shape even though the anchor
+      // is 1120x832 landscape — the closing picture is fitted to the shape
+      // rather than deciding it.
+      promptImage:
+        anchor === null
+          ? this.#dataUri(opening)
+          : [
+              { uri: this.#dataUri(opening), position: "first" },
+              { uri: this.#dataUri(anchor), position: "last" },
+            ],
       promptText: prompt,
       ratio: DEFAULTS.ratio,
       duration: DEFAULTS.duration,
@@ -381,6 +446,7 @@ export class RenderService {
       ratio: DEFAULTS.ratio,
       duration: DEFAULTS.duration,
       reference: this.#relativeTo(opening),
+      anchor: anchor === null ? null : this.#relativeTo(anchor),
       framing: framing.id,
       prompt,
       scene,
@@ -843,6 +909,11 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
   const model = text("model");
   const ratio = text("ratio");
   const reference = text("reference");
+  // Nullable rather than required, and that is the whole of the compatibility
+  // story: every sidecar written before anchoring existed has no such field,
+  // and a required one would have turned all of them unreadable at a stroke —
+  // which is the state this validator exists to report honestly, not to cause.
+  const anchor = nullableText("anchor");
   const prompt = text("prompt");
   const scene = optionalText("scene");
   const because = optionalText("because");
@@ -872,6 +943,7 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
       ratio,
       duration,
       reference,
+      anchor,
       framing: framing.id,
       prompt,
       scene,

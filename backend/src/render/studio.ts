@@ -39,7 +39,20 @@ import { fileURLToPath } from "node:url";
  */
 
 /**
- * Her likeness, in her home, relative to it.
+ * Her likeness, in her home, relative to it — **and the LAST frame of a shot
+ * whose subject is her face.**
+ *
+ * Sent as `promptImage` with `position: "last"` for the framings that need an
+ * anchor, which is what stops the model inventing a stranger now that frame one
+ * is the ribbon. Never as `first`: sending it there is what made every service
+ * render open on her smiling headshot and come back landscape.
+ *
+ * **It stays 1120x832 and it does not need re-cutting.** The obvious worry with
+ * two pictures is that they disagree about shape, and seedance2 takes aspect
+ * from `promptImage`. Measured on 2026-08-11 with one render each way: a
+ * portrait re-cut and this landscape original both produced 834x1112 video with
+ * her likeness intact. The opening frame decides the shape and the closing
+ * picture is fitted into it.
  *
  * **Do not switch this to `syl_source_upscaled.png`.** It cannot be sent:
  *
@@ -283,8 +296,10 @@ export function ensureReference(studio: Studio, seed: string = referenceSeed()):
  *
  * Separate from the reference because the two pictures answer different
  * questions — *who she is* and *where the clip starts* — and the boot that
- * places one must be able to report on the other independently. Only this one
- * is sent to Runway today, so only this one's absence stops a render.
+ * places one must be able to report on the other independently. Both are sent
+ * now, but not on the same renders: this one is frame one of everything, so its
+ * absence stops every render, while a missing reference stops only the framings
+ * that show her face.
  */
 export function ensureOpening(studio: Studio, seed: string = openingSeed()): ReferencePlacement {
   return place(studio.opening(), seed);

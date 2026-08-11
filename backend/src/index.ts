@@ -1380,13 +1380,15 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   const studio = studioAt(studioRootFrom(options.env ?? process.env, home));
   if (home !== undefined) {
     // Her likeness, placed on first boot and never overwritten after. It is
-    // what a shot of her face anchors on, and it must not live in a checkout
-    // that belongs to a different project.
+    // what a shot of her face anchors on — sent as the last frame of a close
+    // portrait, so the model copies a face instead of inventing one — and it
+    // must not live in a checkout that belongs to a different project.
     const placed = ensureReference(studio);
     if (placed === "unplaced") {
       console.warn(
         `[syl] WARNING: there is no reference picture at ${studio.reference()} and none could ` +
-          `be placed — she will refuse to render rather than render somebody else.`,
+          `be placed — she will refuse a shot of her own face rather than render somebody ` +
+          `else. The framings that show no face are unaffected.`,
       );
     }
     // The ribbon her clips open on, placed the same way. This is the one that

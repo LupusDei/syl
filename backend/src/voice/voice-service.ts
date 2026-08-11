@@ -289,6 +289,11 @@ export class VoiceService {
       ratio: source.ratio,
       duration: source.duration,
       reference: source.reference,
+      // Both pictures carried over from the video this is a voiced copy of.
+      // The audio is new; the frames are the source's, and a record that
+      // dropped one of them would say the clip was made from fewer inputs than
+      // it was.
+      anchor: source.anchor,
       framing: source.framing,
       // "The composed prompt, exactly as it was sent" — for a voiced clip that
       // is the text `seed_audio` was asked to say, verbatim.
