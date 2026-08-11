@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { Reminder } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -31,6 +34,10 @@ import { testConfig } from "../helpers/service.js";
 let built: Bootstrapped;
 let running: RunningApp;
 let client: SylApiClient;
+const studios: string[] = [];
+
+/** The one render this file's studio contains. */
+const A_RENDER = "syl-20260811t090000z-close";
 
 /** A reminder body the service will accept. */
 const A_REMINDER = {
@@ -40,8 +47,52 @@ const A_REMINDER = {
   date: "2026-08-10",
 };
 
+/**
+ * A studio with one finished render in it, pointed at by `SYL_VIDEO_STUDIO`.
+ *
+ * `compose` refuses a render that is not `ready` — the Commander's ruling of
+ * 2026-08-11, so that no notification runs ahead of a video. This file boots
+ * the REAL service, so the way to have a render to send is to have one: a
+ * sidecar beside an mp4, exactly as `RenderService` writes them, read back
+ * through the same loader production uses.
+ */
+function studioWithAReadyRender(): string {
+  const root = mkdtempSync(join(tmpdir(), "syl-tools-studio-"));
+  const videoDir = join(root, "renders");
+  mkdirSync(videoDir, { recursive: true });
+  const video = join(videoDir, `${A_RENDER}.mp4`);
+  writeFileSync(video, Buffer.alloc(1024));
+  writeFileSync(
+    join(videoDir, `${A_RENDER}.mp4.json`),
+    JSON.stringify({
+      name: A_RENDER,
+      status: "ready",
+      renderedAt: "2026-08-11T09:02:00.000Z",
+      taskId: "task-1",
+      model: "seedance2",
+      ratio: "720:1280",
+      duration: 15,
+      reference: "reference/syl.png",
+      framing: "close_portrait",
+      prompt: "a luminous spirit woman…",
+      scene: "turning once as the light runs down her arm",
+      holdsLikeness: true,
+      because: "he wanted to know what I look like",
+      startedAt: "2026-08-11T09:00:00.000Z",
+      reason: null,
+      credits: 600,
+      usd: 6,
+      video,
+    }),
+  );
+  studios.push(root);
+  return root;
+}
+
 beforeEach(async () => {
-  built = bootstrap(testConfig({ databasePath: ":memory:" }));
+  built = bootstrap(testConfig({ databasePath: ":memory:" }), {
+    env: { ...process.env, SYL_VIDEO_STUDIO: studioWithAReadyRender() },
+  });
   running = await startTestApp(createApp(testConfig(), built.deps));
   client = new SylApiClient({
     baseUrl: `${running.baseUrl}${API_BASE_PATH}`,
@@ -52,6 +103,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await running.close();
   built.database.close();
+  for (const dir of studios.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 /** The failure a result carries, or a thrown explanation of the success. */
@@ -167,9 +219,11 @@ describe("SylApiClient, against her own service", () => {
     const result = await client.post<{ id: string; messageId: string; state: string }>("/sendings", {
       words: "I thought of you when the light did that thing.",
       because: "He said he missed the sky.",
-      // A name nothing answers to. The words go anyway — that is the feature —
-      // and this test is about the door, not about the video.
-      renderName: "syl-nothing-by-that-name",
+      // A render that is finished, because `compose` refuses one that is not:
+      // nothing reaches him about a video that does not exist. `testDeps` hands
+      // the composer a source that always answers ready, so this test stays
+      // about the door rather than about the video.
+      renderName: A_RENDER,
     });
 
     expect(result.ok).toBe(true);
@@ -188,7 +242,7 @@ describe("SylApiClient, against her own service", () => {
     const created = await client.post<{ id: string }>("/sendings", {
       words: "Hello.",
       because: "Testing.",
-      renderName: "syl-nothing-by-that-name",
+      renderName: A_RENDER,
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;

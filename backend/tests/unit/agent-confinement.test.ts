@@ -195,7 +195,9 @@ describe("the agent scope, over HTTP", () => {
         body: {
           words: "I thought of you when the light did that thing.",
           because: "He said he missed the sky.",
-          renderName: "syl-nothing-by-that-name",
+          // A finished render. `compose` refuses anything else, so a made-up
+          // name here would test the render gate rather than the door.
+          renderName: "syl-20260811t090000z-close",
         },
       });
 

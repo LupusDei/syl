@@ -17,7 +17,7 @@ import { HerOwnMemory } from "../../src/memory/remember.js";
 import type { Retriever } from "../../src/memory/retrieve.js";
 import { EdgeWeights } from "../../src/memory/weights.js";
 import { WorkingMemory } from "../../src/memory/working.js";
-import { RenderService } from "../../src/render/render-service.js";
+import { RenderService, type RenderRecord } from "../../src/render/render-service.js";
 import { studioAt } from "../../src/render/studio.js";
 import type { MemoryViews } from "../../src/routes/memory.js";
 import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api-key-service.js";
@@ -35,8 +35,9 @@ import { MessageStore } from "../../src/services/message-store.js";
 import { Outbox } from "../../src/services/outbox.js";
 import { PresenceService } from "../../src/services/presence.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
-import { SendingService } from "../../src/services/sending-service.js";
+import { SendingService, type RenderSource } from "../../src/services/sending-service.js";
 import { SendingStore } from "../../src/services/sending-store.js";
+import { RenderWatchStore } from "../../src/services/render-watch-store.js";
 import { SyncService } from "../../src/services/sync-service.js";
 import { TodoService } from "../../src/services/todo-service.js";
 
@@ -319,6 +320,42 @@ export function testRenders(clock: Clock = fixedClock(TEST_NOW)): RenderService 
   });
 }
 
+/**
+ * A render source that always answers with one finished clip.
+ *
+ * Needed because `compose` refuses a render that is not `ready` — the
+ * Commander's ruling of 2026-08-11, so that nothing reaches him about a video
+ * that does not exist. Every route test that posts a sending would otherwise be
+ * testing the refusal rather than the door it means to test, and the empty
+ * studio `testRenders` gives them has nothing in it.
+ *
+ * The mp4 path is never opened: `testDeps` hands the composer a compressor that
+ * refuses, so no test needs ffmpeg or a file that is really a video.
+ */
+export function testReadyRenders(): RenderSource {
+  const record = (name: string): RenderRecord => ({
+    name: name === "latest" ? "syl-20260811t090000z-close" : name,
+    status: "ready",
+    renderedAt: "2026-08-11T09:02:00.000Z",
+    taskId: "task-test",
+    model: "seedance2",
+    ratio: "720:1280",
+    duration: 15,
+    reference: "reference.png",
+    framing: "close_portrait",
+    prompt: "…",
+    scene: "…",
+    holdsLikeness: true,
+    because: "A render the suite can send from.",
+    startedAt: "2026-08-11T09:00:00.000Z",
+    reason: null,
+    credits: 120,
+    usd: 1.2,
+    video: "/studio/videos/syl-20260811t090000z-close.mp4",
+  });
+  return { get: (name) => record(name), latest: () => record("latest") };
+}
+
 /** Everything `createApp` and `startServer` need, on one in-memory store. */
 export function testDeps(db: SylDatabase): {
   readonly keys: ApiKeyService;
@@ -338,6 +375,7 @@ export function testDeps(db: SylDatabase): {
   readonly renders: RenderService;
   readonly sendings: SendingStore;
   readonly composer: SendingService;
+  readonly renderWatches: RenderWatchStore;
   readonly presence: PresenceService;
   readonly intakeQueue: IntakeQueue;
   readonly memoryRuntime: MemoryRuntime;
@@ -404,7 +442,11 @@ export function testDeps(db: SylDatabase): {
       chat,
       attachments,
       outbox,
-      renders,
+      // A finished render, always. `renders` above is the real service over an
+      // empty studio, which is right for `/renders` and wrong here: `compose`
+      // now refuses anything that is not `ready`, so a route test posting a
+      // sending would only ever exercise that refusal.
+      renders: testReadyRenders(),
       workDir: mkdtempSync(join(tmpdir(), "syl-test-sendings-")),
       compress: async () => ({
         ok: false,
@@ -412,6 +454,11 @@ export function testDeps(db: SylDatabase): {
       }),
       log: () => undefined,
     }),
+    // The promises to come back and look at a render. Real, on the same
+    // database: nothing in a route test creates one, and a store that refused
+    // to exist would make the review job untestable through the seam that
+    // actually wires it.
+    renderWatches: new RenderWatchStore({ db: db.handle, clock }),
     // No sink. `startServer` attaches one; a test that wants to watch frames
     // hands its own to `PresenceService` directly.
     presence: new PresenceService({ clock }),

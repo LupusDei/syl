@@ -247,6 +247,21 @@ export interface RenderServiceOptions {
   readonly giveUpAfterPolls?: number;
   /** Injected so the suite needs neither ffmpeg nor a real mp4. */
   readonly extract?: FrameRunner;
+  /**
+   * Arrange to come back and look at this render.
+   *
+   * Called once per render, immediately after the record is written and before
+   * anything is polled — so the promise to look at it exists from the same
+   * moment the render does, and a process that dies in the next second still
+   * leaves something that will bring her back to it.
+   *
+   * The Commander's ruling, 2026-08-11: *"when Syl triggers a video to be
+   * rendered she needs some kind of wake up mechanism five minutes later"*.
+   * This is the seam where that is arranged. A function rather than a store,
+   * so this module keeps knowing nothing about the database — and so the suite
+   * can watch it being called without one.
+   */
+  readonly watch?: (record: RenderRecord) => void;
   readonly onError?: (error: unknown, name: string) => void;
 }
 
@@ -258,6 +273,7 @@ export class RenderService {
   readonly #pollMs: number;
   readonly #giveUpAfterPolls: number;
   readonly #extract: FrameRunner | undefined;
+  readonly #watch: ((record: RenderRecord) => void) | undefined;
   readonly #onError: (error: unknown, name: string) => void;
   /** Renders being followed right now, so `drain` can wait for them. */
   readonly #inFlight = new Set<Promise<void>>();
@@ -270,6 +286,7 @@ export class RenderService {
     this.#pollMs = options.pollMs ?? POLL_MS;
     this.#giveUpAfterPolls = options.giveUpAfterPolls ?? GIVE_UP_AFTER_POLLS;
     this.#extract = options.extract;
+    this.#watch = options.watch;
     this.#onError =
       options.onError ??
       ((error, name): void => {
@@ -394,6 +411,15 @@ export class RenderService {
     };
 
     this.#write(record);
+    // The promise to come back and look, arranged before the first poll. It is
+    // wrapped because a render has already cost a credit by this point: a watch
+    // that could not be written must never turn a submitted render into a
+    // refusal, and the failure is loud rather than swallowed.
+    try {
+      this.#watch?.(record);
+    } catch (error) {
+      this.#onError(error, record.name);
+    }
     this.#follow(record);
     return { ok: true, record };
   }

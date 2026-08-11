@@ -82,6 +82,20 @@ const INTENDED_MCP: Readonly<
   // `jobs/agenda-job.ts` was written to end. Same declaration again — one
   // narrow named surface, not a third one nobody reviewed.
   agenda: toolConfigPath,
+  // AND THE RENDER REVIEW, the fourth entry and the narrowest of them: the lane
+  // exists for one decision, and the decision is a verb. The Commander's
+  // ruling, 2026-08-11 — the push must not go out before the video exists, so
+  // she is woken minutes after starting a render to look at the finished clip
+  // and decide whether he should have it. A review turn without `show_him`
+  // could judge a render and then do nothing about the judgement, which is the
+  // state `jobs/render-review-job.ts` was written to end. Same declaration
+  // again — one narrow named surface, not a fourth one nobody reviewed.
+  //
+  // What keeps it narrow lives in that job rather than here: every wake is
+  // caused by a render she herself started, is about that one render, spends
+  // one turn, is bounded in how many times it may recur, and counts against
+  // the same daily ceiling the hourly self-ping spends from.
+  studio: toolConfigPath,
   // Still nothing: the dream must not be able to write a reminder while judging
   // what matters.
   consolidation: undefined,

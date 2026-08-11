@@ -636,9 +636,25 @@ export type AcknowledgeDeliveryRequest = {
  * model could create arbitrary recurring jobs, a prompt injection
  * inside an article becomes a job that speaks to him every morning.
  *
- * Note the shape of the catalogue: the two kinds with a hard guarantee
- * attached, `reminder_delivery` and `maintenance`, are the two that use
- * no turns. That is not a coincidence.
+ * Note the shape of the catalogue: `reminder_delivery` is the kind with
+ * a hard guarantee attached, and it is the one that uses no turns. That
+ * is not a coincidence.
+ *
+ * **The catalogue is closed in the DATABASE too**, as a `CHECK` on
+ * `jobs.kind` (`0007_jobs.sql`), and widening it is not a small change:
+ * SQLite cannot alter a `CHECK` in place, and `runs.job_id` carries
+ * `ON DELETE CASCADE`, so dropping and recreating `jobs` performs an
+ * implicit `DELETE` that takes **every run record with it** — verified
+ * against node:sqlite 3.51.3 before this note was written. The run
+ * ledger is what the daily reaching-him ceiling is counted from, so a
+ * new kind costs the history that bounds her.
+ *
+ * `maintenance` is therefore the general-purpose scheduled kind, and it
+ * carries the **render review**: the deferred self-wake that ends in her
+ * decision about a render she started — is it finished, does it look
+ * right, does she still want to send it (`jobs/render-review-job.ts`).
+ * Most of its passes spend no turn at all; a render that is still going
+ * is deferred, not discussed.
  */
 export type JobKind = "reminder_delivery" | "morning_agenda" | "evening_review" | "heartbeat" | "nightly_consolidation" | "research_brief" | "content_ingestion" | "maintenance";
 

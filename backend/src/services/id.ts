@@ -54,6 +54,11 @@ export type IdType =
   // write that made it — the video lands minutes after the words do, and the
   // surface that lists them is not the conversation.
   | "sending"
+  // A render she started and has not looked at yet (`0026_render_watches.sql`).
+  // Its own id rather than the render's name, because the name addresses a file
+  // on disk and this addresses the promise to come back to it — the two have
+  // different lifetimes, and the file outlives the decision.
+  | "render_watch"
   // Telemetry, not memory. A dream session is a row in the dream log
   // (`0013_dream_log.sql`) and never a node in the graph — see the header of
   // that migration for why the two must not touch.

@@ -23,25 +23,35 @@ import { runIdempotentAsync, sendIdempotent } from "./idempotency.js";
  *
  * ## `POST` answers when the WORDS are delivered
  *
- * Not when the video is ready. `201` here means the message is in his
- * conversation and the notification is enqueued; the returned sending says
- * `pending`, and the video lands on it minutes later. A client that wants the
- * video polls `GET /sendings/{sendingId}`, or — far better — waits for the
- * `sending` change to arrive on `GET /sync`, which is why that resource type
- * exists.
+ * Not when the compressed copy is attached. `201` here means the message is in
+ * his conversation; the returned sending says `pending`, and the playable copy
+ * lands on it seconds later. A client that wants the video polls
+ * `GET /sendings/{sendingId}`, or — far better — waits for the `sending` change
+ * to arrive on `GET /sync`, which is why that resource type exists.
  *
- * ## A bad render name is still a `201`
+ * **The notification is NOT enqueued here.** It goes out when the video settles
+ * on the row, which is the Commander's ruling of 2026-08-11: a buzz that leads
+ * to a pending video is worse than a buzz a moment later that leads to a
+ * finished one.
  *
- * The one genuinely unusual decision in this file, and it follows directly
- * from the feature's rule. By the time the render is looked at, her words have
- * already been said. Answering `404` because the decoration could not be found
- * would throw away a delivered message to complain about a video, and it would
- * leave the caller unable to tell "nothing happened" from "everything except
- * the video happened". So the failure is *in the body* — `state: "failed"`
- * with a `reason` — and the status stays `201`.
+ * ## A render that is not finished is a `422`, not a `201`
  *
- * The only `4xx` this route emits on a write is for things wrong with the
- * WORDS themselves, which are checked before anything is written at all.
+ * This used to be the opposite, and the reversal is the same ruling. The old
+ * rule was that by the time the render was looked at her words had already been
+ * said, so a missing clip was reported *in the body* — `state: "failed"` with a
+ * reason — and the status stayed `201`. That could only produce a message, and
+ * a notification, about a video that did not exist.
+ *
+ * `SendingService.compose` now resolves the render **first** and refuses one
+ * that is not `ready`, before anything is written, so this route answers
+ * `VALIDATION_FAILED` and nothing at all has happened. The caller is Syl
+ * herself, by way of `show_him`, and she is told which render and why — which
+ * is a thing she can act on, unlike a `201` describing a video nobody will
+ * ever see.
+ *
+ * The `4xx` this route emits on a write is therefore for two things: something
+ * wrong with the WORDS, and a render that is not there to send. Both are
+ * checked before anything is written at all.
  *
  * ## There is no DELETE and no PATCH
  *
@@ -132,8 +142,12 @@ function asFailure(error: unknown): never {
     });
   }
   if (error instanceof SendingStoreError) {
+    // Named by the field it is actually about. A refusal about a render that
+    // is still going, reported against `words`, sends the caller to look at
+    // the one thing that was fine.
+    const aboutTheRender = error.kind === "unknown_render" || error.kind === "render_not_ready";
     throw new ApiFailure("VALIDATION_FAILED", error.message, {
-      details: { field: "words", reason: error.kind },
+      details: { field: aboutTheRender ? "renderName" : "words", reason: error.kind },
     });
   }
   throw error;

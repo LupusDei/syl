@@ -15,35 +15,62 @@ import { SendingStore, SendingStoreError } from "./sending-store.js";
 /**
  * Composing a sending: her words, then her face.
  *
- * ## The order is the feature
+ * ## The render has to be FINISHED before any of this starts
+ *
+ * The Commander's ruling, 2026-08-11:
+ *
+ * > *"It sounds like the push notification goes out, regardless of whether a
+ * > video was created or not — that seems a little bit backwards to me. […]
+ * > If she decides to send it at that point, the push notification would go
+ * > out."*
+ *
+ * So `compose` **refuses** a render that is not `ready`, before a message is
+ * appended, before a row exists, before anything is enqueued. A sending is now
+ * something she composes about a clip she has already seen — the seeing happens
+ * on the `studio` lane (`jobs/render-review-job.ts`), minutes after the render
+ * was asked for, and the decision she reaches there is the only thing that
+ * reaches him.
+ *
+ * That inverts what this file used to argue for, which was that the words
+ * should never wait on the video. The words still never wait on the video —
+ * they are refused, together, or delivered, together. What changed is that a
+ * buzz leading to a `pending` or `failed` video is worse than a buzz two
+ * minutes later leading to a finished one, and the old ordering could only
+ * produce the first.
+ *
+ * ## The order, once the render is known finished
  *
  * ```
+ *   0. resolve the render                REFUSES unless it is `ready`
+ *   ------------------------------------ nothing above this line writes
  *   1. append the assistant message      the words are in his conversation
  *   2. publish it                        an attached client sees them now
  *   3. write the sending row             the surface has something to show
- *   4. enqueue the push                  carrying HER SENTENCE
  *   ------------------------------------ everything above is synchronous
- *   5. resolve the render
- *   6. compress, poster, attach          detached; minutes; may fail
+ *   4. compress, poster, attach          detached; seconds; may fail
+ *   5. enqueue the push                  carrying HER SENTENCE
  * ```
  *
- * Steps 1-4 finish before step 5 begins, and nothing in 5 or 6 can reach back
- * across the line. That is what makes **"the words are never contingent on the
- * video"** structural rather than a rule somebody has to remember: there is no
- * ordering a future caller could choose that would deliver the video first,
- * because `compose` does not expose one.
+ * The push is last, and that is the other half of the ruling: it is enqueued
+ * when the video has actually landed on the row (or when it provably will not),
+ * never in the hope that it will. Nothing in 4 or 5 can reach back and touch
+ * the words, so "a failed compression cannot swallow what she wanted to say"
+ * survives the reordering — `#makeVideo` and `#settleFailed` name the video's
+ * columns and no other.
  *
- * It is constraint 4 applied to something new. A vanished reminder destroys
- * trust; words that vanished because their decoration did would be the same
- * injury with a nicer excuse.
+ * It is still constraint 4 applied to something new. A vanished reminder
+ * destroys trust; words that vanished because their decoration did would be
+ * the same injury with a nicer excuse, and a notification about a video that
+ * is not there is the same injury pointed at him.
  *
- * ## Why the answer comes back before the video
+ * ## Why the answer still comes back before the attachment
  *
- * A flagship render is 12-15 MB and an ffmpeg pass over it takes real seconds;
- * `RenderService` already establishes that a turn which blocks is the
- * Commander watching a cursor. So `compose` returns a `pending` sending and
- * the work continues behind it — the same shape `backend/src/jobs/` uses, and
- * the same shape `POST /renders` answers with.
+ * An ffmpeg pass over a 12-15 MB clip takes real seconds; `RenderService`
+ * already establishes that a turn which blocks is the Commander watching a
+ * cursor. So `compose` returns a `pending` sending and the compression
+ * continues behind it — the same shape `backend/src/jobs/` uses. The wait is
+ * now seconds rather than the minutes it used to be, because the render itself
+ * is already done by the time anything here runs.
  *
  * ## Why a failure is always recorded
  *
@@ -181,10 +208,12 @@ export class SendingService {
    *
    * Returns as soon as the words are his. The video follows.
    *
-   * @throws {SendingStoreError} only for things that are wrong about the
-   * WORDS — blank text, no reason, no render named. Every one of those is
-   * checked before a message is appended, so a refusal leaves nothing behind.
-   * Nothing about the video ever throws from here.
+   * @throws {SendingStoreError} for anything wrong with the WORDS — blank
+   * text, no reason, no render named — and for a RENDER that is not finished:
+   * a name that resolves to nothing, a clip still going, a clip that failed.
+   * Every one of those is checked before a message is appended, so a refusal
+   * leaves nothing behind and nothing reaches him. Once past those checks,
+   * nothing about the video throws from here.
    */
   async compose(input: ComposeSending): Promise<Sending> {
     const words = input.words.trim();
@@ -213,6 +242,15 @@ export class SendingService {
       );
     }
 
+    // ---- 0. The render, which must already be finished. --------------------
+    //
+    // Before anything is written. A refusal here leaves no message, no row and
+    // no notification — which is the whole of the Commander's ruling: the
+    // decision to send happens after she has seen the finished render, so
+    // there is no path through this method that puts something in front of him
+    // about a video that does not exist yet.
+    const record = this.#resolve(renderName);
+
     // ---- 1. The words reach the conversation. ------------------------------
     const appended = this.#chat.append({
       conversationId: this.#conversationId,
@@ -234,11 +272,12 @@ export class SendingService {
       renderName,
     });
 
-    // ---- 4. The push, carrying her sentence. -------------------------------
-    this.#notify(sending);
-
-    // ---- 5/6. The video, behind all of it. ---------------------------------
-    this.#follow(sending, renderName);
+    // ---- 4/5. The video, then the push it carries. -------------------------
+    //
+    // The record resolved above is handed on rather than looked up again, so
+    // the clip this sending is made from is the clip that was checked. Two
+    // reads could disagree, and the second one is the one nobody would see.
+    this.#follow(sending, renderName, record);
     return sending;
   }
 
@@ -264,8 +303,12 @@ export class SendingService {
    * refused. What it never does is leave the row claiming a video is coming
    * when nothing is coming.
    *
-   * It does NOT notify. The push went out with the words, before the process
-   * died; a second one would buzz him about a sentence he read an hour ago.
+   * It DOES notify, now that the push is enqueued at the video's settlement
+   * rather than with the words. A row stranded `pending` is a row he was never
+   * buzzed about, so the recovery pass finishing it is the thing that finally
+   * tells him. `idempotencyKey: sending:<id>` is what makes that safe: if the
+   * push had somehow already gone out, the outbox writes no second row, so a
+   * recovery cannot buzz him twice about one sentence.
    */
   resume(): void {
     for (const sending of this.#sendings.pending()) {
@@ -307,15 +350,62 @@ export class SendingService {
   }
 
   /**
+   * The render this sending is made from, or a refusal.
+   *
+   * Every branch out of here that is not `ready` throws, and that is the point:
+   * this runs before a message exists, so a refusal costs nothing and reaches
+   * nobody. The sentences are hers to say back to him or to herself, so they
+   * are sentences rather than codes — and each one names the next move,
+   * because "renderName is invalid" is not something she can turn into speech.
+   *
+   * @throws {SendingStoreError} `unknown_render` or `render_not_ready`.
+   */
+  #resolve(renderName: string): RenderRecord {
+    const record = renderName === "latest" ? this.#renders.latest() : this.#renders.get(renderName);
+
+    if (record === null) {
+      throw new SendingStoreError(
+        "unknown_render",
+        `There is no render called "${renderName}", so there is no face for this to arrive in. ` +
+          "Look at what you have made and name one of those.",
+      );
+    }
+    if (record.status === "rendering") {
+      throw new SendingStoreError(
+        "render_not_ready",
+        `"${record.name}" is still rendering, so there is nothing to send yet. Nothing has ` +
+          "reached him and nothing is lost — you will be woken to look at it when it is done.",
+      );
+    }
+    if (record.status !== "ready" || record.video === null) {
+      throw new SendingStoreError(
+        "render_not_ready",
+        `"${record.name}" did not finish: ${record.reason ?? "no reason was recorded."} ` +
+          "There is no clip to send. Say it to him in words, or make another one.",
+      );
+    }
+
+    return record;
+  }
+
+  /**
    * Enqueue the notification.
    *
-   * Keyed on the sending's own id, so a retried compose — or a recovery pass
-   * that finds the row again — writes one row rather than a second buzz for a
-   * sentence he has already read.
+   * **Called when the video has settled, never before.** That is the
+   * Commander's ruling in one line: a buzz that leads to a video which is
+   * still rendering is worse than a buzz that comes after it landed. By the
+   * time this runs the row is `ready` with a playable clip on it, or `failed`
+   * with a reason — and a failure still buzzes, because the words are already
+   * in his conversation by then and silence would leave him a message he is
+   * never told about.
    *
-   * Never throws. The words are already in his conversation by the time this
-   * runs; failing the whole compose because the outbox was busy would trade a
-   * missing notification for a missing sending.
+   * Keyed on the sending's own id, so a retried settlement — or a recovery
+   * pass that finds the row again after a restart — writes one row rather than
+   * a second buzz for a sentence he has already read.
+   *
+   * Never throws. The words are already persisted by the time this runs;
+   * failing the video's settlement because the outbox was busy would trade a
+   * missing notification for a row left claiming a video is coming.
    */
   #notify(sending: Sending): void {
     try {
@@ -337,8 +427,8 @@ export class SendingService {
   }
 
   /** Chase the video without anybody awaiting it. */
-  #follow(sending: Sending, renderName: string): void {
-    const running = this.#makeVideo(sending, renderName)
+  #follow(sending: Sending, renderName: string, record?: RenderRecord): void {
+    const running = this.#makeVideo(sending, renderName, record)
       .catch((error: unknown) => {
         this.#log(`the video for sending ${sending.id} threw`, error);
         this.#settleFailed(
@@ -355,13 +445,23 @@ export class SendingService {
   /**
    * Resolve the render, compress it, and attach the result.
    *
-   * Every branch ends in `attachVideo` or `#settleFailed`. No path *through
-   * this function* leaves the row `pending` — the way a row survives as
-   * `pending` is for the process to die before this runs, which is what
+   * Every branch ends in `attachVideo` or `#settleFailed`, and both of those
+   * end in {@link SendingService.#notify}. No path *through this function*
+   * leaves the row `pending` — the way a row survives as `pending` is for the
+   * process to die before this runs, which is what
    * {@link SendingService.resume} exists to pick up.
+   *
+   * `known` is the record `compose` already checked, handed through so the
+   * clip that was verified `ready` is the clip that gets compressed. It is
+   * absent on the recovery path, which has only a name — and which is the one
+   * caller that still has to cope with a render that is missing, unfinished or
+   * failed, because those rows predate this process and were written when
+   * `compose` still allowed them.
    */
-  async #makeVideo(sending: Sending, renderName: string): Promise<void> {
-    const record = renderName === "latest" ? this.#renders.latest() : this.#renders.get(renderName);
+  async #makeVideo(sending: Sending, renderName: string, known?: RenderRecord): Promise<void> {
+    const record =
+      known ??
+      (renderName === "latest" ? this.#renders.latest() : this.#renders.get(renderName));
 
     if (record === null) {
       this.#settleFailed(sending.id, "There is no render by that name, so this one goes without a video.");
@@ -424,7 +524,12 @@ export class SendingService {
       return;
     }
 
-    this.#sendings.attachVideo(sending.id, attachmentId);
+    const ready = this.#sendings.attachVideo(sending.id, attachmentId);
+
+    // NOW he is told, and not one step earlier. There is a playable clip on the
+    // row by the time this line runs, so the notification he taps leads to the
+    // video rather than to a spinner.
+    this.#notify(ready);
 
     // The compressed copy now exists twice: once in the blob directory, where
     // the store owns it, and once here, where nothing does. Reaping the second
@@ -447,18 +552,28 @@ export class SendingService {
   }
 
   /**
-   * Record that there will be no video.
+   * Record that there will be no video, and tell him anyway.
+   *
+   * The notification still goes out. By the time anything reaches here her
+   * words are already in his conversation — `compose` refused every render
+   * that was not finished, so the only way to arrive is for the compression or
+   * the store to have failed after that — and staying silent would leave him a
+   * message he is never told about. The row says why there is no clip; the
+   * buzz says there is something to read.
    *
    * Swallows its own failure on purpose: this runs inside a detached promise
    * and is frequently the handler for an earlier failure. Throwing here would
    * replace a legible "no video, and here is why" with an unhandled rejection.
    */
   #settleFailed(id: string, reason: string): void {
+    let failed: Sending;
     try {
-      this.#sendings.markFailed(id, reason);
+      failed = this.#sendings.markFailed(id, reason);
     } catch (error) {
       this.#log(`could not record the failure of sending ${id}`, error);
+      return;
     }
+    this.#notify(failed);
   }
 }
 
