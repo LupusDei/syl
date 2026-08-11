@@ -86,6 +86,8 @@ enum SchemaRegistry {
         "Goal": handler(Goal.self),
         "GoalPage": handler(GoalPage.self),
         "CreateGoalRequest": handler(CreateGoalRequest.self),
+        // Memory — the constellation the phone draws
+        "MemoryConstellation": handler(MemoryConstellation.self),
         // Devices
         "Device": handler(Device.self),
         "DevicePage": handler(DevicePage.self),

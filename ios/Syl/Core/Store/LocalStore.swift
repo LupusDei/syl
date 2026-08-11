@@ -444,6 +444,36 @@ struct LocalStore: Sendable {
         }
     }
 
+    // MARK: - The constellation
+
+    /// Replace the stored sky with a newly fetched one.
+    ///
+    /// **Replaces, never merges.** The payload is a bounded region rather than a
+    /// row set, and a star leaving that region produces no event — so an upsert
+    /// would accumulate a local sky the server would never draw, growing quietly
+    /// and looking correct throughout. See the `v5` migration.
+    func replaceConstellation(_ constellation: MemoryConstellation) throws {
+        try database.queue.write { db in
+            try ConstellationRecord(constellation).save(db)
+        }
+    }
+
+    /// The last sky the server drew, or nil if it has never been fetched.
+    ///
+    /// **Nil is not an empty sky**, and the difference is the whole reason this
+    /// returns an optional. An empty `MemoryConstellation` renders as "she
+    /// remembers nothing about you", which is a confident false statement to make
+    /// on a first launch that simply has not reached the network yet. The caller
+    /// shows nothing until it has an answer — the same distinction
+    /// `GoalsViewModel` draws with a nil snapshot.
+    func constellation() throws -> MemoryConstellation? {
+        try database.queue.read { db in
+            try ConstellationRecord
+                .fetchOne(db, key: ConstellationRecord.singletonID)?
+                .model()
+        }
+    }
+
     /// The to-dos linked to a goal — **every one of them, closed included**.
     ///
     /// This is the read a goal's progress is evidenced from, and most evidence is

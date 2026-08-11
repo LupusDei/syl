@@ -130,6 +130,7 @@ tags:
   - name: jobs
   - name: logs
   - name: sync
+  - name: memory
 
 paths:
   # -------------------------------------------------------------- health ---
@@ -1294,6 +1295,74 @@ paths:
                     required: [data]
                     properties:
                       data: { $ref: "#/components/schemas/SyncResponse" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # -------------------------------------------------------------- memory ---
+  /memory/constellation:
+    get:
+      tags: [memory]
+      operationId: getMemoryConstellation
+      summary: A bounded region of the memory graph, shaped to be drawn as a sky.
+      description: |
+        Nodes are stars, edges are filaments, confidence is brightness and tier
+        is depth. This is the phone's read of what Syl remembers, and it is
+        deliberately not `GET /memory/graph` — that one carries node seeds, edge
+        budgets and a window of dream nights, which are instrument controls for
+        judging the inferred engine. This one takes a count of stars.
+
+        ## It is a REGION and it says so
+
+        The sky is grown from **anchors** — the people and goals the Commander
+        thinks in terms of — plus what orbits them, plus the most connected of
+        whatever is left, up to `bound.stars`. `bound.mayHaveMore` is exact: it
+        is set at the moment a star is refused for want of budget, never
+        inferred from a full response.
+
+        There is deliberately **no total**. A count of what the graph holds is a
+        dashboard statistic, and this surface answers "is this all of it?"
+        without answering "how much is there?".
+
+        ## `confidence` is the DECAYED weight
+
+        On a filament it is what the connection is worth *now*, after decay —
+        the number that is defined for both species and the one the project
+        means by "confidence decays toward zero asymptotically and never
+        arrives". What reflection declared when it drew an inference is a
+        different number that does not decay, carried separately as
+        `inferredConfidence`.
+
+        On a star it is the confidence of the strongest filament touching it: a
+        maximum, so one strong live connection is not dimmed by dead ones beside
+        it. A star nothing connects to carries the law's minimum weight — the
+        faintest a thing can be without being absent.
+
+        ## Nothing set aside is missing
+
+        A hot filament reaching a `cold` or `suppressed` star still draws that
+        star, further back and dimmer. Nodes are superseded and edges are
+        demoted; neither is destroyed, and this view renders that rather than
+        filtering it out.
+      parameters:
+        - name: stars
+          in: query
+          required: false
+          description: |
+            The most stars to return. Refused rather than clamped when out of
+            range: a value quietly read as the default hands back a different
+            sky under a number the caller did not ask for.
+          schema: { type: integer, minimum: 1, maximum: 500, default: 60 }
+      responses:
+        "200":
+          description: A region of the graph, at one instant.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/MemoryConstellation" }
         default: { $ref: "#/components/responses/Error" }
 
 components:
@@ -2706,6 +2775,171 @@ components:
           items: { $ref: "#/components/schemas/LogEntry" }
         nextCursor: { type: [string, "null"] }
         hasMore: { type: boolean }
+
+    # ---------------------------------------------------------- memory ---
+    MemoryNodeKind:
+      type: string
+      description: |
+        What a star IS. Effectively immutable per node — a person does not
+        become an event — which is why it is a partition key in the store.
+      enum: [fact, memory, person, source, event, goal, decision]
+
+    MemoryTier:
+      type: string
+      description: |
+        Depth. `hot` is the live region; `cold` is below the relevance floor,
+        fully addressable and never scanned; `suppressed` is something the
+        Commander said was wrong.
+
+        **None of the three means deleted.** Nodes are superseded and edges are
+        demoted; a client that renders `cold` or `suppressed` as absent has
+        contradicted the store.
+      enum: [hot, cold, suppressed]
+
+    MemoryEdgeSpecies:
+      type: string
+      description: |
+        `observed` was asserted by a source — he said it. `inferred` was drawn
+        by reflection — she worked it out. A viewer that renders the two
+        identically cannot answer the question this whole surface exists for.
+      enum: [observed, inferred]
+
+    MemoryStarProvenance:
+      type: object
+      required: [species, assertedBy, reasoning, learnedAt]
+      description: |
+        Where a star came from, taken from the strongest filament touching it.
+      properties:
+        species:
+          type: string
+          description: |
+            `unattested` is not a third species of edge. It is what a star with
+            no filaments in this region is: something she holds and has not
+            connected to anything.
+          enum: [observed, inferred, unattested]
+        assertedBy:
+          type: [string, "null"]
+          description: WHO said so, by label rather than id. Null unless `observed`.
+        reasoning:
+          type: [string, "null"]
+          description: WHY she believes it, in her words. Null unless `inferred`.
+        learnedAt:
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+          description: When the belief behind it was last touched. Null when `unattested`.
+
+    MemoryStar:
+      type: object
+      required:
+        [id, kind, tier, label, body, confidence, provenance, anchor, anchorId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        kind: { $ref: "#/components/schemas/MemoryNodeKind" }
+        tier: { $ref: "#/components/schemas/MemoryTier" }
+        label: { type: string }
+        body: { type: [string, "null"] }
+        confidence:
+          type: number
+          description: |
+            Brightness, in (0, 1]. The confidence of the strongest filament
+            touching this star — a maximum, not a mean. Never zero: decay
+            approaches zero and never arrives.
+          minimum: 0
+          maximum: 1
+        provenance: { $ref: "#/components/schemas/MemoryStarProvenance" }
+        anchor:
+          type: boolean
+          description: |
+            Whether the sky is built around this one. People and goals are the
+            anchors; everything else orbits one.
+        anchorId:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+          description: |
+            The anchor this star orbits — the anchor at the far end of its
+            strongest filament to one. Null on an anchor itself and on a star
+            connected to no anchor.
+
+            Computed by the server rather than the client, because the honest
+            rule needs the decayed weights: a client falling back to "the first
+            anchor I see" would move a star between launches, and a layout that
+            moves is one nobody can learn.
+        createdAt: { $ref: "#/components/schemas/Instant" }
+        updatedAt: { $ref: "#/components/schemas/Instant" }
+
+    MemoryFilament:
+      type: object
+      required:
+        [id, from, to, relation, species, tier, confidence, inferredConfidence, reasoning, assertedBy, lastTouchedAt]
+      description: |
+        One connection. Both endpoints are always present in `stars` — a
+        filament into a star that is not drawn is a line into nothing.
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        from: { $ref: "#/components/schemas/Id" }
+        to: { $ref: "#/components/schemas/Id" }
+        relation: { type: string }
+        species: { $ref: "#/components/schemas/MemoryEdgeSpecies" }
+        tier: { $ref: "#/components/schemas/MemoryTier" }
+        confidence:
+          type: number
+          description: What this connection is worth NOW, after decay, in (0, 1].
+          minimum: 0
+          maximum: 1
+        inferredConfidence:
+          type: [number, "null"]
+          description: |
+            How sure reflection was when it drew this, in (0, 1]. Null on an
+            observation — a source simply said so, which is not a degree of
+            certainty. **This does not decay**, which is what makes it a
+            different number from `confidence` rather than a copy of it.
+          minimum: 0
+          maximum: 1
+        reasoning: { type: [string, "null"] }
+        assertedBy:
+          oneOf:
+            - { $ref: "#/components/schemas/Id" }
+            - { type: "null" }
+          description: The source node that asserted this. Null on an inference.
+        lastTouchedAt: { $ref: "#/components/schemas/Instant" }
+
+    MemoryConstellationBound:
+      type: object
+      required: [stars, starsReturned, filamentsReturned, mayHaveMore, explanation]
+      description: What this response is NOT, in numbers and in words.
+      properties:
+        stars:
+          type: integer
+          description: The most stars this response would have carried.
+          minimum: 1
+        starsReturned: { type: integer, minimum: 0 }
+        filamentsReturned: { type: integer, minimum: 0 }
+        mayHaveMore:
+          type: boolean
+          description: |
+            Whether the walk stopped with candidates still waiting. Exact, not a
+            guess: it is set at the moment a star is refused, never inferred
+            from `starsReturned == stars`. Those differ exactly when the region
+            is a whole multiple of the budget — a view claiming to hold
+            everything at the one moment it does not.
+        explanation:
+          type: string
+          description: What this view is, in words, so a region is never read as the whole sky.
+
+    MemoryConstellation:
+      type: object
+      required: [generatedAt, bound, stars, filaments]
+      properties:
+        generatedAt: { $ref: "#/components/schemas/Instant" }
+        bound: { $ref: "#/components/schemas/MemoryConstellationBound" }
+        stars:
+          type: array
+          items: { $ref: "#/components/schemas/MemoryStar" }
+        filaments:
+          type: array
+          items: { $ref: "#/components/schemas/MemoryFilament" }
 
     # ------------------------------------------------------------ sync ---
     SyncResourceType:

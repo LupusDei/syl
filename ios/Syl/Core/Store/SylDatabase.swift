@@ -276,6 +276,46 @@ struct SylDatabase: Sendable {
             }
         }
 
+        // `syl-ryp.1`. The sky, held whole.
+        migrator.registerMigration("v5-the-constellation-is-a-snapshot-not-a-row-set") { db in
+            // **One row holding the whole payload, and that is the decision worth
+            // reading before changing it.**
+            //
+            // Every other table here is rows keyed by server id, upserted one at a
+            // time from the sync feed, because every other resource IS a row: a
+            // to-do exists, changes and is deleted, and the device's copy tracks
+            // those events. `GET /memory/constellation` is not that. It returns a
+            // bounded REGION of the graph — the anchors, what orbits them, and the
+            // most connected of what is left — and membership changes wholesale as
+            // salience shifts, with no event saying so.
+            //
+            // Store it as rows and the honest-looking `upsert` is a slow leak: a
+            // star that drops out of the region is not deleted server-side, so
+            // nothing ever tells the device to remove it. The local sky would only
+            // ever grow, diverging further from what the server would draw, and it
+            // would look right the whole time.
+            //
+            // A whole-snapshot replace also makes the read atomic. The phone draws
+            // the last complete sky it was given or it draws nothing — never half
+            // of one sky and half of another, which is the one failure a
+            // constellation cannot survive: a filament whose star is from a
+            // different fetch is a line into nothing.
+            //
+            // `bound` travels inside the payload for the same reason. It is the
+            // response's own statement about what it left out, and a device that
+            // kept the stars while discarding `mayHaveMore` would be free to imply
+            // it holds everything she remembers.
+            try db.create(table: "constellation") { table in
+                table.primaryKey("id", .text)
+                // When the SERVER generated this sky, from `generatedAt` — not when
+                // the device wrote it. The two differ by the length of a request and
+                // by any time spent queued, and the age of a memory view is a
+                // property of the answer rather than of its delivery.
+                table.column("generatedAt", .datetime).notNull()
+                table.column("payload", .blob).notNull()
+            }
+        }
+
         return migrator
     }
 

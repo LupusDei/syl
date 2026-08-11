@@ -30,9 +30,13 @@ import { TEST_NOW, testConfig, testDatabase, testDeps } from "../helpers/service
  * 2. **This endpoint WRITES.** Reject and confirm feed the suppression and
  *    trust forces in `weights.ts`, so the route is a data source for the memory
  *    system and not merely a window onto it.
- * 3. **It is admin-scoped**, exactly like `GET /logs`. A paired phone is
- *    refused: the graph is the record of what a pre-authorised program inferred
- *    on his machine, and the correction surface is a write into her memory.
+ * 3. **It is NOT admin-scoped, and this line used to say the opposite.** It said
+ *    a paired phone is refused, because the graph is the record of what a
+ *    pre-authorised program inferred on his machine and the correction surface
+ *    writes into her memory. The Commander overruled that on 2026-08-10 —
+ *    *"remove the need for another key for the admin panel, too annoying"* — and
+ *    the three cases below asserting a device gets `200` are the record of it.
+ *    Authentication is still required and is what does the work.
  */
 
 interface Envelope<T> {

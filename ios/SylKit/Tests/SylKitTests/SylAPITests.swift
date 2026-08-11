@@ -55,6 +55,26 @@ final class SylAPITests: XCTestCase {
     func testShouldNotPutAnIdempotencyKeyOnARead() {
         XCTAssertNil(SylAPI.whoami().idempotencyKey)
         XCTAssertNil(SylAPI.reminders().idempotencyKey)
+        XCTAssertNil(SylAPI.constellation().idempotencyKey)
+    }
+
+    func testShouldReadTheConstellationFromItsOwnPathAndNotTheAdminGraph() {
+        // The two are different products on purpose. `/memory/graph` carries node
+        // seeds, edge budgets and dream nights — instrument controls for judging
+        // the inferred engine — and a typo pointing the phone at it yields a
+        // payload the sky cannot draw and a 404 nobody reads.
+        XCTAssertEqual(SylAPI.constellation().path, "/memory/constellation")
+        XCTAssertEqual(SylAPI.constellation().method, .get)
+        XCTAssertTrue(SylAPI.constellation().query.isEmpty)
+    }
+
+    func testShouldSendTheStarBoundOnlyWhenTheCallerAsksForOne() {
+        // Omitted means "the server's default", which is a different request
+        // from one naming a number — and the server refuses an out-of-range
+        // `stars` rather than clamping it, so a client that always sends one has
+        // to be right about the range.
+        XCTAssertEqual(SylAPI.constellation(stars: 24).query.map(\.name), ["stars"])
+        XCTAssertEqual(SylAPI.constellation(stars: 24).query.map(\.value), ["24"])
     }
 
     // MARK: - Paths and methods

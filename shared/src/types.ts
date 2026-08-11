@@ -746,6 +746,90 @@ export type LogPage = {
   readonly hasMore: boolean;
 };
 
+/**
+ * What a star IS. Effectively immutable per node — a person does not
+ * become an event — which is why it is a partition key in the store.
+ */
+export type MemoryNodeKind = "fact" | "memory" | "person" | "source" | "event" | "goal" | "decision";
+
+/**
+ * Depth. `hot` is the live region; `cold` is below the relevance floor,
+ * fully addressable and never scanned; `suppressed` is something the
+ * Commander said was wrong.
+ *
+ * **None of the three means deleted.** Nodes are superseded and edges are
+ * demoted; a client that renders `cold` or `suppressed` as absent has
+ * contradicted the store.
+ */
+export type MemoryTier = "hot" | "cold" | "suppressed";
+
+/**
+ * `observed` was asserted by a source — he said it. `inferred` was drawn
+ * by reflection — she worked it out. A viewer that renders the two
+ * identically cannot answer the question this whole surface exists for.
+ */
+export type MemoryEdgeSpecies = "observed" | "inferred";
+
+/**
+ * Where a star came from, taken from the strongest filament touching it.
+ */
+export type MemoryStarProvenance = {
+  readonly species: "observed" | "inferred" | "unattested";
+  readonly assertedBy: string | null;
+  readonly reasoning: string | null;
+  readonly learnedAt: Instant | null;
+};
+
+export type MemoryStar = {
+  readonly id: Id;
+  readonly kind: MemoryNodeKind;
+  readonly tier: MemoryTier;
+  readonly label: string;
+  readonly body: string | null;
+  readonly confidence: number;
+  readonly provenance: MemoryStarProvenance;
+  readonly anchor: boolean;
+  readonly anchorId: Id | null;
+  readonly createdAt: Instant;
+  readonly updatedAt: Instant;
+};
+
+/**
+ * One connection. Both endpoints are always present in `stars` — a
+ * filament into a star that is not drawn is a line into nothing.
+ */
+export type MemoryFilament = {
+  readonly id: Id;
+  readonly from: Id;
+  readonly to: Id;
+  readonly relation: string;
+  readonly species: MemoryEdgeSpecies;
+  readonly tier: MemoryTier;
+  readonly confidence: number;
+  readonly inferredConfidence: number | null;
+  readonly reasoning: string | null;
+  readonly assertedBy: Id | null;
+  readonly lastTouchedAt: Instant;
+};
+
+/**
+ * What this response is NOT, in numbers and in words.
+ */
+export type MemoryConstellationBound = {
+  readonly stars: number;
+  readonly starsReturned: number;
+  readonly filamentsReturned: number;
+  readonly mayHaveMore: boolean;
+  readonly explanation: string;
+};
+
+export type MemoryConstellation = {
+  readonly generatedAt: Instant;
+  readonly bound: MemoryConstellationBound;
+  readonly stars: MemoryStar[];
+  readonly filaments: MemoryFilament[];
+};
+
 export type SyncResourceType = "conversation" | "message" | "reminder" | "todo" | "goal" | "device" | "delivery" | "job" | "run";
 
 export type SyncChangeOp = "upsert" | "delete";
