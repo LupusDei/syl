@@ -138,10 +138,21 @@ function said(text: string, tools: readonly string[] = []): TurnResult {
 
 interface Recorder extends RenderReviewVoice {
   readonly prompts: string[];
+  /**
+   * Every time the thread was thrown away — which must now be never.
+   *
+   * `RenderReviewVoice` no longer offers `reset`, so the handler CANNOT call
+   * it: the review happens in the Commander's own conversation now, and
+   * clearing it deletes what he has been saying. The double offers one anyway,
+   * on purpose. A guarantee that rests only on a method being absent from a
+   * `Pick` is a guarantee that widening the `Pick` silently repeals, and this
+   * array is what goes red when that happens.
+   */
   readonly resets: number[];
+  reset(): void;
 }
 
-/** A stand-in for the studio lane. No subprocess ever runs here. */
+/** A stand-in for his thread, as the render review sees it. No subprocess runs. */
 function voice(answer: TurnResult | (() => Promise<TurnResult>) = said("Looked.")): Recorder {
   const prompts: string[] = [];
   const resets: number[] = [];
@@ -401,7 +412,7 @@ describe("when the render is not done yet", () => {
 });
 
 describe("when the render is finished", () => {
-  it("should wake her on a thread whose whole subject is that one render", async () => {
+  it("should wake her in his own thread, about that one render, without clearing it", async () => {
     const { jobs, watches } = stores();
     const job = ensureRenderReviewJob(jobs, AFTERNOON);
     watches.watch({
@@ -416,9 +427,12 @@ describe("when the render is finished", () => {
     expect(speaker.prompts).toHaveLength(1);
     expect(speaker.prompts[0]).toContain(RENDER);
     expect(speaker.prompts[0]).toContain("ribbon shot");
-    // A fresh thread each time. One render's review has no business carrying
-    // her opinions of the last five into every later turn's context.
-    expect(speaker.resets).toHaveLength(1);
+    // And the thread survives. It used to be cleared on every wake, so that one
+    // render's review never carried her opinions of the last five; the wake
+    // happens in the Commander's own conversation now, where that is his
+    // transcript being deleted. What keeps a review about one clip is the
+    // prompt naming that clip — which the two assertions above are.
+    expect(speaker.resets).toEqual([]);
   });
 
   it("should tell her to look at it before deciding whether it is any good", async () => {

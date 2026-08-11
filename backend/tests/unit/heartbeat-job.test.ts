@@ -11,10 +11,14 @@ import {
   ensureHeartbeatJob,
   heartbeatPrompt,
   HEARTBEAT_INTERVAL_MS,
+  OUTRANKS_THE_HOUR,
   REACHES_HIM,
   SENDINGS_PER_DAY,
+  whatOutranksTheHour,
+  YIELD_WINDOW_MS,
   type HeartbeatVoice,
 } from "../../src/jobs/heartbeat-job.js";
+import { COMPOSE_LEAD_MS, ensureMorningAgendaJob } from "../../src/jobs/agenda-job.js";
 import { instant } from "../../src/services/clock.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import type { JobContext } from "../../src/services/job-runner.js";
@@ -90,16 +94,31 @@ function said(text: string, tools: readonly string[] = []): TurnResult {
 
 interface Recorder extends HeartbeatVoice {
   readonly prompts: string[];
+  /**
+   * Every time the thread was thrown away — which must now be never.
+   *
+   * `HeartbeatVoice` no longer offers `reset`, so the handler CANNOT call it:
+   * the hour happens in the Commander's own conversation now, and clearing it
+   * deletes what he has been saying. The double offers one anyway, on purpose.
+   * A guarantee that rests only on a method being absent from a `Pick` is a
+   * guarantee that widening the `Pick` silently repeals, and this array is what
+   * goes red when that happens.
+   */
   readonly resets: number[];
+  reset(): void;
+  /** Set to make the lane look occupied — the Commander mid-turn on it. */
+  occupied: boolean;
 }
 
-/** A stand-in for the heartbeat lane that records what it was asked. */
+/** A stand-in for his thread, as the hourly wake sees it. */
 function voice(answer: TurnResult | (() => Promise<TurnResult>) = said("Nothing.")): Recorder {
   const prompts: string[] = [];
   const resets: number[] = [];
-  return {
+  const recorder: Recorder = {
     prompts,
     resets,
+    occupied: false,
+    busy: () => recorder.occupied,
     ask: async (prompt: string) => {
       prompts.push(prompt);
       return typeof answer === "function" ? answer() : answer;
@@ -108,6 +127,7 @@ function voice(answer: TurnResult | (() => Promise<TurnResult>) = said("Nothing.
       resets.push(prompts.length);
     },
   };
+  return recorder;
 }
 
 /** A finished run on this job, at an instant, that did or did not reach him. */
@@ -502,20 +522,25 @@ describe("the hour itself", () => {
     expect(heard.prompts[0]?.toLowerCase()).toMatch(/sleep/);
   });
 
-  it("should keep her thread for the day, and start a fresh one on a new day", async () => {
-    // Continuity within a day is what makes "I noticed this at 03:00" survive
-    // to 09:00. Continuity across months is 24 turns a day of transcript that
-    // every later turn pays for.
+  it("should never throw away the thread it is running in, not even on a new day", async () => {
+    // The hour used to clear its own thread at each local midnight, because a
+    // lane of its own carrying 24 turns a day forever is a transcript every
+    // later turn pays to re-read. That thread is the Commander's now — his
+    // ruling of 2026-08-11 — and the same call is his conversation being
+    // deleted, once a day, by a background job he never sees.
+    //
+    // The `Pick` no longer offers `reset`, so this cannot compile its way back.
+    // The assertion is here for the day someone widens the `Pick`.
     const { jobs, job } = ready();
     const heard = voice();
     const handler = createHeartbeatHandler({ voice: heard, jobs, tz: TZ, quiet: QUIET });
 
     await handler(contextFor(jobs, job, MORNING));
     await handler(contextFor(jobs, job, MORNING + 60 * 60_000));
-    expect(heard.resets).toEqual([]);
-
     await handler(contextFor(jobs, job, NEXT_MORNING));
-    expect(heard.resets).toHaveLength(1);
+
+    expect(heard.prompts).toHaveLength(3);
+    expect(heard.resets).toEqual([]);
   });
 
   it("should be silent to him and loud in the log when the turn dies", async () => {
@@ -570,6 +595,127 @@ describe("the hour itself", () => {
     });
 
     await expect(handler(contextFor(jobs, job, MORNING))).resolves.toBeDefined();
+  });
+});
+
+describe("standing aside", () => {
+  /**
+   * The hour is the lowest-priority thing on the Commander's thread and has to
+   * behave like it (`syl-hb`, his ruling of 2026-08-11: the overnight hours
+   * stay, the collisions go).
+   *
+   * Everything here is about NOT running, which is the harder half to test and
+   * the easier half to get wrong in the dangerous direction — a guard that
+   * yields too readily takes the hour away silently and every signal stays
+   * green.
+   */
+  function withAgendaAt(now: number): { readonly jobs: JobStore; readonly heard: Recorder } {
+    const jobs = store();
+    ensureHeartbeatJob(jobs, { tz: TZ, quiet: QUIET }, now);
+    ensureMorningAgendaJob(jobs, { tz: TZ, quiet: QUIET }, now);
+    return { jobs, heard: voice() };
+  }
+
+  it("should stand aside while the Commander is mid-turn on the same thread", async () => {
+    // He outranks everything, and there is no schedule to read: the only
+    // evidence that he is talking is that a turn holds the lane. Without this
+    // the hour queues behind him and his NEXT message waits on a turn nobody
+    // asked for.
+    const { jobs, heard } = withAgendaAt(MORNING);
+    heard.occupied = true;
+
+    expect(whatOutranksTheHour({ voice: heard, jobs }, MORNING)).toMatch(/commander/i);
+  });
+
+  it("should stand aside when the morning brief is about to compose", async () => {
+    // The collision the Commander named. The brief must exist before the 07:00
+    // note announces it and starts COMPOSE_LEAD_MS ahead for exactly that
+    // reason, so an hour still talking at 06:45 spends that lead on itself.
+    const { jobs, heard } = withAgendaAt(MORNING);
+    const composeAt = jobs.list({ kind: "morning_agenda", limit: 1 }).items[0]?.nextRunAt ?? "";
+    const justBefore = Date.parse(composeAt) - COMPOSE_LEAD_MS / 2;
+
+    expect(whatOutranksTheHour({ voice: heard, jobs }, justBefore)).toMatch(/morning_agenda/);
+  });
+
+  it("should take its hour when the brief is further off than the window", async () => {
+    // The other half, and the one that matters more: a guard that never lets
+    // the hour run is not a guard, it is a deletion.
+    const { jobs, heard } = withAgendaAt(MORNING);
+    const composeAt = jobs.list({ kind: "morning_agenda", limit: 1 }).items[0]?.nextRunAt ?? "";
+    const wellBefore = Date.parse(composeAt) - YIELD_WINDOW_MS - 60_000;
+
+    expect(whatOutranksTheHour({ voice: heard, jobs }, wellBefore)).toBeNull();
+  });
+
+  it("should still take its hour in the middle of the night, because she may file overnight", async () => {
+    // *"I think she should be able to file things over night."* Nothing here
+    // refuses an hour for being at night — quiet hours bound what may REACH
+    // him, never what may happen, and the dream and the brief both run inside
+    // the window by design.
+    const { jobs, heard } = withAgendaAt(SMALL_HOURS);
+
+    expect(whatOutranksTheHour({ voice: heard, jobs }, SMALL_HOURS)).toBeNull();
+  });
+
+  it("should not stand aside for a job stuck due in the past, which would silence it forever", async () => {
+    // The trap in the obvious version of this guard. `JobStore.due` sorts
+    // `background` last and the runner takes one job a pass, so the hour being
+    // picked at all already means nothing that outranks it is due — and a job
+    // wedged overdue (an open circuit breaker, a handler failing every time)
+    // would otherwise take the hour away permanently, with every signal green.
+    const { jobs, heard } = withAgendaAt(MORNING);
+    const agenda = jobs.list({ kind: "morning_agenda", limit: 1 }).items[0];
+    jobs.release(agenda?.id ?? "", "failure", null, instant(MORNING - 60 * 60_000));
+
+    expect(whatOutranksTheHour({ voice: heard, jobs }, MORNING)).toBeNull();
+  });
+
+  it("should cost nothing and count as a success when it stands aside", async () => {
+    // A yielded hour recorded as a failure would walk the job's circuit breaker
+    // towards opening, so five polite hours in a row would take the hour away
+    // altogether — a punishment for good manners.
+    const { jobs, heard } = withAgendaAt(MORNING);
+    const job = jobs.list({ kind: "heartbeat", limit: 1 }).items[0];
+    heard.occupied = true;
+    const handler = createHeartbeatHandler({ voice: heard, jobs, tz: TZ, quiet: QUIET });
+
+    const result = await handler(contextFor(jobs, job as Job, MORNING));
+
+    expect(heard.prompts).toEqual([]);
+    expect(result.outcome).toBe("success");
+    expect(result.turns).toBe(0);
+    expect(result.costUsd).toBe(0);
+    expect(result.spoke).toBe(false);
+    expect(result.error).toBeNull();
+    // No `nextRunAt`: the interval trigger computes the next hour, which is
+    // strictly later. `null` would write NULL and take the job out of `due`
+    // forever — the silent drop constraint 4 forbids, by the polite path.
+    expect(result.nextRunAt).toBeUndefined();
+  });
+
+  it("should name only jobs that exist in the catalogue", () => {
+    // A kind nobody recognises is a guard that never fires, silently.
+    const kinds = new Set<string>([
+      "reminder_delivery",
+      "morning_agenda",
+      "evening_review",
+      "heartbeat",
+      "nightly_consolidation",
+      "research_brief",
+      "content_ingestion",
+      "maintenance",
+    ]);
+    for (const kind of OUTRANKS_THE_HOUR) expect(kinds.has(kind)).toBe(true);
+    // And never itself, which would be an hour that always stands aside.
+    expect(OUTRANKS_THE_HOUR).not.toContain("heartbeat");
+  });
+
+  it("should derive its window from the brief's own lead rather than a number", () => {
+    // Move the announcement and both move together. A literal here is a number
+    // that goes stale the day the 07:00 note moves, in a file that never
+    // mentions it.
+    expect(YIELD_WINDOW_MS).toBe(COMPOSE_LEAD_MS);
   });
 });
 

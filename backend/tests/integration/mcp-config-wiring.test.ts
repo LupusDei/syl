@@ -240,7 +240,7 @@ describe("what a turn gets when it is given one", () => {
       },
     });
 
-    for (const lane of [LANES.commander, LANES.heartbeat, LANES.agenda, LANES.consolidation]) {
+    for (const lane of [LANES.commander, LANES.consolidation, LANES.extraction, "research"]) {
       await agent.ask("Say hello.", lane);
     }
 

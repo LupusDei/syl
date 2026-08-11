@@ -78,7 +78,9 @@ An npm monorepo. `ios/` is Swift and deliberately **not** an npm workspace.
 backend/                          the Node 22 service (npm workspace)
   src/harness/protocol.ts         pure codec — JSON lines <-> typed events. Zero I/O.
   src/harness/session.ts          runTurn(): one subprocess per turn
-  src/harness/agent.ts            SylAgent: per-lane continuity + stale-session recovery
+  src/harness/agent.ts            SylAgent: per-lane continuity, one turn at a time
+                                  per lane, stale-session recovery. LANES, and why
+                                  her unattended turns are the Commander's own.
   src/harness/reader.ts           runReaderTurn(): untrusted text, no tools
   src/services/conversation-service.ts  the seam that makes her answer: both write
                                   paths append + accept here; one turn at a time
@@ -306,9 +308,45 @@ to add is about *additional* surfaces and blocks nothing.
   between spawn and init used to strand a conversation that existed on disk.
 - `runTurn` kills a turn that produces no result within `timeoutMs`
   (`DEFAULT_TURN_TIMEOUT_MS`, 10 minutes) and throws `TurnTimeoutError`.
-- Session continuity is **per lane** — `commander`, `heartbeat`, `agenda`,
-  `consolidation` — each in its own file under `.syl/sessions/`. One shared id
-  would interleave Syl's inner monologue with talking to the Commander.
+- **Her unattended turns run in the Commander's own thread.** The hourly
+  check-in, the render review and the morning brief all resume `commander`; only
+  `consolidation` and `extraction` keep lanes of their own, and those are not
+  conversation. His ruling, 2026-08-11: *"running the hourly checkin on a
+  different thread is wrong for now — resume the same session — there will be
+  things in the chat session that might invoke a reason to send a message and
+  how it should appear — a new lane invalidates that entirely… much of her
+  personality lives in that thread"*, extended the same day to the brief.
+  **The bloat is accepted, not overlooked** — *"if it causes bloat on that
+  thread we can solve it later"* — so the answer when it bites is summarisation
+  inside that thread, not a second thread beside it. Three consequences, each of
+  which cost something to find:
+  - **Nothing may `reset` that lane.** Every one of those jobs used to start a
+    fresh thread for a good reason of its own; on his lane the same call deletes
+    his conversation. None of their `Voice` types offers the method any more.
+  - **Being on his lane is no longer evidence that HE SPOKE.** That distinction
+    is what stopped an unattended turn piercing quiet hours, and re-keying it is
+    the load-bearing half of the merge — see the note below.
+  - **Two turns can now want one session id**, which the separate lanes used to
+    make impossible. `SylAgent` serialises per lane; the hourly check-in asks
+    `SylAgent.busy()` and stands aside rather than queueing behind him or ahead
+    of the morning brief (`OUTRANKS_THE_HOUR`).
+- **Quiet hours bound what may REACH him, never what may run.** The dream at
+  03:00 and the brief at 06:45 both run inside his default 22:00–08:00 window on
+  purpose, and he asked to keep the overnight hours: *"I think she should be
+  able to file things over night."* Anything that starts reading the window as
+  "do not run" silently takes those with it.
+- **An unattended turn must never be recordable as words the Commander said.**
+  `harness/urgency.ts` grants the quiet-hours bypass only for a phrase he
+  actually wrote, checked against a file `index.ts` writes from a turn's prompt
+  — so which turns write that file is the whole protection. That condition has
+  been wrong twice, the same way both times: `mcpConfig !== undefined` was exact
+  until a second lane got hands, and `lane === commander` was exact until the
+  merge above. **It is now `AskOptions.hisWords`**, set only by
+  `conversation-service.ts`, which holds a message he authenticated to send;
+  absent means no, and `SylAgent` writes it after the caller's overrides so a
+  turn cannot award itself the bypass.
+  `tests/acceptance/an-unattended-turn-cannot-wake-him.test.ts` drives it to the
+  `urgent` column and goes red the moment it is inferred again.
 - Node **22** is required (`.nvmrc` pins 22.23.1). Node 20 is end-of-life and
   lacks `node:sqlite`. Verified on 22.23.1: `node:sqlite` imports without a flag
   (SQLite 3.51.3) and **FTS5 is compiled in**, so keyword search needs no native

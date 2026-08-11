@@ -1071,13 +1071,28 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
    * Only for a turn carrying a declaration, so no lane without hands leaves a
    * trace of his messages on disk for a reader that does not exist.
    *
-   * **And only for HIS lane**, which used to be the same statement and is not
-   * any more. `mcpConfig !== undefined` meant "the commander lane" while the
-   * commander lane was the only tooled one; since the hourly self-ping and the
-   * morning brief were given hands it is true of them too, and writing an
-   * unattended turn's prompt here would be two failures at once. She could
-   * quote the prompt she was woken with to satisfy `harness/urgency.ts` and
-   * wake him at 03:00 with words he never said — and an hourly write would
+   * **And only when HE ACTUALLY SPOKE.** This condition has now been wrong
+   * twice, in the same way both times, and the shape is worth keeping:
+   *
+   *  1. `mcpConfig !== undefined` — exactly true while the commander lane was
+   *     the only tooled one, and silently wrong the moment a second lane got
+   *     hands.
+   *  2. `lane === LANES.commander` — exactly true while every unattended turn
+   *     had a lane of its own, and silently wrong the moment the Commander
+   *     merged the hour, the render review and the morning brief onto his lane
+   *     (2026-08-11). *Nothing about that merge mentions quiet hours.* It would
+   *     have repealed his sleep's only structural protection as a side effect,
+   *     which is why the condition is no longer a proxy for anything.
+   *
+   * So it asks the question directly: `TurnOptions.hisWords`, set by
+   * `SylAgent` from `AskOptions.hisWords`, which only
+   * `services/conversation-service.ts` passes — the one seam holding a message
+   * he actually sent. Absent means no, so a path that forgets to say anything
+   * is a path that grants nothing.
+   *
+   * Writing an unattended turn's prompt here would be two failures at once. She
+   * could quote the prompt she was woken with to satisfy `harness/urgency.ts`
+   * and wake him at 03:00 with words he never said — and an hourly write would
    * clobber his real message, so an urgent reminder he genuinely asked for
    * could be refused because a background turn landed in the same second.
    *
@@ -1090,10 +1105,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   const recordHisWords =
     (runner: TurnRunner): TurnRunner =>
     async (prompt, turnOptions) => {
-      // Identified by the LANE rather than by "has any declaration at all" —
-      // the property this was always about. Every lane with hands shares one
-      // declaration, so the path cannot tell them apart and only the name can.
-      if (home !== undefined && turnOptions.lane === LANES.commander) {
+      if (home !== undefined && turnOptions.hisWords === true) {
         writeTurnMessage(home, prompt);
       }
       return runner(prompt, turnOptions);
@@ -1134,20 +1146,29 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     /**
      * What she did while nobody was watching — on HIS lane, and no other.
      *
-     * The lanes keep her unattended turns out of his transcript, and until now
+     * The lanes used to keep her unattended turns out of his transcript, and
      * that separation was total in both directions: a reminder the hourly turn
      * filed at 07:04 was something the Syl he talks to had never heard of, and
      * she said so when he asked. Nothing she does is meant to be invisible;
      * this was invisible to her.
      *
+     * **Kept after the merge, and mostly redundant is not the same as
+     * redundant.** Those turns are now in this very transcript, so in the
+     * ordinary case the block restates what the thread already shows. Two
+     * things are still only true of the runs table. A resumed session is not
+     * guaranteed — `SylAgent` starts a clean one when a stored id is gone, and
+     * `agent.reset()` exists — and a transcript that has been dropped takes
+     * every unattended turn in it, while the runs table is unaffected. And the
+     * table is where `Run.spoke` lives, which is what makes this *the turns
+     * that reached him* rather than everything she thought.
+     *
+     * It is cheap and it fails safe: bounded bytes, only the runs that spoke,
+     * and the failure mode of keeping it is a paragraph he can already see
+     * rather than an hour he cannot account for.
+     *
      * Read fresh on every turn, from the runs table rather than from a second
      * store — `jobs/unattended-contributor.ts` decides what fits and what it
      * says about the rest.
-     *
-     * **His lane only**, deliberately. The question this answers is one he
-     * asks; the hourly turn already remembers its own day within its own
-     * thread, and handing every lane the same block would spend the same bytes
-     * on a turn nobody is questioning.
      */
     contributors: (lane: Lane): readonly Contributor[] => {
       if (lane !== LANES.commander) return [];
@@ -1848,8 +1869,8 @@ export async function startSyl(
   // next gap rather than spending turns at breakfast.
   const dreamSchedule = { tz: config.quietHours.tz, quiet: config.quietHours.quiet };
   const dreamJob = ensureNightlyDreamJob(deps.jobs, dreamSchedule, clock());
-  // The hourly self-ping, which `LANES.heartbeat` has been waiting for since the
-  // harness was written. An interval rather than a wall clock, so it never
+  // The hourly self-ping, on the Commander's own lane since his ruling of
+  // 2026-08-11. An interval rather than a wall clock, so it never
   // becomes a third fixed slot beside the morning agenda and the evening review.
   const heartbeatSchedule = { tz: config.quietHours.tz, quiet: config.quietHours.quiet };
   const heartbeatJob = ensureHeartbeatJob(deps.jobs, heartbeatSchedule, clock());
@@ -1891,10 +1912,15 @@ export async function startSyl(
       [
         "heartbeat",
         createHeartbeatHandler({
-          // The lane, bound once. It carries the same MCP declaration the
-          // commander lane does — see `LANES_WITH_HANDS` — because an hour that
-          // could not act would be an hour that could only report to nobody.
-          voice: agent.forLane(LANES.heartbeat),
+          // HIS THREAD, resumed — the Commander's ruling of 2026-08-11, argued
+          // where `LANES` is declared. The hour decides whether to say
+          // something to him and what it should sound like when it arrives, and
+          // both of those are read out of the conversation.
+          //
+          // `agent` itself rather than a lane view: this agent's default lane
+          // IS `commander`, and a view of it would be a second object standing
+          // for the same thread.
+          voice: agent,
           // The ledger is the runs table: how often she has reached him today
           // is a query over runs of this very job, in his zone, resetting with
           // the local day for free. No new store, and nothing to migrate.
@@ -1907,10 +1933,10 @@ export async function startSyl(
       [
         RENDER_REVIEW_KIND,
         createRenderReviewHandler({
-          // The studio lane, bound once. It carries the same MCP declaration
-          // the commander lane does — see `LANES_WITH_HANDS` — because the
-          // whole turn exists to reach a decision, and the decision is a verb.
-          voice: agent.forLane(LANES.studio),
+          // HIS THREAD, resumed. Same ruling as the hour: whether a clip is
+          // worth him stopping for, and what she says when she sends it, are
+          // judgements made out of the conversation.
+          voice: agent,
           watches: deps.renderWatches,
           // Two readers, never the service: a pass deciding whether the last
           // render was any good must not be able to start another one.
@@ -1931,10 +1957,10 @@ export async function startSyl(
       [
         "morning_agenda",
         createMorningAgendaHandler({
-          // The lane, bound once. It carries the same MCP declaration the
-          // commander lane does — see `LANES_WITH_HANDS` — because a brief she
-          // cannot file is a brief that exists only in a run record.
-          voice: agent.forLane(LANES.agenda),
+          // HIS THREAD, resumed — *"the morning routine update should also be
+          // on the same lane for now"*, the Commander, 2026-08-11, extending
+          // the same ruling to the brief.
+          voice: agent,
           ...agendaSchedule,
           // A morning that composed nothing, and a morning that died, are both
           // reported here and nowhere near him.
