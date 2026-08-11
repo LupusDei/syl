@@ -1241,3 +1241,31 @@ compounding zoom, because "zooming" sounds like a scale bug. Nothing in the tran
 touched scale. The zoom was the *layout* rescaling, and the symptom named the wrong
 subsystem — I found it by testing the invariant he described (**the sky should be still**)
 rather than by hunting the mechanism he guessed at.
+
+### A green TestFlight run that shipped nothing, again (2026-08-11)
+
+Build 17 carried the fix for a bug the Commander was actively hitting. The workflow ran,
+reported success, and **uploaded nothing.**
+
+The gate compared `MARKETING_VERSION` against `HEAD~1`. The bump landed in one commit and
+reached `main` inside a merge, so `HEAD~1` was the branch being merged — which already
+carried 0.9.6. Current equalled previous, the job went green, and no build existed.
+
+`HEAD~1` is not a meaningful question. It is a different commit depending on whether the
+tip is a merge, a squash, a revert or a rebase, and on which side of a merge git calls the
+first parent. The question with one true answer is *is this build already on TestFlight?*,
+and the gate now answers exactly that by checking for a `testflight/<build>` tag pushed
+**after** a successful upload. Immune to merges, re-runs, reordering, and to another agent
+committing in between. `testflight/16` was backfilled so the record starts honest.
+
+Note which way each design fails. The tag gate fails toward a **duplicate upload**, which
+App Store Connect rejects loudly and which costs runner minutes. The old gate failed
+toward **silence**, which costs a release nobody knows is missing. Given a check that
+cannot be perfect, choose the noisy failure — and this is the third entry in this file
+where the defect was something reporting green while doing nothing, which is now the
+project's single most common failure shape.
+
+**And the reason it was caught at all**: the Commander asked *"merged and pushed with a new
+version for a new app release?"* — a question about the outcome, not about my actions. I
+had said "pushed as 0.9.6" and that was true and irrelevant. Verifying the outcome he
+asked about took one log read. **Report what shipped, not what you did.**
