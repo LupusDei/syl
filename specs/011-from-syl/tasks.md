@@ -59,6 +59,10 @@ on the machine that actually runs her.
       unlimited sendings in a day and every run still reads `spentToday: 0`, which
       makes root acceptance 7 false. Add the verb from T007b, matched under both its
       bare name and its `mcp__syl__` form exactly as `remind_me` already is.
+      **Guard to expect**: `backend/tests/integration/chat-wiring.test.ts` asserts the
+      exact caller list of `chat.accept` / `chat.append`, and `sending-service.ts` is
+      already the third. If giving the heartbeat a path to the verb creates a fourth,
+      that test fires on purpose — read its comment before changing the list.
       Phases: **write failing tests first** in
       `backend/tests/unit/heartbeat-job.test.ts` — a run that composes a sending sets
       `spoke: true`; two in one local day spend the allowance; yesterday's do not
@@ -134,11 +138,22 @@ already subscribes itself via `chat.setSink`), and the reaping of the derived wo
 directory (done, `#reap(sendingId)`, best-effort, after the bytes reach the attachment
 store).
 
-**Two facts from that exchange that these tasks depend on:**
+**Four facts from that exchange that these tasks depend on:**
 
+- **Branch from `feat/from-syl-backend` @ `cc8e44e`, not from `origin/main`.** That work
+  is committed but **not merged and not pushed** — 25 files. `POST /sendings` exists
+  only there, so a verb branched from `main` has nothing to call. Its final gate:
+  4666 passed, 4 failed, 16 skipped, and all four failures declared (`syl-b97` ×3,
+  `syl-dep1.7`).
 - **`renderName` is required on `CreateSendingRequest`, not optional.** A sending is
   *she says something and the form it takes is her own face*; words with no face is an
   ordinary message and she already has chat for those. The verb must require it too.
+- **`backend/tests/integration/chat-wiring.test.ts` asserts the exact caller list of
+  `chat.accept` / `chat.append`.** Routing her words through `ConversationService` made
+  `sending-service.ts` the third caller. It is a guard, not a flake: the other two
+  callers carry a message from *him*, and a sending is Syl originating. Any task that
+  adds a fourth path into `accept`/`append` will make it fire, and the test's own
+  comment says which question to ask first. Relevant to T007b and to T003 in Phase 2.
 - **`0024` is contested.** `agent/fenix` has `0024_working_memory_budget.sql` committed
   on its own branch. `readMigrations` hard-fails on a gap, so `0025` cannot simply be
   taken instead. See T009.
@@ -195,12 +210,16 @@ store).
       gap**, so whichever merges second cannot simply become `0025` — renumbering has
       to happen at merge, in order, and the service will refuse to start until it does.
       Whoever integrates second: **take the lowest free number immediately before
-      renaming**, do not reserve one, and re-run the migration list. Phases: **write
-      the failing test first** in `backend/tests/unit/migrations.test.ts` — assert the
-      migration directory has no duplicate number and no gap, so the next collision is
-      a red test rather than a service that will not boot — **confirm RED** against the
-      collided tree, then renumber until GREEN and **confirm GREEN**. Gate:
-      `npm run verify`.
+      renaming**, do not reserve one, and re-run the migration list.
+      **Scope, corrected by the agent holding `.3`: the gap half of this check already
+      exists** — `readMigrations` threw *"Gap in the migration sequence: expected
+      version 24, found 25"* at it, which is how `0024` was found to be the only free
+      number. So the genuinely new coverage is the **duplicate** check, and the value of
+      the task is that a collision fails at `npm test` rather than at boot. Keep it;
+      do not oversell it in the commit message. Phases: **write the failing test first**
+      in `backend/tests/unit/migrations.test.ts` — assert the migration directory has no
+      duplicate number and no gap — **confirm RED** against the collided tree, then
+      renumber until GREEN and **confirm GREEN**. Gate: `npm run verify`.
 
 - [ ] **T010** `[docs]` Verify acceptance 3, 4 and 6 on the running service and record
       it in `docs/RUNBOOK.md`. Compose one sending through the verb from T007b and
@@ -416,7 +435,15 @@ so that search needs him, and he has said not now.
       onto the render, then compress as today. Order matters — **the words and the push
       still go first and are still not contingent on any of this**, so a failure to
       speak settles the sending `failed` with a reason and leaves her sentence already
-      delivered. Phases: **write failing tests first** in
+      delivered.
+      **Do not touch the compressor, and do not "optimise" it.** Two deliberate
+      properties of `sending-media.ts` that this task depends on: it already passes
+      audio through **unconditionally** (no `-map`, `-c:a aac -b:a 96k`), so a render
+      that comes back with a voice on it keeps it with no change to that layer; and the
+      bitrate budget subtracts the 96k audio allowance **whether or not there is any
+      audio**, which costs a little quality on silent clips and is the reason a voice
+      track can never push a sending over the 10MB ceiling. It looks like a bug and is
+      not. Phases: **write failing tests first** in
       `backend/tests/unit/sending-service.test.ts` — the attached video carries audio;
       a speech failure does not retract the assistant message or the push; the original
       render is byte-identical afterwards — **confirm RED** → implement → **confirm

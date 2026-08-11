@@ -198,7 +198,22 @@ Plus one integration hazard that is nobody's feature and will stop a boot:
 `0024_sendings.sql` and `agent/fenix`'s `0024_working_memory_budget.sql` are the same
 number on two branches, and `readMigrations` hard-fails on a *gap*, so the second to
 merge cannot simply become `0025`. T009 makes that a red test instead of a service
-that will not start.
+that will not start. (The gap half of that check already exists in `readMigrations` —
+it is what taught the `.3` agent that `0024` was the only free number — so T009's new
+coverage is the *duplicate* half, and its value is failing at `npm test` rather than
+at boot.)
+
+**Where the work is.** `.3` is committed to `feat/from-syl-backend` at `cc8e44e`,
+branched from `origin/main` and **neither merged nor pushed** — 25 files. Anything that
+calls `POST /sendings` must branch from there, not from `main`. Its gate ran 4666
+passed / 4 failed / 16 skipped, all four failures declared (`syl-b97` ×3, `syl-dep1.7`).
+
+**One guard that will fire on the unwary.** Routing her words through
+`ConversationService` made `sending-service.ts` the third caller of
+`chat.accept`/`chat.append`, and `backend/tests/integration/chat-wiring.test.ts`
+asserts that caller list exactly. The distinction it encodes is real — the other two
+carry a message from *him*, a sending is Syl originating — so a fourth caller is a
+question to answer, not a test to update. T003 and T007b both name it.
 
 ## Phase 4 — From Syl, the surface
 
