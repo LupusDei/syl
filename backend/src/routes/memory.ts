@@ -1,5 +1,10 @@
 import { Router, type Request, type RequestHandler } from "express";
 
+import {
+  buildConstellation,
+  DEFAULT_STARS,
+  MAX_STARS,
+} from "../memory/constellation.js";
 import { DreamLogError, type DeclaredCounts, type DreamLog } from "../memory/dream/log.js";
 import { GraphError, type MemoryEdge, type MemoryGraph, type MemoryNode } from "../memory/graph.js";
 import type { MemoryMetrics } from "../memory/metrics.js";
@@ -48,14 +53,32 @@ import { runIdempotent, sendIdempotent } from "./idempotency.js";
  * The two stores stay separate (constraint 7): this route writes to each of them
  * directly, and neither writes to the other.
  *
- * ## Why it is admin-scoped
+ * ## It is NOT admin-scoped, and this section used to say the opposite
  *
- * The same argument as `GET /logs`, twice over. The graph is the record of what
- * a pre-authorised program inferred on his machine, and the feedback endpoint
- * *writes into Syl's memory*. A shoulder-surfed pairing code must not reach
- * either. `requireScope("admin")` is minted only at the console — see
- * `routes/logs.ts` for the full argument, which this route follows exactly
- * rather than restating.
+ * It used to argue — at length, and with the `GET /logs` precedent — that a
+ * shoulder-surfed pairing code must not reach the graph. **The Commander
+ * overruled that on 2026-08-10**: *"Remove the need for another key for the
+ * admin panel. Too annoying."* `index.ts` passes `anyAuthenticatedDevice` for
+ * {@link MemoryRouterOptions.authorize}, and a paired phone reaches every route
+ * in this file.
+ *
+ * The correction is recorded rather than deleted because the mistake it caused
+ * is worth keeping. This comment stayed as it was for the seventy-four minutes
+ * between his ruling landing and `specs/009-the-constellation` being planned
+ * against it — and the plan opens by naming a `403` that no longer existed. The
+ * mount below reads `authenticate, authorize`, the option was called
+ * `requireAdmin`, and the value behind it is `(_req, _res, next) => next()`.
+ * **Every place a reader would look said "gated"; only the call site said
+ * otherwise.** A parameter named for a policy outlives the policy, so it is now
+ * named for its position instead.
+ *
+ * What still does the work, and would whatever the option held: a caller must
+ * be **authenticated**. Pairing is over the tailnet behind eight digits, and an
+ * unpaired caller gets the same indistinguishable 401 it always did.
+ *
+ * The seam is deliberately kept. Putting a scope back is one line at the call
+ * site — see `middleware/auth.ts`, which keeps `requireScope` and the `scope`
+ * column for exactly that reason.
  *
  * ## Scale: what this deliberately does NOT return
  *
@@ -102,8 +125,16 @@ export interface MemoryRouterOptions {
   readonly memory: MemoryViews;
   readonly idempotency: IdempotencyStore;
   readonly authenticate: RequestHandler;
-  /** The scope gate. Separate from `authenticate` so both are visibly mounted. */
-  readonly requireAdmin: RequestHandler;
+  /**
+   * What this surface requires BEYOND a valid token.
+   *
+   * Named for its position rather than for a policy, because the policy has
+   * already changed once underneath the old name — see this module's header.
+   * Today `index.ts` passes `anyAuthenticatedDevice`, which requires nothing
+   * further. Separate from `authenticate` so both are visibly mounted at the
+   * bootstrap rather than hidden in here.
+   */
+  readonly authorize: RequestHandler;
   readonly clock?: Clock;
 }
 
@@ -587,14 +618,28 @@ export function recordVerdictOnSurfaced(
 // ---------------------------------------------------------------------------
 
 export function createMemoryRouter(options: MemoryRouterOptions): Router {
-  const { memory, idempotency, authenticate, requireAdmin } = options;
+  const { memory, idempotency, authenticate, authorize } = options;
   const clock = options.clock ?? systemClock;
   const router = Router();
 
   // Order is the security property, exactly as in `routes/logs.ts`: a token
   // first, then what that token is for. Reversed, a caller with no token would
-  // be told this surface needs admin scope.
-  router.use("/memory", authenticate, requireAdmin);
+  // learn what this surface requires — a fact about the service they have not
+  // earned. That holds even while `authorize` requires nothing.
+  router.use("/memory", authenticate, authorize);
+
+  /**
+   * The sky. The phone's read, and the only one shaped for it.
+   *
+   * Deliberately not `graph` with a flag: that one takes seeds, an edge budget
+   * and a window of dream nights, which are instrument controls for judging the
+   * inferred engine. This one takes a count of stars, because the phone has no
+   * controls to turn. See `memory/constellation.ts`.
+   */
+  router.get("/memory/constellation", (request, response) => {
+    const bounds = { stars: countParam(request, "stars", DEFAULT_STARS, MAX_STARS) };
+    sendOk(response, buildConstellation(memory, bounds, clock()));
+  });
 
   router.get("/memory/graph", (request, response) => {
     const bounds = {

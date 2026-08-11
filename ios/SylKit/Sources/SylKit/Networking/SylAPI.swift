@@ -310,6 +310,25 @@ public enum SylAPI {
         return .get("/sync", query: query)
     }
 
+    // MARK: - Memory
+
+    /// A bounded region of the memory graph, shaped to be drawn as a sky.
+    ///
+    /// Deliberately not the admin's `/memory/graph`, which takes node seeds, edge
+    /// budgets and a window of dream nights — instrument controls for judging the
+    /// inferred engine. This one takes a count of stars, because the phone has no
+    /// controls to turn.
+    ///
+    /// `stars` is refused rather than clamped when out of range (1...500): a value
+    /// quietly read as the default hands back a different sky under a number the
+    /// caller did not ask for.
+    ///
+    /// The response is a REGION. Read `bound.mayHaveMore` before implying it is
+    /// everything she remembers.
+    public static func constellation(stars: Int? = nil) -> Endpoint<MemoryConstellation> {
+        .get("/memory/constellation", query: optional("stars", stars.map(String.init)))
+    }
+
     // MARK: - Query helpers
 
     private static func page(cursor: String?, limit: Int?) -> [QueryItem] {

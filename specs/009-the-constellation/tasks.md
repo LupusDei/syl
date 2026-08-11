@@ -58,14 +58,40 @@
 - **T015** Reduce Motion pins every star at its anchor — and the still must read as *the
   same sky*, not a broken one (D5).
 
-## Phase 4 — Touch a star (`.4`)
+## Phase 4 — Wander, and touch (`.4`)
+
+**Extended by the Commander, 2026-08-11:** *"Wandering critical. Pinch drag zoom and select
+to view details. Tapping on edges or nodes should pop up their details."*
+
+So **edges are selectable too**, which the spec did not say. That is the better call: a
+filament's detail is `relation`, `species`, `confidence` and — for an inferred one —
+`reasoning`, which is *her thinking*, written down. It is the most interesting thing in the
+graph and the only place the inference engine ever explains itself to him.
+
+- **T016a** Wander: drag to pan, pinch to zoom, bounded so he can never lose the sky. Zoom
+  changes what is legible, never what exists — no level-of-detail that makes stars appear
+  and disappear, because a sky that grows things as you approach is not a sky.
 
 - **T016** Hit-testing against **anchor** positions, not drifting ones, so a tap lands
-  where he aimed.
+  where he aimed. In view space after the transform, so the hit radius stays a *finger*
+  rather than shrinking as he zooms out.
+
+- **T016b** Filaments are tappable: distance to a line segment, with a generous radius,
+  because a one-point line is not a touch target. **A star wins a tie** — when both are
+  within reach he meant the star, since it is the thing he can see.
 - **T017** The star brightens, its filaments light, and neighbours dim — the graph
   answering rather than a selection highlight.
-- **T018** One card: the memory in her words, when she learned it, and **from what**.
-  Provenance is the answer to the only question that matters about a memory.
+- **T018** One card for a star: the memory in her words, when she learned it, and **from
+  what**. Provenance is the answer to the only question that matters about a memory.
+
+- **T018b** One card for a filament: what it relates, whether she **observed** it or
+  **inferred** it, and — when inferred — her `reasoning`, verbatim. This is the only
+  surface in the app where she explains a conclusion, and it should read as her saying it
+  rather than as a debug field.
+
+- **T018c** The card must not cover what he touched. Rising from the bottom over a
+  transform that pans the selection clear is the whole reason selection is a transform
+  rather than a highlight.
 - **T019** VoiceOver: a `Canvas` is invisible to it. Every star is an accessibility element
   with a label and a position, or this screen does not exist for anyone using it.
 

@@ -6,18 +6,34 @@
 
 ## What the survey changed
 
-**1. The phone cannot read the memory graph at all.**
-`backend/src/routes/memory.ts` mounts every memory route behind
-`authenticate, requireAdmin`. The phone holds a **`device`**-scoped key, so
-`GET /memory/graph` returns `403` to it today. This is the first task and it blocks
-everything.
+**1. ~~The phone cannot read the memory graph at all.~~ — WRONG WHEN WRITTEN.**
 
-**2. And it should not simply be opened up.** The `/logs` precedent is the reasoning to
-follow, not to copy: logs are admin-only because they are *the record of what a
-pre-authorised program did on his machine*. **The memory graph is not that — it is facts
-about him, his people and his goals.** That is his own data, like his messages and his
-reminders, and `device` scope is right for *reading* it. What stays admin is the tuning
-surface: `metrics` and `edges/{id}/feedback` shape the engine and are not his data.
+> **Corrected 2026-08-11.** This plan claimed `GET /memory/graph` returned `403` to the
+> phone. It did not, and had not for over an hour before the plan was committed: `d7b15bb`
+> *"feat: no second key for the admin panel"* had already replaced the gate with
+> `anyAuthenticatedDevice`, and three tests already asserted a paired device gets `200`.
+>
+> **The mistake is worth keeping rather than deleting.** I read the route's mount line and
+> its doc comment — which was literally headed *"Why it is admin-scoped"* — and did not
+> read the call site, which was the only place telling the truth. The code was internally
+> consistent and wrong: this project's own named pattern, caught by a planner instead of a
+> test. The option is now called `authorize`, named for its position rather than for a
+> policy that has already changed under it once.
+>
+> The phase's real work — a payload shaped for a sky, stored on the device, read from
+> disk — was unaffected.
+
+**2. And the brief's instinct to re-tighten the tuning surface was also wrong.**
+I said `metrics` and `edges/{id}/feedback` should stay admin because they shape the engine
+rather than describe him. The squad refused, correctly: **the Commander opened that
+surface deliberately**, because the thing he asked for — judging how good the inferred
+engine is — was unreachable from the device he actually carries, and *giving feedback is
+how he judges it*. Re-gating would have restored the exact friction he removed, on the
+endpoint he named.
+
+The reasoning about `/logs` still holds and is still worth stating: logs are admin because
+they record *what a program did on his machine*, and the memory graph is facts about him.
+It simply did not lead where I pointed it.
 
 **3. The phone wants a different payload anyway.** `buildGraphView` is built for the
 admin — seeds, edge budgets, dream nights. The constellation wants nodes with kind, tier,

@@ -172,6 +172,30 @@ struct GoalRecord: Codable, PayloadRecord, Equatable {
 /// `lastFrameSeq` is the WebSocket frame-stream sequence that survives one reconnect.
 /// Feeding one to the other makes the client either replay everything or silently
 /// believe it is caught up.
+/// The last sky the server drew, held whole.
+///
+/// Not a `PayloadRecord` over a list, and not one row per star — see the
+/// `v5-the-constellation-is-a-snapshot-not-a-row-set` migration for why. There is
+/// one row, it is replaced entirely, and `bound` rides along inside the payload
+/// so the device keeps the response's own statement about what it left out.
+struct ConstellationRecord: Codable, PayloadRecord, Equatable {
+    static let databaseTableName = "constellation"
+    /// There is one row, ever.
+    static let singletonID = "singleton"
+
+    var id: String = ConstellationRecord.singletonID
+    /// When the SERVER generated it, not when the device stored it.
+    var generatedAt: Date
+    var payload: Data
+
+    init(_ constellation: MemoryConstellation) throws {
+        self.generatedAt = constellation.generatedAt
+        self.payload = try SylJSON.encoder().encode(constellation)
+    }
+
+    typealias Model = MemoryConstellation
+}
+
 struct SyncStateRecord: Codable, FetchableRecord, PersistableRecord, Equatable {
     static let databaseTableName = "syncState"
     /// There is one row, ever.

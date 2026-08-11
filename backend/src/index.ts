@@ -417,17 +417,20 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
       requireAdmin: anyAuthenticatedDevice,
     }),
   );
-  // The graph, and the one surface that corrects it. Admin-scoped for the same
-  // reason the log is — this is the record of what a pre-authorised program
-  // inferred, and the feedback endpoint writes into Syl's memory. Both
-  // middlewares named here rather than hidden inside the router, so the
-  // bootstrap shows what is gated and by what.
+  // The graph, the sky the phone draws from it, and the surface that corrects
+  // it. **Authenticated, and nothing further** — the Commander's ruling of
+  // 2026-08-10 removed the second key from this surface, because the view he
+  // asked for specifically, so he could judge the inferred engine, was one he
+  // could not open from the device he actually carries. Both middlewares named
+  // here rather than hidden inside the router, so the bootstrap shows what is
+  // required and by what. See `routes/memory.ts` for the full argument and for
+  // what the old one was.
   api.use(
     createMemoryRouter({
       memory,
       idempotency,
       authenticate,
-      requireAdmin: anyAuthenticatedDevice,
+      authorize: anyAuthenticatedDevice,
     }),
   );
   api.use(createIntakeRouter({ intake, idempotency, authenticate }));

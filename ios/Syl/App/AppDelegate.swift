@@ -32,6 +32,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     private(set) lazy var diagnostics = CrashDiagnostics()
     private lazy var registrar = PushRegistrationService(backend: backend)
 
+    /// Where the constellation's stars come from: disk first, the server behind it.
+    ///
+    /// Built here rather than in the screen so the view stays a pure function of values and
+    /// can be rendered offscreen — which on that screen is the primary check on the
+    /// feature rather than a convenience.
+    private(set) var constellation: ConstellationSource?
+
     /// Whether this device holds a credential at all.
     ///
     /// The gate on the whole app: without a token every request goes out with no
@@ -137,6 +144,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         guard let database = try? SylDatabase.onDisk() else { return }
 
         let store = LocalStore(database: database)
+        constellation = ConstellationSource(store: store, gateway: .live(backend: backend))
         let outbox = Outbox(database: database)
         let engine = SyncEngine(
             store: store,

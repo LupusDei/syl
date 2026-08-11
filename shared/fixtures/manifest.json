@@ -170,6 +170,12 @@
       "summary": "Includes a dormant goal — a real state, not a soft delete."
     },
     {
+      "file": "http/memory.constellation.json",
+      "schema": "MemoryConstellation",
+      "envelope": "ok",
+      "summary": "CAPTURED from the live route by scripts/experiments/capture-constellation-fixture.mts. Exercises every branch the payload has, because a null that never appears is a CodingKeys bug nobody catches: both edge species plus an unattested star, a cold star a hot filament reaches (constraint 6 — set aside, never absent), all seven node kinds, anchor both ways, and inferredConfidence both null and set."
+    },
+    {
       "file": "http/health.degraded.json",
       "schema": "HealthStatus",
       "envelope": "ok",

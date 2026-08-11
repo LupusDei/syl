@@ -471,6 +471,26 @@ export class MockServer {
       );
     },
 
+    // Served straight from the captured fixture rather than from a synthesised
+    // graph. The mock's job is to hand a client the shape it will actually
+    // meet, and the fixture is the only artefact here that came off the real
+    // route — a second, invented sky would drift from it silently.
+    getMemoryConstellation: ({ query }) => {
+      const raw = query.get("stars");
+      if (raw !== null && raw !== "") {
+        const stars = Number(raw);
+        if (!Number.isInteger(stars) || stars < 1 || stars > 500) {
+          return {
+            ok: false,
+            status: 400,
+            code: "VALIDATION_FAILED",
+            message: "stars must be a whole number between 1 and 500.",
+          };
+        }
+      }
+      return ok((fixture("http/memory.constellation") as { data: unknown }).data);
+    },
+
     syncSinceCursor: ({ query, store }) => {
       const limit = Number(query.get("limit") ?? "50");
       if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
