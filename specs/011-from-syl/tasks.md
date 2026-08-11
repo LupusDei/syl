@@ -224,6 +224,26 @@ store).
       duplicate number and no gap — **confirm RED** against a tree with a deliberate
       duplicate, then make it pass and **confirm GREEN**. Gate: `npm run verify`.
 
+- [ ] **T025** `[P]` **Bug** — the mock serves sendings in the wrong order, and is
+      schema-conformant while doing it. `shared/src/mock/server.ts:382` is
+      `listSendings: ({ store }) => ok(page(store.sendings))`, and `page()` does no
+      sorting — callers order explicitly, which is why `listMessages` reverses by hand
+      just above it. `seedSendings()` in `shared/src/mock/store.ts` is in authoring
+      order (`ready` 09:00, `pending` 10:15, `failed` the previous day), so the mock
+      serves **ready, pending, failed** while the real store —
+      `sending-store.ts:265`, `ORDER BY created_at DESC, id DESC` — serves **pending,
+      ready, failed**. A client built against the mock renders a different order than
+      it will against Syl. Sort in the handler, not by reordering the seed, so
+      `createSending`'s `unshift` stays correct and a future seed cannot reintroduce
+      it. **Nothing caught this because `shared/tests/mock-server.test.ts` validates
+      against the contract's *schema*, and ordering is not expressible in JSON Schema**
+      — the mock is conformant and wrong at once, which is the exact failure the mock
+      exists to prevent. Phases: **write the regression test first** in
+      `shared/tests/mock-server.test.ts`, asserting `GET /sendings` comes back strictly
+      descending by `createdAt` — an assertion the schema cannot make, so it has to be
+      written by hand — **confirm RED**, then fix until GREEN and **confirm GREEN**.
+      Gate: `npm run verify`. **Blocks T014a.**
+
 - [ ] **T010** `[docs]` Verify acceptance 3, 4 and 6 on the running service and record
       it in `docs/RUNBOOK.md`. Compose one sending through the verb from T007b and
       confirm, on the real machine and not in a test: her words appear in chat; the
@@ -296,7 +316,14 @@ New Swift files need no `.pbxproj` edit — both targets use
       or a false empty state; a `pending` sending shows her words and the date with
       **no** video affordance rather than a broken one; a `failed` sending still shows
       her words, because the words were never contingent on the video; and the date
-      formats in his zone. **Confirm RED.**
+      formats in his zone. **The mock's three seeded sendings are one per state on
+      purpose — `ready`, `pending`, `failed` — so exercise all three arms.** A snapshot
+      suite that covers only `ready` lets a client hide `failed`, and `failed` is the
+      row where her words still stand and the video did not arrive, which is root
+      acceptance 3 itself. **Confirm RED. Blocked by T025** — snapshots taken against
+      the mock before that lands bake in the wrong order and then disagree with
+      production while looking green; hand-built fixtures are the acceptable
+      alternative.
 
 - [ ] **T014b** Implement `SendingListSnapshot` in
       `ios/Syl/Features/FromSyl/SendingSnapshot.swift` and `FromSylListView` (with its
@@ -339,7 +366,12 @@ New Swift files need no `.pbxproj` edit — both targets use
       The row's still is the sending's poster variant, which the backend already
       guarantees is never frame zero, so **the row shows her face rather than a generic
       play glyph and never the empty starfield the loop opens on** — that sentence is
-      acceptance item 5 and it is what this task is for. **`\.attachmentContext` is
+      acceptance item 5 and it is what this task is for. **Do not special-case the
+      loader**: `AttachmentLoader.resolve` already downgrades `thumb → original` when
+      `hasThumbnail` is false, and a sending's video carries `hasThumbnail: true`, so
+      the existing loader fetches the poster on its own. Anyone finding themselves
+      branching on sendings inside that loader has found an upstream bug — most likely
+      `hasThumbnail` unset — not a reason to branch. **`\.attachmentContext` is
       applied only to the Chat tab today** (`ios/Syl/SylApp.swift`); apply it to the
       From Syl subtree too or the bytes silently never load. Phases: **write failing
       tests first** in `ios/SylTests/FromSylPlaybackTests.swift` — the poster variant
