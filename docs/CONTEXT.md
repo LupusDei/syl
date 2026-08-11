@@ -927,6 +927,20 @@ one of those three reached the Commander because somebody competent had said it
 first and said it well — which is the only reason it got past anyone. When you
 pass on a finding you did not verify, say so in the same sentence, or verify it.
 
+**A worked example, because it was repeated about twenty times in one session
+and told to four agents as fact.** "`npm run verify` reports exit 0 while
+actually failing" was said all night, written into a memory, and put in briefs
+as *the harness lies about exit codes*. It does not. **A pipeline's exit status
+is the last command's** — every one of those runs was `npm run verify | sed |
+grep`, so the 0 belonged to `grep`. Provable in one line: `false | tail -1; echo
+$?` prints `0`, and `set -o pipefail` makes it `1`.
+
+The advice survives and the reason changes: read the output and confirm real
+test counts, but the actual remedy is `set -o pipefail`, or not piping the
+command whose status you mean to read. A wrong mechanism attached to correct
+advice is the most durable kind of error — nobody challenges it, because the
+advice keeps working.
+
 **And the remedy is not more diligence.** Two agents produced false claims the
 same night by opposite routes: one invented a mechanism it had never run, the
 other ran `git branch --show-current`, got the right answer, and reported the
