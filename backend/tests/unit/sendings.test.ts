@@ -15,11 +15,19 @@ import { testConfig, testDatabase, testDeps } from "../helpers/service.js";
 /**
  * `/sendings` over a real socket.
  *
- * The route's whole unusual decision is asserted here: **a video that could
- * not be made is still a `201`.** By the time the render is looked at, her
- * words are already in his conversation and the notification is already
- * enqueued — so answering `404` because the decoration was missing would throw
- * away a delivered message to complain about a video.
+ * Two decisions are asserted here and they pull in opposite directions, which
+ * is the whole shape of this route since the Commander's ruling of 2026-08-11:
+ *
+ * **A render that is not finished is a `4xx`, and nothing is written.** Her
+ * words and the notification used to go out first and the video was chased
+ * behind them, so a `201` could describe a video that did not exist. Now the
+ * render is resolved before anything is appended, and a refusal costs nothing
+ * and reaches nobody.
+ *
+ * **A COMPRESSION that fails is still a `201`.** Everything after the render
+ * gate is the old rule exactly: her words have already been said, so answering
+ * `4xx` because the derived copy could not be made would throw away a delivered
+ * message to complain about a decoration.
  *
  * Nothing here reaches Runway or ffmpeg: the render source and the compressor
  * are both doubles.
@@ -194,25 +202,44 @@ describe("POST /sendings", () => {
     expect(delivery?.payload.body).not.toMatch(/sent you a video/i);
   });
 
-  it("should still answer 201 when the render does not exist, and say why on the row", async () => {
-    // The decision this route is built around. A `4xx` here would throw away
-    // words that had already been said, to complain about a decoration.
+  it("should refuse when the render does not exist, without writing anything", async () => {
+    // The reversal. This used to answer 201 with `state: "failed"` on the row —
+    // which meant a message in his conversation and a notification on his phone
+    // about a video nobody could ever have found. The refusal names the render
+    // rather than the words, because the words were fine.
     await boot({ renders: { get: () => null, latest: () => null } });
+    const before = deps.sendings.list().items.length;
     const response = await api("/sendings", {
       method: "POST",
       body: JSON.stringify({ words: "Hello.", because: "b", renderName: "syl-nope" }),
     });
 
-    expect(response.status).toBe(201);
-    await deps.composer.drain();
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as {
+      readonly error?: { readonly code: string; readonly details?: { readonly field?: string } };
+    };
+    expect(body.error?.code).toBe("VALIDATION_FAILED");
+    expect(body.error?.details?.field).toBe("renderName");
+    expect(deps.sendings.list().items).toHaveLength(before);
+  });
 
-    const settled = deps.sendings.get(
-      ((await response.json()) as Envelope<Sending>).data?.id ?? "",
-    );
-    expect(settled?.state).toBe("failed");
-    expect(settled?.reason).toMatch(/no render/i);
-    // And the words are untouched.
-    expect(deps.messages.get(settled?.messageId ?? "")?.text).toBe("Hello.");
+  it("should refuse a render that is still going, so no notification runs ahead of it", async () => {
+    // The case the Commander actually hit: `show_him` on a clip that was two
+    // minutes from finishing. A buzz that leads to a pending video is worse
+    // than a buzz two minutes later that leads to a finished one.
+    await boot({
+      renders: {
+        get: () => ({ ...READY_RENDER, status: "rendering", video: null, renderedAt: null }),
+        latest: () => ({ ...READY_RENDER, status: "rendering", video: null, renderedAt: null }),
+      },
+    });
+    const response = await api("/sendings", {
+      method: "POST",
+      body: JSON.stringify({ words: "Hello.", because: "b", renderName: "latest" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(deps.sendings.list().items).toHaveLength(0);
   });
 
   it("should still answer 201 when there is no ffmpeg to compress with", async () => {

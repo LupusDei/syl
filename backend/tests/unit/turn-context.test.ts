@@ -459,9 +459,18 @@ describe("assertContextBudget", () => {
   });
 
   it("should throw when the declared maxima sum over, naming each and the overage", () => {
+    // DERIVED FROM THE CEILING, never written down beside it. This asserted a
+    // literal 40,000 — which was the ceiling when it was written and stopped
+    // being one when `DEFAULT_CONTEXT_BUDGET_BYTES` was raised to 72,000, so a
+    // contributor that no longer overflowed made a test about overflowing go
+    // red for a reason that had nothing to do with the behaviour it names.
+    const overflowing = DEFAULT_CONTEXT_BUDGET_BYTES;
     const error = (() => {
       try {
-        assertContextBudget([...today, { id: "syl-009-tools", kind: "capability", maxBytes: 40_000 }]);
+        assertContextBudget([
+          ...today,
+          { id: "syl-009-tools", kind: "capability", maxBytes: overflowing },
+        ]);
         return undefined;
       } catch (e) {
         return e as TurnContextBudgetError;
@@ -470,7 +479,7 @@ describe("assertContextBudget", () => {
 
     expect(error).toBeInstanceOf(TurnContextBudgetError);
     expect(error?.message).toMatch(/syl-009-tools/);
-    expect(error?.message).toMatch(/40000|40,000/);
+    expect(error?.message).toContain(String(overflowing));
   });
 
   it("should fail on the SUM, not on any single contributor being large", () => {

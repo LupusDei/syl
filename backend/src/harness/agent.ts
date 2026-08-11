@@ -39,6 +39,20 @@ export const LANES = {
    * see {@link LANES_WITH_HANDS} and `jobs/agenda-job.ts`.
    */
   agenda: "agenda",
+  /**
+   * Coming back to look at a render she started.
+   *
+   * One turn per render, minutes after it was asked for, whose whole subject is
+   * that one clip: is it finished, does it look right, does she still want him
+   * to have it. It acts — the decision it exists to reach is `show_him` — so
+   * see {@link LANES_WITH_HANDS} and `jobs/render-review-job.ts`.
+   *
+   * Its own lane rather than a step inside `heartbeat`: the hour is her spare
+   * time and runs as one day-long conversation, and threading a specific
+   * render's review through it would make every later hour pay to re-read her
+   * opinions of clips that are already decided.
+   */
+  studio: "studio",
   /** The nightly review and memory consolidation pass. */
   consolidation: "consolidation",
   /**
@@ -83,12 +97,32 @@ export const LANES = {
  * announcement, and it cannot pierce quiet hours for the same structural reason
  * the heartbeat cannot — no unattended turn ever records words as HIS.
  *
+ * **`studio`** is the fourth, and it is the narrowest of them: the lane exists
+ * for exactly one decision, and that decision is a verb. The Commander's
+ * ruling, 2026-08-11 — *"when Syl triggers a video to be rendered she needs
+ * some kind of wake up mechanism five minutes later to check to see whether or
+ * not it's done and whether or not she wants to send it to me"* — makes
+ * `show_him` the entire point of the turn. A review turn that could only think
+ * would be a turn that judges a clip and then has no way to act on the
+ * judgement, which is the state this lane was added to end. What keeps it
+ * narrow is that every wake is caused by a render SHE started and is about that
+ * one render: one turn, one clip, a bounded number of wakes per render
+ * (`jobs/render-review-job.ts`), and the same daily ceiling the hour spends
+ * from — a review that reaches him counts against `SENDINGS_PER_DAY` exactly as
+ * an hour that reaches him does, or moving the send out of the heartbeat would
+ * have quietly removed the bound.
+ *
  * **Every other lane has nothing, and that is not an oversight.** The dream
  * must not be able to write a reminder while judging what matters, and the
  * extraction turn is a sealed reader over text he may have pasted from
  * anywhere, which must never hold a capability at all.
  */
-export const LANES_WITH_HANDS: readonly Lane[] = [LANES.commander, LANES.heartbeat, LANES.agenda];
+export const LANES_WITH_HANDS: readonly Lane[] = [
+  LANES.commander,
+  LANES.heartbeat,
+  LANES.agenda,
+  LANES.studio,
+];
 
 /**
  * Lanes that must never write into Claude Code's auto-memory.
