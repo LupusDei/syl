@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
-import type { Goal, HealthStatus, Reminder, Todo } from "@syl/shared";
+import type { Goal, HealthStatus, Reminder, ReminderOrigin, Todo } from "@syl/shared";
 
 import { verifyUrgency } from "../harness/urgency.js";
 
@@ -241,10 +241,43 @@ const remindMe: ToolHandler = async (input, context) => {
     context.hisMessage(),
   );
 
+  // `syl-y82`. The reason was REQUIRED above and then thrown away — on the one
+  // verb that wakes him. `SOUL.md` promises he can tell a good suggestion from
+  // a wrong one and can tell her to stop making a kind he dislikes, and both
+  // were false while this line did not exist.
+  //
+  // `origin` is DERIVED, not asked for. A heartbeat or dream turn carries no
+  // message from him, so it cannot be a response to one — which makes "she
+  // thought of it" a fact about the turn rather than something she reports
+  // about herself. Those are exactly the 3am ones, the case that matters. Same
+  // rule as `urgentBecauseHeSaid`: a conclusion can only be trusted, evidence
+  // can be checked.
+  // ASYMMETRIC, and that is artanis's refinement rather than a detail.
+  //
+  // No message from him means it CANNOT be a response to one, so "she noticed"
+  // is derived — a fact about the turn, not a self-report. That covers the 3am
+  // reminders, which is the case that matters.
+  //
+  // When he IS talking, "he asked" is a claim nothing can check. So it is hers
+  // to declare and she gets the benefit of the doubt — but silence or
+  // uncertainty falls to "she noticed", never to "he asked".
+  //
+  // The asymmetry is free because the costs are: a wrong "she noticed" gives
+  // her slightly less credit than she is owed, which is harmless. A wrong "he
+  // asked" is her telling him he said something he did not — which is the
+  // failure that fooled a careful reader with the database open. Over-
+  // attributing to herself is both the safe direction and the honest one.
+  const heIsTalking = context.hisMessage().trim() !== "";
+  const claimed = text(input, "origin");
+  const origin: ReminderOrigin =
+    heIsTalking && claimed === "he_asked" ? "he_asked" : "she_noticed";
+
   const created = await context.client.post<Reminder>("/reminders", {
     text: errand,
     ...reminderInputFrom(resolution),
     urgent,
+    because: text(input, "because"),
+    origin,
   });
   if (!created.ok) return refused("remind_me", created.failure);
 

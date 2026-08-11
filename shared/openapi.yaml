@@ -1964,6 +1964,19 @@ components:
         suppression is visible.
       enum: [commitment, rhythm]
 
+    ReminderOrigin:
+      type: string
+      enum: [he_asked, she_noticed]
+      description: |
+        `he_asked` — he requested it in the conversation.
+        `she_noticed` — she offered it unprompted.
+
+        DERIVED rather than claimed wherever it can be: a heartbeat or dream
+        turn has no message from him at all, so "she thought of it" is a fact
+        about that turn rather than a self-report — and those are exactly the
+        3am ones. Same rule as `urgentBecauseHeSaid`: a conclusion can only be
+        trusted, evidence can be checked.
+
     ReminderDeliveryState:
       type: string
       description: |
@@ -2011,6 +2024,29 @@ components:
             Composed at creation time, in Syl's voice. Delivery is a zero-turn
             path and reads this verbatim — no model is in the way to improve
             it later.
+        because:
+          type: [string, "null"]
+          description: |
+            Why this reminder exists, in his words or hers. `syl-y82`.
+
+            `remind_me` has REQUIRED this since it shipped and discarded it
+            until now — on the one verb that wakes him. `SOUL.md` promises he
+            can tell a good suggestion from a wrong one and can tell her to
+            stop making a kind he dislikes; both were false while it was
+            dropped.
+
+            Null on reminders written before the column existed. Not
+            backfilled: a guessed reason is exactly the claim-beyond-evidence
+            this field exists to prevent.
+        origin:
+          oneOf:
+            - { $ref: "#/components/schemas/ReminderOrigin" }
+            - { type: "null" }
+          description: |
+            Whether HE asked for it or SHE thought of it — a different question
+            from `because`, and the one a careful reader actually got wrong.
+            Prose answers "why does this exist" and only sometimes "did he
+            ask". A list showing him which are hers needs this, not that.
         todoId:
           oneOf:
             - { $ref: "#/components/schemas/Id" }
