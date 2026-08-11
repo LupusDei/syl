@@ -72,8 +72,31 @@ import { crossingInstant } from "./weights.js";
  *   / *Building in Tennessee* / *Family compound* — need a judgement no
  *   distance function can make. {@link MemoryTidying.duplicates} NOMINATES;
  *   {@link MemoryTidying.merge} acts, and only when something calls it.
- *   Nominating on a threshold is safe because a nomination is reversible by
- *   ignoring it. Acting on one is what that 0.62 is.
+ *
+ * **NOMINATING ON A THRESHOLD IS SAFE. ACTING ON ONE IS WHAT THAT 0.62 IS.**
+ * A nomination is undone by ignoring it. A merge that should not have happened
+ * has already superseded a node and moved its edges, and — this is the part
+ * that makes it worse than an ordinary bug — the graph afterwards looks exactly
+ * like a graph that was correctly tidied.
+ *
+ * The worked example, because "why not just merge the ones that look alike"
+ * is a reasonable-sounding question and the answer is not obvious:
+ *
+ * > *He lives in Buda.* / *He moved to Nashville.*
+ *
+ * Those two are near neighbours in every embedding — they share the subject,
+ * the frame and most of the tokens — and they are the single most important
+ * pair in his memory to keep apart, because one of them is the correction of
+ * the other. A similarity merge eats the correction and leaves a confident,
+ * unremarkable-looking node. That is the direction of the 0.82 → 0.62: not
+ * noise added, but **the answer replaced by a stale one nothing flags.**
+ *
+ * And the other half of `supersede.ts` §1, which is the reason the fix is not
+ * "a better threshold": *"Bounded growth is a consequence of supersession,
+ * never a goal pursued by compression."* If the graph is accumulating
+ * duplicates, the repair is supersession — a merge she decided on, recorded,
+ * and reversible by argument — and never a compressor tuned to keep the row
+ * count down.
  *
  *
  * ## Nominations are DERIVED, never stored
@@ -578,10 +601,16 @@ export class MemoryTidying {
   /**
    * Nodes that look like one thing under several entries. **Writes nothing.**
    *
-   * A list she reads and decides about, not a plan anything executes. See the
-   * module header for why that separation is the design rather than caution:
-   * merging on a similarity threshold is measured to make her memory worse, and
-   * nominating on one cannot.
+   * A list she reads and decides about, not a plan anything executes.
+   *
+   * **Do not feed this to {@link MemoryTidying.merge} in a loop.** That is the
+   * one change to this file that would look like finishing the feature and
+   * would actually be the defect: it turns a threshold from something that
+   * *proposes* into something that *acts*, which `supersede.ts` §1 measures at
+   * 0.82 accuracy down to 0.62. A contradiction is on average MORE
+   * cosine-similar to a fact than a genuine duplicate is — *He lives in Buda*
+   * and *He moved to Nashville* are near neighbours — so the pairs an automatic
+   * pass would eat first are the corrections. See the module header.
    *
    * Handles are never nominated. A node with a `subjectId` is a projection of an
    * operational row, and two goal handles with the same title are two different

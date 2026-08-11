@@ -257,6 +257,29 @@ describe("comparing a candidate against what the graph already holds", () => {
     expect(graph.getNode(result.facts[0]?.nodeId ?? "")?.label).toBe("Ela");
   });
 
+  it("should keep a contradiction as two nodes, which is what a similarity merge would eat first", () => {
+    const first = apply({
+      extraction: extraction({
+        facts: [candidate({ kind: "fact", label: "He lives in Buda", about: null })],
+      }),
+    });
+    const second = apply({
+      transcript: OTHER_TRANSCRIPT,
+      extraction: extraction({
+        facts: [candidate({ kind: "fact", label: "He moved to Nashville", about: null })],
+      }),
+    });
+
+    // Same subject, same frame, most of the same tokens — near neighbours in
+    // any embedding, and the pair it matters most to keep apart, because one is
+    // the correction of the other. `supersede.ts` §1 measures what collapsing
+    // them costs: 0.82 accuracy down to 0.62. Loosening FACT_IDENTITY_SQL to a
+    // distance would eat this pair and leave one confident, ordinary-looking
+    // node behind.
+    expect(second.facts[0]?.nodeId).not.toBe(first.facts[0]?.nodeId);
+    expect(graph.listNodes({ kind: "fact" })).toHaveLength(2);
+  });
+
   it("should still mint a second node for a label that is genuinely different", () => {
     apply({ extraction: extraction({ facts: [candidate({ label: "Tennessee possibility" })] }) });
     const second = apply({

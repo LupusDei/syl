@@ -295,10 +295,17 @@ interface ProvenanceRow {
  *
  * **It is exactness, not similarity, and that distinction is load-bearing.**
  * `supersede.ts` §1 measures what near-duplicate merging costs — 0.82 accuracy
- * down to 0.62 — and a contradiction is on average *more* cosine-similar to a
- * fact than a genuine duplicate is. So the automatic path collapses only what is
- * the same characters, and everything that merely looks alike is nominated to
- * Syl by `tidy.ts` and merged by a judgement rather than by a threshold.
+ * down to 0.62 — because a contradiction is on average *more* cosine-similar to
+ * a fact than a genuine duplicate is:
+ *
+ * > *He lives in Buda.* / *He moved to Nashville.*
+ *
+ * Same subject, same frame, most of the same tokens — and the pair it matters
+ * most to keep apart, because one is the correction of the other. Loosening
+ * this comparison to a distance would eat the corrections first, and leave a
+ * node that looks perfectly ordinary. So the automatic path collapses only what
+ * is the same characters, and everything that merely looks alike is nominated
+ * to Syl by `tidy.ts` and merged by a judgement rather than by a threshold.
  *
  * The cost is that `memory_nodes_label_idx` is a `BINARY` index, so the folded
  * comparison seeks on `kind` and filters the rest. That is one kind's worth of

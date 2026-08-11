@@ -646,6 +646,26 @@ describe("MemoryTidying.duplicates", () => {
     expect(tidy.duplicates({ kind: "goal" })).toEqual([]);
   });
 
+  it("should not nominate a contradiction, which is the pair a threshold gets wrong", () => {
+    const commander = graph.addNode({ kind: "person", label: "the Commander" });
+    const note = graph.addNode({ kind: "source", label: "evening review" });
+    for (const label of ["He lives in Buda", "He moved to Nashville"]) {
+      const fact = graph.addNode({ kind: "fact", label });
+      graph.observe({
+        sourceNode: fact.id,
+        targetNode: commander.id,
+        relation: "about",
+        assertedBy: note.id,
+      });
+    }
+
+    // Near neighbours in any embedding, and one is the correction of the other.
+    // Even the NOMINATION channels leave them alone — and if they ever did
+    // group them, the answer is still that she looks at the pair rather than
+    // that the machine folds it.
+    expect(tidy.duplicates({ kind: "fact" })).toEqual([]);
+  });
+
   it("should write nothing: a nomination is a list she reads, not a plan anything runs", () => {
     tennessee();
     const before = census();
