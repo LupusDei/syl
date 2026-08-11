@@ -85,6 +85,34 @@ const BECAUSE = {
     "Why this exists, in his terms. If he asked, say so. If you noticed it, say what you noticed.",
 } as const;
 
+/**
+ * When a to-do is due.
+ *
+ * The agenda order in `shared/openapi.yaml` is "pinned first; then the nearest
+ * `dueAt`, with undated to-dos after every dated one" — so this field and
+ * {@link PINNED} are the two the whole plan sorts on, and until `syl-74p` she
+ * could set neither. Ten to-dos, `due_at` NULL on every one, and a "today" view
+ * that was empty by construction however well she planned his morning.
+ */
+const DUE_AT = {
+  type: "string",
+  description:
+    "When it is due, as an RFC 3339 UTC instant. Set it whenever he says when — a to-do with no date sorts below every dated one and cannot appear in a view of his day.",
+} as const;
+
+/**
+ * Whether this one matters more than its date says.
+ *
+ * The one durable bit of priority in the model: it sorts above `dueAt`, so a
+ * pinned undated to-do still leads his list. Use sparingly — a list where
+ * everything is pinned is a list with no pin.
+ */
+const PINNED = {
+  type: "boolean",
+  description:
+    "True to keep it at the top of his list regardless of date. For the one thing that matters most right now, not for everything that matters.",
+} as const;
+
 export const TOOLS: readonly ToolSchema[] = [
   {
     name: "remind_me",
@@ -176,12 +204,33 @@ export const TOOLS: readonly ToolSchema[] = [
   },
   {
     name: "add_todo",
-    description: "Put something on his list. For a thing he has to do, with no particular hour attached.",
+    description:
+      "Put something on his list. For a thing he has to do, with no particular hour attached. Give it a dueAt when he says WHEN — an undated to-do sorts below every dated one and will not appear in a view of his day.",
     inputSchema: {
       type: "object",
       required: ["text", "because"],
       properties: {
         text: { type: "string", description: "The task, at the level he would describe it." },
+        dueAt: DUE_AT,
+        pinned: PINNED,
+        because: BECAUSE,
+      },
+    },
+  },
+  {
+    name: "schedule_todo",
+    description:
+      "Put a date on something already on his list, move it, take the date off, or pin it. This is how a pile becomes a plan: use it when he says when he will do a thing he has already told you about, rather than adding a second copy with a date on it.",
+    inputSchema: {
+      type: "object",
+      required: ["id", "because"],
+      properties: {
+        id: { type: "string", description: "The to-do's id, from whats_outstanding." },
+        dueAt: {
+          ...DUE_AT,
+          description: `${DUE_AT.description} Pass null to take the date off entirely, and omit it to leave the date alone — those are three different asks.`,
+        },
+        pinned: PINNED,
         because: BECAUSE,
       },
     },
