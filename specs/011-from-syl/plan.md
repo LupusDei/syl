@@ -194,19 +194,24 @@ can do:
 3. **Nothing has verified acceptance 3, 4 and 6 on the running service** — that the
    notification really carries her sentence, and that SQLite really refuses a DELETE.
 
-Plus one integration hazard that is nobody's feature and will stop a boot:
-`0024_sendings.sql` and `agent/fenix`'s `0024_working_memory_budget.sql` are the same
-number on two branches, and `readMigrations` hard-fails on a *gap*, so the second to
-merge cannot simply become `0025`. T009 makes that a red test instead of a service
-that will not start. (The gap half of that check already exists in `readMigrations` —
-it is what taught the `.3` agent that `0024` was the only free number — so T009's new
-coverage is the *duplicate* half, and its value is failing at `npm test` rather than
-at boot.)
+Plus one integration hazard that is nobody's feature. `0024_sendings.sql` and
+`agent/fenix`'s `0024_working_memory_budget.sql` were the same number on two branches.
+**It has since settled in sendings' favour**: local `main` runs `0001`–`0024` with no
+gap and `0024_sendings.sql` is the `0024`, so what remains is `agent/fenix`'s alone —
+its migration becomes `0025` at merge, and it will present as a **duplicate-number
+conflict rather than the gap error** `readMigrations` throws, which means the failure
+will not name the problem. Cross-noted on `syl-ulf`, whose fix that migration is.
 
-**Where the work is.** `.3` is committed to `feat/from-syl-backend` at `cc8e44e`,
-branched from `origin/main` and **neither merged nor pushed** — 25 files. Anything that
-calls `POST /sendings` must branch from there, not from `main`. Its gate ran 4666
-passed / 4 failed / 16 skipped, all four failures declared (`syl-b97` ×3, `syl-dep1.7`).
+T009 keeps only the part that is still work: a duplicate check in
+`backend/tests/unit/migrations.test.ts` so the next collision fails at `npm test`
+rather than at boot. The *gap* half of that check already exists in `readMigrations` —
+it is what taught the `.3` agent that `0024` was the only free number — so T009's new
+coverage is the duplicate half, and it should not be described as more than that.
+
+**Where the work is.** `.3` is on **local `main`** (`cc8e44e`, with `5cefe25` on top)
+and **not yet on `origin/main`**. Branch from `main`; `feat/from-syl-backend` is
+redundant. Its gate before merge ran 4666 passed / 4 failed / 16 skipped, all four
+failures declared (`syl-b97` ×3, `syl-dep1.7`).
 
 **One guard that will fire on the unwary.** Routing her words through
 `ConversationService` made `sending-service.ts` the third caller of
