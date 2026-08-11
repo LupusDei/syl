@@ -50,23 +50,23 @@ export const ROSTER: readonly RosterEntry[] = [
   {
     id: "treasurer",
     good_for:
-      "His money — accounts, spending, bills, what something actually costs. Knows his real finances, not general advice.",
+      "his money: accounts, bills, what things cost",
   },
   {
     id: "artanis",
-    good_for: "How Syl herself is built, and anything about her own machinery.",
+    good_for: "how Syl herself is built",
   },
   {
     id: "tassadar",
-    good_for: "How Syl herself is built, and anything about her own machinery.",
+    good_for: "how Syl herself is built",
   },
   {
     id: "raynor",
-    good_for: "Building software, when he wants something made rather than answered.",
+    good_for: "building software",
   },
   {
     id: "adjutant-coordinator",
-    good_for: "Who is working on what, and who to ask when she does not know.",
+    good_for: "who is working on what",
   },
 ];
 

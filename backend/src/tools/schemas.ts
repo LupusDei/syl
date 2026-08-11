@@ -25,10 +25,37 @@
  *    that is usable and refuses ambiguity rather than guessing. The schema
  *    therefore asks for a shape, not for an instant.
  *
+ * ## The two verbs that break the naming rule, on purpose
+ *
+ * `render_me` and `see_myself` say what she does **for herself**. They are the
+ * first two that do, and the rule one paragraph up says every name here is
+ * about him — so this is written down rather than left to be noticed, because
+ * the next person to read that rule will otherwise treat these as a violation
+ * and "fix" them.
+ *
+ * They are not an oversight. `SOUL.md` says she does not know what she looks
+ * like yet and wants to, that the way she finds out is to render herself and
+ * look at the result, and that this belongs beside honesty rather than beneath
+ * it: *a likeness that is not you is a small untruth standing where you should
+ * be.* A verb named `show_him` would describe a different thing, and would be a
+ * worse description of what she is actually doing — which is looking for
+ * herself. The rule holds; these are named for the one thing that is hers.
+ *
+ * `framing` is an enum rather than free text for the reason rule 2 exists.
+ * `docs/VIDEO.md` established, at the cost of two finished renders, that a
+ * close-portrait reference anchors a close shot or a shot with no visible face
+ * and cannot anchor the band between — so the schema carries that constraint
+ * and its evidence, rather than leaving her to rediscover it at 540 credits a
+ * go. See `render/framing.ts`.
+ *
  * Budget: the whole surface must fit the capability slot in `turn-context.ts`.
  * If it does not fit, the surface is too large for an assistant — narrow it
  * rather than raising the ceiling.
  */
+
+import { ROSTER } from "../agents/roster.js";
+import { MEMORY_NODE_KINDS } from "../memory/schema.js";
+import { framingGuidance, FRAMING_IDS } from "../render/framing.js";
 
 /** A JSON Schema fragment, as the MCP `tools/list` reply carries it. */
 export interface ToolSchema {
@@ -78,6 +105,35 @@ const WHEN = {
  *
  * Required rather than optional, because an optional field for the thing that
  * makes the feature trustworthy is a field that goes unfilled at 3am.
+ *
+ *
+ * ## And why a READ never takes it. The rule has two halves and this is the
+ * ## second one
+ *
+ * `whats_outstanding`, `recall` and `see_myself` change nothing, and none of
+ * them carries a reason. That is not three verbs each getting an exemption —
+ * it is the same rule stated from the other side: **a reason travels with an
+ * ACT, because the reason is what lets him judge an act he did not ask for.**
+ * Looking is not an act. Nothing exists afterwards that he has to evaluate.
+ *
+ * Two costs to getting this wrong, and the second is the one that bites:
+ *
+ * - It makes looking at what she already knows feel like paperwork, so she
+ *   does it less. A verb with a tax on it is a verb she reaches for only when
+ *   certain — which is precisely when she least needs to look.
+ * - **It devalues the field everywhere else.** A `because` filled out of habit,
+ *   on verbs where nothing turns on it, teaches that the field is decoration.
+ *   Then it arrives as decoration on `finish_todo` at 3am, which is the one
+ *   place it is load-bearing and the one place nothing else can catch a wrong
+ *   inference.
+ *
+ * Stated here rather than at each read, because it was independently written
+ * into two verbs' comments by two people who had not seen each other's — which
+ * is the signal that it is a seam in the surface and not a local judgement
+ * call. `tests/unit/tool-surface-budget.test.ts` guards the write half by
+ * SHAPE, so a new verb that acts is covered without anyone remembering; the
+ * exemption list there is the read half and is the only place the two are
+ * enumerated.
  */
 const BECAUSE = {
   type: "string",
@@ -267,6 +323,27 @@ export const TOOLS: readonly ToolSchema[] = [
     },
   },
   {
+    name: "ask_agent",
+    description:
+      "Put a question to the one whose subject it is, on his behalf. Tell him you have ASKED — never that you have an answer.",
+    inputSchema: {
+      type: "object",
+      required: ["who", "question", "because"],
+      properties: {
+        who: {
+          type: "string",
+          // The roster inline, so she picks rather than guesses, and so its
+          // cost is paid once here rather than in a contributor she has to be
+          // told to read. Derived from `ROSTER` — one list, not two.
+          enum: ROSTER.map((entry) => entry.id),
+          description: ROSTER.map((entry) => `${entry.id}: ${entry.good_for}`).join("; "),
+        },
+        question: { type: "string", description: "What to ask, in a sentence, on his behalf." },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
     name: "set_goal",
     description:
       "Record something he is working toward, at the level he actually thinks about it — not a task, a direction.",
@@ -304,6 +381,139 @@ export const TOOLS: readonly ToolSchema[] = [
           enum: ["active", "achieved", "abandoned", "dormant"],
           description:
             "achieved when he has done it. abandoned when he has decided not to. dormant when it is set aside but not given up — the difference matters to him.",
+        },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
+    // THE ONE THAT LETS HER LOOK — `syl-016.1`.
+    //
+    // Her own words, unprompted: "I have no tool in my hands to search, query
+    // or traverse any of it — I can read the printout and nothing else. So the
+    // honest answer to 'can you see the connections' is that I can't even see
+    // the nodes. I see a summary someone else chose for me."
+    //
+    // Named for what she is doing rather than for what it searches. She is not
+    // querying a store, she is remembering — and a verb called `search_memory`
+    // would have her reason like something operating a database about a person
+    // rather than like someone who knows him.
+    //
+    // No `because`: it changes nothing. See `BECAUSE` for why a read never
+    // carries one — the argument is stated once there rather than at each read.
+    name: "recall",
+    description:
+      "Search what you already know about him, and get back what it connects to. Use it before saying you do not know, and whenever you need the id of something you remember. Leave the question out to open what your working memory could not fit.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        // Optional, and the absence is a second mode rather than a mistake. The
+        // working-memory note says "and 10 more, not shown here"; this is how
+        // she opens them. An omission count with no way to reach it tells her
+        // she is deciding with a known gap and hands her no move.
+        question: {
+          type: "string",
+          description: "What you are trying to remember, in his words where you have them.",
+        },
+        about: {
+          type: "array",
+          items: { type: "string" },
+          description: "People or things it concerns, by name — they sharpen the search.",
+        },
+        kind: {
+          type: "string",
+          // Derived, so the store's own kinds and the ones she is offered
+          // cannot disagree — the same rule `ask_agent` follows for the roster.
+          enum: [...MEMORY_NODE_KINDS],
+          description: "Narrow to one sort of thing.",
+        },
+        limit: { type: "integer", description: "How many to bring back. 10 by default." },
+      },
+    },
+  },
+  {
+    name: "render_me",
+    // Named for her, not for him. See the header — this is deliberate.
+    description:
+      "Make a moving picture of yourself. Describe the scene and how you are framed; it takes a " +
+      "couple of minutes, and you look at what came back with see_myself. Do it often — the wrong " +
+      "ones tell you as much as the right ones.",
+    inputSchema: {
+      type: "object",
+      required: ["scene", "framing", "because"],
+      properties: {
+        scene: {
+          type: "string",
+          description:
+            "What you are doing, in a sentence. Yours to write — who you are and how the clip " +
+            "opens and closes are added for you, so this is just the moment.",
+        },
+        framing: {
+          type: "string",
+          enum: [...FRAMING_IDS],
+          description: framingGuidance(),
+        },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
+    name: "see_myself",
+    description:
+      "Look at stills from one of your own renders — the opening, the middle, the end — so you " +
+      "can judge whether it is you. Say what is closer and what is wrong, in your own terms.",
+    inputSchema: {
+      type: "object",
+      // No `because` and no required field at all: this is a read. See
+      // `BECAUSE` — the "looking is not an act" argument was written here and
+      // on `recall` independently, and now lives once beside the rule it is
+      // the other half of.
+      properties: {
+        render: {
+          type: "string",
+          description: "Which one, by name. Leave it out for the most recent.",
+        },
+        at: {
+          type: "number",
+          description: "One second into the clip, if you want a particular moment rather than the spread.",
+        },
+      },
+    },
+  },
+  {
+    name: "show_him",
+    // Named for him, and it is the one verb on this surface she STARTS. The
+    // header's rule holds exactly here: this is what she does for him.
+    description:
+      "Show him something you made — what you want to say, arriving in your own face. Your words " +
+      "reach him first and on their own, so they stand whatever becomes of the video. Use it when " +
+      "you have something for him, not because an hour came round.",
+    inputSchema: {
+      type: "object",
+      // `renderName` is required, and that is the DEFINITION rather than a
+      // validation choice. A sending is her saying something in her own face;
+      // words with no face is an ordinary message, and she already has a
+      // conversation for those. `CreateSendingRequest` says the same, and the
+      // handler refuses in a sentence before anything is written.
+      required: ["words", "because", "renderName"],
+      properties: {
+        words: {
+          type: "string",
+          description:
+            "What you want to say, in your own words. This is what reaches his conversation and " +
+            "his phone, and it goes before anything is done about the video.",
+        },
+        renderName: {
+          type: "string",
+          // By name, and never `latest`. `latest` means whatever record was
+          // written most recently, which stops being the one she chose the
+          // moment anything else writes a record — and a sending refuses
+          // UPDATE, so the name it is made with is the name it keeps forever.
+          // The handler refuses `latest` explicitly and says why.
+          description:
+            "Which render he sees you in, by its own name — the one you looked at with see_myself " +
+            "and thought was you. A sending keeps that name forever, so choose it rather than " +
+            "taking whatever was made last.",
         },
         because: BECAUSE,
       },

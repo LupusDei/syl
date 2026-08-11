@@ -121,6 +121,12 @@ function fieldFor(code: AttachmentError["code"]): string {
     case "unknown-attachment":
     case "already-attached":
       return "attachmentIds";
+    case "poster-unusable":
+      // Not reachable over HTTP today: `poster` is a store-level input used by
+      // the sendings path, and this route never populates it. Named anyway,
+      // because the switch is exhaustive over the store's vocabulary and the
+      // day the phone uploads its own poster this is the field it names.
+      return "poster";
   }
 }
 

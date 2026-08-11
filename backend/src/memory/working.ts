@@ -226,6 +226,37 @@ const SECTION_RANK = new Map<MemoryNodeKind, number>(
   WORKING_MEMORY_SECTIONS.map((section, index) => [section.kind, index]),
 );
 
+/**
+ * What each kind is called in the overflow notice, singular and plural.
+ *
+ * Prose rather than the enum values, because the notice is read by Syl and
+ * turned into a sentence for him. "3 memories" is a sentence; "3 memory" is a
+ * schema leaking into the one document she reads on every turn.
+ */
+const KIND_NOUNS: Readonly<Record<MemoryNodeKind, readonly [one: string, many: string]>> = {
+  person: ["person", "people"],
+  goal: ["goal", "goals"],
+  decision: ["decision", "decisions"],
+  fact: ["fact", "facts"],
+  event: ["event", "events"],
+  memory: ["memory", "memories"],
+  source: ["source", "sources"],
+};
+
+/** One kind, and how many of it are in the overflow. */
+export interface OverflowKindCount {
+  readonly kind: MemoryNodeKind;
+  readonly count: number;
+}
+
+/** Kind counts over a set of candidates, in section order, empties omitted. */
+export function countByKind(candidates: readonly WorkingMemoryCandidate[]): OverflowKindCount[] {
+  return WORKING_MEMORY_SECTIONS.map((section) => ({
+    kind: section.kind,
+    count: candidates.filter((candidate) => candidate.kind === section.kind).length,
+  })).filter((entry) => entry.count > 0);
+}
+
 /** One hot node, reduced to what the projection can use. */
 export interface WorkingMemoryCandidate {
   readonly id: string;
@@ -265,6 +296,29 @@ export interface WorkingMemoryRow {
   readonly dropped: number;
   /** When the projection last CHANGED — not when a job last ran. */
   readonly generatedAt: string;
+}
+
+/** How many overflow items are returned when nobody says. */
+export const DEFAULT_OVERFLOW_LIMIT = 20;
+
+/** Which part of the overflow to open. Both narrow; neither changes the set. */
+export interface OverflowQuery {
+  /** One kind, as the notice names them. Omit for all of them. */
+  readonly kind?: MemoryNodeKind;
+  /** How many to return. Defaults to {@link DEFAULT_OVERFLOW_LIMIT}. */
+  readonly limit?: number;
+}
+
+/** Everything the projection could not fit, and what it is made of. */
+export interface WorkingMemoryOverflow {
+  /** The items themselves, most salient first. Capped by `limit`. */
+  readonly items: readonly WorkingMemoryCandidate[];
+  /** The whole overflow, before `kind` and `limit`. */
+  readonly total: number;
+  /** How many matched `kind`, before `limit`. */
+  readonly matched: number;
+  /** Kind counts over the whole overflow, in section order. */
+  readonly byKind: readonly OverflowKindCount[];
 }
 
 /** What one regeneration did. */
@@ -316,10 +370,42 @@ export function renderEntry(candidate: WorkingMemoryCandidate): string {
   return `- ${truncate(full, WORKING_MEMORY_ENTRY_MAX_CHARS)}`;
 }
 
-function renderOverflow(count: number): string {
+/**
+ * What was left out — how many, **of what**, and the move that opens it.
+ *
+ * `syl-016.2`. This used to say only *"…and 10 more in the hot region, not
+ * shown here. Search deep memory for anything specific."* Two things were wrong
+ * with that, and the second is the worse one:
+ *
+ * 1. **A bare count tells her she is deciding with a known gap and gives her
+ *    nothing to weigh.** Ten dropped sources and ten dropped people are very
+ *    different situations — the first is a handful of articles she can look up,
+ *    the second is people in his life she is about to talk to him without. She
+ *    could not tell which, so every count read as the alarming one.
+ * 2. **"Search deep memory" was a capability she did not have.** She said so
+ *    herself: *"I have no tool in my hands to search, query or traverse any of
+ *    it."* An instruction and the capability it assumes are one decision, and
+ *    this document had the instruction for months with nothing behind it —
+ *    which is the failure mode that makes a model act the instruction out in
+ *    prose. `recall` (`syl-016.1`) is what makes the sentence true.
+ *
+ * It names `recall` rather than describing a search in the abstract, and that
+ * is safe in the direction that matters: on a lane with no tools attached,
+ * `harness/capability.ts` derives NO_HANDS_YET from the surface itself and
+ * tells her plainly she cannot act. A derived sentence outranks a stored one,
+ * so this notice cannot become the stale half of that pair.
+ */
+export function renderOverflow(dropped: readonly WorkingMemoryCandidate[]): string {
+  const counted = countByKind(dropped)
+    .map((entry) => {
+      const [one, many] = KIND_NOUNS[entry.kind];
+      return `${String(entry.count)} ${entry.count === 1 ? one : many}`;
+    })
+    .join(", ");
+
   return (
-    `_…and ${String(count)} more in the hot region, not shown here. ` +
-    `Search deep memory for anything specific._`
+    `_…and ${String(dropped.length)} more in the hot region, not shown here: ${counted}. ` +
+    `Use recall with no query to open them, or search for anything specific._`
   );
 }
 
@@ -339,8 +425,19 @@ function rank(a: WorkingMemoryCandidate, b: WorkingMemoryCandidate): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-/** Render a set of admitted candidates, grouped into sections. */
-function render(admitted: readonly WorkingMemoryCandidate[], remaining: number): string {
+/**
+ * Render a set of admitted candidates, grouped into sections.
+ *
+ * `remaining` is the dropped candidates themselves rather than a count, because
+ * the overflow notice names their kinds. That makes every trial render in
+ * {@link buildWorkingMemory} measure the notice it would really carry, which is
+ * what keeps the budget arithmetic honest — a notice sized from a count and
+ * printed from a list is two answers to one question.
+ */
+function render(
+  admitted: readonly WorkingMemoryCandidate[],
+  remaining: readonly WorkingMemoryCandidate[],
+): string {
   const lines: string[] = [WORKING_MEMORY_TITLE, "", WORKING_MEMORY_NOTE, ""];
 
   // A SOURCE IS A HANDLE, NOT A FACT, and a projection holding nothing but
@@ -355,7 +452,7 @@ function render(admitted: readonly WorkingMemoryCandidate[], remaining: number):
   // already has a source.
   const knowledge = admitted.filter((candidate) => candidate.kind !== "source");
 
-  if (knowledge.length === 0 && remaining === 0) {
+  if (knowledge.length === 0 && remaining.length === 0) {
     // Nothing is admitted at all in this case: an unearned handle is worse than
     // no handle, because it is read as content.
     return `${[WORKING_MEMORY_TITLE, "", WORKING_MEMORY_NOTE, "", WORKING_MEMORY_EMPTY].join("\n")}\n`;
@@ -369,7 +466,7 @@ function render(admitted: readonly WorkingMemoryCandidate[], remaining: number):
     lines.push("");
   }
 
-  if (remaining > 0) lines.push(renderOverflow(remaining));
+  if (remaining.length > 0) lines.push(renderOverflow(remaining));
 
   return `${lines.join("\n").replace(/\s+$/u, "")}\n`;
 }
@@ -399,13 +496,13 @@ export function buildWorkingMemory(
   const admitted: WorkingMemoryCandidate[] = [];
 
   for (const candidate of ordered) {
-    const trial = render([...admitted, candidate], ordered.length - admitted.length - 1);
+    const trial = render([...admitted, candidate], ordered.slice(admitted.length + 1));
     if (byteLength(trial) > maxBytes || trial.split("\n").length > maxLines) break;
     admitted.push(candidate);
   }
 
   const dropped = ordered.slice(admitted.length);
-  const text = render(admitted, dropped.length);
+  const text = render(admitted, dropped);
 
   // Rendered order, not admission order: `included` is what a caller shows
   // next to the text, and the two disagreeing would be its own small lie.
@@ -503,6 +600,61 @@ export class WorkingMemory {
    */
   preamble(): string {
     return this.current()?.text ?? "";
+  }
+
+  /**
+   * What the projection could not fit — the items the notice counts.
+   *
+   * `syl-016.2`. The digest says *"and 10 more"* and would not say which, which
+   * is worse than a shorter list: it tells her she is deciding with a known gap
+   * and hands her no move. This is the move.
+   *
+   * **Recomputed from the graph through {@link buildWorkingMemory}, on the same
+   * bounds, rather than read from a stored list of ids.** Two reasons, and the
+   * first is the one that makes it correct rather than merely convenient:
+   *
+   * - It cannot drift from what the digest actually hid. There is one admission
+   *   rule, in one function, and both the text she reads and this list come out
+   *   of it. A stored `dropped` column would be a second answer to the same
+   *   question, going stale the moment the graph moved — the same second-source
+   *   -of-truth failure `projection.ts` exists to prevent.
+   * - The stored row keeps only a COUNT (`0017`), so there is no list to read.
+   *   Adding one would be a migration in service of the drift above.
+   *
+   * It is deliberately NOT a search: this reaches the hot region through
+   * salience, exactly as the projection does, so it answers "what is being kept
+   * from me" rather than "what matches these words". Searching is `Retriever`'s
+   * job and there is only one of those.
+   *
+   * @throws {GraphError} `bad_limit` on a scan limit below 1.
+   */
+  overflow(options: OverflowQuery = {}): WorkingMemoryOverflow {
+    const candidates = this.#graph.listSalientNodes(this.#scanLimit).map(toCandidate);
+    const plan = buildWorkingMemory(candidates, {
+      maxBytes: this.#maxBytes,
+      maxLines: this.#maxLines,
+    });
+
+    const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+    const dropped = plan.dropped
+      .map((id) => byId.get(id))
+      .filter((candidate): candidate is WorkingMemoryCandidate => candidate !== undefined);
+
+    const matching =
+      options.kind === undefined
+        ? dropped
+        : dropped.filter((candidate) => candidate.kind === options.kind);
+
+    // A limit is applied last and reported beside `matched`, so "there are more
+    // than I showed you" is a number she can say rather than something she has
+    // to infer from a full page. Same rule as the notice it opens.
+    const limit = options.limit ?? DEFAULT_OVERFLOW_LIMIT;
+    return {
+      items: limit >= matching.length ? matching : matching.slice(0, limit),
+      total: dropped.length,
+      matched: matching.length,
+      byKind: countByKind(dropped),
+    };
   }
 
   /**

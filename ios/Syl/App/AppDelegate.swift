@@ -39,6 +39,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     /// feature rather than a convenience.
     private(set) var constellation: ConstellationSource?
 
+    /// Where From Syl's rows come from: disk first, the server behind it.
+    ///
+    /// Built here beside the constellation and for the same reason — the screen stays a
+    /// pure function of values and can be rendered offscreen without booting the object
+    /// graph.
+    private(set) var sendings: SendingSource?
+
     /// Whether this device holds a credential at all.
     ///
     /// The gate on the whole app: without a token every request goes out with no
@@ -145,6 +152,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
 
         let store = LocalStore(database: database)
         constellation = ConstellationSource(store: store, gateway: .live(backend: backend))
+        sendings = SendingSource(store: store, gateway: .live(backend: backend))
         let outbox = Outbox(database: database)
         let engine = SyncEngine(
             store: store,

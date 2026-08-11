@@ -467,4 +467,28 @@ final class HomeDoorTests: XCTestCase {
 
         XCTAssertTrue(orb.isReady, "ready is the default; only a door that is a wall opts out")
     }
+
+    /// The third destination (`syl-015.4.7`, T016).
+    ///
+    /// From Syl is reached the same way Goals and Memory are — the orb appends onto the
+    /// type-erased path this screen already keeps, which is what lets one stack carry
+    /// both an orb's push and whatever the screen beyond it pushes next.
+    func testShouldCarryFromSylOnTheSamePathAsEveryOtherDoor() {
+        var path = NavigationPath()
+
+        path.append(HomeView.Destination.fromSyl)
+        path.append(HomeView.Destination.goals)
+
+        XCTAssertEqual(path.count, 2)
+    }
+
+    /// **An orb that looks like its neighbours and does nothing is the defect this whole
+    /// property exists for.** From Syl leads somewhere on the day it appears, so dimming
+    /// it would be the lie instead — the same reversal Memory went through.
+    @MainActor
+    func testShouldLeaveTheFromSylOrbReady() {
+        let orb = SylOrb(title: "From Syl", symbol: "envelope") {}
+
+        XCTAssertTrue(orb.isReady)
+    }
 }

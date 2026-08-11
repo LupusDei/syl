@@ -67,6 +67,29 @@ const UNDECLARED: readonly string[] = [
   "GET /memory/graph",
   "GET /memory/metrics",
   "POST /memory/edges/{edgeId}/feedback",
+  // `syl-016.1`, and it joins the debt above rather than escaping it. Worth
+  // one distinction though: this is the only undeclared route SYL HERSELF
+  // calls, over her own credential, through `tools/server.ts`. That consumer
+  // is in this repository and is typed against the route, so nothing is being
+  // built against a guess today — but it is also the route most likely to
+  // acquire a second caller, and `shared/openapi.yaml` is where that caller
+  // would look first.
+  "GET /memory/recall",
+  // `syl-016.7` — and the one that most needs the spec to catch up, for the
+  // same reason the feedback write does: it is a WRITE, so a second client
+  // would have to guess at the body.
+  "POST /memory/remember",
+  // `/renders` joins them, and with the smallest debt of the three: nothing
+  // else consumes this surface. Her tool server is the only client, it lives in
+  // this repository, and its request and response shapes are pinned by
+  // `tests/unit/render-verbs.test.ts` against the same fakes. What the contract
+  // would add is a *second* client being able to reach it — which is exactly
+  // what a phone screen showing her renders would need, and is why this is
+  // listed rather than left to be noticed then. Note which one is a write.
+  "GET /renders",
+  "POST /renders",
+  "GET /renders/{name}",
+  "GET /renders/{name}/frames",
 ];
 
 /** Path parameters that are syntactically valid but name nothing. */
@@ -76,6 +99,7 @@ const ABSENT_IDS: Readonly<Record<string, string>> = {
   reminderId: "syl:reminder:00000000-0000-7000-8000-0000000000ff",
   todoId: "syl:todo:00000000-0000-7000-8000-0000000000ff",
   goalId: "syl:goal:00000000-0000-7000-8000-0000000000ff",
+  sendingId: "syl:sending:00000000-0000-7000-8000-0000000000ff",
   deviceId: "syl:device:00000000-0000-7000-8000-0000000000ff",
   deliveryId: "syl:delivery:00000000-0000-7000-8000-0000000000ff",
   jobId: "syl:job:00000000-0000-7000-8000-0000000000ff",

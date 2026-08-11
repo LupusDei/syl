@@ -123,8 +123,34 @@ import { REPLY_FENCE_OPEN } from "../agents/fencing.js";
  * `autoMemoryOff()` unconditionally: a quarantine you have to remember to
  * switch on is not a quarantine. `reports` is not a general slot for outside
  * text — it is the slot for text `fenceReplies` has already been through.
+ *
+ * ## `ledger` — what SHE did, which is neither memory nor a report
+ *
+ * `jobs/unattended-contributor.ts` gives the commander lane the record of her
+ * own unattended turns. It exists because she could not account for her own
+ * work: the hourly turn runs on its own lane and its own session, so a reminder
+ * it filed at 07:04 was something the Syl he talks to had never heard of. She
+ * said so, honestly, and that is constraint 4's spirit failing inwards —
+ * nothing she does is meant to be invisible, and this was invisible to her.
+ *
+ * It gets its own position rather than joining an existing one, and both
+ * alternatives are worse in the same way:
+ *
+ * - **Not `memory`.** That kind is emitted inside `MEMORY_FENCE`, and
+ *   `SOUL.md` says everything past the fence is what she knows about the
+ *   COMMANDER. A log of her own actions annexed into that region stops being a
+ *   record of what she did and becomes a belief about his life.
+ * - **Not `reports`.** That is the slot for another process's words, ranked
+ *   last because a thing she read never moves up. Her own runs are not
+ *   something she read; they are the store's record of what she actually did,
+ *   and ranking them beneath a tool schema would be a lie about their standing.
+ *
+ * So: below memory, because what he says and what she remembers of him both
+ * outrank her own notes — `SOUL.md` rung 3 puts the store above her memory and
+ * this is the store. And above capability, because what she has already done
+ * frames what it means to do more of it.
  */
-export const CONTRIBUTOR_ORDER = ["identity", "memory", "capability", "reports"] as const;
+export const CONTRIBUTOR_ORDER = ["identity", "memory", "ledger", "capability", "reports"] as const;
 
 /** What a contribution is. Derived from the order, so no kind can lack a position. */
 export type ContributorKind = (typeof CONTRIBUTOR_ORDER)[number];
@@ -198,7 +224,7 @@ export const MEMORY_FENCE_END = "--- END OF WHAT YOU REMEMBER ---";
  * | contributor | then | now | why |
  * |---|---|---|---|
  * | `SOUL.md` | 5,502 | ~8,400 | the personality work, and the Commander's ruling that she be curious |
- * | working memory | 4,000 | 32,000 | `syl-ulf` — the Commander's order, 2026-08-11 |
+ * | working memory | 4,000 | 4,000 | a hard cap, enforced three ways |
  * | tool schemas | 0 | ~6,500 | the verbs, so she can manage his data rather than only add to it |
  * | agent replies | 0 | 4,800 | `syl-014` — one fenced answer at `MAX_REPLY_BYTES`, and the note saying what did not fit |
  *
@@ -218,41 +244,128 @@ export const MEMORY_FENCE_END = "--- END OF WHAT YOU REMEMBER ---";
  * was `SOUL.md` gaining a paragraph, where the temptation is to write a worse
  * paragraph rather than to ask whether the number is still right.
  *
- * 24,000 restores the margin it was built to have. `tools/schemas.ts` says
+ * 24,000 restored the margin it was built to have. `tools/schemas.ts` says
  * "narrow the surface rather than raise the ceiling", and that is right for a
  * surface that is too large FOR AN ASSISTANT — nine verbs covering reminders,
  * to-dos, goals and memory is not that. Raise it when the intended contributors
  * outgrow it; narrow the contributor when one of them is bloated. The two rules
  * are not in conflict, they are answers to different questions.
  *
- * ### 24,000 -> 56,000, on 2026-08-11
+ * ## 30,000, on 2026-08-11
  *
- * This is the first case the rule above describes: an **intended** contributor
- * outgrew the ceiling, deliberately and by the Commander's order. Working
- * memory went 4,000 -> 32,000 (`syl-ulf`) after it was measured dropping his
- * own name, his wife, his son and his daughter from the document she reads
- * every turn. He accepted the recurring cost in terms — *"I'm fine with it
- * burning extra tokens"* — and named the rollback.
+ * The tripwire fired, exactly where it was designed to and on exactly the case
+ * the paragraphs above say is grounds for raising it: **two intended
+ * contributors grew for reviewed reasons on the same day.**
  *
- * So the ceiling is raised rather than the contributor narrowed, which is
- * exactly what the rule prescribes. The declared maxima now sum to **51,956
- * bytes**, so 56,000 leaves a margin of ~4,000.
+ * | contributor | before | after | why |
+ * |---|---|---|---|
+ * | `SOUL.md` | 8,553 | 10,644 | she does not know what she looks like and wants to; keep every render and every reason |
+ * | tool schemas | 7,623 | 9,562 | `render_me` and `see_myself`, which are what make the first true |
  *
- * **The margin is deliberately wider than the ~300 bytes it replaces.** That
- * number was flagged above as worth knowing before the next contributor is
- * added, and it had a failure mode this build has now seen twice: a guard so
- * tight that it fires on a change with nothing to do with it, at which point
- * the temptation is to write a worse `SOUL.md` paragraph rather than to ask
- * whether the number is right. A tripwire needs to be loose enough that it
- * only fires on a runaway. ~4,000 bytes is room for the reviewed growth of one
- * contributor and not room for a runaway one.
+ * Neither is bloat and neither can be narrowed without making the other a lie:
+ * `SOUL.md` now tells her she can render herself and look at the result, and a
+ * character file that describes a capability the surface does not carry is the
+ * exact defect `schemas.ts` rule 2 exists to prevent. Trimming either is the
+ * quiet behavioural regression this module refuses to make.
  *
- * This does NOT reopen the token-economy question. It is still nothing against
- * the context window; what it is against is a recurring per-turn cost, and
- * that argument lives on {@link WORKING_MEMORY_MAX_BYTES} where the number
- * that actually moved is.
+ * 30,000 leaves about 2,950 bytes of margin against a declared sum of 27,051 —
+ * ten times what 24,000 had left by the end, and chosen that way on purpose:
+ * `SOUL.md` moved 2,100 bytes in a single day, so a margin sized to today's
+ * contributors is a margin that fires again next week on a paragraph rather
+ * than on a runaway. Still nothing against a 200k window; still a tripwire and
+ * not a token economy.
+ *
+ * ## 33,000, on 2026-08-11, and the margin above was already gone
+ *
+ * **Measure before trusting the paragraph above.** By the time a fifth
+ * contributor was proposed, the 2,950 bytes it describes had shrunk to about
+ * 600 — `SOUL.md` had reached 11,954 and the tool surface 10,583, both inside
+ * the same day, neither noticed because the test only asks whether the sum
+ * fits. It did fit. It was 29,393 against 30,000, and the file still claimed a
+ * margin an order of magnitude larger. A number in prose beside a number in
+ * code is the drift this whole module exists to make unrepresentable, and it
+ * happened here, in the paragraph explaining the margin.
+ *
+ * | contributor | at the 30,000 raise | now | why |
+ * |---|---|---|---|
+ * | `SOUL.md` | 10,644 | 11,954 | the voice, and being heard rather than read |
+ * | tool schemas | 9,562 | 10,583 | `show_him` — the sending verb |
+ * | her own unattended work | 0 | 1,200 | she could not account for a reminder she filed at 07:04 |
+ *
+ * The fifth contributor is the case this file already names as grounds for
+ * raising: an INTENDED one that does not fit. It is also the smallest of them
+ * by a wide margin, and it is what makes constraint 4's spirit hold inwards —
+ * see `jobs/unattended-contributor.ts`. 33,000 against a declared 30,593
+ * restores roughly the 2,400 bytes the previous raise meant to leave.
  */
-export const DEFAULT_CONTEXT_BUDGET_BYTES = 56_000;
+/**
+ * RAISED AGAIN, 30,000 -> 40,000, and the repetition is itself the finding.
+ *
+ * Nothing ran away. Two contributors the Commander asked for both grew while
+ * this branch was elsewhere: `SOUL.md` 8,361 -> 11,954 (render, voice and
+ * expressions) and the tool schemas 8,410 -> 11,370 (the render verbs, and
+ * `recall`). With working memory at 4,000 and replies at 2,800 that is 30,124
+ * against a 30,000 ceiling — over by a hundred bytes of deliberate content.
+ *
+ * I trimmed prose until it fitted with FOUR BYTES to spare, and that is what
+ * made me stop. Shaving words off a description to satisfy a number is the
+ * guard editing the code rather than the code answering to the guard, and a
+ * turn that fits by four bytes fails on the next honest sentence anyone writes.
+ *
+ * Three raises in two days is the signature of a number being asked to do a job
+ * it cannot: set by hand, containing four contributors that each move on their
+ * own. `agent/fenix` reached 56,000 independently by the same road, neither of
+ * us knowing the other was walking it — two people editing one tripwire in two
+ * places, which is `CONTEXT.md` §8 wearing the guard's own uniform.
+ *
+ * 40,000 is today plus real margin. Deliberately NOT sized for `syl-ulf`'s
+ * working-memory raise to 32,000: picking a number to fit an unlanded branch is
+ * how a ceiling stops meaning anything. When that lands, ONE number gets set
+ * ONCE by whoever lands it, in conversation with the others.
+ */
+/**
+ * 40,000 -> 72,000, which is the "when that lands" the paragraph above names.
+ *
+ * This DOES size for `syl-ulf`, an unlanded branch, and the paragraph above
+ * argues against exactly that. Both belong here, because the distinction is the
+ * useful part: sizing for work that MIGHT land makes a ceiling meaningless,
+ * while sizing for the merge this number exists to unblock is the job. The test
+ * is whether the branch is hypothetical. `syl-ulf` is not — it raises working
+ * memory to 32,000, and against main's `SOUL.md` and tool surface it does not
+ * fit at any smaller number.
+ *
+ *   working memory  32,000   replies 4,800
+ *   SOUL.md         11,954   tools  11,370   = 60,124 required
+ *
+ * 72,000 rather than the 64,000 that also clears it: `SOUL.md` grew 3,593 bytes
+ * in a single day, so a 3,900-byte spare is one day of headroom. Every turn pays
+ * this ceiling in full, which is the reason not to go higher still — 72,000 is
+ * roughly 18k tokens, about 9% of context as fixed cost.
+ *
+ * BEFORE YOU RAISE THIS AGAIN: say the number in the team channel first, then
+ * edit the file. It has been set five times in two days and collided twice,
+ * because four contributors move independently and each of us was correct
+ * alone. `tool-surface-budget.test.ts` computes the minimum viable value and
+ * prints it on failure — take the number from the test rather than deriving it
+ * by hand, because a subtraction done by hand is stale by the time it is done.
+ */
+export const DEFAULT_CONTEXT_BUDGET_BYTES = 72_000;
+
+/**
+ * POSTSCRIPT, and it arrived while the paragraph above was being written.
+ *
+ * The merge that landed this hit a conflict on THIS CONSTANT: 40,000 here
+ * against 33,000 from `b9e582d`, set independently, minutes apart, by two
+ * people who could not see each other. That is the sentence above happening in
+ * its own file — "two people editing one tripwire in two places" — and neither
+ * of us was careless.
+ *
+ * Kept the higher, because it satisfies both and because a ceiling that has to
+ * be re-argued every time two branches meet is worse than one with slack. The
+ * point stands and is now demonstrated rather than predicted: ONE number, set
+ * ONCE, in conversation. The next person to need it should raise it in the
+ * channel before the file.
+ */
 
 /** A contributor was wired up wrong. A programming error, not a runtime condition. */
 export class TurnContextError extends Error {

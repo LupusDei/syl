@@ -935,7 +935,7 @@ export class MemoryMetrics {
       else if (response === "rejected") rejected += 1;
       else pending += 1;
 
-      const key = row.relation ?? " synthesis";
+      const key = row.relation ?? "\0synthesis";
       const bucket = byRelation.get(key) ?? {
         relation: row.relation,
         engaged: 0,

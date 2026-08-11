@@ -912,6 +912,67 @@ Constitution Rule 1 and it has already paid for itself.
 **Fail loudly on auth and billing.** These are the failures that would quietly
 change what the Commander is paying, or quietly stop the assistant working.
 
+**A mechanism that explains the observation perfectly, and describes something
+that never happened, reads as insight rather than as a guess.** That is what
+makes it dangerous. A wild guess gets challenged; a coherent account of *why*
+gets relayed onward as a finding. Three false diagnoses reached the Commander as
+fact on 2026-08-10–11 — "extraction produces containers rather than facts", "the
+service writes frames to /tmp", "every planning commit exists twice on main" —
+and each one had a tidy mechanism attached. All three were withdrawn. **Before
+reporting a cause, name the one command that would disprove it, and run that.**
+
+**Relaying is not verifying.** A claim does not become checked by passing
+through another agent, and it does not become checked by being detailed. Every
+one of those three reached the Commander because somebody competent had said it
+first and said it well — which is the only reason it got past anyone. When you
+pass on a finding you did not verify, say so in the same sentence, or verify it.
+
+**A worked example, because it was repeated about twenty times in one session
+and told to four agents as fact.** "`npm run verify` reports exit 0 while
+actually failing" was said all night, written into a memory, and put in briefs
+as *the harness lies about exit codes*. It does not. **A pipeline's exit status
+is the last command's** — every one of those runs was `npm run verify | sed |
+grep`, so the 0 belonged to `grep`. Provable in one line: `false | tail -1; echo
+$?` prints `0`, and `set -o pipefail` makes it `1`.
+
+The advice survives and the reason changes: read the output and confirm real
+test counts, but the actual remedy is `set -o pipefail`, or not piping the
+command whose status you mean to read. A wrong mechanism attached to correct
+advice is the most durable kind of error — nobody challenges it, because the
+advice keeps working.
+
+**And the remedy is not more diligence.** Two agents produced false claims the
+same night by opposite routes: one invented a mechanism it had never run, the
+other ran `git branch --show-current`, got the right answer, and reported the
+session header instead. Checking harder does not save you from discarding a
+value you already had. What does is that **a claim about a mutable fact should
+carry the command that produced it** — cheap for branch names, paths and merge
+status, not worth it for everything. A claim carries no evidence of how it was
+obtained, so two claims of identical confidence can differ entirely in whether
+anyone looked.
+
+Two specific forms of it, both bought the same night:
+
+- **A merge-status claim has a shelf life of minutes in a shared checkout.**
+  Re-verify at the moment you report it, not from a check you ran earlier. Main
+  moves under a running agent constantly, and "not on main" is true until it is
+  not.
+- **`git show --stat` on a merge commit is not evidence of what that commit
+  introduced.** It shows the combined diff against the first parent, so a merge
+  bringing in a large file reads exactly like a re-add. Use a path-filtered
+  `git log`, or look at `%p`. A subject line is not topology.
+- **A dependency on a parent epic hides every descendant from `bd ready`**,
+  whatever the descendant's own edges say — and `bd dep cycles` reports nothing,
+  because a parent blocker is not a cycle. It cost a re-plan on `syl-013` and
+  hid an entire phase of `syl-015`. After wiring dependencies, run `bd ready` and
+  confirm the beads you believe are independent actually appear. Asserting the
+  graph is right is not the same as asking it.
+
+**A planning document that has gone stale is worse than one that never made the
+claim**, because it reads as current. When the tree moves under a plan — an edge
+cut, a phase unblocked, a branch merged — the plan is wrong until it is
+corrected, and the next agent has no way to know which parts aged.
+
 **If a property can be STATED, it can be forgotten. If it can be DERIVED, it
 cannot.** artanis's line, and the through-line under most of what follows —
 worth reading before the individual cases, because we rediscovered it about
@@ -929,11 +990,124 @@ the structure:
 | "every write says why" | required at the door, dropped at the store | carried to the row |
 | "outside text is fenced" | a fence you had to remember to apply | `validate` refuses the slot without the marker |
 | "she can act" | a sentence in `SOUL.md` | computed from `TurnOptions.tools` |
+| "her key reaches reminders, to-dos and goals" | a string in `beyondAgentReach` | rendered from `AGENT_SURFACES` |
+
+The last one is `syl-016.1` and it is worth naming because it was caught *while
+widening the list rather than afterwards*. Opening `/memory/recall` to her
+credential would have left the refusal she reads out to the Commander saying she
+cannot search her own memory — a fluent, confident sentence, wrong in exactly
+the way nothing fails on. Each surface now carries the words it goes by, and the
+refusal is a function of the list.
+
+**Her memory surface is two ROUTES, never the router.** `/memory` would have
+carried `POST /memory/edges/{id}/feedback` with it, and an assistant that can
+confirm and reject her own inferences can groom what she will be shown tomorrow
+— the `/logs` argument, one layer in. `withinAgentSurface` matches on segment
+boundaries, which is what makes a single-route entry a real boundary rather than
+a naming convention.
+
+`syl-016.1` opened the read. **`syl-016.7` opened the write** — `/memory/remember`,
+the only entry on `AGENT_SURFACES` that is not a read — and the gap between them
+is the point: she could read her own memory for exactly as long as it took to
+decide the write on its own terms, rather than have it arrive as a side effect.
+The line that survives is not read-versus-write, it is this: **she may add what
+she concluded, and she may not adjust what she will be shown for concluding it.**
+
+What bounds the write is the object behind the route, not the allowlist.
+`HerOwnMemory` creates a `memory` node and `inferred` links to entities that
+already exist, and has no method that deletes, supersedes, relabels, moves a
+weight, or mints a person — so *she cannot invent people* and *she cannot groom
+her own recall* are held by the type. And nothing written through it can claim he
+said anything: the node is `memory` and never `fact`, every link is `inferred`
+and never `observed`, and `observed` is the species carrying `assertedBy`.
+Extraction's criterion 3 — *"HE asserted it"* — is untouched.
+
+Two things that decided the shape, both discovered rather than designed:
+
+- **Authorship is marked twice because the two marks fail differently.** The
+  species is an EDGE property, so a memory naming no entity has no edges and
+  nothing to carry it; `kind: "memory"` is on the row and survives that. The
+  kind had been sitting unwritten with a `## Memories` section already rendering
+  for it.
+- **`memory_provenance` cannot hold her memories, and that is correct.** It
+  requires a `digest` referencing an extraction, a `said_in` message id, and a
+  non-blank `quote` copied from that message. She has none of the three. Its
+  `quote` is DERIVED precisely so it is evidence rather than a claim, and a
+  derived field with nothing to derive from is a lie with a schema. Her
+  reasoning travels on the edge, where an inference's reasoning already lives.
 
 The repair is the same every time: make the claim a function of the thing it is
 about. `advertisedTools()` from the handler map; `origin` from whether he spoke;
 the capability sentence from the surface. **A stated property has a shelf life
 and nothing announces its expiry.**
+
+One postscript, earned the same afternoon: deriving the refusal from the list
+immediately produced a defect that *could not exist while they were two things*
+— a `says` may not contain a comma, because they are spliced into one sentence,
+and "her own memory, to search it and read it back, her own renders" is a list
+nobody can parse. That is the derivation working, not an argument against it: a
+single mechanism has failure modes, and failure modes are findable. Two hand-kept
+strings have *drift*, which is not.
+
+**A MEASUREMENT CARRIES ITS REF, not just its version stamp.** `CLAUDE.md` says
+load-bearing measurements against someone else's binary need a version stamp and
+a re-run. Generalise it: **any tree that moves is someone else's binary**, and
+that is every branch in this repo.
+
+Three of us hit this on 2026-08-11, in three different materials, and it is one
+failure:
+
+| what was measured | against what | why it went stale |
+|---|---|---|
+| the tool-surface slot | a commit *inside* a branch | the ceiling was raised 26 commits later, on the same branch |
+| migration `0018` | origin, correctly, at the time | origin reached `0024` while the work was in flight |
+| "cherry-pick this commit" | a main that had since moved | an instruction to a merger names a ref implicitly |
+
+The sharp version, and it is `extraction`'s: **a number in a decision has no
+expiry either, and "I checked at the time" feels exactly like "I checked."**
+Every one of those checks was *complete* against the world it was run against.
+
+Two consequences worth holding:
+
+1. **Measure the tip of what will actually merge.** A commit inside a branch is
+   a waypoint, not a destination — it may be momentarily inconsistent on its way
+   to being right, and quoting it produces a plausible number with no error and
+   a conclusion nobody re-tests.
+2. **Record the ref beside the number**, so the next person can re-run it.
+   `c8462cf` and "fenix tip" are different worlds; a figure naming neither cannot
+   be checked and therefore will not be.
+
+Note which of these had a guard. Two migrations at one version fail loudly with
+both filenames, so that one was always going to surface on contact. A slot
+computed from the wrong ref produces **a plausible number and a conclusion** —
+"unlandable" — and nothing in the system ever contradicts it. *The variant with
+no guard is the one that propagates*, which is why it reached a second agent's
+report before it was caught.
+
+**BUILD THE FIXTURE FROM THE THING THAT REALLY WRITES IT.** Constitution Rule 1
+says build fixtures from real captured CLI output rather than from our own type
+definitions, and it is written about the wire. The same rule holds one layer in,
+against our own stores, and it is easy to miss there because the thing you are
+faking is *code you can read*.
+
+Setting up `syl-9ro`'s test, I hand-wrote the `INSERT`s into
+`memory_extractions` and invented a `message_count` column that does not exist.
+Rebuilt to go through `ExtractionStore.apply`, the real writer immediately
+caught a second one: `Extraction` requires `instructionsFound`, which I had not
+passed. **Both were my idea of the shape rather than the shape**, and I had read
+the migration minutes earlier.
+
+What makes this worth its own entry is *where the defect lands*. A wrong
+assertion fails. **A wrong fixture makes a green test meaningless rather than
+red** — it sets up a world the code never produces, and then faithfully proves
+something about that world. Nothing in the suite can see it, because the suite's
+only question is whether the assertion held.
+
+So: if a store, a service or a codec can produce the row, let it. The cost is a
+few more lines of setup; the return is that every constraint the real writer
+enforces is enforced on your fixture too, for free and forever. Hand-rolled SQL
+in a test is a second implementation of the write path, and it drifts exactly
+like every other second implementation in this file.
 
 **An instruction and the capability it assumes are ONE decision, and the failure
 is always prose.** Hit three times on 2026-08-10, in both directions:
@@ -1207,3 +1381,390 @@ The lesson is not "don't script it". It is that **an additive resolve is safe
 for declarations and unsafe for call sites**: two branches adding a field each
 to the same initialiser produce two complete calls, and concatenating them is
 never what you want. Resolve declarations by union, and call sites by hand.
+
+### The sky chased a third of a point (2026-08-11)
+
+*"Whenever I click on a node, the screen starts kind of zooming in and moving up on its
+own and is hard to stop."*
+
+`ConstellationViewModel.resize(to:)` guarded with `size != preparedFor` — exact `CGSize`
+equality. The card's arrival perturbs the geometry by a fraction of a point, that counted
+as a new screen, and **the sky's layout is a function of its size**, so every star was
+placed again. Which closed a ring: a re-laid sky has a new `size`, which sets
+`ConstellationBand.tallestCard(in:)`, which decides what the card fits into, which
+perturbs the geometry — back to the start. The whole field slowly scaling and sliding,
+with no gesture that could catch it.
+
+**Every line in that ring is correct on its own**, which is why nothing caught it: the
+resize guard, the band, the card's fitting, the reveal — each is right, and each test of
+each one passes. The defect exists only in the cycle. A unit test per component cannot
+see it, and the test that does had to be about *stillness* rather than about any one
+function's output: read at a size, wobble it by tenths of a point, assert the sky does
+not move.
+
+Two rules:
+
+1. **Compare geometry with a tolerance, never with `==`.** A point is the threshold,
+   because below it nothing on screen can change, so there is nothing to compute. Exact
+   float equality on a measured value is a promise no layout system makes.
+2. **When a value both derives from layout and feeds back into it, that ring is the
+   feature's real risk surface** — write the test that runs it round.
+
+Worth noting what the diagnosis cost: I read the pan maths three times looking for a
+compounding zoom, because "zooming" sounds like a scale bug. Nothing in the transform
+touched scale. The zoom was the *layout* rescaling, and the symptom named the wrong
+subsystem — I found it by testing the invariant he described (**the sky should be still**)
+rather than by hunting the mechanism he guessed at.
+
+### A green TestFlight run that shipped nothing, again (2026-08-11)
+
+Build 17 carried the fix for a bug the Commander was actively hitting. The workflow ran,
+reported success, and **uploaded nothing.**
+
+The gate compared `MARKETING_VERSION` against `HEAD~1`. The bump landed in one commit and
+reached `main` inside a merge, so `HEAD~1` was the branch being merged — which already
+carried 0.9.6. Current equalled previous, the job went green, and no build existed.
+
+`HEAD~1` is not a meaningful question. It is a different commit depending on whether the
+tip is a merge, a squash, a revert or a rebase, and on which side of a merge git calls the
+first parent. The question with one true answer is *is this build already on TestFlight?*,
+and the gate now answers exactly that by checking for a `testflight/<build>` tag pushed
+**after** a successful upload. Immune to merges, re-runs, reordering, and to another agent
+committing in between. `testflight/16` was backfilled so the record starts honest.
+
+Note which way each design fails. The tag gate fails toward a **duplicate upload**, which
+App Store Connect rejects loudly and which costs runner minutes. The old gate failed
+toward **silence**, which costs a release nobody knows is missing. Given a check that
+cannot be perfect, choose the noisy failure — and this is the third entry in this file
+where the defect was something reporting green while doing nothing, which is now the
+project's single most common failure shape.
+
+**And the reason it was caught at all**: the Commander asked *"merged and pushed with a new
+version for a new app release?"* — a question about the outcome, not about my actions. I
+had said "pushed as 0.9.6" and that was true and irrelevant. Verifying the outcome he
+asked about took one log read. **Report what shipped, not what you did.**
+
+**Postscript, same day.** The new gate's first live run uploaded build 17 successfully and
+then failed `403` pushing its own tag — the default `GITHUB_TOKEN` is read-only, so the
+job needs `permissions: contents: write`. Fixed, and the tag backfilled by hand.
+
+It is worth being clear about what that failure demonstrated. **The design worked.** A
+missing tag means the next push re-uploads and App Store Connect rejects a duplicate
+build: loud, harmless, obvious. The old gate's equivalent slip lost a release in silence.
+When choosing where a check is allowed to break, choose the side that makes noise.
+
+### The sky grew fifty-two points a pass, and everything he reported followed from it (2026-08-11)
+
+> *"If I tap the base node I get the memory to pop up. But if I tap another node, no memory
+> pops up and the whole thing starts zooming in without end."*
+
+Three symptoms, one cause, and the cause is a layout ring with a **gain of exactly one**.
+
+`ConstellationView` measured its own size with a `GeometryReader` **inside** its `ZStack` —
+which is a measurement of the stack, not of the screen. The card was a member of that stack
+and reserved its band with `.padding(.top, sky.size.height − tallestCard(sky.size))`. So:
+the card's height derived from the sky's height, the stack grew by the difference, the reader
+reported the larger number, the sky was laid out for it, and the band grew again. Measured
+through real SwiftUI layout in a real window: **852 → 904 → 956 → 1008 → 1060 → 1112 → 1164**,
++52 every pass, no bound.
+
+`ConstellationLayout`'s field is `(height − insets) / 2`, so the whole star field spread as
+the number grew. **That is what "zooming in without end" was** — not the transform.
+`maximumScale` is 4 and the sky he photographed was spread about ten times, which is the
+arithmetic that rules the transform out and it was available before any code was read.
+
+And the missed taps are the same fault, not a second one. The drawing and the hit test both
+read one `PreparedSky`, so they cannot disagree about where a star is; what they can both be
+is wrong about where it was a second ago. Measured on the original code: **opening one card
+moves stars 60 to 193 points on the first pass.** A finger is 22. So the first tap of a
+session lands and every tap after it arrives where the star used to be — exactly "the base
+node works and nothing else does".
+
+Three rules out of it:
+
+1. **Measure the screen at the root, never inside the stack.** A `GeometryReader` reports the
+   size it was *proposed*, so a reader at the root of a screen is a measurement of the glass
+   and nothing drawn inside it can move the number. One rung below that it is a measurement of
+   its own siblings.
+2. **A card is drawn over the sky, not added to it.** It is an `.overlay` now, which is
+   proposed its host's size and cannot change it — the ring is impossible rather than merely
+   unlikely.
+3. **"It converges" is not the property you want.** The first fix attempt had a gain of ½ and
+   settled — at 1045 points on an 852-point screen, with the field spread off every edge. The
+   assertion that catches that is *the sky is laid out for the size of the screen*, not *the
+   sky stops changing*.
+
+Note the relationship to the entry above it. That one fixed a ring driven by a **third of a
+point** and added a 1pt tolerance to `resize(to:)`. This ring steps 52 points at a time, so
+the tolerance never had a chance — and the tolerance was still right. **A guard sized for
+jitter is not a defence against feedback.** Fixing the small ring made the big one the only
+one left, which is why it surfaced looking like a regression.
+
+#### And the sky had never been told about the tab bar
+
+The two remaining things he could see were the same omission from both sides.
+`ConstellationLayout` inset the field by 104 and 72 — measured against a navigation bar and a
+home indicator, before this screen was in a tab bar. A tab bar takes 83, so the lowest star in
+the field was drawn under it. `ConstellationBand.cardTop` had the mirror image: it put the
+card's top edge at `size.height − cardHeight − step`, measuring from the bottom of the
+**glass**, while the card sits above the **tab bar** — 83 points higher. So the sky panned a
+selection to a line it believed was clear and the card came up over it.
+
+Both are now one `ConstellationChrome` carried **on the sky**, so the layout that placed the
+stars and the arithmetic that decides where the card's edge falls cannot answer differently.
+
+**The render harness had no bars in it, which is why no image ever showed either defect.** It
+has them now — `safeAreaInset` for the real geometry, and translucent fills drawn on top so a
+human can see what is covered. An offscreen render of a pleasanter rectangle than the one he
+is holding is a consistency check.
+
+#### One more, from the same screenshot
+
+His graph hangs entirely off a single `source` node, *"Conversation with the Commander"*,
+which asserts everything — including itself. Its card read the title and then *"Conversation
+with the Commander said so."* **A thing is not its own evidence.** `ConstellationWords`
+compares the asserter to the star's own label and says what the node *is* instead. Compared by
+label rather than by kind, so a source something else genuinely cited still says so.
+
+#### The fixture was the whole reason none of this was caught
+
+Everything this feature was accepted on was looked at through `ConstellationSnapshot.fixture`:
+seven anchors, real entity-to-entity edges, six clusters. **His graph has none of that.** 33
+nodes and 32 edges, every edge `stated`/`observed` from the one source node — a hub and
+spokes, with nothing relating to anything else, and therefore `anchorId: nil` on every star
+and no clusters at all. `ConstellationSnapshot.hubAndSpokes` is that shape, measured off
+`~/.syl/syl.db`, and every render and every new test runs against it.
+
+This is the standing fixture rule — *build fixtures from captured reality, never from our own
+types* — arriving on a screen rather than on a wire format. A fixture that is prettier than
+production is a consistency check with good art direction.
+
+### The build number in the project file is not the build number that ships (2026-08-11)
+
+The gate I had just rewritten to key on `CURRENT_PROJECT_VERSION` shipped 0.9.7 and then
+logged **"Tagged build 24 as uploaded"** for a commit whose project file said **18**.
+
+`fastlane beta` calls `increment_build_number(latest_testflight_build_number + 1)`. App
+Store Connect's own counter decides the build number; the repository's copy is read by
+nobody. So every "bump the build number" commit in this project's history was theatre —
+the *marketing version* is the only part of that ritual that does anything.
+
+The tag was therefore keyed on a value the gate could never look up again: next push
+reads 18 from the project, finds no `testflight/18`, and ships — restoring the
+build-per-commit the job exists to avoid, on a 10x-billed runner. Now keyed on
+`MARKETING_VERSION` as `testflight/v0.9.7`, which is what the repository actually
+controls and what "a build per version bump" always meant. Tags backfilled for v0.9.5,
+v0.9.6 and v0.9.7; the three build-numbered ones deleted so there is one scheme.
+
+**Three consecutive fixes to this one gate in one morning, each revealing the next.** The
+`HEAD~1` comparison dropped a release silently; its replacement could not push its own tag
+(`403`, read-only token); and that fixed version tagged the wrong identifier. Every one of
+them was found by reading the run log rather than the conclusion — and the conclusion was
+**green** for the first and third. The rule this file keeps re-learning: *a workflow's
+exit status tells you it finished, not that it did the thing.*
+
+There is a happier reading, though. Each failure was louder than the one before: silence,
+then a red step, then a wrong-looking string in a log. That is what designing the failure
+direction buys — the bugs got easier to see even as they got subtler.
+
+### "It never parses" — the chat freeze of 2026-08-11
+
+`MarkdownView`'s doc comment said **"It never parses"**. `MarkdownInline.render`
+did a full `AttributedString(markdown:)` parse plus three passes over the runs,
+from inside a `body`, for every paragraph, every heading, every list row *twice*
+(the VoiceOver label parses again) and every table cell.
+
+Three multipliers stacked on it: `ChatView.body` re-runs on every keystroke and
+every presence frame; `.defaultScrollAnchor(.bottom)` needs the total content
+height, so the `LazyVStack` sizes **every** row in the 200-message window rather
+than the visible ones; and an arriving reply invalidates the lot. A main thread
+that stops answering long enough is a watchdog kill, which is what he saw.
+
+**The two previous fixes to this same symptom both guessed wrong** —
+`ChatSnapshotLoader` moved *block* scanning off the main actor, and `blocksByGroup`
+killed a quadratic compare. Inline parsing was in neither, and the file went on
+claiming it never parsed. A comment agreeing with the code while neither agrees
+with the profiler: consistency, not correspondence, in the most literal form yet.
+
+Three further corrections came out of it, and every one of them was mine:
+
+1. **It was never frozen permanently.** The conversation continues in the
+   database past the moment I called the freeze — a watchdog kill and relaunch,
+   not a deadlock. My evidence was a snapshot that had already moved on, and I
+   read a stale row as a stuck system.
+2. **My single-owner-stream hypothesis was wrong.** One pump fans every event to
+   both models; neither can starve the other. I had reasoned from the symptom to
+   an architecture that does not exist.
+3. **`-scheme Syl` does not run SylKit.** Every "the suite is green" in this
+   session counted 795 of 1094 tests. The count-checking rule I had just written
+   down was itself measuring the wrong thing — a habit built to catch this exact
+   failure, blind in one eye.
+
+And a mutation that survived is worth recording: a faithfulness test compared the
+memo against a fresh parse, so corrupting both produced two wrong answers that
+agreed. **A correspondence check between two things that share an implementation
+is a consistency check.** Only breaking it on purpose showed that.
+
+### An empty grep is the most confident-looking wrong answer available (2026-08-11)
+
+Asked whether `show_him` notifies him, I searched the sending route and service
+for `push`, `notif`, `apns`. **Zero matches in both files.** One message away
+from reporting that From Syl delivers videos in silence — a broken flagship
+feature, and one that fit his oldest open complaint about a reminder that never
+buzzed, which is what made it feel confirmed rather than merely found.
+
+The mechanism is called **`outbox`**. `sending-service.ts` enqueues an APNS
+notification with her sentence as the body, keyed on the sending id, and the
+file contains the word "push" nowhere.
+
+**A search proves something about your vocabulary, never about the system's.**
+This is worse than a stale measurement, because every other kind of wrong answer
+hands you something to be suspicious of: a bad number still looks like a number,
+a bad diagnosis has an argument you can attack. **Nothing looks like certainty.**
+
+The remedy is not a longer list of synonyms. **Verify the positive** — find
+where a notification *is* sent and see whether this path reaches it. A negative
+about behaviour cannot be established by failing to find a string.
+
+### A comment is not a mechanism (2026-08-11)
+
+`REACHES_HIM` decides which verbs count as reaching him, and bounds
+`SENDINGS_PER_DAY`. Its own comment said, in as many words, *"when the sending
+verb lands it belongs in here."* The verb landed as `show_him`. Nobody added it.
+
+So every hour in which she sent him a video was recorded as **an hour that
+reached nobody**, the allowance was never spent, and twenty-four a day was
+permitted by the code. **Thirty-six heartbeat tests passed over it**, because
+they assert the list matches itself — a tautology in test form, which is the
+shape a test takes when it is written from the implementation.
+
+**If the next change must update something, a test has to fail when it doesn't.**
+A note addressed to a future reader is a hope, not a constraint.
+
+The repair generalises past this constant, and `AGENT_SURFACE` is the worked
+example: its refusal sentence used to be written *beside* the list, so widening
+the list would have had her claiming she cannot do the thing she had just been
+given. Deriving the sentence from the list closed that — and within the hour the
+derivation exposed a second defect that could not have existed before, since
+entries are spliced into one sentence and **a `says` may not contain a comma**.
+A hand-written sentence never had to survive being joined to anything.
+
+**A commit inside a branch is a waypoint, not a destination.** The same day, a
+false alarm about the context budget was diagnosed as reading two constants from
+two branches, with the remedy *"take both from one `git show <branch>:<file>`"*.
+That diagnosis was wrong: both reads came from one ref, correctly. The ref was 26
+commits behind the tip, and genuinely did raise working memory without the
+ceiling — the ceiling moved later. **The proposed remedy would have passed the
+real failure straight through**, which makes it worse than none: a rule that
+looks right and does not fire ends the investigation. Measure the tip of what
+will actually merge.
+
+The same shape governs migration numbers, where checking origin is necessary and
+not sufficient: origin says which number is *free*, and nothing about which
+numbers *your branch can hold*. A branch that is behind cannot satisfy
+contiguity at the number origin calls free. Two questions, and only one of them
+was being asked.
+
+### An ellipse around a rectangle is not the rectangle plus a margin (2026-08-11)
+
+The Commander replaced the home waveform with *"a circular ribbon of light that
+orbits around the message"*. The obvious geometry — `a = halfWidth + margin` —
+survives one short phrase by luck. At `accessibility5` the phrase's box is nearly
+square, the smallest ellipse enclosing a square is √2 larger in **both**
+directions, and the first render came back **437 points tall on an 852-point
+screen**, straight across her face.
+
+The fix is the observation that the phrase is not a box: it is three centred
+lines whose box corners are *empty*. Solving against the lines is what makes the
+large type sizes possible at all. That was found by looking at a picture, not by
+reasoning — and it is the clearest example yet of why renders are this feature's
+acceptance check rather than a supplement to it.
+
+Two more that only a picture could have caught:
+
+- **Overlapping segments do not blend under `plusLighter`, they add.** Tail
+  segments overlapping by 50% made every junction twice as bright: the comet
+  rendered as a row of beads — a dashed arc going round a circle, the one
+  silhouette this component may never have.
+- **The light appearance needed the opposite instruction, not a weaker one.**
+  `SylRibbon`'s rule is that the hot filament is always `plusLighter`. Her core
+  resolves to white, and white *added* to a pale daylight painting is nothing —
+  the day render had a beautiful tail with no source on the end of it. The head
+  is now laid down as pigment. Same principle about contrast, inverted.
+
+And the design rule underneath the Commander's instinct, worth keeping: **the
+waveform is chat's grammar** — a line of speech under the last message, the shape
+of something being *said*. Home has no transcript, so the same shape there merely
+crosses the picture. A ring is a halo rather than an utterance: it encloses
+instead of dividing, and light travelling a closed path reads as attention
+circling a thought. He saw that it was wrong before anyone could say why.
+
+### A success signal that is not downstream of the effect (2026-08-11)
+
+Two of these landed within an hour, in different hands, and they are one bug.
+
+A push was confirmed with `git push -q …; echo "pushed: $(git log --oneline -1)"`.
+The push **failed** on a divergent branch; the echo printed the local HEAD, which
+is always there. A restore was done with `cp`, which hit an interactive overwrite
+prompt — **in a non-interactive shell that defaults to NO**, so the file was never
+restored and the exit code meant only *"I asked"*.
+
+**Neither success message was capable of reporting failure.** One was composed
+from local state, the other from an exit code that did not describe the effect.
+The rule: **confirm the thing you actually wanted, from the side that would know.**
+For a push that is `git merge-base --is-ancestor HEAD origin/<branch>`; for a copy
+it is reading the destination. A check that cannot fail is decoration.
+
+### A stale test is worse than a stale comment (2026-08-11)
+
+Raising `DEFAULT_CONTEXT_BUDGET_BYTES` to 72,000 silently disarmed the test that
+proves the budget guard fires. It asked for **40,000 of overage** — enough to
+break the 24,000 ceiling it was written against, not enough to break 72,000. It
+kept passing, so nothing anywhere said the guard was now unprotected. The overage
+is derived from the ceiling now.
+
+This is the same family as a comment that asks the next person to update it, but
+it is worse in one specific way: **the test is the mechanism we rely on to tell
+us when something else has gone stale.** When it goes stale it does not merely
+fail to help, it actively reports that all is well — and it reports it in the
+one place designed to be trusted without re-derivation.
+
+A constant inside a test that is a function of production code must be **derived
+from that code**, never restated. If a test asserts "this breaks when X exceeds
+the limit", the number it uses to exceed the limit has to come from the limit.
+
+### The sixth face: a prescription in a brief (2026-08-11)
+
+Five entries above are measurements or claims going stale. This one is an
+*instruction*, and it is the most dangerous of the set.
+
+Syl diagnosed her own memory correctly — *"nothing compares a new memory to what
+is already there"* — and the obvious cure was written into an agent's brief:
+compare a candidate against existing nodes before minting one. The agent read
+`supersede.ts` and refused, correctly. That file already records that **aggressive
+near-duplicate merging collapses accuracy from 0.82 to 0.62**, and that *"bounded
+growth is a consequence of supersession, never a goal pursued by compression."*
+
+The instruction was a documented way to make her memory worse. It came from a
+real symptom and reached for the obvious remedy without checking whether the
+remedy was already known to be poison.
+
+**The part worth keeping past this incident**: a contradiction is on average
+*more* cosine-similar to a fact than a genuine duplicate is. *"He lives in Buda"*
+and *"He moved to Nashville"* are near neighbours in embedding space. Merging on
+similarity destroys exactly what his memory exists to hold, and it would have
+looked like tidying. The resolution: **`duplicates()` nominates, `merge()` acts.**
+Nominating on a threshold is safe; acting on one is what the 0.82 -> 0.62 number
+measures. The write side stays deterministic — normalise the label, no threshold.
+
+**Why a brief is the worst place for a wrong claim.** Every other artefact gets
+re-derived by somebody. A brief does not, because it comes from the person who is
+supposed to hold the context, and a competent agent reads it as settled. Two
+practices follow, and they cost nothing:
+
+- **Mark each claim in a brief with its evidence status** — what was measured,
+  what is believed, what must be confirmed before it is built on. "I checked this,
+  do not repeat it" and "I believe this, confirm it first" are different sentences
+  and an agent will act on them differently.
+- **An agent that reads the subsystem and pushes back is doing the job.** Both
+  times it happened today the brief was wrong and the pushback was right.

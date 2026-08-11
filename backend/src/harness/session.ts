@@ -46,6 +46,22 @@ export interface TurnOptions {
   readonly systemPrompt?: string;
   /** Path to an MCP config JSON file. Plugin MCP servers load regardless. */
   readonly mcpConfig?: string;
+  /**
+   * Which of Syl's lanes this turn belongs to. **Never becomes argv.**
+   *
+   * Here for the wrappers a caller puts around a runner, which see a prompt and
+   * an options object and nothing else. `index.ts` has one that records what
+   * the Commander said so the tool server can check an urgency claim against
+   * his actual words — and it must write for his lane and no other, or a
+   * background turn's own prompt becomes evidence of something he said.
+   *
+   * It used to infer that from `mcpConfig !== undefined`, which was exactly
+   * true while one lane had hands and silently wrong the moment a second one
+   * did. A lane is what that wrapper was always asking about, so it is the
+   * thing the options carry. `SylAgent` sets it after the caller's overrides,
+   * so a turn cannot claim to be a lane it is not.
+   */
+  readonly lane?: string;
   /** Prior session id, to continue an existing conversation. */
   readonly resume?: string;
   /**

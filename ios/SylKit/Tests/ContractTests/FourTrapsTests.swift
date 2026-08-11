@@ -272,6 +272,91 @@ final class FourTrapsTests: XCTestCase {
         )
     }
 
+    // MARK: - `syl-y82` — why a reminder exists, and who asked for it
+
+    func testShouldDecodeTheReasonAndOriginOfAReminderSheThoughtOf() throws {
+        let data = try fixture("http/reminder.deferred.json")
+
+        let reminder = try SylJSON.decoder().decode(Envelope<Reminder>.self, from: data).data
+
+        XCTAssertEqual(reminder.origin, .sheNoticed)
+        XCTAssertEqual(
+            reminder.because,
+            "Priya asked for them on Friday and the quarter closes tomorrow"
+        )
+    }
+
+    func testShouldDecodeTheOriginOfAReminderHeAskedFor() throws {
+        let data = try fixture("http/reminder.commitment.json")
+
+        let reminder = try SylJSON.decoder().decode(Envelope<Reminder>.self, from: data).data
+
+        XCTAssertEqual(reminder.origin, .heAsked)
+        XCTAssertNotNil(reminder.because)
+    }
+
+    func testShouldDecodeAnExplicitNullProvenanceAsNilRatherThanRefusingTheRow() throws {
+        // The row that predates the record. Null is a legitimate value here and
+        // means "written before we kept this" — never "she gave no reason".
+        let data = try fixture("http/reminder.rhythm.json")
+
+        let reminder = try SylJSON.decoder().decode(Envelope<Reminder>.self, from: data).data
+
+        XCTAssertNil(reminder.because)
+        XCTAssertNil(reminder.origin)
+    }
+
+    func testShouldRefuseAReminderThatOmitsTheProvenanceKeysEntirely() throws {
+        // Absence is not null. A server that stopped sending these would be
+        // shipping rows whose provenance is unknowable, and a client that
+        // silently decoded them as "no reason" would repeat the original defect
+        // — reading an absence as a statement.
+        for key in ["because", "origin"] {
+            let stripped = try removingKey(key, fromDataAt: fixture("http/reminder.commitment.json"))
+
+            XCTAssertThrowsError(
+                try SylJSON.decoder().decode(Envelope<Reminder>.self, from: stripped),
+                "omitting \(key) must not decode"
+            ) { error in
+                guard case DecodingError.keyNotFound = error else {
+                    return XCTFail("expected keyNotFound for \(key), got \(error)")
+                }
+            }
+        }
+    }
+
+    func testShouldReEmitANullProvenanceAsAnExplicitNull() throws {
+        let data = try fixture("http/reminder.rhythm.json")
+        let reminder = try SylJSON.decoder().decode(Envelope<Reminder>.self, from: data).data
+
+        let encoded = try SylJSON.encoder().encode(reminder)
+        let object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+
+        for key in ["because", "origin"] {
+            XCTAssertTrue(object.keys.contains(key), "\(key) must survive a round trip")
+            XCTAssertTrue(object[key] is NSNull)
+        }
+    }
+
+    func testShouldRefuseAnOriginTheContractDoesNotDefine() throws {
+        // The enum is closed. A third value invented server-side must fail loudly
+        // rather than arrive as something the app quietly treats as "not hers".
+        var root = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: fixture("http/reminder.commitment.json"))
+                as? [String: Any]
+        )
+        var payload = try XCTUnwrap(root["data"] as? [String: Any])
+        payload["origin"] = "she_guessed"
+        root["data"] = payload
+        let tampered = try JSONSerialization.data(withJSONObject: root)
+
+        XCTAssertThrowsError(
+            try SylJSON.decoder().decode(Envelope<Reminder>.self, from: tampered)
+        )
+    }
+
     // MARK: - Helpers
 
     private func fixture(_ relativePath: String) throws -> Data {

@@ -49,8 +49,14 @@ extension PreparedSky {
 struct ConstellationCard: View {
     var subject: ConstellationSubject
 
-    /// The tallest this card may grow before it starts scrolling inside itself. The screen
-    /// sets it from its own height; the default is a sane phone.
+    /// The tallest this card may grow, **in total and including its own padding**, before it
+    /// starts scrolling inside itself. The screen sets it from its own height; the default is
+    /// a sane phone.
+    ///
+    /// Total rather than content-only, because the screen reserves room by subtracting this
+    /// number from the glass — so a card that answered it with `ceiling` of scrolling content
+    /// *plus* a gutter at each end would stand forty points into space nobody set aside. See
+    /// ``ConstellationBand/tallestCard(in:chrome:)``.
     var ceiling: CGFloat = 460
 
     /// Closing it. Tapping empty sky does the same thing; this is the one that is visible.
@@ -81,7 +87,12 @@ struct ConstellationCard: View {
                 content
             }
             .scrollIndicators(.hidden)
-            .frame(height: ceiling)
+            // **The gutter comes out of the ceiling, not on top of it.** ``ceiling`` is a
+            // budget for the whole card and the padding below is applied *outside* this
+            // frame, so a scrolling card set to the full ceiling finished forty points over
+            // it — measured at 240 against a ceiling of 200, 340 against 300, 371 against
+            // 331. `ConstellationRunawayTests` asserts it rather than trusting it.
+            .frame(height: max(0, ceiling - SylTheme.Metric.gutter * 2))
         }
         .padding(SylTheme.Metric.gutter)
         .frame(maxWidth: SylTheme.Metric.proseMeasure, alignment: .leading)
@@ -178,7 +189,8 @@ struct ConstellationCard: View {
 
         provenance(
             sentence: ConstellationWords.provenance(
-                species: star.detail.species, assertedBy: star.detail.assertedBy),
+                species: star.detail.species, assertedBy: star.detail.assertedBy,
+                describing: star.label),
             certainty: ConstellationWords.certainty(star.confidence),
             when: ConstellationWords.learned(star.detail.learnedAt))
 
@@ -302,18 +314,33 @@ enum ConstellationBand {
     /// star tucked under a chrome element is a star he cannot see or touch.
     static let headroom: CGFloat = 104
 
+    /// The same, once the view has measured what the navigation bar really takes.
+    static func headroom(_ chrome: ConstellationChrome) -> CGFloat {
+        max(headroom, chrome.top + ConstellationChrome.clearance)
+    }
+
     /// Where the top edge of a card this tall actually falls. **The hard line** — anything
     /// below it is covered.
-    static func cardTop(forCardOf height: CGFloat, in size: CGSize) -> CGFloat {
-        size.height - height - SylTheme.Metric.step
+    ///
+    /// **`chrome` is not optional detail, it is the answer.** The card sits above the tab
+    /// bar, not above the bottom of the glass, and this function measured from the glass —
+    /// so on his phone it put the line eighty-three points too low and the sky cleared a
+    /// selection to somewhere the card then covered. He photographed it: the card describing
+    /// the hub, over the hub.
+    static func cardTop(
+        forCardOf height: CGFloat, in size: CGSize, chrome: ConstellationChrome = .none
+    ) -> CGFloat {
+        size.height - chrome.bottom - height - SylTheme.Metric.step
     }
 
     /// Where the sky *aims* to put a selection: clear of the card's edge with a chapter of
     /// air above it, so the star is not pressed against the glass it was just uncovered
     /// from. Best effort — the bound on wandering has the last word, and
-    /// ``tallestCard(in:)`` is what guarantees the last word is still good enough.
-    static func skyline(forCardOf height: CGFloat, in size: CGSize) -> CGFloat {
-        cardTop(forCardOf: height, in: size) - SylTheme.Metric.chapter
+    /// ``tallestCard(in:chrome:)`` is what guarantees the last word is still good enough.
+    static func skyline(
+        forCardOf height: CGFloat, in size: CGSize, chrome: ConstellationChrome = .none
+    ) -> CGFloat {
+        cardTop(forCardOf: height, in: size, chrome: chrome) - SylTheme.Metric.chapter
     }
 
     /// **The card may never take more than the sky can pan out from under it.**
@@ -336,8 +363,25 @@ enum ConstellationBand {
     /// not by a `maxHeight` on the card — see ``ConstellationCard``, where that mistake cost
     /// two renders: `maxHeight` makes a view *flexible* up to that height, which is the
     /// opposite of a cap.
-    static func tallestCard(in size: CGSize) -> CGFloat {
-        max(200, size.height / 2 - SylTheme.Metric.step)
+    ///
+    /// **How that room is reserved is the second half of the runaway**, and it is worth
+    /// writing down. It used to be reserved with `.padding(.top, sky.size.height −
+    /// tallestCard(sky.size))` on a card sitting *inside* the sky's own `ZStack`. So the
+    /// card's height was a function of the sky's height, and the sky's height was measured
+    /// from the stack the card was in — a ring with a gain of one. Opening a card grew the
+    /// screen by fifty-two points, and then by fifty-two more, without limit; the field
+    /// spread with it, which is what "zooming in without end" actually was. The card is now
+    /// an **overlay**, which is proposed the stack's size and can never change it.
+    ///
+    /// **The arithmetic is the other half, and the overlay does not excuse it.** This number
+    /// bounds the card's *whole* height, its own padding included — the scrolling branch in
+    /// ``ConstellationCard`` therefore takes the gutter out of it rather than adding it on
+    /// top. Structurally the ring is already broken and stays broken; but a card that
+    /// overruns this still overhangs its band on the glass, and the height it reports back
+    /// through `onHeight` is what ``skyline(forCardOf:in:chrome:)`` pans against, so the sky
+    /// would lift a selection further than it needs to.
+    static func tallestCard(in size: CGSize, chrome: ConstellationChrome = .none) -> CGFloat {
+        max(200, size.height / 2 - chrome.bottom - SylTheme.Metric.step)
     }
 }
 

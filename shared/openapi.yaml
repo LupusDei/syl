@@ -122,6 +122,7 @@ tags:
   - name: auth
   - name: conversation
   - name: attachments
+  - name: sendings
   - name: reminders
   - name: todos
   - name: goals
@@ -440,6 +441,112 @@ paths:
         default: { $ref: "#/components/responses/Error" }
 
   # ----------------------------------------------------------- reminders ---
+  # ------------------------------------------------------------ sendings ---
+  /sendings:
+    get:
+      tags: [sendings]
+      operationId: listSendings
+      summary: Everything she has sent him, newest first.
+      description: |
+        The surface the app calls **From Syl**. The internal noun is a
+        *sending*; the screen says the other thing, and the two are allowed to
+        differ — one is what the code calls it, the other is what a person
+        reads at the top of a screen.
+
+        A sending is one thing with two parts: **the words** she wanted to say,
+        and **the video** of her saying them. The words are already in the
+        conversation and already carried the notification by the time a row
+        appears here; `messageId` points at them. The video is what this
+        surface adds, and it may not be here yet or may never come — see
+        `state`.
+
+        This is deliberately **not a gallery of renders**. A grid of every
+        experiment separates the picture from the reason it was made. Her
+        experiments live in her memory with what she thought of them; a sending
+        is the small number she chose to give him.
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of sendings, newest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/SendingPage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [sendings]
+      operationId: createSending
+      summary: Say something to him, in her own face.
+      description: |
+        **Answers as soon as the words are his**, exactly as `POST /renders`
+        does — it does not wait for a video. The words are appended to the
+        conversation and the notification is enqueued inside this call; the
+        render is compressed, poster-framed and attached afterwards, and the
+        row moves from `pending` to `ready` or `failed` on its own.
+
+        That ordering is the whole point and it is structural rather than a
+        code path somebody has to remember: **a failed or still-generating
+        render cannot swallow what she wanted to say.** A late video is a
+        disappointment; words that vanished because their decoration did would
+        be the thing constraint 4 exists to forbid.
+
+        `201` therefore means *the words are delivered*, never *the video is
+        ready*. A caller that wants the video polls `GET /sendings/{sendingId}`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSendingRequest" }
+      responses:
+        "201":
+          description: |
+            The words are in the conversation and the notification is enqueued.
+            `state` is `pending` when a render was named, `failed` when one was
+            named and could not be started.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Sending" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /sendings/{sendingId}:
+    get:
+      tags: [sendings]
+      operationId: getSending
+      summary: One sending.
+      description: |
+        There is no `DELETE`, and there is no `PATCH`. Not an omission — the
+        database refuses both. See `Sending`.
+      parameters:
+        - $ref: "#/components/parameters/SendingId"
+      responses:
+        "200":
+          description: The sending.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/Sending" }
+        default: { $ref: "#/components/responses/Error" }
+
   /reminders:
     get:
       tags: [reminders]
@@ -1402,6 +1509,11 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/Id" }
+    SendingId:
+      name: sendingId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
     ReminderId:
       name: reminderId
       in: path
@@ -1914,10 +2026,21 @@ components:
         hasThumbnail:
           type: boolean
           description: |
-            Whether `?variant=thumb` will answer with bytes. False for every
-            video, and false for an image the service could not downscale.
+            Whether `?variant=thumb` will answer with bytes. False for an image
+            the service could not downscale, and false for **an uploaded
+            video** — no macOS built-in extracts a frame, and a client that
+            wants one for its own clip uploads it alongside.
+
+            True for the video on a `Sending`, which is the exception and the
+            reason this field is worth reading rather than assuming. Those get
+            a poster pulled out of the clip with ffmpeg, so the From Syl list
+            shows her face.
+
             A client that asks for a thumbnail that does not exist gets `404`;
-            it must read this rather than probe.
+            it must read this rather than probe. Reading it also decides how
+            many bytes an inline cell costs: a client that treats `false` as
+            "fetch the original instead" pulls the whole clip to draw a play
+            triangle.
 
     CreateAttachmentRequest:
       type: object
@@ -1950,6 +2073,151 @@ components:
           type: integer
           minimum: 0
           description: Required for a video. Rejected on an image.
+
+    # --------------------------------------------------------- sendings ---
+    SendingState:
+      type: string
+      description: |
+        Where the **video** got to. It says nothing about the words, which
+        were delivered before this field had any value at all.
+
+        `pending` — a render is being followed, compressed, or poster-framed.
+        `ready`   — `video` is attached and playable.
+        `failed`  — there will be no video, and `reason` says why in a
+                    sentence. The words stand either way.
+
+        A client renders all three: a row with her words and the date is a
+        complete row. `failed` is not an error state to hide — it is the
+        honest one, and hiding it would be the silence this project refuses.
+      enum: [pending, ready, failed]
+
+    Sending:
+      type: object
+      required:
+        [id, words, because, messageId, state, renderName, video, reason, createdAt, updatedAt]
+      description: |
+        Something she wanted to say, in her own face.
+
+        ## The words are never contingent on the video
+
+        `words` and `messageId` are written before a render is asked about and
+        are never touched again. Whatever happens to the video, he has already
+        received what she wanted to say, and the push notification carried
+        **her sentence** — never *"Syl sent you a video"*, which would be a
+        notification about the app rather than from her.
+
+        ## Nothing can delete a sending
+
+        Not a cache eviction, not a cleanup job, not her. The `sendings` table
+        carries `BEFORE DELETE` and `BEFORE UPDATE` triggers that `RAISE(ABORT)`
+        unconditionally, and the message and attachment a sending points at are
+        guarded the same way, so the words and the video cannot be removed out
+        from under it either. There is **no named exception** — unlike the
+        memory tables, which admit one for the Commander's explicit order.
+        A belief the system holds about him is his to correct; a thing she
+        gave him is not the system's to take back.
+
+        The only writes the triggers permit are filling in what was not known
+        yet: `video`, `state`, `reason`, `updatedAt`.
+
+        ## The full-quality render is the record
+
+        `renderName` addresses the original mp4, which is never modified and
+        never compressed in place. `video` is a *derived, regenerable* copy,
+        made small enough to live under the attachment ceiling. Losing the
+        derived copy costs a re-encode; losing the record would cost the thing
+        itself.
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        words:
+          type: string
+          minLength: 1
+          description: |
+            What she wanted to say. Already in the conversation as an
+            assistant message, and already the body of the push.
+        because:
+          type: string
+          minLength: 1
+          description: |
+            Why she made it. Required, as on everything else she makes — the
+            reason travels with the thing, or he cannot tell a good one from a
+            wrong one, and neither can she. It is also what makes *"show me the
+            one about Ela"* answerable.
+        messageId:
+          $ref: "#/components/schemas/Id"
+          description: |
+            The assistant message carrying `words`. Always present: a sending
+            whose words never reached chat is not a sending.
+        state: { $ref: "#/components/schemas/SendingState" }
+        renderName:
+          type: [string, "null"]
+          description: |
+            The full-quality render this was made from — the record, never
+            modified, never re-pointed. Nullable only because the column is;
+            every sending this service writes names one.
+        video:
+          oneOf:
+            - { $ref: "#/components/schemas/Attachment" }
+            - { type: "null" }
+          description: |
+            The compressed, playable copy. Null until `state` is `ready`.
+
+            **`hasThumbnail` is true on this one**, which is the one place in
+            the contract a video's is. The poster is a frame pulled out of the
+            clip — never frame zero, because her loops open on empty starfield
+            and frame zero is nothing at all. So the list shows her face rather
+            than a generic video affordance, and a client fetching
+            `?variant=thumb` gets a small JPEG instead of the whole clip.
+        reason:
+          type: [string, "null"]
+          description: |
+            Why there is no video, when there is none. A sentence, never a
+            code. Null unless `state` is `failed`.
+        createdAt: { $ref: "#/components/schemas/Instant" }
+        updatedAt: { $ref: "#/components/schemas/Instant" }
+
+    SendingPage:
+      type: object
+      required: [items, nextCursor, hasMore]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Sending" }
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+
+    CreateSendingRequest:
+      type: object
+      required: [words, because, renderName]
+      properties:
+        words:
+          type: string
+          minLength: 1
+          maxLength: 32000
+          description: |
+            What she wants to say. Delivered to the conversation and carried by
+            the notification before anything is done about a video.
+        because:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Why she is sending it. Kept forever, alongside the words.
+        renderName:
+          type: string
+          minLength: 1
+          description: |
+            A render of hers to send, by name, or `latest`.
+
+            Required, and that is the definition rather than a validation
+            choice: a sending is *she says something and the form it takes is
+            her own face*. Words with no face is an ordinary message, and she
+            already has a conversation for those.
+
+            **Naming a render that does not exist, has not finished, or cannot
+            be compressed is still a `201`**, carrying `state: failed` and a
+            `reason`. It is deliberately not a `4xx`: a refusal here would
+            throw away words that had already been said, to complain about a
+            decoration. The caller learns what went wrong from the body.
 
     # ------------------------------------------------------- reminders ---
     ReminderKind:
@@ -1999,6 +2267,14 @@ components:
           id,
           kind,
           text,
+          # Required-and-nullable, like every other absent-able field on this
+          # schema, and for a reason `syl-y82` turns on: the server writes both
+          # keys on every reminder it returns, so `null` is a statement — "this
+          # row predates the record" — and a MISSING key is a bug. An optional
+          # field would let a reader conflate the two, which is the exact
+          # confusion the columns exist to end.
+          because,
+          origin,
           todoId,
           eventId,
           wallTime,
@@ -2536,9 +2812,25 @@ components:
         model could create arbitrary recurring jobs, a prompt injection
         inside an article becomes a job that speaks to him every morning.
 
-        Note the shape of the catalogue: the two kinds with a hard guarantee
-        attached, `reminder_delivery` and `maintenance`, are the two that use
-        no turns. That is not a coincidence.
+        Note the shape of the catalogue: `reminder_delivery` is the kind with
+        a hard guarantee attached, and it is the one that uses no turns. That
+        is not a coincidence.
+
+        **The catalogue is closed in the DATABASE too**, as a `CHECK` on
+        `jobs.kind` (`0007_jobs.sql`), and widening it is not a small change:
+        SQLite cannot alter a `CHECK` in place, and `runs.job_id` carries
+        `ON DELETE CASCADE`, so dropping and recreating `jobs` performs an
+        implicit `DELETE` that takes **every run record with it** — verified
+        against node:sqlite 3.51.3 before this note was written. The run
+        ledger is what the daily reaching-him ceiling is counted from, so a
+        new kind costs the history that bounds her.
+
+        `maintenance` is therefore the general-purpose scheduled kind, and it
+        carries the **render review**: the deferred self-wake that ends in her
+        decision about a render she started — is it finished, does it look
+        right, does she still want to send it (`jobs/render-review-job.ts`).
+        Most of its passes spend no turn at all; a render that is still going
+        is deferred, not discussed.
       enum:
         - reminder_delivery
         - morning_agenda
@@ -2980,7 +3272,14 @@ components:
     # ------------------------------------------------------------ sync ---
     SyncResourceType:
       type: string
-      enum: [conversation, message, reminder, todo, goal, device, delivery, job, run]
+      description: |
+        `sending` is on the feed and `attachment` is not, and the difference is
+        the rule: an attachment is never interesting on its own — a device
+        wants it exactly when it wants the message carrying it, and
+        `Message.attachments` is served inline. A sending has its own surface,
+        its own list and its own lifecycle after the message is written, so it
+        is the resource that changes when a video finally lands.
+      enum: [conversation, message, reminder, todo, goal, device, delivery, job, run, sending]
 
     SyncChangeOp:
       type: string

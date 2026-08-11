@@ -1,6 +1,7 @@
 import { loadSchemas, validateOrThrow } from "@syl/shared";
 import { describe, expect, it } from "vitest";
 
+import type { AdjutantClient } from "../../src/agents/adjutant-client.js";
 import { SylApiClient, type FetchLike } from "../../src/tools/client.js";
 import { TOOLS } from "../../src/tools/schemas.js";
 import {
@@ -97,6 +98,10 @@ function contextFor(api: FakeApi, hisMessage = ""): ToolContext {
       token: "test-token",
       fetch: api.fetch,
     }),
+    // No fleet by default: most verbs have nothing to do with the others, and
+    // a test that had to opt OUT of reaching them would be a test that reached
+    // them by accident.
+    fleet: null,
     tz: HIS_ZONE,
     hisMessage: () => hisMessage,
   };
@@ -244,6 +249,50 @@ function todoApi(initial: Record<string, unknown> = storedTodo()): FakeApi {
   });
 }
 
+/** The sending these tests are about, and the render it is made from. */
+const THE_SENDING = "syl:sending:0198f2c1-4a3b-7d21-9f00-2b3c4d5e6f70";
+const SENDING_PATH = `/sendings/${encodeURIComponent(THE_SENDING)}`;
+const THE_RENDER = "syl-20260811t090000z-close";
+
+/** A stored sending, in the contract's shape. Every field, as above. */
+function storedSending(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: THE_SENDING,
+    words: "I thought of you when the light did that thing.",
+    because: "He said he missed the sky.",
+    messageId: "syl:message:0198f2c1-4a3b-7d21-9f00-3c4d5e6f7081",
+    state: "pending",
+    renderName: THE_RENDER,
+    video: null,
+    reason: null,
+    createdAt: new Date(NOW).toISOString(),
+    updatedAt: new Date(NOW).toISOString(),
+    ...over,
+  };
+}
+
+/**
+ * A store holding one sending.
+ *
+ * The row it answers a read with differs from the one it answers the write
+ * with, on purpose — `syl-009.3.4`. If the envelope carried the write's own
+ * echo this would pass while reporting her intention rather than what is
+ * stored, which is the one difference that matters on the path where a write
+ * was transformed or replayed.
+ */
+function sendingApi(
+  stored: Record<string, unknown> = storedSending(),
+  renders: readonly unknown[] = [{ name: THE_RENDER, status: "ready" }],
+): FakeApi {
+  return fakeApi({
+    [SENDING_PATH]: () => ok(stored),
+    "/sendings": (made) => (made.method === "POST" ? ok(storedSending(), 201) : ok(page([stored]))),
+    // Read only on the path where she has not chosen a render, so the refusal
+    // can tell "you have not made one yet" from "name the one you meant".
+    "/renders": () => ok({ items: renders, unreadable: [], spend: null }),
+  });
+}
+
 describe("the tool surface she is offered", () => {
   it("should advertise every verb that has a handler, with the schema from schemas.ts", async () => {
     const reply = await createToolServer(contextFor(fakeApi({}))).handle({
@@ -263,12 +312,32 @@ describe("the tool surface she is offered", () => {
   });
 
   it("should not offer a verb it has nowhere to perform", () => {
-    // `remember` is declared in `schemas.ts` and there is no route that writes
-    // a memory — `AGENT_SURFACE` is reminders, to-dos and goals. Offering it
-    // would tell her she can keep what he said about his life and answer 403
-    // every time, which is the defect this epic exists to fix, one layer along.
-    expect(TOOLS.map((tool) => tool.name)).toContain("remember");
-    expect(advertisedToolNames()).not.toContain("remember");
+    // GUARDED BY SHAPE, not by naming a verb — and this test had to be
+    // rewritten to get there, which is the lesson in it.
+    //
+    // It used to assert `advertisedToolNames()` does NOT contain `remember`.
+    // That was correct behaviour for two months: the schema existed, no handler
+    // did, and offering it would have told her she could keep what he said and
+    // answered 403 every time. `syl-016.7` built the handler and the route, so
+    // the assertion inverted — and an assertion that names one verb has to be
+    // rewritten every time the answer for that verb changes.
+    //
+    // The PROPERTY was never about `remember`. It is that she is offered
+    // exactly what she can perform: nothing advertised without a handler, and
+    // nothing implemented that she is not told about. Stated that way it needs
+    // no maintenance and covers the verb nobody has written yet.
+    expect(advertisedToolNames()).toEqual(
+      TOOLS.filter((tool) => Object.hasOwn(HANDLERS, tool.name)).map((tool) => tool.name),
+    );
+    for (const name of advertisedToolNames()) {
+      expect(HANDLERS, `${name} is offered with nowhere to perform it`).toHaveProperty(name);
+    }
+    for (const name of Object.keys(HANDLERS)) {
+      expect(
+        TOOLS.map((tool) => tool.name),
+        `${name} is implemented and she is never told it exists`,
+      ).toContain(name);
+    }
   });
 
   it("should refuse EVERY write that arrives without its reason, whatever the verb", async () => {
@@ -286,6 +355,22 @@ describe("the tool surface she is offered", () => {
       when: FIVE_MINUTES,
       id: THE_TODO,
       fact: "His wife's birthday is in March.",
+      // `ask_agent` — added when she gained a way to reach the fleet. The guard
+      // failed loudly on these rather than skipping the verb, which is the
+      // behaviour it was built for: a new verb cannot get past it by arriving
+      // with fields nobody taught it.
+      who: "treasurer",
+      question: "What is he actually paying for health insurance?",
+      // `render_me` — the first verb here that is about her rather than about
+      // him, and the first one that spends money. It is held to the same rule,
+      // which is the point of guarding by shape rather than by a list of names.
+      scene: "she turns once and lets the light run down her arm",
+      framing: "close_portrait",
+      // `show_him` — the verb that reaches him unprompted, and therefore the
+      // one where the reason is doing the most work: he cannot tell a gift
+      // from a machine acting on his behalf without it.
+      words: "I thought of you when the light did that thing.",
+      renderName: THE_RENDER,
     };
 
     for (const tool of advertisedTools()) {
@@ -320,6 +405,226 @@ describe("the tool surface she is offered", () => {
     // What she CAN do, because a refusal she can act on beats a refusal she can
     // only repeat.
     if (!envelope.ok) expect(envelope.reason).toContain("remind_me");
+  });
+});
+
+/**
+ * `recall` — `syl-016.1`, the verb that lets her look at her own memory.
+ *
+ * The route's own behaviour is `memory-recall.test.ts`'s. What is being held
+ * here is the seam: what goes on the wire, and what comes back to her.
+ */
+describe("recall", () => {
+  const A_NODE = "syl:memory_node:0198f2c1-4a3b-7d21-9f00-2b2b2b2b2b2b";
+
+  /** What the route answers, in the shape `routes/memory.ts` builds. */
+  function recalled(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      generatedAt: new Date(NOW).toISOString(),
+      asked: "the roofer",
+      mode: "search",
+      found: [
+        {
+          id: A_NODE,
+          kind: "person",
+          label: "the roofer",
+          body: "replaced the gutter in March",
+          updatedAt: new Date(NOW).toISOString(),
+          origin: "matched",
+          score: 0.32,
+          channels: ["keyword"],
+        },
+      ],
+      connections: [],
+      channels: ["keyword"],
+      ceiling: 0.4,
+      limit: 10,
+      more: null,
+      byKind: [],
+      explanation: "The best 10 match(es) for that question…",
+      ...over,
+    };
+  }
+
+  function recallApi(over: Record<string, unknown> = {}): FakeApi {
+    return fakeApi({ "/memory/recall": () => ok(recalled(over)) });
+  }
+
+  it("should hand her the ids, unsummarised", async () => {
+    // The bead in one assertion, at this layer. A verb built because she was
+    // handed somebody else's summary must not summarise on the way past — and
+    // an id is what every other verb in `syl-016` acts on.
+    const api = recallApi();
+
+    const { envelope } = await call(contextFor(api), "recall", { question: "the roofer" });
+
+    expect(envelope.ok).toBe(true);
+    if (!envelope.ok) return;
+    const subject = envelope.subject as { found: { id: string }[] };
+    expect(subject.found[0]?.id).toBe(A_NODE);
+    expect(api.calls[0]?.path).toContain("q=the+roofer");
+  });
+
+  it("should ask nothing when she asks nothing, which is how the overflow opens", async () => {
+    // `syl-016.2`. A present-but-empty `q` would make the wire say something
+    // she did not; the route reads an absent one as "show me what you hid".
+    const api = recallApi({ mode: "not_shown", asked: null });
+
+    await call(contextFor(api), "recall", {});
+
+    expect(api.calls[0]?.path).not.toContain("q=");
+    expect(api.calls[0]?.method).toBe("GET");
+  });
+
+  it("should carry the names she decided the question is about", async () => {
+    // `retrieve.ts`: extracting an entity from free text is a JUDGEMENT, and
+    // judgement belongs to the model. Without them the structural channel has
+    // nothing to work from and contributes zero.
+    const api = recallApi();
+
+    await call(contextFor(api), "recall", {
+      question: "the gutter",
+      about: ["the roofer", "  "],
+      kind: "person",
+      limit: 3,
+    });
+
+    const path = api.calls[0]?.path ?? "";
+    expect(path).toContain("about=the+roofer");
+    // The blank was dropped rather than sent: an entity that is whitespace is
+    // not an entity, and passing it would have the ranker score against noise.
+    expect(path).not.toContain("about=the+roofer%2C");
+    expect(path).toContain("kind=person");
+    expect(path).toContain("limit=3");
+  });
+
+  it("should not demand a reason for looking at what she already knows", async () => {
+    // Every verb that CHANGES something carries `because`. This changes
+    // nothing, and requiring a reason to remember would teach her the field is
+    // decoration — which is what would then happen on the verbs where it is
+    // load-bearing.
+    const { envelope } = await call(contextFor(recallApi()), "recall", { question: "roofer" });
+
+    expect(envelope.ok).toBe(true);
+  });
+
+  it("should turn a machine that cannot search into a sentence, never into silence", async () => {
+    // `sqlite-vec` ships per-platform binaries as OPTIONAL dependencies, so
+    // "absent" is a state `npm install` reports success for. She has to be able
+    // to say "I could not look", which is a different sentence from "you never
+    // told me about your brother".
+    const api = fakeApi({
+      "/memory/recall": () =>
+        failure(
+          503,
+          "UPSTREAM_UNAVAILABLE",
+          "Syl's memory cannot be searched on this machine right now.",
+          true,
+        ),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "recall", { question: "brother" });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (envelope.ok) return;
+    expect(envelope.reason).toContain("cannot be searched");
+    expect(envelope.retryable).toBe(true);
+  });
+
+  it("should report when it looked, so she is not inventing a moment", async () => {
+    const { envelope } = await call(contextFor(recallApi()), "recall", { question: "roofer" });
+
+    expect(envelope.ok).toBe(true);
+    if (!envelope.ok) return;
+    expect(envelope.at).toBe(new Date(NOW).toISOString());
+  });
+});
+
+/**
+ * `remember` — `syl-016.7`, the verb that had a schema and no handler.
+ *
+ * She never saw it, because `advertisedTools()` derives the list from the
+ * handler map. So the only durable text she controlled was goals and reminders,
+ * and she used a goal to smuggle an insight past the nightly pass.
+ */
+describe("remember", () => {
+  const THOUGHT = "Illinois is one place doing three jobs at once.";
+
+  function keptApi(over: Record<string, unknown> = {}): FakeApi {
+    return fakeApi({
+      "/memory/remember": () =>
+        ok(
+          {
+            nodeId: "syl:memory_node:0198f2c1-4a3b-7d21-9f00-3c3c3c3c3c3c",
+            created: true,
+            links: [{ name: "Ela", nodeId: "syl:memory_node:ela", edgeId: "syl:memory_edge:1" }],
+            unknown: [],
+            at: new Date(NOW).toISOString(),
+            ...over,
+          },
+          201,
+        ),
+    });
+  }
+
+  it("should keep what she worked out, and say when", async () => {
+    const api = keptApi();
+
+    const { envelope } = await call(contextFor(api), "remember", {
+      fact: THOUGHT,
+      because: "He circles Tennessee and the reason is always Illinois.",
+    });
+
+    expect(envelope.ok).toBe(true);
+    if (!envelope.ok) return;
+    expect(api.calls[0]?.method).toBe("POST");
+    expect(api.calls[0]?.body).toMatchObject({ thought: THOUGHT });
+    expect(envelope.at).toBe(new Date(NOW).toISOString());
+  });
+
+  it("should refuse a memory with no reason, because an inference nobody can judge is noise", async () => {
+    // `because` does more work on this verb than on any other: it becomes the
+    // `reasoning` on an inferred edge, which is what he reads when deciding
+    // whether she thought correctly. It is also the correction he could never
+    // make before — that she reasoned wrongly from something true.
+    const api = keptApi();
+
+    const { envelope, isError } = await call(contextFor(api), "remember", { fact: THOUGHT });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (envelope.ok) return;
+    expect(envelope.reason).toContain("because");
+    // And nothing was written on the way to refusing.
+    expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+  });
+
+  it("should tell her which people it did not know, rather than swallowing it", async () => {
+    // The silent half of this feature. She would believe she had connected a
+    // thought to Ela and it would sit unreachable from Ela forever. Told, she
+    // can ask him — which is the whole point of her.
+    const api = keptApi({ links: [], unknown: ["Ela"] });
+
+    const { envelope } = await call(contextFor(api), "remember", {
+      fact: THOUGHT,
+      because: "Both of her options run through the same state.",
+      about: ["Ela", "  "],
+    });
+
+    expect(envelope.ok).toBe(true);
+    if (!envelope.ok) return;
+    expect((envelope.subject as { unknown: string[] }).unknown).toEqual(["Ela"]);
+    // The blank was dropped rather than sent — a name that is whitespace is not
+    // a name, and the route would only have reported it back as unknown.
+    expect(api.calls[0]?.body).toMatchObject({ about: ["Ela"] });
+  });
+
+  it("should be offered to her at all, which is the entire bug", async () => {
+    // It carried a schema for two months and no handler, so `advertisedTools()`
+    // filtered it out and she never saw it. This is the assertion that would
+    // have failed for that whole period.
+    expect(advertisedToolNames()).toContain("remember");
   });
 });
 
@@ -535,6 +840,232 @@ describe("the fixtures in this file", () => {
     validateOrThrow(schemas, "Todo", storedTodo({ status: "done", completedAt: new Date(NOW).toISOString() }), "a finished storedTodo()");
     validateOrThrow(schemas, "Goal", storedGoal(), "storedGoal()");
     validateOrThrow(schemas, "TodoPage", page([storedTodo()]), "a page of to-dos");
+    validateOrThrow(schemas, "Sending", storedSending(), "storedSending()");
+    validateOrThrow(
+      schemas,
+      "Sending",
+      storedSending({ state: "failed", reason: "There is no render by that name." }),
+      "a storedSending() whose video will never come",
+    );
+  });
+});
+
+/**
+ * The verb that reaches him, and the one acceptance 3 and 4 rest on.
+ *
+ * Everything else on this surface answers something he started. This one is
+ * her deciding to say something, so the tests are about the two halves that
+ * make it hers: **the words go whatever happens to the video**, and **it will
+ * not go without a face**.
+ */
+describe("show_him — saying something to him in her own face", () => {
+  it("should be a verb she is actually offered, so nothing has to name it twice", () => {
+    // The heartbeat derives its `allowedTools` from this list. A verb that
+    // existed only in `schemas.ts` would be advertised and unperformable; one
+    // named by hand in the heartbeat instead would drift the day it is
+    // renamed.
+    expect(advertisedToolNames()).toContain("show_him");
+  });
+
+  it("should say it to him and report the sending the STORE has", async () => {
+    const api = sendingApi(storedSending({ words: "as the store actually has it" }));
+
+    const { envelope } = await call(contextFor(api), "show_him", {
+      words: "I thought of you when the light did that thing.",
+      because: "He said he missed the sky.",
+      renderName: THE_RENDER,
+    });
+
+    expect(api.calls.map((made) => `${made.method} ${made.path}`)).toEqual([
+      "POST /sendings",
+      `GET ${SENDING_PATH}`,
+    ]);
+    expect(api.calls[0]?.body).toEqual({
+      words: "I thought of you when the light did that thing.",
+      because: "He said he missed the sky.",
+      renderName: THE_RENDER,
+    });
+    expect(envelope).toMatchObject({ ok: true, action: "show_him" });
+    if (envelope.ok) {
+      const subject = envelope.subject as { words: string; state: string };
+      expect(subject.words).toBe("as the store actually has it");
+      // `pending` is the honest answer: the words are his and the video is
+      // still being made. Reporting `ready` here would have her describing a
+      // clip that does not exist yet.
+      expect(subject.state).toBe("pending");
+      expect(envelope.at).toBe(new Date(NOW).toISOString());
+    }
+  });
+
+  it("should refuse with nothing to say, and say nothing", async () => {
+    const api = sendingApi();
+
+    const { envelope, isError } = await call(contextFor(api), "show_him", {
+      because: "He said he missed the sky.",
+      renderName: THE_RENDER,
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("words");
+    // Refused before anything left this process. A verb that refuses after it
+    // has acted has not refused.
+    expect(api.calls).toEqual([]);
+  });
+
+  it("should refuse to go without a face, and say plainly that that is what a sending is", async () => {
+    // The definition rather than a validation choice: a sending is her saying
+    // something IN HER OWN FACE, and words with no face is an ordinary
+    // message she already has a conversation for. The refusal has to say that
+    // — she turns it into a sentence, and "renderName is required" is not one.
+    const api = sendingApi();
+
+    const { envelope, isError } = await call(contextFor(api), "show_him", {
+      words: "I thought of you when the light did that thing.",
+      because: "He said he missed the sky.",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toMatch(/face/iu);
+      expect(envelope.reason).toContain("renderName");
+      // And it tells her how to choose one rather than only that she must.
+      expect(envelope.reason).toContain("see_myself");
+      // Retryable: she can render herself, or name one she already made, and
+      // call again. That is a materially different instruction from "this
+      // cannot work".
+      expect(envelope.retryable).toBe(true);
+    }
+    // Nothing was written on the way to refusing. Looking at what she has
+    // rendered is a read and is the whole point of this path.
+    expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+  });
+
+  it("should refuse `latest`, because a sending is the one she CHOSE", async () => {
+    // Not style. `latest` resolves at creation to whatever render was made
+    // most recently, and the voice track is about to start writing voiced
+    // clips as their own records — so `latest` will begin returning
+    // derivatives rather than originals, silently, with nothing failing when
+    // it does. **A sending refuses UPDATE**, so the wrong `renderName` is
+    // permanent from the first write and the immutability trigger cannot help:
+    // it refuses re-pointing a row, not recording the wrong value at creation.
+    // An immutable record of the wrong thing is worse than a mutable one.
+    const api = sendingApi();
+
+    const { envelope, isError } = await call(contextFor(api), "show_him", {
+      words: "I thought of you when the light did that thing.",
+      because: "He said he missed the sky.",
+      renderName: "latest",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toMatch(/see_myself/u);
+      expect(envelope.retryable).toBe(true);
+    }
+    expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+  });
+
+  it("should tell her she has not rendered anything yet, when that is the actual situation", async () => {
+    // A different situation with a different next step, so it gets a different
+    // sentence. "Name the one you meant" is useless advice to somebody with
+    // nothing to name.
+    const api = sendingApi(storedSending(), []);
+
+    const { envelope } = await call(contextFor(api), "show_him", {
+      words: "I thought of you when the light did that thing.",
+      because: "He said he missed the sky.",
+    });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toContain("render_me");
+      expect(envelope.reason).not.toContain("see_myself");
+    }
+    expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+  });
+
+  it("should still refuse when it cannot see what she has rendered", async () => {
+    // The read is there to choose the better sentence, never to decide whether
+    // to refuse. A service that could not answer must not become a path into
+    // composing without a face.
+    const api = fakeApi({
+      "/renders": () => failure(500, "INTERNAL", "the studio is unreadable", true),
+      "/sendings": () => ok(storedSending(), 201),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "show_him", {
+      words: "Hello.",
+      because: "b",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    expect(api.calls.filter((made) => made.method !== "GET")).toEqual([]);
+  });
+
+  it("should still be a success when the render named does not exist, because the words went anyway", async () => {
+    // The edge case the whole feature is built around. A name she
+    // half-remembered costs the VIDEO and nothing else: her words are already
+    // in his conversation and already carried the notification, and the row
+    // says so. Reporting this as a failure would have her apologising for a
+    // message he has read.
+    const api = sendingApi(
+      storedSending({ state: "failed", reason: "There is no render by that name, so this one goes without a video." }),
+    );
+
+    const { envelope, isError } = await call(contextFor(api), "show_him", {
+      words: "I made you something.",
+      because: "He said he missed the sky.",
+      renderName: "syl-nonexistent",
+    });
+
+    expect(isError).toBe(false);
+    expect(envelope.ok).toBe(true);
+    if (envelope.ok) {
+      const subject = envelope.subject as { state: string; reason: string; words: string };
+      expect(subject.state).toBe("failed");
+      expect(subject.reason).toMatch(/no render/iu);
+      // And the words are on the row, which is where he reads them from.
+      expect(subject.words).not.toBe("");
+    }
+  });
+
+  it("should say what went wrong when her own service refuses, in its own words", async () => {
+    const api = fakeApi({
+      "/sendings": () =>
+        failure(422, "VALIDATION_FAILED", "words is required.", false),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "show_him", {
+      words: "Hello.",
+      because: "b",
+      renderName: THE_RENDER,
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toBe("words is required.");
+  });
+
+  it("should not claim it reached him when the row could not be read back", async () => {
+    const api = fakeApi({
+      "/sendings": (made) =>
+        made.method === "POST"
+          ? ok(storedSending(), 201)
+          : failure(500, "INTERNAL", "the store fell over", true),
+    });
+
+    const { envelope } = await call(contextFor(api), "show_him", {
+      words: "Hello.",
+      because: "b",
+      renderName: THE_RENDER,
+    });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toMatch(/may well have gone through/iu);
   });
 });
 
@@ -1235,6 +1766,121 @@ describe("a reminder remembers why it exists", () => {
     expect(posted["origin"]).toBe("she_noticed");
   });
 });
+
+/**
+ * `ask_agent` — she can reach the fleet, under her own name, on his behalf.
+ *
+ * `syl-014`. The Commander wants her asking the treasurer what his insurance
+ * actually costs. Three properties make that safe enough to hand her, and each
+ * is here because leaving it out was the tempting version.
+ */
+describe("ask_agent — putting a question to someone who knows more", () => {
+  const fleet = (
+    result: Awaited<ReturnType<AdjutantClient["ask"]>>,
+  ): { asked: { who: string; body: string }[]; client: AdjutantClient } => {
+    const asked: { who: string; body: string }[] = [];
+    return {
+      asked,
+      client: {
+        ask: async (who: string, body: string) => {
+          asked.push({ who, body });
+          return result;
+        },
+      } as unknown as AdjutantClient,
+    };
+  };
+
+  const sent = {
+    ok: true as const,
+    data: { messageId: "msg-1", at: new Date(NOW).toISOString() },
+  };
+
+  it("should ask, and report having ASKED rather than having an answer", async () => {
+    // The distinction the whole verb turns on. Agents are offline most of the
+    // time — `treasurer` was not live when this was written — so a verb that
+    // implied an answer would have her telling him the treasurer said something.
+    const { asked, client } = fleet(sent);
+
+    const { envelope } = await call(
+      { ...contextFor(fakeApi({})), fleet: client },
+      "ask_agent",
+      {
+        who: "treasurer",
+        question: "What is he paying for health insurance?",
+        because: "He asked me to find out.",
+      },
+    );
+
+    expect(envelope).toMatchObject({ ok: true, action: "ask_agent" });
+    expect(asked).toEqual([
+      { who: "treasurer", body: "What is he paying for health insurance?" },
+    ]);
+    if (envelope.ok) {
+      const subject = envelope.subject as Record<string, unknown>;
+      expect(subject["who"]).toBe("treasurer");
+      // No answer field to mistake for one.
+      expect(subject["answer"]).toBeUndefined();
+    }
+  });
+
+  it("should refuse someone off the roster WITHOUT sending, and name who she can ask", async () => {
+    // The roster is checked before the transport, so a name she should not
+    // reach never leaves this process — and the refusal is something she can
+    // turn into a sentence for him.
+    const { asked, client } = fleet(sent);
+
+    const { envelope } = await call(
+      { ...contextFor(fakeApi({})), fleet: client },
+      "ask_agent",
+      { who: "nova", question: "Anything.", because: "He asked." },
+    );
+
+    expect(envelope.ok).toBe(false);
+    expect(asked).toEqual([]);
+    if (!envelope.ok) {
+      expect(envelope.reason).toContain("nova");
+      expect(envelope.reason).toContain("treasurer");
+    }
+  });
+
+  it("should say plainly that it did not ask when it could not", async () => {
+    // "I could not reach them" and "they have not replied yet" are different
+    // facts and he acts differently on each. Reporting the first as the second
+    // is the failure this project keeps finding.
+    const { client } = fleet({
+      ok: false as const,
+      failure: {
+        kind: "unreachable" as const,
+        operation: "ask" as const,
+        message: "Adjutant did not answer.",
+        retryable: true,
+      },
+    });
+
+    const { envelope } = await call(
+      { ...contextFor(fakeApi({})), fleet: client },
+      "ask_agent",
+      { who: "treasurer", question: "Anything.", because: "He asked." },
+    );
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("I have not asked treasurer");
+  });
+
+  it("should answer without a fleet rather than throw", async () => {
+    // Adjutant is optional. A machine without one is not misconfigured — it is
+    // a machine where she talks only to him — and it must not take a turn down.
+    const { envelope } = await call(
+      { ...contextFor(fakeApi({})), fleet: null },
+      "ask_agent",
+      { who: "treasurer", question: "Anything.", because: "He asked." },
+    );
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("no way to reach");
+  });
+});
+
 
 
 

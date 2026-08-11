@@ -228,8 +228,8 @@ const DEFAULT_BASE_PATH = "/api/v1";
  * opposite default — reachable by her until somebody remembered — which is a
  * boundary that erodes by inaction.
  *
- * The three here are the product's own nouns, and the ones she was given hands
- * for. What is deliberately absent is worth naming:
+ * The entries here are the product's own nouns, and the ones she was given
+ * hands for. What is deliberately absent is worth naming:
  *
  * - **`/logs`.** It is the record of everything she did on his machine. An
  *   assistant that can read her own audit trail can also tell you what is in
@@ -282,7 +282,88 @@ export const anyAuthenticatedDevice: RequestHandler = (_request, _response, next
   next();
 };
 
-export const AGENT_SURFACE: readonly string[] = ["/reminders", "/todos", "/goals"];
+/** One surface she may reach, and what it is called when she has to say so. */
+export interface AgentSurface {
+  /** The path prefix under the base path. Matched on segment boundaries. */
+  readonly path: string;
+  /** What it is, in the words she would use to the Commander. */
+  readonly says: string;
+}
+
+/**
+ * Everything the `agent` scope may reach, with the name each one goes by.
+ *
+ * **A pair rather than a bare path, because the refusal has to name them.**
+ * {@link beyondAgentReach} used to carry the sentence "reminders, to-dos and
+ * goals" as a hand-written string beside this list, which is the exact shape
+ * `docs/CONTEXT.md` §8 catalogues seven times over: a claim stated twice, going
+ * stale on the day the other half moves, and failing as a fluent sentence that
+ * no assertion can see. Widening the list without touching the sentence would
+ * have had her telling him she cannot search her own memory while doing it.
+ * Now the sentence is a function of the list, so there is nothing to keep in
+ * step.
+ *
+ * ## `/memory/recall`, and why it is that and not `/memory` — `syl-016.1`
+ *
+ * She diagnosed the gap herself: *"I can't even see the nodes. I see a summary
+ * someone else chose for me."* The retrieval kernels, the FTS5 index and the
+ * graph view all existed and none of them was reachable from her hands, so the
+ * only memory she had was a digest somebody else had ranked for her — and no
+ * way to obtain the id that every corrective verb in `syl-016` needs.
+ *
+ * **The entry is the one route and not the router**, and that is the whole of
+ * the security argument. `/memory` would also have handed her:
+ *
+ * - `POST /memory/edges/{id}/feedback`, which moves the weight of an edge in
+ *   her own memory. An assistant that can confirm and reject her own inferences
+ *   can groom what she will be shown tomorrow, and the graph stops being
+ *   evidence about her for the same reason `/logs` would. This is the one that
+ *   decides it.
+ * - `GET /memory/graph` and `/memory/metrics`, instruments built for the
+ *   Commander to judge the inferred engine — every night's cost, token spend
+ *   and outcome. Telemetry about her own reflection is the dream-log half of
+ *   constraint 7, and it is not memory.
+ *
+ * A read of her own memory is her own data and the thing she is FOR. Grading
+ * it, and reading the record of her own nights, are not. The prefix match is on
+ * segment boundaries (`withinAgentSurface`), so this opens exactly one route.
+ */
+export const AGENT_SURFACES: readonly AgentSurface[] = [
+  { path: "/reminders", says: "reminders" },
+  { path: "/todos", says: "to-dos" },
+  { path: "/goals", says: "goals" },
+  // No comma inside a `says`: these are spliced into one sentence, and an
+  // internal comma turns "her own memory, to search it and read it back, her
+  // own renders" into a list nobody can parse. The derivation exposed it — the
+  // hand-written sentence never had to survive being joined to anything.
+  { path: "/memory/recall", says: "her own memory" },
+  // HER FIRST WRITE INTO HER OWN MEMORY — `syl-016.7`, and the only entry on
+  // this list that is not a read.
+  //
+  // The Commander: *"She's definitely gonna need a way to make her own
+  // memories. That's kind of a ridiculous limitation."* Without it the only
+  // durable text she controlled was goals and reminders, and she used a GOAL to
+  // smuggle an insight past the night rather than lose it.
+  //
+  // **The bound is the object behind the route, not this list.** `HerOwnMemory`
+  // creates a `memory` node and `inferred` links to entities that already
+  // exist. It has no method that deletes, supersedes, relabels, moves a weight
+  // or mints a person — so "she cannot invent people" and "she cannot groom her
+  // own recall" are held by the type rather than by a handler remembering to be
+  // careful. `POST /memory/edges/{id}/feedback` is one route away and stays out
+  // of reach, which is the line that matters: **she may add what she concluded,
+  // and she may not adjust what she will be shown for concluding it.**
+  //
+  // Nothing written through it can claim he said anything. The node is `memory`
+  // and never `fact`; every link is `inferred` and never `observed`, and
+  // `observed` is the species carrying `assertedBy`. Extraction's criterion 3
+  // is untouched and she still cannot fabricate a fact about him.
+  { path: "/memory/remember", says: "her own memory, to add what she works out" },
+  { path: "/renders", says: "her own renders" },
+  { path: "/sendings", says: "the things she has sent him" },
+];
+
+export const AGENT_SURFACE: readonly string[] = AGENT_SURFACES.map((surface) => surface.path);
 
 /**
  * The refusal Syl gets for reaching outside her own nouns.
@@ -297,11 +378,18 @@ export const AGENT_SURFACE: readonly string[] = ["/reminders", "/todos", "/goals
 export function beyondAgentReach(path: string): ApiFailure {
   return new ApiFailure(
     "FORBIDDEN",
-    "Syl's own credential reaches reminders, to-dos and goals, and nothing else on this API. " +
-      `${path} is outside that, deliberately — she cannot pair a device, read the log of what ` +
-      "she has done, or change where a notification goes.",
+    // DERIVED from the list, never written beside it. See `AGENT_SURFACES`.
+    `Syl's own credential reaches ${prose(AGENT_SURFACES.map((surface) => surface.says))}, and ` +
+      `nothing else on this API. ${path} is outside that, deliberately — she cannot pair a ` +
+      "device, read the log of what she has done, or change where a notification goes.",
     { details: { reach: AGENT_SURFACE } },
   );
+}
+
+/** `a, b and c`. An Oxford-comma-free list, because she says this out loud. */
+function prose(items: readonly string[]): string {
+  if (items.length <= 1) return items[0] ?? "nothing";
+  return `${items.slice(0, -1).join(", ")} and ${String(items.at(-1))}`;
 }
 
 export interface ConfineAgentOptions {

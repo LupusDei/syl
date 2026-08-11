@@ -727,6 +727,10 @@ final class SyncEngineTests: XCTestCase {
                 "id": .string(id),
                 "kind": .string("commitment"),
                 "text": .string("Call the pharmacy — the refill lapses today."),
+                // Required-and-nullable, so the keys are present even when the
+                // values are not. Mirrors `http/reminder.commitment.json`.
+                "because": .string("you asked me to chase it after you said the refill lapses today"),
+                "origin": .string("he_asked"),
                 "todoId": .null,
                 "eventId": .null,
                 "wallTime": .string("16:00"),

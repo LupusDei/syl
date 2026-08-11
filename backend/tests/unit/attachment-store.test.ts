@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -349,6 +349,132 @@ describe("AttachmentStore", () => {
       const attachment = store.create({ kind: "image", declaredMime: "image/png", data: png() });
 
       expect(store.open(attachment.id, "thumb")).toBeNull();
+    });
+  });
+
+  /**
+   * A poster frame supplied by the caller.
+   *
+   * `hasThumbnail` was false for every video, because no macOS built-in
+   * extracts a frame and this store deliberately spawns nothing but `sips`.
+   * A sending's video needs one — the From Syl list has to show her face
+   * rather than a generic video affordance — and pulling it needs ffmpeg.
+   *
+   * So the bytes are handed in rather than made here. The store's job is
+   * bytes; a store that shells out to a video toolchain is a store with a new
+   * dependency and a new failure mode, and `services/sending-media.ts` already
+   * owns that seam.
+   */
+  describe("a video's poster frame", () => {
+    /**
+     * A clip of a realistic size.
+     *
+     * The bare `mp4()` fixture is a 24-byte box header, which is *smaller than
+     * a JPEG*, so every poster against it is correctly discarded as not worth
+     * keeping. A real clip is megabytes; padding makes the fixture answer the
+     * question these tests are actually asking.
+     */
+    const clip = (): Buffer => Buffer.concat([mp4(), Buffer.alloc(64 * 1024)]);
+
+    it("should be served as the thumbnail variant, so hasThumbnail is true for that video", () => {
+      const store = build(neverThumbnails);
+      const attachment = store.create({
+        kind: "video",
+        declaredMime: "video/mp4",
+        data: clip(),
+        width: 484,
+        height: 720,
+        durationMs: 15_040,
+        poster: jpeg(320, 480),
+      });
+
+      expect(attachment.hasThumbnail).toBe(true);
+      const opened = store.open(attachment.id, "thumb");
+      expect(opened?.mimeType).toBe("image/jpeg");
+      expect(opened?.bytes).toBe(jpeg(320, 480).length);
+      close(opened);
+    });
+
+    it("should leave a video with no poster exactly as it was", () => {
+      // Every video uploaded from the phone still takes this path.
+      const store = build(neverThumbnails);
+      const attachment = store.create({
+        kind: "video",
+        declaredMime: "video/mp4",
+        data: clip(),
+        width: 100,
+        height: 200,
+        durationMs: 1,
+      });
+
+      expect(attachment.hasThumbnail).toBe(false);
+      expect(store.open(attachment.id, "thumb")).toBeNull();
+    });
+
+    it("should refuse a poster that is not a JPEG", () => {
+      // Sniffed, never believed — the same rule the whole module is built on.
+      // A PNG here would be served under `image/jpeg` and fail to decode on
+      // the phone, which reads as a broken video rather than a bad poster.
+      const store = build(neverThumbnails);
+      expect(() =>
+        store.create({
+          kind: "video",
+          declaredMime: "video/mp4",
+          data: clip(),
+          width: 100,
+          height: 200,
+          durationMs: 1,
+          poster: png(4, 4),
+        }),
+      ).toThrow(/poster/i);
+    });
+
+    it("should refuse a poster on an image, which makes its own", () => {
+      const store = build(neverThumbnails);
+      expect(() =>
+        store.create({
+          kind: "image",
+          declaredMime: "image/png",
+          data: png(400, 300),
+          poster: jpeg(),
+        }),
+      ).toThrow(/poster/i);
+    });
+
+    it("should discard a poster no smaller than the clip it previews", () => {
+      // Same rule as a thumbnail, and it matters more here: the entire reason
+      // the poster exists is that fetching the clip to draw a still costs
+      // megabytes on cellular. A poster that is not cheaper is not a poster.
+      const store = build(neverThumbnails);
+      const attachment = store.create({
+        kind: "video",
+        declaredMime: "video/mp4",
+        data: clip(),
+        width: 100,
+        height: 200,
+        durationMs: 1,
+        poster: Buffer.concat([jpeg(), Buffer.alloc(128 * 1024)]),
+      });
+
+      expect(attachment.hasThumbnail).toBe(false);
+      expect(store.open(attachment.id, "thumb")).toBeNull();
+    });
+
+    it("should leave no poster behind when the row cannot be written", () => {
+      // The store's standing rule: a refused upload leaves no trace. A poster
+      // on disk that no row points at is a byte nobody will ever delete.
+      const store = build(neverThumbnails);
+      const first = store.create({
+        kind: "video",
+        declaredMime: "video/mp4",
+        data: clip(),
+        width: 100,
+        height: 200,
+        durationMs: 1,
+        poster: jpeg(),
+      });
+      expect(first.hasThumbnail).toBe(true);
+      expect(readdirSync(directory).filter((name) => name.endsWith(".thumb.jpg"))).toHaveLength(1);
     });
   });
 

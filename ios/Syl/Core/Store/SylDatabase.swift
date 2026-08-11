@@ -316,6 +316,42 @@ struct SylDatabase: Sendable {
             }
         }
 
+        // `syl-015.4.2`. What she sent him, kept.
+        migrator.registerMigration("v6-a-sending-is-kept-not-cached") { db in
+            // **Rows, not one snapshot — and the constellation's reasoning is why.**
+            //
+            // The sky is stored whole because it is a bounded REGION whose membership
+            // changes silently: a star that drops out produces no event, so an upsert
+            // would grow a local sky the server would never draw. None of that is true
+            // here. A sending is an immutable row with a server id that is created and
+            // then only ever completed — `video`, `state`, `reason` filled in when the
+            // render lands — and one that is not on the newest page has not left any
+            // region, it is simply older.
+            //
+            // **So nothing on this device deletes one either.** Acceptance item 6 is a
+            // property of the whole system rather than of the service's triggers, and a
+            // store that mirrored a page by removing what the page did not mention
+            // would throw away the oldest thing she gave him every time she sent a new
+            // one. Rows are written and replaced by id; there is no path here that
+            // removes one, and `LocalStore.tableName(for:)` answers nil for `.sending`
+            // so the sync feed's delete path has no table to reach either.
+            try db.create(table: "sending") { table in
+                table.primaryKey("id", .text).collate(.nocase)
+                // The list's whole order, and the service's own: newest first, ties
+                // broken on the id. Indexed because it is the only query this table has.
+                table.column("createdAt", .datetime).notNull()
+                // `pending` is the one state that has to be found again cheaply: the
+                // video lands minutes later and the device learns of it by asking.
+                table.column("state", .text).notNull()
+                table.column("payload", .blob).notNull()
+            }
+            try db.create(
+                index: "sending_on_createdAt",
+                on: "sending",
+                columns: ["createdAt"]
+            )
+        }
+
         return migrator
     }
 

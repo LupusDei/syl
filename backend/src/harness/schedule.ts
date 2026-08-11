@@ -177,6 +177,46 @@ export function nextDailyOccurrence(spec: string, from: Date, timeZone: string):
   return resolveLocalDateTime(addLocalDays(today, 1), time, timeZone);
 }
 
+/**
+ * The calendar date an instant falls on, in a zone, as `YYYY-MM-DD`.
+ *
+ * For anything counted "per day" — a ceiling on how often she reaches him, a
+ * ledger that must not bank what yesterday did not spend. A day counted in UTC
+ * turns over at 19:00 or 18:00 local, so his whole evening lands on tomorrow's
+ * tally and a twice-a-day rate quietly becomes four.
+ *
+ * Zero-padded, so the strings compare and sort exactly as the dates do and no
+ * caller ever has to parse one back.
+ */
+export function localDate(instant: Date, timeZone: string): string {
+  const p = partsInZone(instant, timeZone);
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${String(p.year).padStart(4, "0")}-${pad(p.month)}-${pad(p.day)}`;
+}
+
+/**
+ * The instant as HE would read it: his weekday, his date, his 24-hour clock.
+ *
+ * For the prompts of unattended turns, which have to state the hour they are in
+ * before they can reason about it. Lives here rather than beside any one job
+ * because two of them now need it and a second copy of an `Intl` format is a
+ * second place for the hour to be rendered differently.
+ *
+ * 24-hour and zone-aware on purpose: a turn handed "2:00" cannot tell morning
+ * from afternoon, and a turn handed UTC converts it wrongly.
+ */
+export function wallClockIn(instant: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(instant);
+}
+
 function minutesOfDay(instant: Date, timeZone: string): number {
   const p = partsInZone(instant, timeZone);
   return p.hour * 60 + p.minute;

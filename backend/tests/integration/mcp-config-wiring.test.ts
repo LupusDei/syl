@@ -4,7 +4,7 @@ import { join, sep } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { LANES, SylAgent, memorySessionStore } from "../../src/harness/agent.js";
+import { LANES, LANES_WITH_HANDS, SylAgent, memorySessionStore } from "../../src/harness/agent.js";
 import { NO_HANDS_YET } from "../../src/harness/capability.js";
 import { runTurn, type TurnOptions } from "../../src/harness/session.js";
 import { bootstrap } from "../../src/index.js";
@@ -20,7 +20,12 @@ import { BACKEND_SRC } from "../helpers/sql-tables.js";
  * `syl-009` gives Syl hands: an MCP server that can write reminders, to-dos and
  * goals on the Commander's machine, attached to a turn that already runs
  * `--permission-mode bypassPermissions`. The whole safety argument for that is
- * *which turns get it* — the commander lane, and nothing else.
+ * *which turns get it* — the lanes named in `LANES_WITH_HANDS`, and nothing
+ * else. That list is one entry longer than it was (`syl-hb` gives the hourly
+ * self-ping hands, because an hour that cannot act is an hour that can only
+ * report to nobody); the point of this file is that growing it has to be a
+ * deliberate edit with a name and a reason on it, which is what going red is
+ * for.
  *
  * This is not a hypothetical risk, it is a repeat. `--strict-mcp-config` was
  * off once, every turn inherited the repository's own `.mcp.json`, and the
@@ -66,18 +71,23 @@ import { BACKEND_SRC } from "../helpers/sql-tables.js";
  * other.
  */
 const MAY_HAND_OUT_THE_TOOLS: readonly string[] = [
-  // `index.ts`, and it serves the COMMANDER lane and no other.
+  // `index.ts`, and it serves the lanes named in `LANES_WITH_HANDS`.
   //
-  // `syl-009.3.3` has landed, so this entry now means what it was declared to
-  // mean: `bootstrap` builds `SylAgent.turnOptions` as a FUNCTION OF THE LANE,
-  // and `handsFor` returns the declaration for `LANES.commander` and
+  // `syl-009.3.3` has landed, so this entry means what it was declared to mean:
+  // `bootstrap` builds `SylAgent.turnOptions` as a FUNCTION OF THE LANE, and
+  // `handsFor` returns the declaration for a lane in `LANES_WITH_HANDS` and
   // `undefined` for every other lane. That is the whole containment argument,
   // made in one function, in one file — which is why this list must stay at one
-  // entry.
+  // entry even though the list of LANES it serves has grown to two.
   //
-  // The other lanes get nothing: the dream must not be able to write a reminder
-  // while judging what matters, the heartbeat and agenda read rather than act,
-  // and the extraction turn is a sealed reader that never reaches this object.
+  // **A file and a lane are different questions, and this file asks both.**
+  // This list is the first: how many places in the source can attach a surface
+  // at all. `which lane the service actually gives them to`, below, is the
+  // second, and it is where the heartbeat's entry has to be argued for.
+  //
+  // The remaining lanes get nothing: the dream must not be able to write a
+  // reminder while judging what matters, the agenda reads rather than acts, and
+  // the extraction turn is a sealed reader that never reaches this object.
   //
   // `startSyl` also names the option indirectly — it writes the file the path
   // points at, once the port is known — and that is the same file and the same
@@ -247,10 +257,11 @@ describe("which lane the service actually gives them to", () => {
    * The other half of this file, and the half the static scan cannot reach.
    *
    * `MAY_HAND_OUT_THE_TOOLS` proves only ONE FILE can attach a surface. It
-   * cannot prove that file attaches it to one lane, and "index.ts hands out
-   * tools" would still be true of a version that handed them to all four. So
+   * cannot prove which lanes that file attaches it to, and "index.ts hands out
+   * tools" would still be true of a version that handed them to all five. So
    * this drives the real `bootstrap`, on a real home, and asks each lane what
-   * it was carrying.
+   * it was carrying — every lane in `LANES`, so a new one cannot slip in
+   * untested.
    */
   interface LaneProbe {
     /** Take a turn on `lane` and remember the options it carried. */
@@ -286,25 +297,32 @@ describe("which lane the service actually gives them to", () => {
     return home;
   }
 
-  it("should be the commander lane, and no other", async () => {
+  it("should be exactly the lanes declared to have hands, and no other", async () => {
+    // Three now: his own conversation, the hourly self-ping (`syl-hb`) and the
+    // morning brief. Each widening was argued where the list lives. It is
+    // stated as a list rather than as three names so that this test asks the
+    // real question — *does the wiring match the declaration* — rather than
+    // restating today's answer.
     const home = aHome();
     const lanes = lanesOf(home);
 
     try {
-      for (const lane of [LANES.commander, LANES.heartbeat, LANES.agenda, LANES.consolidation]) {
-        await lanes.record(lane);
+      for (const lane of Object.values(LANES)) await lanes.record(lane);
+
+      for (const lane of LANES_WITH_HANDS) {
+        // Under her home, absolute, from configuration. A path into this source
+        // tree would reattach her to the workshop through the one door that is
+        // deliberately open, and `ops/container.ts` refuses to boot on one.
+        const given = lanes.options.get(lane)?.mcpConfig;
+        expect(given, `${lane} was declared to have hands and got none`).toBe(toolConfigPath(home));
+        expect(given?.startsWith(home)).toBe(true);
       }
 
-      // Under her home, absolute, from configuration. A path into this source
-      // tree would reattach her to the workshop through the one door that is
-      // deliberately open, and `ops/container.ts` refuses to boot on one.
-      const commander = lanes.options.get(LANES.commander)?.mcpConfig;
-      expect(commander).toBe(toolConfigPath(home));
-      expect(commander?.startsWith(home)).toBe(true);
-
       // The dream must not be able to write a reminder while judging what
-      // matters; the heartbeat and the agenda read rather than act.
-      for (const lane of [LANES.heartbeat, LANES.agenda, LANES.consolidation]) {
+      // matters; the extraction turn is a sealed reader over text he may have
+      // pasted from anywhere.
+      for (const lane of Object.values(LANES)) {
+        if (LANES_WITH_HANDS.includes(lane)) continue;
         expect(lanes.options.get(lane)?.mcpConfig, `${lane} was given hands`).toBeUndefined();
         expect(lanes.options.get(lane)?.strictMcpConfig).toBe(true);
       }
@@ -313,25 +331,30 @@ describe("which lane the service actually gives them to", () => {
     }
   });
 
-  it("should tell only that lane it can act, because only that lane can", async () => {
+  it("should tell each lane it can act only if it really can", async () => {
     // `--tools ""` empties the built-ins alone, so every lane here has an empty
-    // `tools` string and exactly one of them has hands. A capability section
+    // `tools` string and only some of them have hands. A capability section
     // derived from `tools` by itself would tell the commander lane it cannot
     // act while it is holding `remind_me` — `NO_HANDS_YET` becoming the lie it
-    // was written to prevent.
+    // was written to prevent — and, since the widening, would tell the
+    // heartbeat the same thing in the one hour where it matters most.
     const lanes = lanesOf(aHome());
 
     try {
-      await lanes.record(LANES.commander);
-      await lanes.record(LANES.heartbeat);
+      for (const lane of Object.values(LANES)) await lanes.record(lane);
 
-      const commander = lanes.options.get(LANES.commander)?.systemPrompt ?? "";
-      expect(commander).toContain(mcpToolName("remind_me"));
-      expect(commander).not.toContain(NO_HANDS_YET);
-
-      const heartbeat = lanes.options.get(LANES.heartbeat)?.systemPrompt ?? "";
-      expect(heartbeat).toContain(NO_HANDS_YET);
-      expect(heartbeat).not.toContain(mcpToolName("remind_me"));
+      for (const lane of Object.values(LANES)) {
+        const prompt = lanes.options.get(lane)?.systemPrompt ?? "";
+        if (LANES_WITH_HANDS.includes(lane)) {
+          expect(prompt, `${lane} holds the verbs and was not told so`).toContain(
+            mcpToolName("remind_me"),
+          );
+          expect(prompt).not.toContain(NO_HANDS_YET);
+        } else {
+          expect(prompt, `${lane} has no hands and was not told so`).toContain(NO_HANDS_YET);
+          expect(prompt).not.toContain(mcpToolName("remind_me"));
+        }
+      }
     } finally {
       lanes.close();
     }

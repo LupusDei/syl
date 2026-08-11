@@ -134,6 +134,24 @@ keeping them testable without spawning a process is worth the seam.
   Adjutant project.
 - **Communicate through Adjutant MCP.** Terminal output alone is invisible to the
   Commander; `send_message` reaches his dashboard and phone.
+- **`git add -A` and a bare `git commit` are repo-global too, and they take
+  other people's work under YOUR message.** The stash rule below is one instance
+  of a wider hazard: in a worktree several agents write to, any command with no
+  pathspec sweeps whatever anyone else has on disk or staged. **Always
+  `git add <explicit paths>` and `git commit -- <paths>`.**
+
+  It has happened twice in one day. A `git add -A` intended for three test
+  changes committed 1,041 insertions — another agent's entire feature, its
+  route, its middleware entry and four test files — under a message about a
+  budget assertion. The code was fine; the commit message was a false statement
+  about its own contents, and the argument for the most consequential decision
+  in that epic is not in the history because of it.
+
+  **Do not fix it by rewriting.** Once pushed, history surgery to recover a
+  message costs more than the message. Write the design record where a reader
+  actually stands — the module header and `docs/CONTEXT.md` — and take the loss.
+  Using a pathspec yourself is not enough; it only protects you from your own
+  sweep, not from someone else's.
 - **Never `git stash` while other worktrees are live.** Worktrees share one
   object store, and the stash is a REPO-GLOBAL stack: `pop` takes the top entry,
   not *your* entry. Two agents stashing concurrently means one pops the other's
@@ -210,6 +228,21 @@ to add is about *additional* surfaces and blocks nothing.
   (`syl-acr`); each time an agent caught it, and each time the guard reported a
   duplicate version loudly with both filenames rather than silently skipping a
   migration. That guard is why these stay ten-minute problems.
+- **Checking ORIGIN is necessary and NOT sufficient — ask two questions, not
+  one.** The rule below answers *which number is free*. It says nothing about
+  *which numbers your branch can hold*. A branch that is behind cannot satisfy
+  contiguity at the number origin says is free: take it, and you leave a gap
+  under it, and `readMigrations` hard-fails on a gap — reddening every
+  database-backed test for a reason its author did not cause. Origin was at
+  `0024` while a branch sat at `0023`, so both obvious moves were wrong.
+
+      git ls-tree --name-only origin/main backend/src/migrations/   # what is free
+      ls backend/src/migrations/                                    # what you can hold
+
+  The second is the one-liner nobody was running. If your branch is missing a
+  number origin has, import that one file byte-identical (`git checkout
+  origin/main -- <path>`) to restore contiguity rather than fast-forwarding a
+  shared tree under other agents.
 - **Before claiming an id or a number in a shared namespace — a bead root, a
   spec directory, a migration — fetch and look at ORIGIN, not at your branch.**
   Five collisions in one day all had this single cause: creating from a stale

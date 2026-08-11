@@ -35,6 +35,8 @@ import type {
   LogLevel,
   LogPage,
   MessagePage,
+  ReminderDeliveryState,
+  ReminderPage,
   Run,
   RunPage,
 } from "@syl/shared/types";
@@ -62,6 +64,12 @@ export interface DeliveryListParams extends PageParams {
 
 export interface ConversationListParams extends PageParams {
   readonly lane?: ConversationLane | undefined;
+}
+
+export interface ReminderListParams extends PageParams {
+  readonly state?: ReminderDeliveryState | undefined;
+  /** Only reminders next due before this instant, RFC 3339. */
+  readonly dueBefore?: string | undefined;
 }
 
 /**
@@ -112,6 +120,16 @@ export interface AdminClient {
     params?: MessageListParams,
     options?: CallOptions,
   ): Promise<MessagePage>;
+
+  /**
+   * Reminders, with the reason and origin `syl-y82` added.
+   *
+   * Read-only from here on purpose. The admin is where the Commander sees what
+   * she has been offering unprompted; creating or editing a reminder is the
+   * phone's job and Syl's, and a console that could write them would be a
+   * second author of the one thing delivery reads verbatim.
+   */
+  listReminders(params?: ReminderListParams, options?: CallOptions): Promise<ReminderPage>;
 
   listDevices(params?: PageParams, options?: CallOptions): Promise<DevicePage>;
 
@@ -226,6 +244,13 @@ export function createAdminClient(options: AdminClientOptions): AdminClient {
       get<MessagePage>(
         `/conversations/${segment(conversationId)}/messages`,
         { ...pageParams(params), direction: params?.direction },
+        call,
+      ),
+
+    listReminders: (params, call) =>
+      get<ReminderPage>(
+        "/reminders",
+        { ...pageParams(params), state: params?.state, dueBefore: params?.dueBefore },
         call,
       ),
 

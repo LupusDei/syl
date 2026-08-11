@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   LATE_THRESHOLD_MS,
+  MIN_REASON_CHARS,
+  NOTIFICATION_BODY_BUDGET,
   RHYTHM_GRACE_MS,
   coalescedPayload,
   countWord,
@@ -42,6 +44,11 @@ describe("payloadFor", () => {
     id: "syl:reminder:x",
     kind: "commitment" as const,
     text: "Call the pharmacy.",
+    // The null pair: a row written before the provenance columns existed.
+    // Deliberately the default here, so every pre-existing assertion below is
+    // also a regression test that such a row's notification did not change.
+    because: null,
+    origin: null,
     todoId: null,
     eventId: null,
     wallTime: "16:00",
@@ -88,6 +95,143 @@ describe("payloadFor", () => {
 
   it("should say what was skipped rather than hiding it", () => {
     expect(payloadFor(base, 2).body).toContain("Two went unsaid");
+  });
+});
+
+/**
+ * `syl-y82`, and the half of it that actually reaches him.
+ *
+ * `SOUL.md`: "every unprompted thing you offer carries its reason, and you say
+ * the reason. Not 'I've made you a reminder' but 'Dave's birthday is Thursday —
+ * you mentioned him in March.'"
+ *
+ * An anticipated reminder arrives on a lock screen. A reason that lives only
+ * inside the app is a reason he has to go and fetch, and he will not — so the
+ * promise is kept here or it is not kept. The three cases are genuinely
+ * different and only one of them adds anything.
+ */
+describe("payloadFor and the reason she thought of it", () => {
+  const base = {
+    id: "syl:reminder:x",
+    kind: "commitment" as const,
+    text: "Dave's birthday is Thursday.",
+    because: "you mentioned him in March",
+    origin: "she_noticed" as const,
+    todoId: null,
+    eventId: null,
+    wallTime: "09:00",
+    tz: CHICAGO,
+    rrule: null,
+    scheduledFor: "2026-08-09T14:00:00.000Z",
+    nextFireAt: "2026-08-09T14:00:00.000Z",
+    urgent: false,
+    late: false,
+    deferredFrom: null,
+    supersedesPrevious: false,
+    deliveryState: "scheduled" as const,
+    createdAt: "2026-08-09T12:00:00.000Z",
+    updatedAt: "2026-08-09T12:00:00.000Z",
+    completedAt: null,
+  };
+
+  it("should carry the reason on a reminder she thought of herself", () => {
+    // The case the column exists for. Without this he cannot tell a good
+    // suggestion from a wrong one without opening the app.
+    expect(payloadFor(base, 0).body).toBe(
+      "Dave's birthday is Thursday.\nyou mentioned him in March",
+    );
+  });
+
+  it("should keep his own words first and whole, with the reason beneath them", () => {
+    const body = payloadFor(base, 0).body;
+    // Not appended into her sentence and not punctuated on her behalf: the
+    // text is byte-for-byte what she composed, and the reason is a second
+    // line — which is also what makes the reason the part truncation eats.
+    expect(body.startsWith("Dave's birthday is Thursday.")).toBe(true);
+    expect(body.split("\n")[0]).toBe("Dave's birthday is Thursday.");
+  });
+
+  it("should add nothing when he asked for it, because he already knows why", () => {
+    // He asked. Telling him why is noise, and noise is what gets an assistant
+    // muted.
+    const asked = { ...base, origin: "he_asked" as const };
+    expect(payloadFor(asked, 0).body).toBe("Dave's birthday is Thursday.");
+  });
+
+  it("should leave a reminder from before the record exactly as it was", () => {
+    // Null is "written before we kept this", not "no reason given". The
+    // notification must be identical to the one it sent yesterday — anything
+    // added here would be the app narrating its own gap at him.
+    const older = { ...base, because: null, origin: null };
+    expect(payloadFor(older, 0).body).toBe("Dave's birthday is Thursday.");
+  });
+
+  it("should say nothing extra when she noticed it but recorded no reason", () => {
+    // Belt and braces: `remind_me` refuses a call without `because`, so this
+    // pair should not exist. If it ever does, silence beats an empty dash.
+    const reasonless = { ...base, because: null };
+    expect(payloadFor(reasonless, 0).body).toBe("Dave's birthday is Thursday.");
+    expect(payloadFor({ ...base, because: "   " }, 0).body).toBe("Dave's birthday is Thursday.");
+  });
+
+  it("should keep the skipped-occurrences admission ahead of the reason", () => {
+    // The suppression notice is a promise (`never silently drop`); the reason
+    // is a courtesy. When the body is cut, the courtesy is what goes.
+    const body = payloadFor({ ...base, kind: "rhythm" }, 2).body;
+    expect(body.indexOf("Two went unsaid")).toBeLessThan(body.indexOf("you mentioned him"));
+  });
+
+  it("should elide a long reason at a word boundary rather than mid-word", () => {
+    const rambling = {
+      ...base,
+      // Comfortably past the budget on its own, so the elision is not a
+      // question of how long this sentence happens to be.
+      because:
+        "you mentioned him in March when you were talking about the trip you never took, " +
+        "and then again in June, and you sounded like you regretted losing touch with him " +
+        "after everything that happened with the move",
+    };
+    expect(rambling.because.length).toBeGreaterThan(NOTIFICATION_BODY_BUDGET);
+    const reason = payloadFor(rambling, 0).body.split("\n")[1] ?? "";
+    expect(reason.endsWith("…")).toBe(true);
+    expect(reason.length).toBeLessThanOrEqual(NOTIFICATION_BODY_BUDGET);
+    // Cut between words, so no fragment of a word is presented as a word.
+    expect(rambling.because.startsWith(reason.slice(0, -1).trimEnd())).toBe(true);
+    expect(reason).not.toMatch(/\s…$/);
+  });
+
+  it("should keep the whole body inside the budget", () => {
+    const rambling = { ...base, because: "x".repeat(400) };
+    expect(payloadFor(rambling, 0).body.length).toBeLessThanOrEqual(NOTIFICATION_BODY_BUDGET);
+  });
+
+  it("should drop the reason entirely rather than show a stub of one", () => {
+    // A three-word fragment of a reason is worse than no reason: a truncated
+    // "not because you asked" can read as its own opposite. Either it fits
+    // well enough to be read, or it stays in the app.
+    const longText = {
+      ...base,
+      text: "A".repeat(NOTIFICATION_BODY_BUDGET - MIN_REASON_CHARS + 2),
+      because: "you mentioned him in March",
+    };
+    expect(payloadFor(longText, 0).body).toBe(longText.text);
+  });
+
+  it("should never truncate her reminder text, however long it is", () => {
+    // The text is the reminder. Cutting it to make room for the reason would
+    // trade the thing he needs for the explanation of it.
+    const enormous = { ...base, text: "B".repeat(400) };
+    expect(payloadFor(enormous, 0).body).toBe(enormous.text);
+  });
+
+  it("should leave a reason that exactly fills the budget unelided", () => {
+    // The boundary, from the inside: nothing is cut, so nothing claims to be.
+    const text = "Go.";
+    const room = NOTIFICATION_BODY_BUDGET - text.length - 1;
+    const exact = { ...base, text, because: "c".repeat(room) };
+    const body = payloadFor(exact, 0).body;
+    expect(body.length).toBe(NOTIFICATION_BODY_BUDGET);
+    expect(body).not.toContain("…");
   });
 });
 

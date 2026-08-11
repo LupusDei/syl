@@ -15,6 +15,7 @@ import type {
   Principal,
   Reminder,
   Run,
+  Sending,
   SyncChange,
   Todo,
 } from "../types.js";
@@ -101,6 +102,16 @@ export class MockStore {
    * `Content-Type`.
    */
   attachments: Attachment[];
+  /**
+   * What she has already sent him.
+   *
+   * Seeded rather than empty, unlike `attachments`: the From Syl surface is a
+   * LIST, and a client built against a mock that always answers zero rows
+   * never renders the screen it exists to render. One of each state, so the
+   * `failed` and `pending` arms are exercised too — those are the honest
+   * cases, and a client that only ever sees `ready` will hide them.
+   */
+  sendings: Sending[];
   private blobs = new Map<string, Buffer>();
   readonly principal: Principal;
   private changes: SyncLogEntry[] = [];
@@ -117,6 +128,7 @@ export class MockStore {
     this.runs = clone(data<Page<Run>>("http/runs.page").items) as Run[];
     this.logs = seedLogs();
     this.attachments = [];
+    this.sendings = seedSendings();
     this.principal = clone(data<Principal>("http/auth.whoami"));
   }
 
@@ -133,6 +145,7 @@ export class MockStore {
     this.jobs = fresh.jobs;
     this.runs = fresh.runs;
     this.logs = fresh.logs;
+    this.sendings = fresh.sendings;
     this.attachments = [];
     this.blobs.clear();
     this.changes = [];
@@ -318,6 +331,13 @@ export class MockStore {
       id: mockId("reminder"),
       kind: (body["kind"] as Reminder["kind"]) ?? "commitment",
       text: String(body["text"] ?? "(mock) untitled reminder"),
+      // `syl-y82`. Echoed rather than invented: a mock that answers with a
+      // reason the caller never gave would let a client ship against a
+      // provenance the real server cannot produce. Absent stays null, which
+      // is the same thing the store says about a row written before the
+      // column existed.
+      because: (body["because"] as string | null) ?? null,
+      origin: (body["origin"] as Reminder["origin"]) ?? null,
       todoId: (body["todoId"] as string | null) ?? null,
       eventId: null,
       wallTime: String(body["wallTime"] ?? "09:00"),
@@ -468,6 +488,39 @@ export class MockStore {
     this.todos = this.todos.map((t) => (t.id === id ? updated : t));
     this.record("todo", "upsert", id, at);
     return updated;
+  }
+
+  // ----------------------------------------------------------- sendings ---
+
+  sending(id: string): Sending | undefined {
+    return this.sendings.find((s) => s.id === id);
+  }
+
+  /**
+   * Compose one.
+   *
+   * Answers `pending` with no video, which is exactly what the real service
+   * does: `201` means the WORDS are delivered, never that the video is ready.
+   * A mock that returned `ready` immediately would let a client ship without
+   * ever handling the state it will actually see first.
+   */
+  createSending(body: Record<string, unknown>): Sending {
+    const at = nowIso();
+    const sending: Sending = {
+      id: mockId("sending"),
+      words: String(body["words"] ?? "(mock) something she wanted to say"),
+      because: String(body["because"] ?? "(mock) because she thought of him"),
+      messageId: mockId("message"),
+      state: "pending",
+      renderName: String(body["renderName"] ?? "latest"),
+      video: null,
+      reason: null,
+      createdAt: at,
+      updatedAt: at,
+    };
+    this.sendings.unshift(sending);
+    this.record("sending", "upsert", sending.id, at);
+    return sending;
   }
 
   // -------------------------------------------------------------- goals ---
@@ -715,6 +768,75 @@ export function page<T>(items: readonly T[]): Page<T> {
  * with, so a mock that produced none of them would let a client be built that
  * renders that column wrong and never finds out.
  */
+/**
+ * Three sendings, one per state.
+ *
+ * Hand-written rather than captured, because the live route cannot produce a
+ * `ready` one without ffmpeg and a real render — and the shape a client has to
+ * handle is the contract's, which this file is generated against.
+ *
+ * The `ready` one carries `hasThumbnail: true` on its video, which is the
+ * single most important thing for a client to see: it is the difference
+ * between fetching a poster frame and fetching the entire clip to draw a still.
+ */
+export function seedSendings(): Sending[] {
+  const at = (offsetMs: number): string => new Date(Date.parse("2026-08-11T09:00:00.000Z") + offsetMs).toISOString();
+
+  return [
+    {
+      id: "syl:sending:0198e2c0-0000-7000-8000-00000000c001",
+      words: "The light came through the window at exactly the angle you like, and I wanted you to see it.",
+      because: "He said the winter here makes him forget the sky has colours.",
+      messageId: "syl:message:0198e2c0-0000-7000-8000-00000000d001",
+      state: "ready",
+      renderName: "syl-20260811t090000z-close",
+      video: {
+        id: "syl:attachment:0198e2c0-0000-7000-8000-00000000e001",
+        kind: "video",
+        mimeType: "video/mp4",
+        bytes: 2_310_144,
+        width: 484,
+        height: 720,
+        durationMs: 15_040,
+        sha256: "3f1c8a2b9d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8",
+        createdAt: at(120_000),
+        // The exception in the whole contract, and the reason it is worth
+        // reading rather than assuming. See `Attachment.hasThumbnail`.
+        hasThumbnail: true,
+      },
+      reason: null,
+      createdAt: at(0),
+      updatedAt: at(120_000),
+    },
+    {
+      id: "syl:sending:0198e2c0-0000-7000-8000-00000000c002",
+      words: "You have not stopped since Tuesday. I noticed, and I am saying so once.",
+      because: "Four late commits in a row and he cancelled the walk.",
+      messageId: "syl:message:0198e2c0-0000-7000-8000-00000000d002",
+      state: "pending",
+      renderName: "syl-20260811t101500z-mid",
+      video: null,
+      reason: null,
+      createdAt: at(4_500_000),
+      updatedAt: at(4_500_000),
+    },
+    {
+      id: "syl:sending:0198e2c0-0000-7000-8000-00000000c003",
+      words: "Ela asked about you today, in the way she does when she has been thinking a while.",
+      because: "He wanted to know when she brings him up unprompted.",
+      messageId: "syl:message:0198e2c0-0000-7000-8000-00000000d003",
+      state: "failed",
+      renderName: "syl-20260810t183000z-close",
+      video: null,
+      // A sentence, never a code — and the words above still stand, which is
+      // the whole point of this row being in the seed at all.
+      reason: "The render finished but the compressed copy came out over the size ceiling, so it has no video.",
+      createdAt: at(-52_200_000),
+      updatedAt: at(-52_000_000),
+    },
+  ];
+}
+
 export function seedLogs(): LogEntry[] {
   const pid = 4242;
   const base = Date.parse("2026-08-10T13:04:00.000Z");

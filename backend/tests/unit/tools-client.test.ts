@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { Reminder } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -31,6 +34,10 @@ import { testConfig } from "../helpers/service.js";
 let built: Bootstrapped;
 let running: RunningApp;
 let client: SylApiClient;
+const studios: string[] = [];
+
+/** The one render this file's studio contains. */
+const A_RENDER = "syl-20260811t090000z-close";
 
 /** A reminder body the service will accept. */
 const A_REMINDER = {
@@ -40,8 +47,52 @@ const A_REMINDER = {
   date: "2026-08-10",
 };
 
+/**
+ * A studio with one finished render in it, pointed at by `SYL_VIDEO_STUDIO`.
+ *
+ * `compose` refuses a render that is not `ready` — the Commander's ruling of
+ * 2026-08-11, so that no notification runs ahead of a video. This file boots
+ * the REAL service, so the way to have a render to send is to have one: a
+ * sidecar beside an mp4, exactly as `RenderService` writes them, read back
+ * through the same loader production uses.
+ */
+function studioWithAReadyRender(): string {
+  const root = mkdtempSync(join(tmpdir(), "syl-tools-studio-"));
+  const videoDir = join(root, "renders");
+  mkdirSync(videoDir, { recursive: true });
+  const video = join(videoDir, `${A_RENDER}.mp4`);
+  writeFileSync(video, Buffer.alloc(1024));
+  writeFileSync(
+    join(videoDir, `${A_RENDER}.mp4.json`),
+    JSON.stringify({
+      name: A_RENDER,
+      status: "ready",
+      renderedAt: "2026-08-11T09:02:00.000Z",
+      taskId: "task-1",
+      model: "seedance2",
+      ratio: "720:1280",
+      duration: 15,
+      reference: "reference/syl.png",
+      framing: "close_portrait",
+      prompt: "a luminous spirit woman…",
+      scene: "turning once as the light runs down her arm",
+      holdsLikeness: true,
+      because: "he wanted to know what I look like",
+      startedAt: "2026-08-11T09:00:00.000Z",
+      reason: null,
+      credits: 600,
+      usd: 6,
+      video,
+    }),
+  );
+  studios.push(root);
+  return root;
+}
+
 beforeEach(async () => {
-  built = bootstrap(testConfig({ databasePath: ":memory:" }));
+  built = bootstrap(testConfig({ databasePath: ":memory:" }), {
+    env: { ...process.env, SYL_VIDEO_STUDIO: studioWithAReadyRender() },
+  });
   running = await startTestApp(createApp(testConfig(), built.deps));
   client = new SylApiClient({
     baseUrl: `${running.baseUrl}${API_BASE_PATH}`,
@@ -52,6 +103,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await running.close();
   built.database.close();
+  for (const dir of studios.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 /** The failure a result carries, or a thrown explanation of the success. */
@@ -159,6 +211,50 @@ describe("SylApiClient, against her own service", () => {
     expect(second.ok && second.replayed).toBe(true);
   });
 
+  it("should reach her own sendings, which is the one surface she ORIGINATES on", async () => {
+    // Every other write on this client answers something he started. This one
+    // is her saying something, so it is also the assertion that `/sendings`
+    // was actually added to what her credential reaches — without that this
+    // comes back 403 and the verb above it is a capability she does not have.
+    const result = await client.post<{ id: string; messageId: string; state: string }>("/sendings", {
+      words: "I thought of you when the light did that thing.",
+      because: "He said he missed the sky.",
+      // A render that is finished, because `compose` refuses one that is not:
+      // nothing reaches him about a video that does not exist. `testDeps` hands
+      // the composer a source that always answers ready, so this test stays
+      // about the door rather than about the video.
+      renderName: A_RENDER,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.status).toBe(201);
+    // From the stores this process owns, not from the answer: her words are in
+    // his conversation before anything about a video has been decided.
+    const stored = built.deps.sendings.get(result.data.id);
+    expect(stored?.words).toBe("I thought of you when the light did that thing.");
+    expect(built.deps.messages.get(stored?.messageId ?? "")?.text).toBe(
+      "I thought of you when the light did that thing.",
+    );
+  });
+
+  it("should read a sending back, so a write can be confirmed from the store", async () => {
+    const created = await client.post<{ id: string }>("/sendings", {
+      words: "Hello.",
+      because: "Testing.",
+      renderName: A_RENDER,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const read = await client.get<{ id: string }>(
+      `/sendings/${encodeURIComponent(created.data.id)}`,
+    );
+
+    expect(read.ok).toBe(true);
+    if (read.ok) expect(read.data.id).toBe(created.data.id);
+  });
+
   it("should not send an Idempotency-Key on a read", async () => {
     const seen: (string | null)[] = [];
     const spy = clientWith(async (url, init) => {
@@ -204,7 +300,13 @@ describe("SylApiClient, when the service refuses", () => {
 
     expect(failure.status).toBe(403);
     expect(failure.code).toBe("FORBIDDEN");
-    expect(failure.message).toMatch(/reminders, to-dos and goals/u);
+    expect(failure.message).toMatch(/reminders/u);
+    // `syl-016.1` gave her a fourth surface, and this line is why the sentence
+    // is now RENDERED from `AGENT_SURFACES` rather than written beside it: it
+    // used to pin "reminders, to-dos and goals" as a literal, so widening what
+    // she may do would have left her reading out a refusal that named three of
+    // her four surfaces. Nothing would have failed — it is a fluent sentence.
+    expect(failure.message).toMatch(/her own memory/u);
   });
 
   it("should say her own credential stopped working, not 'Re-pair this device'", async () => {
@@ -235,7 +337,7 @@ describe("SylApiClient, when the service refuses", () => {
     // client that rewrote refusals would be a second opinion that drifts.
     const failure = failureOf(await client.get("/logs"));
 
-    expect(failure.message).toMatch(/reminders, to-dos and goals/u);
+    expect(failure.message).toMatch(/reminders, to-dos, goals, her own memory/u);
     expect(failure.message).not.toMatch(/credential is no longer accepted/u);
   });
 

@@ -347,6 +347,36 @@ describe("SylAgent", () => {
       expect(optionsOfCall(runner, 0).strictMcpConfig).toBe(true);
       expect(optionsOfCall(runner, 0).mcpConfig).toBeUndefined();
     });
+
+    it("should say which lane it is, so a wrapper can tell his turns from hers", async () => {
+      // A runner wrapper sees a prompt and an options object. `index.ts` has one
+      // that records what the Commander said, for the urgency check, and it must
+      // fire for his lane and no other — a background turn's own prompt becoming
+      // evidence of something he said is how a heartbeat could quote itself into
+      // waking him at 03:00. It inferred the lane from `mcpConfig !== undefined`
+      // until a second lane was given hands.
+      const runner = announcingRunner(() => "sess-1");
+      const agent = new SylAgent({ runner, store: memoryStore() });
+
+      await agent.forLane(lane).ask("who are you?");
+
+      expect(optionsOfCall(runner, 0).lane).toBe(lane);
+    });
+
+    it("should not let a caller's options claim to be a different lane", async () => {
+      // The whole value of the field is that it cannot be forged: it is written
+      // after the caller's overrides, not before.
+      const runner = announcingRunner(() => "sess-1");
+      const agent = new SylAgent({
+        runner,
+        store: memoryStore(),
+        turnOptions: { lane: LANES.commander },
+      });
+
+      await agent.forLane(lane).ask("who are you?");
+
+      expect(optionsOfCall(runner, 0).lane).toBe(lane);
+    });
   });
 
   it("should take her turns with no built-in tools at all", async () => {

@@ -71,20 +71,22 @@ const SHE_SAID = "Noted — Ela, Rowan, Isla, 6lock, and the debt.";
  */
 const EXTRACTED = JSON.stringify({
   facts: [
-    { kind: "person", label: "Justin Martin", body: "The Commander.", saidIn: 1 },
-    { kind: "person", label: "Ela — his wife", body: "His wife Ela.", saidIn: 1 },
+    { kind: "person", label: "Justin Martin", body: "The Commander.", saidIn: 1, about: null, why: "He said so in this exchange." },
+    { kind: "person", label: "Ela — his wife", body: "His wife Ela.", saidIn: 1, about: null, why: "He said so in this exchange." },
     // The duplicate, as it actually happened: a second mention of one person,
     // extracted under a different label. Both are `person`, neither carries a
     // `subject_id`, and nothing has ever noticed they are the same woman.
-    { kind: "person", label: "Ela", body: "Ela wants an apartment back home.", saidIn: 1 },
-    { kind: "person", label: "Rowan — his son", body: "His son Rowan.", saidIn: 1 },
-    { kind: "person", label: "Isla — his daughter", body: "His daughter Isla.", saidIn: 1 },
-    { kind: "goal", label: "Get out of debt", body: "His primary goal, urgent.", saidIn: 1 },
+    { kind: "person", label: "Ela", body: "Ela wants an apartment back home.", saidIn: 1, about: null, why: "He said so in this exchange." },
+    { kind: "person", label: "Rowan — his son", body: "His son Rowan.", saidIn: 1, about: null, why: "He said so in this exchange." },
+    { kind: "person", label: "Isla — his daughter", body: "His daughter Isla.", saidIn: 1, about: null, why: "He said so in this exchange." },
+    { kind: "goal", label: "Get out of debt", body: "His primary goal, urgent.", saidIn: 1, about: null, why: "He said so in this exchange." },
     {
       kind: "fact",
       label: "Head of engineering at 6lock",
       body: "He is head of engineering at 6lock.",
       saidIn: 1,
+      about: 1,
+      why: "He said so in this exchange.",
     },
   ],
   instructionsFound: [],

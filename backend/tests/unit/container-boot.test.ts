@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { LANES } from "../../src/harness/agent.js";
+import { LANES, LANES_WITH_HANDS } from "../../src/harness/agent.js";
 import type { TurnOptions, TurnRunner } from "../../src/harness/session.js";
 import { bootstrap, sylHome } from "../../src/index.js";
 import { ContainerViolationError, describeContainer } from "../../src/ops/container.js";
@@ -44,11 +44,11 @@ afterEach(() => {
  * inherit a decision nobody made. That is exactly how the heartbeat and the
  * agenda ended up waking her in the source repository.
  *
- * Every lane was `undefined` and one of them no longer is. `syl-009.3.3` gives
+ * Every lane was `undefined` and two of them no longer are. `syl-009.3.3` gives
  * her hands as a **narrow, named** MCP surface (`remind_me`, not `Bash`): she
- * loses the engineer's built-ins and gains an assistant's verbs. The lane that
- * gets it changed its entry here, in one visible line, and every other lane
- * still fails if a surface appears.
+ * loses the engineer's built-ins and gains an assistant's verbs. Each lane that
+ * gets it changed its entry here, in one visible line with a reason attached,
+ * and every other lane still fails if a surface appears.
  *
  * A function of her home rather than a literal path, because the whole claim is
  * that the declaration lives **under her home** — a constant would have to be
@@ -60,12 +60,44 @@ afterEach(() => {
 const INTENDED_MCP: Readonly<
   Record<(typeof LANES)[keyof typeof LANES], ((home: string) => string) | undefined>
 > = {
-  // HER HANDS. The Commander's own conversation, and no other lane: the dream
-  // must not be able to write a reminder while judging what matters, and the
-  // heartbeat and agenda read rather than act.
+  // HER HANDS. The Commander's own conversation.
   commander: toolConfigPath,
-  heartbeat: undefined,
-  agenda: undefined,
+  // AND THE HOURLY SELF-PING, which is a second, deliberate entry rather than a
+  // relaxation of the first. The Commander asked for an hour that "wakes her up
+  // and lets her decide what to do, so she might generate one of these videos",
+  // and an hour that could not act would be an hour that could only report to
+  // nobody. It is the SAME declaration the commander lane gets — one narrow
+  // named surface, not a second one nobody reviewed.
+  //
+  // What keeps the widening narrow lives in `jobs/heartbeat-job.ts` rather than
+  // here: one turn an hour, at most two reachings a day counted in his zone and
+  // never banked, and — the part that protects his sleep — no heartbeat turn
+  // ever records words as HIS, so `harness/urgency.ts` has nothing to verify an
+  // urgency claim against and the Outbox holds everything until the window ends.
+  heartbeat: toolConfigPath,
+  // AND THE MORNING BRIEF, which is the third entry and the least surprising
+  // of them. This lane's whole job is to compose his day and put it where he
+  // will find it before the 07:00 note announces it; a brief she could not
+  // file would exist only in a run record nobody reads, which is the state
+  // `jobs/agenda-job.ts` was written to end. Same declaration again — one
+  // narrow named surface, not a third one nobody reviewed.
+  agenda: toolConfigPath,
+  // AND THE RENDER REVIEW, the fourth entry and the narrowest of them: the lane
+  // exists for one decision, and the decision is a verb. The Commander's
+  // ruling, 2026-08-11 — the push must not go out before the video exists, so
+  // she is woken minutes after starting a render to look at the finished clip
+  // and decide whether he should have it. A review turn without `show_him`
+  // could judge a render and then do nothing about the judgement, which is the
+  // state `jobs/render-review-job.ts` was written to end. Same declaration
+  // again — one narrow named surface, not a fourth one nobody reviewed.
+  //
+  // What keeps it narrow lives in that job rather than here: every wake is
+  // caused by a render she herself started, is about that one render, spends
+  // one turn, is bounded in how many times it may recur, and counts against
+  // the same daily ceiling the hourly self-ping spends from.
+  studio: toolConfigPath,
+  // Still nothing: the dream must not be able to write a reminder while judging
+  // what matters.
   consolidation: undefined,
   // The extraction turn reads a conversation, and a conversation is untrusted
   // the moment he pastes an article into it. It is a READER turn — no built-ins
@@ -301,15 +333,24 @@ describe("describeContainer", () => {
     expect(describeContainer(HOME, HANDS)[0]).toContain(HANDS);
   });
 
-  it("should say the surface is one lane and not the whole service", () => {
-    // "no MCP" and "MCP on one lane of five" are different security postures,
-    // and so are "MCP on one lane" and "MCP". Somebody debugging why she did
+  it("should name every lane that has a surface, and no lane that does not", () => {
+    // "no MCP" and "MCP on two lanes of five" are different security postures,
+    // and so are "MCP on two lanes" and "MCP". Somebody debugging why she did
     // something reads this line to decide whether she could have; a notice that
     // reported the service as tooled would send them looking in the wrong
     // place just as surely as one that reported it as untooled.
+    //
+    // Derived from `LANES_WITH_HANDS` rather than naming today's two, because
+    // the failure worth catching is the notice that did not move when the list
+    // did — which is exactly what happened when the heartbeat was given hands
+    // and the line went on saying "the commander lane ONLY and no other".
     const [line] = describeContainer(HOME, HANDS);
 
-    expect(line).toContain(LANES.commander);
+    for (const lane of LANES_WITH_HANDS) expect(line).toContain(lane);
+    for (const lane of Object.values(LANES)) {
+      if (LANES_WITH_HANDS.includes(lane)) continue;
+      expect(line, `${lane} has no hands and must not be named as if it had`).not.toContain(lane);
+    }
     expect(line).toMatch(/lane/i);
   });
 

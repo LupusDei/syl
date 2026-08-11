@@ -296,7 +296,9 @@ export type AttachmentErrorCode =
   /** An id no upload ever produced. */
   | "unknown-attachment"
   /** That attachment already belongs to a message. */
-  | "already-attached";
+  | "already-attached"
+  /** A supplied poster frame that is not a JPEG, or is on an image. */
+  | "poster-unusable";
 
 /** A refusal with a name. The route maps the name to a contract failure. */
 export class AttachmentError extends Error {
@@ -388,6 +390,22 @@ export interface CreateAttachmentInput {
   readonly height?: number | undefined;
   /** Required for a video; must be absent on an image. */
   readonly durationMs?: number | undefined;
+  /**
+   * A pre-rendered JPEG to keep as this attachment's thumbnail. Video only.
+   *
+   * **Why the bytes are handed in rather than made here.** `hasThumbnail` was
+   * false for every video because no macOS built-in extracts a frame, and this
+   * store deliberately shells out to nothing heavier than `sips`. Pulling a
+   * still needs ffmpeg — a genuine third-party binary — and a store that
+   * spawns a video toolchain is a store with a new dependency and a new way to
+   * hang. `services/sending-media.ts` owns that seam and passes the result
+   * here, so this module keeps doing what it does: bytes, and a row that
+   * describes them truthfully.
+   *
+   * Validated like everything else: sniffed rather than believed, and kept
+   * only if it is actually cheaper than the clip it previews.
+   */
+  readonly poster?: Buffer | undefined;
 }
 
 /** The wire shape plus the two columns that never leave the service. */
@@ -499,7 +517,12 @@ export class AttachmentStore {
     // After the original is on disk, because `sips` reads a file rather than a
     // buffer — and best-effort, because a machine without it is a machine
     // without previews, not a machine that cannot receive a picture.
-    const thumbName = kind === "image" ? this.#thumbnailFor(storedName, path) : null;
+    //
+    // An image makes its own preview; a video can only have one it was given.
+    const thumbName =
+      kind === "image"
+        ? this.#thumbnailFor(storedName, path)
+        : this.#posterFor(storedName, input.poster, input.data.length);
 
     const row: AttachmentRow = {
       id: newId("attachment"),
@@ -713,6 +736,28 @@ export class AttachmentStore {
         `That file is a ${MIME_TO_KIND[mime]}; the request declared a ${input.kind}.`,
       );
     }
+
+    // Checked here rather than at the point of use, so a bad poster refuses
+    // the upload before a single byte is written. The store's standing rule is
+    // that a refused upload leaves no trace.
+    if (input.poster !== undefined) {
+      if (MIME_TO_KIND[mime] !== "video") {
+        throw new AttachmentError(
+          "poster-unusable",
+          "Only a video takes a poster frame; an image is its own preview.",
+        );
+      }
+      if (sniffMime(input.poster) !== "image/jpeg") {
+        // Sniffed, never believed. A PNG accepted here would be served under
+        // `image/jpeg` and fail to decode on the phone, which reads as a
+        // broken video rather than as a bad poster.
+        throw new AttachmentError(
+          "poster-unusable",
+          "A poster frame must be a JPEG; those bytes are not one.",
+        );
+      }
+    }
+
     return mime;
   }
 
@@ -780,6 +825,33 @@ export class AttachmentStore {
     }
     this.#remove(name);
     return null;
+  }
+
+  /**
+   * Keep a caller-supplied poster frame, under the same rule thumbnails obey.
+   *
+   * The size check is the whole justification for the feature. A video's
+   * inline cell has no preview today, so a client that wants to draw one
+   * fetches the original — the entire clip, megabytes of it, to render a play
+   * triangle and a duration. A poster is worth having exactly to the extent it
+   * is cheaper than that, so one that is not smaller is discarded and
+   * `hasThumbnail` stays false, which is the honest answer.
+   *
+   * The bytes are already validated as a JPEG by `#validate`; this only
+   * decides whether keeping them pays.
+   */
+  #posterFor(storedName: string, poster: Buffer | undefined, originalBytes: number): string | null {
+    if (poster === undefined || poster.length >= originalBytes) return null;
+
+    const name = `${storedName}.thumb.jpg`;
+    try {
+      writeFileSync(this.#pathOf(name), poster);
+    } catch {
+      // No preview, rather than a failed upload. Same degradation as a machine
+      // without `sips`: the clip itself is already safely on disk.
+      return null;
+    }
+    return name;
   }
 
   #ensureDir(): void {

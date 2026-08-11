@@ -459,16 +459,19 @@ describe("assertContextBudget", () => {
   });
 
   it("should throw when the declared maxima sum over, naming each and the overage", () => {
-    // The runaway contributor is sized against DEFAULT_CONTEXT_BUDGET_BYTES
-    // rather than hard-coded, so this keeps asserting "the tripwire fires"
-    // after the ceiling moves. It was a literal 40,000 and silently stopped
-    // overflowing when the ceiling went 24,000 -> 56,000 (`syl-ulf`) — a test
-    // that no longer tests what it names is the failure mode this suite cares
-    // about most.
-    const runaway = DEFAULT_CONTEXT_BUDGET_BYTES + 10_000;
+    // DERIVED FROM THE CEILING, not hard-coded. This asked for 40,000 extra,
+    // which overflowed a 24,000 ceiling and stopped overflowing a 72,000 one —
+    // so the test that proves the guard FIRES silently stopped proving it, and
+    // the guard would have been unprotected while looking tested.
+    //
+    // That is the same constant-that-should-be-derived defect the budget exists
+    // to catch, living inside a test about the budget. Whatever the ceiling
+    // becomes, this is bigger than it.
+    const over = DEFAULT_CONTEXT_BUDGET_BYTES + 1_000;
+
     const error = (() => {
       try {
-        assertContextBudget([...today, { id: "syl-009-tools", kind: "capability", maxBytes: runaway }]);
+        assertContextBudget([...today, { id: "syl-009-tools", kind: "capability", maxBytes: over }]);
         return undefined;
       } catch (e) {
         return e as TurnContextBudgetError;
@@ -477,7 +480,7 @@ describe("assertContextBudget", () => {
 
     expect(error).toBeInstanceOf(TurnContextBudgetError);
     expect(error?.message).toMatch(/syl-009-tools/);
-    expect(error?.message).toContain(String(runaway));
+    expect(error?.message).toContain(String(over));
   });
 
   it("should fail on the SUM, not on any single contributor being large", () => {

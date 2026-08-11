@@ -1,0 +1,101 @@
+{
+  "$comment": [
+    "Every shot Syl has ever been rendered in, with the exact prompt that made it.",
+    "",
+    "This file exists because the first eight loops were generated on 2026-08-10 and",
+    "THE PROMPTS WERE NEVER WRITTEN DOWN. Eight finished videos, some of them very",
+    "good, and no way to make a ninth in the same style or to fix the two that",
+    "failed — the outputs survived and the inputs did not.",
+    "",
+    "So: a shot is not the mp4. A shot is the prompt, the reference, the model and",
+    "the duration. The mp4 is what those produce, and it can always be produced",
+    "again. Add a shot here, then run:",
+    "",
+    "    npm run video -- <shot-name>",
+    "",
+    "`framing` is one of the four ids in backend/src/render/framing.ts, not free",
+    "text. It goes into the sidecar, and the service reads a sidecar with an",
+    "unrecognised framing as UNREADABLE rather than guessing — which is right:",
+    "the framing is what says whether the reference could hold her likeness at",
+    "all. What each one means, and the render that proved it, is in that file.",
+    "",
+    "The prompts below for shots 1-8 are RECONSTRUCTED from the outputs and the",
+    "filenames, not recovered — the originals are gone. They are marked so, and",
+    "regenerating from them will produce something in the same spirit rather than",
+    "the same clip. Everything added after this file exists is exact."
+  ],
+
+  "$defaults": [
+    "`reference` is what goes over as `promptImage`, and `promptImage` IS THE",
+    "VIDEO'S FIRST FRAME — Runway starts the clip from the picture it is handed.",
+    "So it is the bare ribbon, not her likeness. All eight loops open on this one",
+    "picture: PSNR between the first frames of any two of them is ~35dB, which is",
+    "one image through two encodes rather than two generations.",
+    "",
+    "It also decides the SHAPE. Measured 2026-08-11: the loops are 834x1112 and a",
+    "render made against the 1120x832 landscape headshot came back 1112x834 —",
+    "same pixels, transposed — while both asked for `720:1280`. seedance2 takes",
+    "the aspect from the picture and overrules `ratio` without saying so. `ratio`",
+    "here is the shape the loops actually are, so the two cannot disagree."
+  ],
+
+  "defaults": {
+    "model": "seedance2",
+    "ratio": "834:1112",
+    "duration": 15,
+    "reference": "renders/opening-ribbon.png"
+  },
+
+  "shots": [
+    {
+      "name": "1-emerge",
+      "reconstructed": true,
+      "framing": "face_turned_away",
+      "prompt": "A luminous spirit woman of living starlight drifts into view against a deep blue starfield, seen from behind and three-quarters, her face turned away toward the stars. Long silver-white hair and a translucent flowing gown trail like ribbons of light. She turns slowly, weightless, as motes of light spiral around her. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
+    },
+    {
+      "name": "2-dance",
+      "reconstructed": true,
+      "framing": "face_turned_away",
+      "prompt": "A luminous spirit woman of living starlight dances weightlessly in deep space, silver-white hair and translucent gown streaming behind her in ribbons. She spins and arcs with joy, trailing motes of light. Seen from behind and in profile, face mostly turned from the camera. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
+    },
+    {
+      "name": "3-spiral",
+      "reconstructed": true,
+      "framing": "face_turned_away",
+      "prompt": "A luminous spirit woman of living starlight spirals upward through a deep blue starfield, her translucent gown and silver-white hair drawing a helix of light behind her. Seen from below and behind. Motes of starlight follow her path. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
+    },
+    {
+      "name": "4-playful",
+      "reconstructed": true,
+      "framing": "face_turned_away",
+      "prompt": "A luminous spirit woman of living starlight tumbles and plays in zero gravity, laughing, silver-white hair and translucent gown swirling around her. Seen from behind and above. She darts between drifting motes of light. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
+    },
+    {
+      "name": "5-stillness",
+      "reconstructed": true,
+      "framing": "face_turned_away",
+      "prompt": "A luminous spirit woman of living starlight comes to rest, floating almost motionless in deep space, silver-white hair and translucent gown settling slowly around her. Seen in profile, face turned toward the stars. Only the motes of light move. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
+    },
+    {
+      "name": "6-constellation",
+      "reconstructed": true,
+      "framing": "face_turned_away",
+      "prompt": "A luminous spirit woman of living starlight traces her hand through the stars and leaves a constellation drawn in light behind her fingertips. Seen from behind, face turned away. Silver-white hair and translucent gown drift weightlessly. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
+    },
+    {
+      "name": "7-twin",
+      "reconstructed": true,
+      "framing": "wide_face_visible",
+      "knownProblem": "Face toward camera at full-body distance. Too few pixels for her features to resolve, so the model invents a generic face. See docs/VIDEO.md — the anchoring band.",
+      "prompt": "A luminous spirit woman of living starlight faces the viewer, arms outstretched, floating in a deep blue starfield. A second identical figure of light mirrors her movement. Silver-white hair and translucent gown drift weightlessly. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
+    },
+    {
+      "name": "8-descent",
+      "reconstructed": true,
+      "framing": "mid_face_visible",
+      "knownProblem": "Face toward camera at mid distance — large enough to read as a face, not close enough to match the reference. Renders as a visibly different woman. See docs/VIDEO.md.",
+      "prompt": "A luminous spirit woman of living starlight descends slowly toward the viewer through a deep blue starfield, arms open, wings of light spreading behind her. Silver-white hair streams upward as she falls. Opens on a lone ribbon of blue light against empty starfield, with no figure present. The ribbon gathers and coalesces into her, her whole body made of that same living light. At the end she unravels back into the ribbon and it streams away, leaving empty starfield. The first and last frames are identical: the bare ribbon, no figure."
+    }
+  ]
+}

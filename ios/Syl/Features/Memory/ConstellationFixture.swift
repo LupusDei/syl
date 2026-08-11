@@ -20,6 +20,10 @@ enum ConstellationFixture {
     /// The instant the fixture is read at, so ages — and therefore depths — are stable.
     static let now: Date = day("2026-08-10")
 
+    /// A day before ``now``. Everything in ``ConstellationSnapshot/hubAndSpokes`` was learned
+    /// within a day, which is why his sky is bright.
+    static let yesterday: Date = day("2026-08-09")
+
     static func day(_ iso: String) -> Date {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
@@ -250,6 +254,157 @@ extension ConstellationSnapshot {
             edge("e.kate.dad", "person.kate", "person.dad", .observed, 0.79, "knows",
                  nil, "2026-03-09"),
         ]
+
+        return ConstellationSnapshot(
+            nodes: nodes, edges: edges, capturedAt: ConstellationFixture.now)
+    }()
+
+    /// **The Commander's actual sky, in shape.** Thirty-three stars, one hub, thirty-two
+    /// identical threads, and not one relation between two things she knows.
+    ///
+    /// ## Why this exists beside ``fixture``
+    ///
+    /// Everything this feature was accepted on was looked at through ``fixture``, which has
+    /// seven anchors, real entity-to-entity edges and six clusters. **His graph has none of
+    /// that.** Measured off `~/.syl/syl.db` on 2026-08-11: 33 nodes — 17 `fact`, 8 `goal`,
+    /// 6 `person`, 1 `decision`, 1 `source` — and 32 edges, every single one `stated` /
+    /// `observed`, every single one from the one source node *"Conversation with the
+    /// Commander"* to one of the other 32.
+    ///
+    /// Two consequences follow and neither is visible in ``fixture``:
+    ///
+    /// 1. **Nothing orbits anything.** `anchorId` is computed on the server as the far end of
+    ///    the strongest filament *whose far end is an anchor*, and the far end of every
+    ///    filament here is the source — which is not an anchor kind. So every star comes back
+    ///    with `anchorId: nil`, every star is free-standing, and the phyllotaxis field is
+    ///    asked for thirty-three slots instead of seven. There are no clusters at all.
+    /// 2. **The hub is a star with thirty-two threads on it**, which is the only structure
+    ///    the picture has.
+    ///
+    /// A fixture is a correspondence check — it is the project's standing rule that they come
+    /// from captured reality rather than from our own types — and the whole of the trouble on
+    /// this screen lived in the gap between the two shapes. The labels are written fresh
+    /// rather than copied: what has to match is the shape, the kinds, the counts, the ages and
+    /// the confidences, and none of his private prose belongs in a checked-in file.
+    ///
+    /// Confidences are the decay law's own answer for edges a day old at a 21-day half-life,
+    /// which is why they are all near one: his sky is bright because his memories are new.
+    static let hubAndSpokes: ConstellationSnapshot = {
+        let hub = "source.conversation"
+
+        /// One star off the hub. Everything is `hot`, everything was learned within a day,
+        /// and nothing orbits anything — exactly as the wire delivers it.
+        func spoke(
+            _ id: String, _ kind: ConstellationKind, _ confidence: Double, _ label: String,
+            _ body: String
+        ) -> ConstellationNode {
+            ConstellationNode(
+                id: id, kind: kind, tier: .hot, confidence: confidence, label: label,
+                anchorId: nil, learnedAt: ConstellationFixture.yesterday, body: body,
+                provenance: ConstellationProvenance(
+                    species: .observed,
+                    assertedBy: "Conversation with the Commander",
+                    learnedAt: ConstellationFixture.yesterday))
+        }
+
+        var nodes: [ConstellationNode] = [
+            // The hub. A `source` node: bookkeeping about where things came from, not
+            // something she knows about him. It cites itself as its own provenance, which is
+            // the reason `ConstellationWords` has a case for it.
+            ConstellationNode(
+                id: hub, kind: .source, tier: .hot, confidence: 1.0,
+                label: "Conversation with the Commander",
+                anchorId: nil, learnedAt: ConstellationFixture.yesterday, body: nil,
+                provenance: ConstellationProvenance(
+                    species: .observed, assertedBy: "Conversation with the Commander",
+                    learnedAt: ConstellationFixture.yesterday))
+        ]
+
+        nodes += [
+            spoke("person.him", .person, 0.981, "Justin Martin",
+                  "An engineering leader and entrepreneur, and the person this whole graph is about."),
+            spoke("person.wife", .person, 0.981, "Ela — his wife",
+                  "His wife, a yogi, and the other half of every decision in here."),
+            spoke("person.daughter", .person, 0.981, "Isla — his daughter",
+                  "His daughter, born in November, and the reason several of the goals have dates."),
+            spoke("person.son", .person, 0.981, "Rowan — his son",
+                  "His son, born in December, energetic in the way that is its own weather."),
+            spoke("person.father", .person, 0.987, "Robert C. Martin — his father",
+                  "His father, who taught the discipline the video series is about."),
+            spoke("person.wife.wants", .person, 0.986, "Ela, on the move",
+                  "She wants somewhere to come back to, which is a different goal from his."),
+
+            spoke("goal.company", .goal, 0.984, "Make the company a huge success",
+                  "The goal every working hour is spent against."),
+            spoke("goal.compound", .goal, 0.984, "A family compound",
+                  "Land, eventually, with the whole family on it."),
+            spoke("goal.debt", .goal, 0.986, "Get out of debt",
+                  "His stated first priority, ahead of everything that costs money."),
+            spoke("goal.build", .goal, 0.986, "Build in Tennessee",
+                  "His parents would buy the land and the build would follow."),
+            spoke("goal.series", .goal, 0.987, "A video series with his dad",
+                  "On agentic discipline, recorded in the gaps of a working week."),
+            spoke("goal.tennessee", .goal, 0.987, "The Tennessee possibility",
+                  "Weighed rather than decided, and still open."),
+            spoke("goal.weight", .goal, 0.990, "Get back to 185 pounds",
+                  "About thirty pounds, and he has said the number twice."),
+            spoke("goal.enterprise", .goal, 0.994, "An enterprise identity solution",
+                  "Outlined against a competitor he named."),
+
+            spoke("fact.role", .fact, 0.981, "Head of engineering",
+                  "He runs engineering at the startup."),
+            spoke("fact.home", .fact, 0.981, "Lives outside Austin",
+                  "He and his family live just south of the city."),
+            spoke("fact.company", .fact, 0.981, "The company prevents fraud in private markets",
+                  "What it is for, in his own words."),
+            spoke("fact.method", .fact, 0.981, "Identity and bank account verification",
+                  "How the product actually works."),
+            spoke("fact.reminders", .fact, 0.981, "Wants unprompted practical reminders",
+                  "He values the ones that arrive before he asks."),
+            spoke("fact.leaving", .fact, 0.986, "Reasons for leaving the state",
+                  "Taxes, opportunity, and the direction of travel."),
+            spoke("fact.debt", .fact, 0.986, "Currently in debt",
+                  "He says major purchases are out of reach until it is cleared."),
+            spoke("fact.house", .fact, 0.986, "The house",
+                  "Owned, and expected to carry part of the next move."),
+            spoke("fact.debtshape", .fact, 0.986, "The shape of the debt",
+                  "A mortgage, a car loan, and one large balance behind both."),
+            spoke("fact.treasurer", .fact, 0.986, "An agent holds his financial state",
+                  "The numbers live somewhere other than his head."),
+            spoke("fact.commute", .fact, 0.987, "Records scenes during his commute",
+                  "The series is filmed in a car, on purpose."),
+            spoke("fact.times", .fact, 0.987, "Daily commute times",
+                  "Out at a quarter to nine, back between five and six."),
+            spoke("fact.parents", .fact, 0.987, "His parents have seen the land",
+                  "Twice, and they came back in favour."),
+            spoke("fact.partnership", .fact, 0.990, "How he and his wife run the week",
+                  "A standing arrangement, and it is the reason the days have a shape."),
+            spoke("fact.tasks", .fact, 0.990, "Daily tasks he sets for his wife",
+                  "Most mornings, against her own goals rather than his."),
+            spoke("fact.competitor", .fact, 0.994, "The competitor",
+                  "In some ways a competitor to what he is building."),
+            spoke("fact.avatar", .fact, 0.999, "Preferred avatar expression",
+                  "He liked the earnest one and found the other one wrong."),
+
+            spoke("decision.foundation", .decision, 0.986,
+                  "Won't build a family foundation in a declining state",
+                  "The decision under the move, stated once and clearly."),
+        ]
+
+        // **Every edge is the same edge.** Hub to star, `stated`, `observed`, near enough to
+        // one because none of them is a day old. There is not a single connection between two
+        // things she knows about him — which is the whole point of this fixture.
+        let edges: [ConstellationEdge] = nodes.dropFirst().map { node in
+            ConstellationEdge(
+                id: "e.\(node.id)",
+                from: hub,
+                to: node.id,
+                species: .observed,
+                confidence: node.confidence,
+                relation: "stated",
+                reasoning: nil,
+                touchedAt: ConstellationFixture.yesterday)
+        }
 
         return ConstellationSnapshot(
             nodes: nodes, edges: edges, capturedAt: ConstellationFixture.now)

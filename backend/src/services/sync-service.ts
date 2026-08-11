@@ -47,18 +47,35 @@ import type { Database } from "./sqlite.js";
  * conflated by accident.
  */
 
-/** Every type the feed can carry, in the contract's own order. */
-export const SYNC_RESOURCE_TYPES: readonly SyncResourceType[] = [
-  "conversation",
-  "message",
-  "reminder",
-  "todo",
-  "goal",
-  "device",
-  "delivery",
-  "job",
-  "run",
-];
+/**
+ * Every type the feed can carry, in the contract's own order.
+ *
+ * Spelled as a `Record` over `SyncResourceType` and then flattened, rather than
+ * written as an array, so **a type added to the contract and forgotten here is
+ * a compile error**. As a plain `readonly SyncResourceType[]` it was not: the
+ * array stayed assignable, `changes()` defaulted to a list missing the new
+ * type, and `GET /sync` answered `200` with an empty page — a resource that
+ * silently never reaches a device, which is the exact class of failure this
+ * endpoint's whole design is built to rule out.
+ *
+ * Same trick `SyncResolvers` uses one screen down, and for the same reason.
+ */
+const EVERY_TYPE: Readonly<Record<SyncResourceType, true>> = {
+  conversation: true,
+  message: true,
+  reminder: true,
+  todo: true,
+  goal: true,
+  device: true,
+  delivery: true,
+  job: true,
+  run: true,
+  sending: true,
+};
+
+export const SYNC_RESOURCE_TYPES: readonly SyncResourceType[] = Object.keys(
+  EVERY_TYPE,
+) as readonly SyncResourceType[];
 
 /**
  * How a resource is fetched, by type.

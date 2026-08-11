@@ -278,6 +278,79 @@ export type CreateAttachmentRequest = {
 };
 
 /**
+ * Where the **video** got to. It says nothing about the words, which
+ * were delivered before this field had any value at all.
+ *
+ * `pending` — a render is being followed, compressed, or poster-framed.
+ * `ready`   — `video` is attached and playable.
+ * `failed`  — there will be no video, and `reason` says why in a
+ *             sentence. The words stand either way.
+ *
+ * A client renders all three: a row with her words and the date is a
+ * complete row. `failed` is not an error state to hide — it is the
+ * honest one, and hiding it would be the silence this project refuses.
+ */
+export type SendingState = "pending" | "ready" | "failed";
+
+/**
+ * Something she wanted to say, in her own face.
+ *
+ * ## The words are never contingent on the video
+ *
+ * `words` and `messageId` are written before a render is asked about and
+ * are never touched again. Whatever happens to the video, he has already
+ * received what she wanted to say, and the push notification carried
+ * **her sentence** — never *"Syl sent you a video"*, which would be a
+ * notification about the app rather than from her.
+ *
+ * ## Nothing can delete a sending
+ *
+ * Not a cache eviction, not a cleanup job, not her. The `sendings` table
+ * carries `BEFORE DELETE` and `BEFORE UPDATE` triggers that `RAISE(ABORT)`
+ * unconditionally, and the message and attachment a sending points at are
+ * guarded the same way, so the words and the video cannot be removed out
+ * from under it either. There is **no named exception** — unlike the
+ * memory tables, which admit one for the Commander's explicit order.
+ * A belief the system holds about him is his to correct; a thing she
+ * gave him is not the system's to take back.
+ *
+ * The only writes the triggers permit are filling in what was not known
+ * yet: `video`, `state`, `reason`, `updatedAt`.
+ *
+ * ## The full-quality render is the record
+ *
+ * `renderName` addresses the original mp4, which is never modified and
+ * never compressed in place. `video` is a *derived, regenerable* copy,
+ * made small enough to live under the attachment ceiling. Losing the
+ * derived copy costs a re-encode; losing the record would cost the thing
+ * itself.
+ */
+export type Sending = {
+  readonly id: Id;
+  readonly words: string;
+  readonly because: string;
+  readonly messageId: Id;
+  readonly state: SendingState;
+  readonly renderName: string | null;
+  readonly video: Attachment | null;
+  readonly reason: string | null;
+  readonly createdAt: Instant;
+  readonly updatedAt: Instant;
+};
+
+export type SendingPage = {
+  readonly items: Sending[];
+  readonly nextCursor: string | null;
+  readonly hasMore: boolean;
+};
+
+export type CreateSendingRequest = {
+  readonly words: string;
+  readonly because: string;
+  readonly renderName: string;
+};
+
+/**
  * Drives the catch-up policy, which is why it is stored on the row.
  *
  * A `commitment` never collapses: it fires late and says it is late.
@@ -310,8 +383,8 @@ export type Reminder = {
   readonly id: Id;
   readonly kind: ReminderKind;
   readonly text: string;
-  readonly because?: string | null;
-  readonly origin?: ReminderOrigin | null;
+  readonly because: string | null;
+  readonly origin: ReminderOrigin | null;
   readonly todoId: Id | null;
   readonly eventId: Id | null;
   readonly wallTime: WallTime;
@@ -563,9 +636,25 @@ export type AcknowledgeDeliveryRequest = {
  * model could create arbitrary recurring jobs, a prompt injection
  * inside an article becomes a job that speaks to him every morning.
  *
- * Note the shape of the catalogue: the two kinds with a hard guarantee
- * attached, `reminder_delivery` and `maintenance`, are the two that use
- * no turns. That is not a coincidence.
+ * Note the shape of the catalogue: `reminder_delivery` is the kind with
+ * a hard guarantee attached, and it is the one that uses no turns. That
+ * is not a coincidence.
+ *
+ * **The catalogue is closed in the DATABASE too**, as a `CHECK` on
+ * `jobs.kind` (`0007_jobs.sql`), and widening it is not a small change:
+ * SQLite cannot alter a `CHECK` in place, and `runs.job_id` carries
+ * `ON DELETE CASCADE`, so dropping and recreating `jobs` performs an
+ * implicit `DELETE` that takes **every run record with it** — verified
+ * against node:sqlite 3.51.3 before this note was written. The run
+ * ledger is what the daily reaching-him ceiling is counted from, so a
+ * new kind costs the history that bounds her.
+ *
+ * `maintenance` is therefore the general-purpose scheduled kind, and it
+ * carries the **render review**: the deferred self-wake that ends in her
+ * decision about a render she started — is it finished, does it look
+ * right, does she still want to send it (`jobs/render-review-job.ts`).
+ * Most of its passes spend no turn at all; a render that is still going
+ * is deferred, not discussed.
  */
 export type JobKind = "reminder_delivery" | "morning_agenda" | "evening_review" | "heartbeat" | "nightly_consolidation" | "research_brief" | "content_ingestion" | "maintenance";
 
@@ -844,7 +933,15 @@ export type MemoryConstellation = {
   readonly filaments: MemoryFilament[];
 };
 
-export type SyncResourceType = "conversation" | "message" | "reminder" | "todo" | "goal" | "device" | "delivery" | "job" | "run";
+/**
+ * `sending` is on the feed and `attachment` is not, and the difference is
+ * the rule: an attachment is never interesting on its own — a device
+ * wants it exactly when it wants the message carrying it, and
+ * `Message.attachments` is served inline. A sending has its own surface,
+ * its own list and its own lifecycle after the message is written, so it
+ * is the resource that changes when a video finally lands.
+ */
+export type SyncResourceType = "conversation" | "message" | "reminder" | "todo" | "goal" | "device" | "delivery" | "job" | "run" | "sending";
 
 export type SyncChangeOp = "upsert" | "delete";
 
