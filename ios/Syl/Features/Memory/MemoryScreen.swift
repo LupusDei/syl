@@ -130,7 +130,7 @@ struct MemoryScreen: View {
     /// Where the graph comes from. Defaults to nothing, which is the honest state until the
     /// device-scoped read lands — and is also the real state of a brand new pairing, so it
     /// is not a placeholder in either case.
-    init(source: @escaping ConstellationSource = { .empty }) {
+    init(source: @escaping SkySource = { .empty }) {
         _model = StateObject(wrappedValue: ConstellationViewModel(source: source))
     }
 

@@ -11,10 +11,18 @@ import Foundation
 /// `GoalListSnapshot` already make, and it is what lets the one screen in this project
 /// whose acceptance is *aesthetic* be looked at before its transport exists.
 ///
-/// Named `Constellation*` rather than `Memory*` on purpose: the device-scoped read is
-/// being built in parallel and will land its own types in SylKit. Two modules owning a
-/// `MemoryNode` is an ambiguity the compiler resolves quietly and in whichever direction
-/// it likes.
+/// ## Named `Constellation*` rather than `Memory*`, and that turned out to be load-bearing
+///
+/// The device-scoped read was built in parallel and landed `MemoryStar`, `MemoryFilament`,
+/// `MemoryConstellation`, `MemoryNodeKind`, `MemoryTier` and `MemoryEdgeSpecies` in SylKit
+/// while this was being drawn. Three of these types were first written as `MemoryNodeKind`,
+/// `MemoryNodeTier` and `MemoryEdgeSpecies` — two of which collide exactly.
+///
+/// A same-named type in the app module and in an imported one does not fail to build. It
+/// *shadows*, silently, and whichever one a file gets depends on what it imports — which
+/// is the worst possible failure mode for the adapter that will convert between them. So
+/// everything here carries the `Constellation` prefix without exception, and the SylKit
+/// names are left alone.
 struct ConstellationSnapshot: Equatable, Sendable {
     var nodes: [ConstellationNode] = []
     var edges: [ConstellationEdge] = []
@@ -33,8 +41,8 @@ struct ConstellationNode: Equatable, Sendable, Identifiable {
     /// It must be stable across launches, or the sky rearranges itself, which is the one
     /// failure the whole layout exists to avoid.
     var id: String
-    var kind: MemoryNodeKind
-    var tier: MemoryNodeTier
+    var kind: ConstellationKind
+    var tier: ConstellationTier
     /// `0...1`. Brightness **is** this number; nothing quantises it.
     var confidence: Double
     /// Her words for it. Unused by the drawing, and carried anyway — the card and the
@@ -58,14 +66,14 @@ struct ConstellationEdge: Equatable, Sendable, Identifiable {
     var id: String
     var from: String
     var to: String
-    var species: MemoryEdgeSpecies
+    var species: ConstellationSpecies
     /// `0...1`, decaying asymptotically toward zero. It never arrives, which is why a
     /// filament fades rather than vanishing.
     var confidence: Double
 }
 
 /// The seven kinds in the graph.
-enum MemoryNodeKind: String, Equatable, Sendable, CaseIterable {
+enum ConstellationKind: String, Equatable, Sendable, CaseIterable {
     case fact
     case memory
     case person
@@ -84,7 +92,7 @@ enum MemoryNodeKind: String, Equatable, Sendable, CaseIterable {
 }
 
 /// How far back a node sits.
-enum MemoryNodeTier: String, Equatable, Sendable, CaseIterable {
+enum ConstellationTier: String, Equatable, Sendable, CaseIterable {
     case hot
     case cold
     /// Not gone. The dimmest thing on the field — present if he goes looking, invisible
@@ -93,7 +101,7 @@ enum MemoryNodeTier: String, Equatable, Sendable, CaseIterable {
 }
 
 /// He said it, or she worked it out.
-enum MemoryEdgeSpecies: String, Equatable, Sendable, CaseIterable {
+enum ConstellationSpecies: String, Equatable, Sendable, CaseIterable {
     case observed
     case inferred
 }

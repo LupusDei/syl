@@ -33,7 +33,7 @@ extension ConstellationSnapshot {
     /// The rich sky. Seven anchors, thirty-one orbiting them, forty-one threads.
     static let fixture: ConstellationSnapshot = {
         func node(
-            _ id: String, _ kind: MemoryNodeKind, _ tier: MemoryNodeTier,
+            _ id: String, _ kind: ConstellationKind, _ tier: ConstellationTier,
             _ confidence: Double, _ label: String, _ anchor: String? = nil,
             _ learned: String? = nil
         ) -> ConstellationNode {
@@ -136,7 +136,7 @@ extension ConstellationSnapshot {
         ]
 
         func edge(
-            _ id: String, _ from: String, _ to: String, _ species: MemoryEdgeSpecies,
+            _ id: String, _ from: String, _ to: String, _ species: ConstellationSpecies,
             _ confidence: Double
         ) -> ConstellationEdge {
             ConstellationEdge(id: id, from: from, to: to, species: species, confidence: confidence)
@@ -147,7 +147,7 @@ extension ConstellationSnapshot {
         // difference has to be visible without a key.
         var edges: [ConstellationEdge] = nodes.compactMap { node in
             guard let anchorId = node.anchorId else { return nil }
-            let species: MemoryEdgeSpecies = node.kind == .decision || node.kind == .memory
+            let species: ConstellationSpecies = node.kind == .decision || node.kind == .memory
                 ? .inferred
                 : .observed
             return edge("e.\(node.id)", node.id, anchorId, species, node.confidence)

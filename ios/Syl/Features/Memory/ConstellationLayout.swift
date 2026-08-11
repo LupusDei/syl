@@ -300,7 +300,7 @@ struct ConstellationLayout: Sendable {
     /// The three are 0.34 apart and the age term below is worth at most 0.20, so the bands
     /// cannot cross. `suppressed` is not gone — it is the furthest and faintest thing on
     /// the field, which is constraint 6 drawn rather than described.
-    static func tierDepth(_ tier: MemoryNodeTier) -> Double {
+    static func tierDepth(_ tier: ConstellationTier) -> Double {
         switch tier {
         case .hot: return 1.00
         case .cold: return 0.66
@@ -312,7 +312,7 @@ struct ConstellationLayout: Sendable {
     static let ageDepthFalloff = 0.20
 
     /// A node's depth. 1 is nearest; 0 is as far back as this sky goes.
-    static func depth(tier: MemoryNodeTier, learnedAt: Date?, now: Date) -> Double {
+    static func depth(tier: ConstellationTier, learnedAt: Date?, now: Date) -> Double {
         let aged: Double
         if let learnedAt {
             let days = now.timeIntervalSince(learnedAt) / 86_400

@@ -66,7 +66,7 @@ struct PreparedFilament: Equatable, Sendable, Identifiable {
     var toSeed: Int
     var fromDepth: Double
     var toDepth: Double
-    var species: MemoryEdgeSpecies
+    var species: ConstellationSpecies
     var alpha: Double
     var width: Double
     /// How far the line bows out of true, as a fraction of its own length. Seeded, so a
@@ -210,7 +210,7 @@ struct SkyPreparer: Sendable {
     /// weight every cluster rendered as a dandelion and the lines across the sky lost to
     /// the spokes inside it, which is R1's hairball arriving by the side door.
     static func filamentAlpha(
-        species: MemoryEdgeSpecies,
+        species: ConstellationSpecies,
         confidence: Double,
         haze: Double,
         betweenAnchors: Bool = true

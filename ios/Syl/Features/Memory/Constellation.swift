@@ -306,7 +306,7 @@ struct Constellation: View {
         additive ? SylTheme.Colour.luminanceCore : haloColour(tint)
     }
 
-    private func filamentColour(_ species: MemoryEdgeSpecies) -> Color {
+    private func filamentColour(_ species: ConstellationSpecies) -> Color {
         species == .observed ? SylTheme.Colour.luminance : SylTheme.Colour.greyBlue
     }
 }

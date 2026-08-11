@@ -4,10 +4,18 @@ import SwiftUI
 /// Where a sky comes from.
 ///
 /// A closure rather than a protocol, and rather than a `LocalStore` reference, because the
-/// device-scoped read is being built in parallel and this screen must be renderable,
-/// previewable and testable before it exists. When it lands, its wiring is one adapter
-/// function handed in here — not a change to anything that draws.
-typealias ConstellationSource = @Sendable () async -> ConstellationSnapshot
+/// device-scoped read was built in parallel and this screen had to be renderable,
+/// previewable and testable before it existed. Its wiring is one adapter function handed in
+/// here — not a change to anything that draws.
+///
+/// **`SkySource`, not `ConstellationSource`, and that is not a stylistic choice.** The
+/// parallel squad landed a `ConstellationSource` struct in this same module
+/// (`Core/Services/ConstellationSource.swift`) — disk first, network second, wrapping
+/// `LocalStore`. Two declarations of one name in one module do not shadow, they fail to
+/// build, so this is the name that has to move. The two are complementary and not
+/// alternatives: theirs answers *where the bytes come from*, this one is the seam a
+/// preview, a test or an offscreen render fills with a value.
+typealias SkySource = @Sendable () async -> ConstellationSnapshot
 
 /// Owns the constellation's lifecycle; every view below it stays a pure function of values.
 ///
@@ -27,11 +35,11 @@ final class ConstellationViewModel: ObservableObject {
     /// gets to say so.
     @Published private(set) var hasRead = false
 
-    private let source: ConstellationSource
+    private let source: SkySource
     private var snapshot: ConstellationSnapshot = .empty
     private var preparedFor: CGSize = .zero
 
-    init(source: @escaping ConstellationSource) {
+    init(source: @escaping SkySource) {
         self.source = source
     }
 
