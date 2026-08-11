@@ -1207,3 +1207,37 @@ The lesson is not "don't script it". It is that **an additive resolve is safe
 for declarations and unsafe for call sites**: two branches adding a field each
 to the same initialiser produce two complete calls, and concatenating them is
 never what you want. Resolve declarations by union, and call sites by hand.
+
+### The sky chased a third of a point (2026-08-11)
+
+*"Whenever I click on a node, the screen starts kind of zooming in and moving up on its
+own and is hard to stop."*
+
+`ConstellationViewModel.resize(to:)` guarded with `size != preparedFor` — exact `CGSize`
+equality. The card's arrival perturbs the geometry by a fraction of a point, that counted
+as a new screen, and **the sky's layout is a function of its size**, so every star was
+placed again. Which closed a ring: a re-laid sky has a new `size`, which sets
+`ConstellationBand.tallestCard(in:)`, which decides what the card fits into, which
+perturbs the geometry — back to the start. The whole field slowly scaling and sliding,
+with no gesture that could catch it.
+
+**Every line in that ring is correct on its own**, which is why nothing caught it: the
+resize guard, the band, the card's fitting, the reveal — each is right, and each test of
+each one passes. The defect exists only in the cycle. A unit test per component cannot
+see it, and the test that does had to be about *stillness* rather than about any one
+function's output: read at a size, wobble it by tenths of a point, assert the sky does
+not move.
+
+Two rules:
+
+1. **Compare geometry with a tolerance, never with `==`.** A point is the threshold,
+   because below it nothing on screen can change, so there is nothing to compute. Exact
+   float equality on a measured value is a promise no layout system makes.
+2. **When a value both derives from layout and feeds back into it, that ring is the
+   feature's real risk surface** — write the test that runs it round.
+
+Worth noting what the diagnosis cost: I read the pan maths three times looking for a
+compounding zoom, because "zooming" sounds like a scale bug. Nothing in the transform
+touched scale. The zoom was the *layout* rescaling, and the symptom named the wrong
+subsystem — I found it by testing the invariant he described (**the sky should be still**)
+rather than by hunting the mechanism he guessed at.

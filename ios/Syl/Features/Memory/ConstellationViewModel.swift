@@ -55,8 +55,20 @@ final class ConstellationViewModel: ObservableObject {
     /// Guarded, because `GeometryReader` republishes its size for reasons that are not a
     /// size change, and re-preparing the sky on each of them would be a detached task per
     /// layout pass.
+    ///
+    /// **The guard is a tolerance, not an equality, and that distinction was a bug he could
+    /// see.** With `!=`, a third of a point counted as a new screen — and the sky's layout
+    /// is a function of its size, so every star moved. Worse, it closed a ring: a re-laid
+    /// sky has a new ``PreparedSky/size``, which sets ``ConstellationBand/tallestCard(in:)``,
+    /// which decides what the card fits into, which perturbs the geometry again. Tapping a
+    /// star started it, and it looked exactly like what it was — the whole field slowly
+    /// scaling and sliding, and no gesture that could catch it.
+    ///
+    /// A point is the right threshold because it is the smallest change that can move a
+    /// pixel on any screen we run on. Below it there is nothing to redraw, so there is
+    /// nothing to compute.
     func resize(to size: CGSize) async {
-        guard size != preparedFor else { return }
+        guard !size.isWithinAPoint(of: preparedFor) else { return }
         await prepare(size: size)
     }
 
@@ -82,5 +94,18 @@ final class ConstellationViewModel: ObservableObject {
 
         preparedFor = size
         sky = prepared
+    }
+}
+
+// MARK: - Stillness
+
+extension CGSize {
+    /// Whether these two sizes are the same screen as far as anything drawable is concerned.
+    ///
+    /// Compared per axis rather than by distance: a size is two independent measurements,
+    /// and a rotation that swaps them is a real change on both even where the diagonal
+    /// barely moves.
+    func isWithinAPoint(of other: CGSize) -> Bool {
+        abs(width - other.width) < 1 && abs(height - other.height) < 1
     }
 }

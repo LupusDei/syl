@@ -260,7 +260,10 @@ struct ConstellationView: View {
                     ceiling: ConstellationBand.tallestCard(in: sky.size),
                     onDismiss: { select(nil) },
                     onHeight: { height in
-                        guard height != cardHeight else { return }
+                        // A tolerance, for the same reason `resize` uses one: a sub-pixel
+                        // difference cannot move anything on screen, and acting on it here
+                        // restarts the settle spring on a sky that had already arrived.
+                        guard abs(height - cardHeight) >= 1 else { return }
                         cardHeight = height
                         withAnimation(reduceMotion ? nil : SylTheme.Motion.settle) { makeRoom() }
                     }
