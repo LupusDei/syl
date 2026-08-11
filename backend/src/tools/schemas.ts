@@ -97,6 +97,12 @@ export const TOOLS: readonly ToolSchema[] = [
         text: { type: "string", description: "What to bring back, in his words where you have them." },
         when: WHEN,
         because: BECAUSE,
+        origin: {
+          type: "string",
+          enum: ["he_asked", "she_noticed"],
+          description:
+            "he_asked only when he actually asked for this, in this conversation. If you thought of it, or you are not sure, say she_noticed — he needs to know which are yours.",
+        },
         // URGENCY IS DESCRIBED, NEVER DECIDED — `syl-j55`.
         //
         // This was `urgent: boolean`, and a boolean is a DECISION. `schedule.ts`

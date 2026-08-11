@@ -1081,6 +1081,35 @@ and the Commander found the missing project registration before I did.
 
 ---
 
+**"The platform cannot do X" — believed twice, checked neither time, wrong both
+times.** This is now a repeat offender and deserves its own line.
+
+| what we believed | how long it stood | what it cost |
+|---|---|---|
+| a turn cannot complete with stdin open, so one subprocess per turn | months, and it decided the whole architecture | a 4-7x latency floor on every turn Syl takes |
+| Syl cannot send a message under her own name | the length of one epic's planning | an epic designed around an impersonation workaround |
+
+The second was found on 2026-08-11. `POST /api/messages` stamps every message
+`from: "user"`, so the obvious integration would have had Syl asking the
+treasurer about the Commander's money **in his voice**. That was true, and the
+conclusion drawn from it — that she had no identity available — was not: the MCP
+path carries one, and a probe came back `from: 'syl'`, `role: 'agent'` on the
+first try.
+
+Both share a shape worth naming: **a real observation, generalised into a
+capability claim, and never re-tested.** The first was correctly measured and
+went stale; the second was correctly measured about the *wrong door*. Neither
+was carelessness, and that is the point — the check is cheap and the belief is
+load-bearing, so the rule is to spend ten minutes proving a platform limit
+before designing around it.
+
+Related, and the same failure from the other side: `maxWorkers: 3` was a
+measurement taken on a 20-core machine and committed as a constant, then applied
+to a 2-core CI runner. **A measurement is a fact about a time and a place; a
+constant is a claim about everywhere.** Writing one down as the other is the
+same move as a hard-coded "she cannot act yet".
+
+
 ## 11. Reference
 
 | Bead | What |

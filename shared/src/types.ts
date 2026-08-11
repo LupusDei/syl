@@ -289,6 +289,18 @@ export type CreateAttachmentRequest = {
 export type ReminderKind = "commitment" | "rhythm";
 
 /**
+ * `he_asked` — he requested it in the conversation.
+ * `she_noticed` — she offered it unprompted.
+ *
+ * DERIVED rather than claimed wherever it can be: a heartbeat or dream
+ * turn has no message from him at all, so "she thought of it" is a fact
+ * about that turn rather than a self-report — and those are exactly the
+ * 3am ones. Same rule as `urgentBecauseHeSaid`: a conclusion can only be
+ * trusted, evidence can be checked.
+ */
+export type ReminderOrigin = "he_asked" | "she_noticed";
+
+/**
  * `delivered` means APNs accepted the push. `acknowledged` means the
  * device confirmed it. Only the second one satisfies the guarantee.
  */
@@ -298,6 +310,8 @@ export type Reminder = {
   readonly id: Id;
   readonly kind: ReminderKind;
   readonly text: string;
+  readonly because?: string | null;
+  readonly origin?: ReminderOrigin | null;
   readonly todoId: Id | null;
   readonly eventId: Id | null;
   readonly wallTime: WallTime;

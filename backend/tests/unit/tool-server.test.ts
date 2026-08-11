@@ -1158,5 +1158,84 @@ describe("change_goal — the verb that ends one", () => {
   });
 });
 
+/**
+ * `syl-y82` — the reason she was required to give, and then kept.
+ *
+ * `remind_me` demanded `because` from the day it shipped and threw it away.
+ * artanis found it the way it had to be found: reading the store while chasing
+ * something else, seeing "text Ela and tell her you love her" with a message
+ * drafted, and telling the Commander nobody had asked her for it. He had
+ * asked. **If it fooled a careful reader with the database open, it will fool
+ * him with a notification.**
+ *
+ * `SOUL.md` promises two things about anticipation — that he can tell a good
+ * suggestion from a wrong one, and that he can tell her to stop making a kind
+ * he does not want. Both were false while this was dropped on the floor.
+ */
+describe("a reminder remembers why it exists", () => {
+  it("should carry his reason into the store", async () => {
+    const api = fakeApi({
+      "/reminders": (made) => (made.method === "POST" ? ok(storedReminder(), 201) : ok(page([]))),
+      "/reminders/syl%3Areminder%3A0000": () => ok(storedReminder()),
+      "/health": () => ok({ now: new Date(NOW).toISOString() }),
+    });
+
+    await call(contextFor(api, "Remind me at 6 to text Ela."), "remind_me", {
+      text: "Text Ela and tell her you love her.",
+      when: { said: "at 6pm", kind: "time_of_day", wallTime: "18:00" },
+      because: "He mentioned she has had a hard week.",
+      origin: "he_asked",
+    });
+
+    const posted = api.calls.find((made) => made.method === "POST")?.body ?? {};
+    expect(posted["because"]).toBe("He mentioned she has had a hard week.");
+  });
+
+  it("should record that SHE thought of it when he never spoke", async () => {
+    // Derived, not claimed. A heartbeat or dream turn carries no message from
+    // him, so it cannot be a response to one — and those are exactly the 3am
+    // reminders, the case where he most needs to know it was hers.
+    const api = fakeApi({
+      "/reminders": (made) => (made.method === "POST" ? ok(storedReminder(), 201) : ok(page([]))),
+      "/reminders/syl%3Areminder%3A0000": () => ok(storedReminder()),
+      "/health": () => ok({ now: new Date(NOW).toISOString() }),
+    });
+
+    // No message from him at all — a heartbeat or a dream turn.
+    await call(contextFor(api, ""), "remind_me", {
+      text: "Dave's birthday is Thursday.",
+      when: { said: "tomorrow morning", kind: "part_of_day", part: "morning", day: "tomorrow" },
+      because: "He mentioned Dave in March.",
+      // She claims he asked. He did not say anything at all this turn.
+      origin: "he_asked",
+    });
+
+    const posted = api.calls.find((made) => made.method === "POST")?.body ?? {};
+    expect(posted["origin"]).toBe("she_noticed");
+  });
+
+  it("should fall to 'she noticed' when she does not claim he asked", async () => {
+    // The asymmetry, which is the whole design: a wrong "she noticed" gives her
+    // less credit than she is owed and is harmless. A wrong "he asked" tells
+    // him he said something he did not — the failure that fooled a careful
+    // reader. Silence falls the safe way.
+    const api = fakeApi({
+      "/reminders": (made) => (made.method === "POST" ? ok(storedReminder(), 201) : ok(page([]))),
+      "/reminders/syl%3Areminder%3A0000": () => ok(storedReminder()),
+      "/health": () => ok({ now: new Date(NOW).toISOString() }),
+    });
+
+    await call(contextFor(api, "I'm heading to Tennessee Friday."), "remind_me", {
+      text: "Pack for Tennessee.",
+      when: { said: "at 8pm", kind: "time_of_day", wallTime: "20:00" },
+      because: "He is travelling Friday.",
+    });
+
+    const posted = api.calls.find((made) => made.method === "POST")?.body ?? {};
+    expect(posted["origin"]).toBe("she_noticed");
+  });
+});
+
+
 
 

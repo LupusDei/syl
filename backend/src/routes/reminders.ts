@@ -145,6 +145,13 @@ export function createReminderRouter(options: ReminderRouterOptions): Router {
           rrule: optionalString(body, "rrule") ?? null,
           todoId: optionalString(body, "todoId") ?? null,
           urgent: body["urgent"] === true,
+          // `syl-y82`. Optional on the route because the phone and the admin
+          // also create reminders and have no reason to give; required by
+          // `remind_me`, which is where it was being demanded and dropped.
+          ...(body["because"] === undefined
+            ? {}
+            : { because: optionalString(body, "because") ?? null }),
+          ...(body["origin"] === undefined ? {} : { origin: String(body["origin"]) as never }),
         };
 
         try {

@@ -1,0 +1,43 @@
+-- Why a reminder exists, and whether HE asked for it.
+--
+-- `syl-y82`, found by artanis the way it had to be found: reading the store
+-- while chasing something else, seeing "text Ela and tell her you love her"
+-- with a message already drafted, and telling the Commander nobody had asked
+-- her for it. He corrected them — he had asked. The store could not tell an
+-- anticipated reminder from a requested one, so neither could a careful reader
+-- with the database open.
+--
+-- `remind_me` has REQUIRED `because` since it shipped. `tools/server.ts`
+-- refuses the call without one and says why: "so you can tell a good
+-- suggestion from a wrong one". It then dropped the field on the floor. Todos
+-- keep `source`, goals keep `why`; reminders — the verb that wakes him at
+-- 3am — kept nothing.
+--
+-- SOUL.md promises him two things about anticipation:
+--
+--     "every unprompted thing you offer carries its reason, and you say the
+--      reason... or he cannot tell a good suggestion from a wrong one, and
+--      cannot tell you to stop making a kind he does not want"
+--
+-- Both were false. She is already anticipating him — four birthdays, a pack
+-- for Tennessee, the one for Ela — so the feature was live and the thing that
+-- makes it a gift rather than a machine acting on his behalf was not.
+--
+-- TWO COLUMNS, BECAUSE THEY ANSWER DIFFERENT QUESTIONS. Prose answers "why
+-- does this exist" and only sometimes "did he ask" — which is the one artanis
+-- actually got wrong. A list has to show him at a glance which are hers.
+--
+-- `origin` is DERIVED where it can be. A heartbeat or a dream turn has no
+-- message from him at all, so "she thought of it" is a fact about that turn
+-- rather than a claim she makes — and those are exactly the 3am ones. Where he
+-- is talking, she declares it and `because` sits beside it to be read against.
+-- Same rule as `urgentBecauseHeSaid`: a conclusion can only be trusted,
+-- evidence can be checked.
+--
+-- Nullable, and no backfill invented. Reminders written before this line
+-- genuinely have no recorded reason, and guessing one would be worse than the
+-- gap — a made-up provenance is exactly the claim-beyond-the-evidence this
+-- column exists to stop.
+ALTER TABLE reminders ADD COLUMN because TEXT;
+ALTER TABLE reminders ADD COLUMN origin TEXT
+  CHECK (origin IS NULL OR origin IN ('he_asked', 'she_noticed'));
