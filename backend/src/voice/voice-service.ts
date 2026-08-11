@@ -45,6 +45,14 @@ import type { SpeechBackend } from "./speech.js";
  * overstate what he has spent — the one direction an honest ledger must not err
  * in.
  *
+ * Two consequences follow from being a real record, and both are wanted rather
+ * than tolerated. A voiced clip appears in `RenderService.list()` and can be the
+ * answer to `latest()`, so `see_myself latest` will look at the clip she last
+ * spoke over — which is her most recent piece of work, and the frames in it are
+ * the render's own frames. And `spend().seconds` counts its length again, which
+ * is honest about what is on disk rather than about what was rendered; the
+ * number that is about money, `credits`, stays exact.
+ *
  * ## Why this awaits rather than returning a record and polling behind itself
  *
  * `RenderService` does the opposite, because a flagship render takes minutes
