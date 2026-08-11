@@ -931,6 +931,17 @@ Two specific forms of it, both bought the same night:
   introduced.** It shows the combined diff against the first parent, so a merge
   bringing in a large file reads exactly like a re-add. Use a path-filtered
   `git log`, or look at `%p`. A subject line is not topology.
+- **A dependency on a parent epic hides every descendant from `bd ready`**,
+  whatever the descendant's own edges say — and `bd dep cycles` reports nothing,
+  because a parent blocker is not a cycle. It cost a re-plan on `syl-013` and
+  hid an entire phase of `syl-015`. After wiring dependencies, run `bd ready` and
+  confirm the beads you believe are independent actually appear. Asserting the
+  graph is right is not the same as asking it.
+
+**A planning document that has gone stale is worse than one that never made the
+claim**, because it reads as current. When the tree moves under a plan — an edge
+cut, a phase unblocked, a branch merged — the plan is wrong until it is
+corrected, and the next agent has no way to know which parts aged.
 
 **If a property can be STATED, it can be forgotten. If it can be DERIVED, it
 cannot.** artanis's line, and the through-line under most of what follows —
