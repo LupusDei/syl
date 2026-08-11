@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Syl — a personal assistant harness driving Claude Code over its native stream-json stdio protocol.",
+  "description": "Syl \u2014 a personal assistant harness driving Claude Code over its native stream-json stdio protocol.",
   "engines": {
     "node": ">=22.13.0"
   },
@@ -17,7 +17,7 @@
     "machine and on no other kind of machine, which is exactly why it looks",
     "removable.",
     "",
-    "The iMac is Intel — darwin-x64 — and onnxruntime-node shipped no darwin-x64",
+    "The iMac is Intel \u2014 darwin-x64 \u2014 and onnxruntime-node shipped no darwin-x64",
     "binary from 1.24.0 onward. 1.23.0 is the last release that has one.",
     "@huggingface/transformers depends on an EXACT version above that (4.2.0",
     "pins onnxruntime-node@1.24.3), so npm installs it NESTED under",
@@ -26,7 +26,7 @@
     "",
     "Without this line, backend/src/memory/embed.ts dies at model load with",
     "\"Cannot find module '../bin/napi-v6/darwin/x64/onnxruntime_binding.node'\"",
-    "— a message that reads like a broken install and names nothing that would",
+    "\u2014 a message that reads like a broken install and names nothing that would",
     "lead you here. Verified by installing both versions and importing them on",
     "2026-08-09: 1.24.3 throws, 1.23.0 imports and runs.",
     "",
@@ -41,7 +41,7 @@
     "check:node": "node scripts/check-node.mjs",
     "check:deps": "node scripts/check-workspace-deps.mjs",
     "check:secrets": "node scripts/check-no-secrets.mjs",
-    "check:env": "npm run check:node && npm run check:deps && npm run check:secrets",
+    "check:env": "npm run check:node && npm run check:deps && npm run check:secrets && npm run check:nul",
     "pretypecheck": "npm run check:env",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
     "prebuild": "npm run check:env",
@@ -68,7 +68,8 @@
     "launchd": "tsx backend/src/ops/cli/launchd.ts",
     "predeploy": "npm run check:env",
     "deploy": "tsx backend/src/ops/cli/deploy.ts",
-    "video": "node scripts/video/generate.mjs"
+    "video": "node scripts/video/generate.mjs",
+    "check:nul": "node scripts/check-no-nul-bytes.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
