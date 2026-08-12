@@ -1,4 +1,4 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createConnection } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { queryLog } from "../../src/ops/log-query.js";
+import { HELPER_DEADLINE_MS } from "../helpers/budget.js";
+import { buildBackendOnce } from "../helpers/built-backend.js";
 
 /**
  * Syl, started and stopped as a **process**.
@@ -52,10 +54,15 @@ const entry = join(repoRoot, "backend", "dist", "index.js");
  * artifact exists, so the build is skipped, and the test passes against
  * something the source no longer says. Since this file's entire purpose is
  * process-level truth, testing a stale binary would defeat it completely.
+ *
+ * `buildBackendOnce` keeps that promise per RUN while skipping the second,
+ * identical build inside one — `launchd-entrypoint.test.ts` needs the same
+ * artifact and shares this process in the heavy pass. The hook's budget comes
+ * from `vitest.heavy.config.ts`, which sets it for the whole class.
  */
 beforeAll(() => {
-  execFileSync("npm", ["run", "build", "-w", "backend"], { cwd: repoRoot, stdio: "inherit" });
-}, 300_000);
+  buildBackendOnce();
+});
 
 /**
  * A port below 49152.
@@ -144,7 +151,7 @@ async function startProcess(
   };
   running.push(spawned);
 
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + HELPER_DEADLINE_MS;
   for (;;) {
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(`the service exited before it answered:\n${output}`);
@@ -186,7 +193,7 @@ describe("the service as a process", () => {
     // exactly the ungraceful stop this epic exists to remove.
     expect(signal).toBeNull();
     expect(code).toBe(0);
-  }, 60_000);
+  });
 
   it("should record the shutdown in its own log, where a human can find it", async () => {
     const service = await startProcess();
@@ -197,7 +204,7 @@ describe("the service as a process", () => {
     const records = queryLog(service.logDirectory, { event: "shutdown" });
     expect(records.map((record) => record.event)).toContain("shutdown.begin");
     expect(records.map((record) => record.event)).toContain("shutdown.complete");
-  }, 60_000);
+  });
 
   it("should put the credential source in the startup record", async () => {
     // `syl-007.2.2`. The one invariant that costs real money if it quietly
@@ -211,7 +218,7 @@ describe("the service as a process", () => {
 
     service.child.kill("SIGTERM");
     await service.exited;
-  }, 60_000);
+  });
 
   it("should release its port on a graceful stop", async () => {
     const service = await startProcess();
@@ -221,7 +228,7 @@ describe("the service as a process", () => {
     await service.exited;
 
     expect(await portIsFree(service.port)).toBe(true);
-  }, 60_000);
+  });
 
   it("should treat SIGINT the same way, so Ctrl-C is not a kill either", async () => {
     const service = await startProcess();
@@ -230,7 +237,7 @@ describe("the service as a process", () => {
     const { code } = await service.exited;
 
     expect(code).toBe(0);
-  }, 60_000);
+  });
 
   it("should shut down once when SIGTERM arrives twice", async () => {
     const service = await startProcess();
@@ -242,7 +249,7 @@ describe("the service as a process", () => {
     expect(code).toBe(0);
     const complete = queryLog(service.logDirectory, { event: "shutdown.complete" });
     expect(complete).toHaveLength(1);
-  }, 60_000);
+  });
 
   it("should come back after a SIGKILL, against the store it left behind", async () => {
     // `syl-007.4.2`. SIGKILL is what a wedge-killer, a panic, or a power cut
@@ -259,7 +266,7 @@ describe("the service as a process", () => {
 
     second.child.kill("SIGTERM");
     await second.exited;
-  }, 90_000);
+  });
 
   it("should refuse to start, loudly, when the environment is not a configuration", async () => {
     const directory = mkdtempSync(join(tmpdir(), "syl-proc-"));
@@ -291,5 +298,5 @@ describe("the service as a process", () => {
     expect(code).toBe(78);
     expect(output).toContain("SYL_TZ");
     rmSync(directory, { recursive: true, force: true });
-  }, 60_000);
+  });
 });

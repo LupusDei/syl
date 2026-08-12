@@ -23,7 +23,12 @@ worktrees/
 # matched a run started from here — and `npm run verify` writes the file into
 # whichever WORKSPACE it ran in. `backend/tests/.vitest-results.json` therefore
 # showed up as untracked for anyone who ran the gate the documented way.
-**/tests/.vitest-results.json
+#
+# The glob covers the per-pass files too. The suite runs as two vitest
+# processes — `.vitest-results.light.json` and `.vitest-results.heavy.json`,
+# one each — so a pattern naming only the old single file would start leaving
+# untracked results behind the day the split landed.
+**/tests/.vitest-results*.json
 
 # Apple signing and push keys. NEVER commit these.
 #

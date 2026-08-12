@@ -1,6 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFileSync } from "node:fs";
 
+import { HELPER_DEADLINE_MS } from "./budget.js";
+
 /**
  * A very small MCP client. Enough to be a client, and no more.
  *
@@ -11,8 +13,18 @@ import { readFileSync } from "node:fs";
  * connects to Syl's own API, and really writes a row.
  */
 
-/** How long a request gets before the test says so itself. */
-export const MCP_TIMEOUT_MS = 10_000;
+/**
+ * How long a request gets before the test says so itself.
+ *
+ * Derived from the heavy pass's budget rather than chosen here. It used to be
+ * a flat 10 000ms, and this server is started as `node --import tsx server.ts`
+ * — a cold TypeScript load of the whole tool surface — so on a loaded machine
+ * the handshake alone could spend most of it. When it did, the failure did not
+ * read as a timeout at all: the reject propagated as "she could not file", in a
+ * test about the quiet-hours bypass, which is the most alarming possible way to
+ * report that a laptop was busy.
+ */
+export const MCP_TIMEOUT_MS = HELPER_DEADLINE_MS;
 
 export interface JsonRpcResponse {
   readonly id?: number;
