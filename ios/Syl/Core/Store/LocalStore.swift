@@ -926,6 +926,22 @@ struct LocalStore: Sendable {
         }
     }
 
+    /// Records that the one-time to-do recovery has run. `syl-020`.
+    ///
+    /// Targeted UPDATE for the reason `setCursor` states — this row has several writers
+    /// and a whole-row write would roll one of them back. Writing the whole record here
+    /// would be worse than usual: the column next to it is the sync cursor, and rolling
+    /// THAT back would re-page thousands of rows.
+    func markTodosBackfilled(at instant: Date) throws {
+        try database.queue.write { db in
+            try SyncStateRecord().insert(db, onConflict: .ignore)
+            try db.execute(
+                sql: "UPDATE syncState SET todosBackfilledAt = ? WHERE id = ?",
+                arguments: [instant, SyncStateRecord.singletonID]
+            )
+        }
+    }
+
     /// Writes the frame-stream sequence **and the server run it belongs to**, and only
     /// those two. See `setCursor` for why it is a targeted UPDATE.
     ///
