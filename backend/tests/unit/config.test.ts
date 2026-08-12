@@ -343,7 +343,9 @@ describe("quiet hours", () => {
   });
 
   describe("loadQuietHours", () => {
-    it("should fall back to 22:00–08:00 in the Commander's zone", () => {
+    it("should fall back to 23:00–07:00 in the Commander's zone", () => {
+      // His machine sets neither variable, so this fallback IS the window the
+      // service runs on. The value itself is asserted in `quiet-window.test.ts`.
       expect(loadQuietHours({})).toEqual(DEFAULT_QUIET_HOURS);
     });
 
@@ -375,9 +377,13 @@ describe("quiet hours", () => {
 
   describe("loadConfig", () => {
     it("should carry the validated window onto the config", () => {
-      expect(loadConfig({ SYL_QUIET_START: "23:00" }).quietHours).toEqual({
-        quiet: { start: "23:00", end: "08:00" },
-        tz: "America/Chicago",
+      // One end overridden and the other left alone, so this asserts both that
+      // the override lands and that the default fills the gap. The start is
+      // deliberately not the default's, or an override that did nothing would
+      // pass.
+      expect(loadConfig({ SYL_QUIET_START: "21:30" }).quietHours).toEqual({
+        quiet: { start: "21:30", end: DEFAULT_QUIET_HOURS.quiet.end },
+        tz: DEFAULT_QUIET_HOURS.tz,
       });
     });
 
