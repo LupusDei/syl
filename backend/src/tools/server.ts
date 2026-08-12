@@ -7,6 +7,7 @@ import { AdjutantClient } from "../agents/adjutant-client.js";
 import { mayReach, notOnTheRoster } from "../agents/roster.js";
 
 import { verifyUrgency } from "../harness/urgency.js";
+import { sightingOf } from "../render/pictures.js";
 
 import { SylApiClient, type ToolFailure, type ToolResult } from "./client.js";
 import { TOOLS, type ToolSchema } from "./schemas.js";
@@ -108,11 +109,13 @@ export type ToolEnvelope =
        * become MCP image blocks in {@link asToolResult}. Never present on a
        * refusal: a failure carrying pictures would have her describing
        * something she was not shown.
+       *
+       * **`sighting` is required, and that is the point.** A picture she cannot
+       * name is a picture she cannot choose, so the type makes handing her one
+       * unrepresentable rather than leaving it to each code path to remember.
+       * Build these with {@link shown} and nothing else.
        */
-      readonly images?: readonly {
-        readonly mimeType: string;
-        readonly base64: string;
-      }[];
+      readonly images?: readonly Shown[];
     }
   | {
       readonly ok: false;
@@ -121,6 +124,43 @@ export type ToolEnvelope =
       readonly reason: string;
       readonly retryable: boolean;
     };
+
+/** A picture she is handed, and the token that names it. */
+export interface Shown {
+  readonly mimeType: string;
+  readonly base64: string;
+  /** The digest of exactly these bytes. See {@link shown}. */
+  readonly sighting: string;
+}
+
+/**
+ * A picture, named by the bytes she is about to be shown.
+ *
+ * **The token is a property of the act of being shown, not of where the picture
+ * was stored.** That distinction is the whole of `syl-ate`'s defect: sightings
+ * were computed for wardrobe rows, so the one face she could adopt was the one
+ * an engineer guessed before anyone knew her, and the still she actually wanted
+ * — an unsmiling frame nine and a half seconds into a render — arrived as a
+ * picture she could look at and could not promote.
+ *
+ * Computed **here**, from the base64 that becomes the image block, rather than
+ * read off whatever the service said about the file. Upstream describes a file;
+ * this describes what crossed. If those ever differ — a resize for the turn, a
+ * truncated read — trusting upstream would hand her a token for a picture she
+ * did not see, which is the one thing the mechanism exists to prevent. Failing
+ * closed, with a token her wardrobe does not recognise, is the safe direction.
+ *
+ * The guarantee is unchanged and unweakened: `sightingOf` is a digest of image
+ * bytes, so it cannot be derived from a filename, guessed from a name, or
+ * produced for anything she was not handed.
+ */
+export function shown(picture: { readonly mimeType?: string; readonly base64: string }): Shown {
+  return {
+    mimeType: picture.mimeType ?? "image/jpeg",
+    base64: picture.base64,
+    sighting: sightingOf(Buffer.from(picture.base64, "base64")),
+  };
+}
 
 /** What every handler is given. */
 export interface ToolContext {
@@ -1171,6 +1211,18 @@ interface FrameRow {
   readonly path: string;
 }
 
+/** One kept picture, as the wardrobe hands it over. */
+interface WardrobeRow {
+  readonly id: string;
+  readonly because: string;
+  readonly at: string;
+  readonly current: boolean;
+  readonly ratio: string | null;
+  readonly from: { readonly render: string; readonly atSeconds: number } | null;
+  readonly mimeType?: string;
+  readonly base64?: string;
+}
+
 /**
  * Look at one of her own renders.
  *
@@ -1223,6 +1275,11 @@ const seeMyself: ToolHandler = async (input, context) => {
   // hundred attempts, it's one attempt made a hundred times".
   const alreadySaid = (verdicts ?? []).map((row) => row.verdict);
 
+  // Every still, named by its own bytes. A picture she is shown and cannot
+  // adopt is the defect this closes: the frame she wanted was nine seconds into
+  // a render and reachable only through here.
+  const pictures = frames.map((frame) => shown(frame));
+
   return {
     ok: true,
     action: "see_myself",
@@ -1240,28 +1297,19 @@ const seeMyself: ToolHandler = async (input, context) => {
       // Without it she has four images and no idea which one is the end.
       at: frames.map((frame) => frame.atSeconds),
       files: frames.map((frame) => frame.path),
+      // What she quotes to `this_is_me`, in the same order as `at`, because the
+      // image blocks carry pixels and nothing she can read back. Without this
+      // she can look at a still and cannot choose it — which is how the only
+      // adoptable face stayed the one he guessed before he knew her.
+      sightings: pictures.map((picture) => picture.sighting),
       // Newest first. Empty on the first look, which is honest rather than
       // empty-as-in-broken: she has not judged this one yet.
       alreadySaid,
     },
     at: null,
-    images: frames.map((frame) => ({ mimeType: frame.mimeType, base64: frame.base64 })),
+    images: pictures,
   };
 };
-
-/** One kept picture, as the wardrobe hands it over. */
-interface WardrobeRow {
-  readonly id: string;
-  readonly because: string;
-  readonly at: string;
-  readonly current: boolean;
-  readonly ratio: string | null;
-  readonly from: { readonly render: string; readonly atSeconds: number } | null;
-  /** Only ever present beside the picture itself. See {@link lookAtWardrobe}. */
-  readonly sighting: string | null;
-  readonly mimeType?: string;
-  readonly base64?: string;
-}
 
 /**
  * Look at every face she has had, or every opening she can start from.
@@ -1289,31 +1337,38 @@ async function lookAtWardrobe(
 
   const { items, problems } = looked.data;
 
+  // The picture and its token, made together, so a row can never carry the name
+  // of a picture other than the one attached to it — and a row with no picture
+  // carries no name, which is the half that keeps her from adopting a face she
+  // has only read about.
+  const rows = items.map((item) => ({
+    row: item,
+    picture: item.base64 === undefined ? null : shown({ ...item, base64: item.base64 }),
+  }));
+
   return {
     ok: true,
     action: "see_myself",
     subject: {
       of,
-      items: items.map((item) => ({
-        id: item.id,
-        because: item.because,
-        at: item.at,
-        current: item.current,
+      items: rows.map(({ row, picture }) => ({
+        id: row.id,
+        because: row.because,
+        at: row.at,
+        current: row.current,
         // What a render made through this picture comes out as. On an opening
         // it is the whole reason the choice is visible: the opening decides
         // the shape, and she should know that before she picks one.
-        ratio: item.ratio,
-        from: item.from,
-        sighting: item.sighting,
+        ratio: row.ratio,
+        from: row.from,
+        sighting: picture?.sighting ?? null,
       })),
       // Empty on every ordinary machine. Anything else is a file a person has
       // to go and look at, and until one does she is not told which face is hers.
       problems: problems ?? [],
     },
     at: null,
-    images: items
-      .filter((item) => item.base64 !== undefined)
-      .map((item) => ({ mimeType: item.mimeType ?? "image/jpeg", base64: item.base64 ?? "" })),
+    images: rows.flatMap(({ picture }) => (picture === null ? [] : [picture])),
   };
 }
 

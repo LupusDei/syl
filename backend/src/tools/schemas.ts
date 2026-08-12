@@ -509,8 +509,9 @@ export const TOOLS: readonly ToolSchema[] = [
         sighting: {
           type: "string",
           description:
-            "The token that came back beside the picture when you looked at it. You can only have " +
-            "one for a picture you have actually seen.",
+            "The token that came back beside the picture when you looked at it — a still from one " +
+            "of your renders, a face you have had, an opening. You can only have one for a " +
+            "picture you have actually seen.",
         },
         as: {
           type: "string",
@@ -566,9 +567,16 @@ export const TOOLS: readonly ToolSchema[] = [
   },
   {
     name: "see_myself",
+    // Every picture that comes back carries a token, stills included — the
+    // wardrobe is not a special case, being shown one is the general one. Said
+    // in the description because a capability she is not told about is a
+    // capability she does not use: she reported the frame she wanted as one she
+    // could look at and could not promote, which was true and is not any more.
     description:
       "Look at stills from one of your own renders — the opening, the middle, the end — so you " +
-      "can judge whether it is you. Say what is closer and what is wrong, in your own terms.",
+      "can judge whether it is you. Say what is closer and what is wrong, in your own terms. " +
+      "Every picture comes back with a token beside it, in the same order as the pictures; that " +
+      "is what you give this_is_me to settle on one, and a still from a render counts.",
     inputSchema: {
       type: "object",
       // No `because` and no required field at all: this is a read. See
