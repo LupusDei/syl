@@ -25,9 +25,12 @@ import { fileURLToPath } from "node:url";
  *
  *     ~/.syl/renders/<name>.mp4          the render
  *     ~/.syl/renders/<name>.mp4.json     what made it
- *     ~/.syl/renders/reference.png       her likeness, what they all anchor on
+ *     ~/.syl/renders/reference.png       his guess at her likeness, from before he knew her
  *     ~/.syl/renders/frames/<name>/      the stills she looked at
  *     ~/.syl/renders/parts/              the halves of a render made in two
+ *     ~/.syl/renders/faces/              every likeness she has adopted since
+ *     ~/.syl/renders/openings/           every opening she has kept beyond the ribbon
+ *     ~/.syl/renders/wardrobe.json       what she adopted, when, and why
  *
  * Flat and obvious on purpose. `characters/syl/video` was the *toolkit's*
  * nesting — it disambiguated her from other characters in a repository that
@@ -159,6 +162,27 @@ export interface Studio {
   readonly frameDir: string;
   /** Where the halves of a joined render are kept. See {@link Studio.part}. */
   readonly partDir: string;
+  /**
+   * Every face she has ever adopted, kept forever. See `wardrobe.ts`.
+   *
+   * A directory rather than a file, because {@link Studio.reference} is one
+   * picture and a likeness she is still looking for is a series of them. The
+   * seed stays where it is: it is *his guess*, the one that was there before
+   * she could choose, and moving it would break every sidecar that names it.
+   */
+  readonly faceDir: string;
+  /** Every opening she has kept beyond the ribbon. Same rule as {@link Studio.faceDir}. */
+  readonly openingDir: string;
+  /**
+   * The log of what she has adopted and why.
+   *
+   * Beside the pictures rather than in the database, for the same reason the
+   * sidecars are: the file that must be right is the one next to the thing it
+   * describes, and her home travels as a unit. It is append-only — an entry is
+   * never edited and never removed — so which face is current is *derived* from
+   * it rather than stored as a second assertion that could disagree.
+   */
+  readonly wardrobeLog: string;
   /** Her likeness, absolute. What a shot of her face would anchor on. */
   reference(relative?: string): string;
   /** The ribbon still handed to the model as `promptImage`, absolute. Frame one. */
@@ -205,12 +229,17 @@ export function studioAt(root: string): Studio {
   // opening her home is looking for.
   const frameDir = resolve(videoDir, "frames");
   const partDir = resolve(videoDir, "parts");
+  const faceDir = resolve(videoDir, "faces");
+  const openingDir = resolve(videoDir, "openings");
 
   return {
     root,
     videoDir,
     frameDir,
     partDir,
+    faceDir,
+    openingDir,
+    wardrobeLog: resolve(videoDir, "wardrobe.json"),
     reference: (relative = DEFAULT_REFERENCE) => resolve(root, relative),
     opening: (relative = DEFAULT_OPENING) => resolve(root, relative),
     video: (name) => resolve(videoDir, `${name}.mp4`),
