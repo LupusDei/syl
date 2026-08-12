@@ -104,6 +104,24 @@ const UNDECLARED: readonly string[] = [
   // shows her renders: a second client would otherwise have to guess the body.
   "POST /renders/{name}/verdicts",
   "GET /renders/{name}/verdicts",
+  // `syl-ate` — every face she has adopted and every opening she can choose.
+  // Joins the render debt above rather than escaping it, and for the same
+  // reason: her tool server is the only client, it lives in this repository,
+  // and both shapes are pinned by `tests/unit/render-verbs.test.ts` and
+  // `tests/unit/renders.test.ts` against the same fakes.
+  //
+  // They are listed here rather than published because publishing them alone
+  // would put a child in the contract whose parent surface is not in it — a
+  // phone able to read her faces and unable to list the renders they came out
+  // of. When `/renders` is published these go with it, in one pass.
+  //
+  // **The POST is the one to publish first, ahead of every other write on this
+  // surface.** It is the only one that changes what she LOOKS LIKE, its
+  // `sighting` field is meaningless to a client that has not been handed the
+  // matching picture, and `because` is required on the Commander's ruling. A
+  // second client guessing at that body would be guessing at her likeness.
+  "GET /renders/wardrobe",
+  "POST /renders/wardrobe",
 ];
 
 /** Path parameters that are syntactically valid but name nothing. */
