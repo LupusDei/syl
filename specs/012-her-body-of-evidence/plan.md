@@ -54,7 +54,14 @@ it *is* an observation, at coarser resolution.
 | `backend/src/health/samples.ts` | the store: append, watermark, downsample |
 | `backend/src/health/derive.ts` | baselines and deviations, pure, no I/O |
 | `backend/src/health/review.ts` | the review turn's input and schema-validated output |
-| `backend/src/routes/health.ts` | `POST /health/samples`, `GET /health/watermarks`, `GET /health/series` |
+| `backend/src/routes/health-data.ts` | `POST /health/samples`, `GET /health/watermarks`, `GET /health/series` |
+
+**Not `routes/health.ts`** — that name was in the first draft of this plan and it
+is already taken by the service's LIVENESS endpoint, `GET /health`, which is the
+one unauthenticated route in the contract. Authentication is mounted on
+`/health/samples`, `/health/watermarks` and `/health/series` **by name and never on
+the `/health` prefix**, so a bearer check cannot land in front of liveness whatever
+the mount order turns out to be. Caught by the backend agent while building.
 | `backend/src/jobs/nightly-*.ts` | the review step, on the lane that already exists |
 | `frontend/src/…/Health*` | the admin view (US2) |
 

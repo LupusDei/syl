@@ -26,7 +26,7 @@
   `memory_nodes`, and a comment saying why the absence is the enforcement.
 - **T006** `[US1]` `backend/src/health/samples.ts` — append, idempotent on
   `(type, start, end, source)`; watermark read and advance.
-- **T007** `[US1]` `backend/src/routes/health.ts` — `POST /health/samples` with an
+- **T007** `[US1]` `backend/src/routes/health-data.ts` — `POST /health/samples` with an
   idempotency key, `GET /health/watermarks`. Device scope: his own data.
 - **T008** `[P]` `[US1]` **RED acceptance test**: *a re-upload changes nothing.*
   Same batch twice; the second is a no-op.
