@@ -69,12 +69,46 @@ export function isHealthType(value: unknown): value is HealthType {
 /**
  * What the phone can say about one type's permission.
  *
- * Three states and not two, because `notDetermined` and `denied` need different
- * things from him: one is a prompt he has not seen, the other is an answer he
- * gave. Collapsing them would mean re-asking for something he declined, which is
- * its own small betrayal.
+ * **Five states, and the last two were added because iOS cannot support three**
+ * (`syl-m3gi`, found while building `HealthReader`). The first draft of this file
+ * had `authorised | denied | notDetermined`, which is the model Apple's
+ * documentation reads like and is not the one the API can answer:
+ *
+ * - `authorizationStatus(for:)` answers about **sharing**. Syl requests read-only,
+ *   so after the sheet it returns `.sharingDenied` for all seven types whatever he
+ *   granted. It is the attractive wrong answer.
+ * - `statusForAuthorizationRequest(toShare:read:)` reliably proves
+ *   **`notDetermined`** — it answers "would iOS still show a prompt?".
+ * - A returned sample proves **`authorised`**. It is the only positive proof, and
+ *   it exists only when there is data.
+ *
+ * So *denied*, *authorised-but-quiet*, and *authorised-then-revoked* are ONE
+ * indistinguishable state on this platform. Narrowing them all to `denied` — which
+ * the reader had to do against the three-state contract — puts the empty-vs-denied
+ * conflation back one level up, in the field built to abolish it. `undisclosed`
+ * names it instead of hiding it.
+ *
+ * `unavailable` is separate because it is a different fact with a different
+ * remedy: no watch means no HRV, and telling him to grant a permission he has
+ * already granted is useless advice.
+ *
+ * **Only `authorised` makes silence evidence** ({@link silenceIsEvidence}), so
+ * adding states is safe in the direction that matters: an unproven type simply
+ * never licenses a conclusion drawn from its quiet.
+ *
+ * The residual, which no client-side code can close: **revocation after proof is
+ * undetectable.** The samples just stop. Named here so nobody looks for the API
+ * that would fix it.
  */
-export const AUTHORISATION_STATES = ["authorised", "denied", "notDetermined"] as const;
+export const AUTHORISATION_STATES = [
+  "authorised",
+  "denied",
+  "notDetermined",
+  /** Asked, and the platform will not say. See the block above. */
+  "undisclosed",
+  /** This device cannot measure it — no watch, no sensor. */
+  "unavailable",
+] as const;
 
 export type AuthorisationState = (typeof AUTHORISATION_STATES)[number];
 
@@ -184,5 +218,9 @@ export function unreportedTypes(
  * rather than about him.
  */
 export function silenceIsEvidence(state: AuthorisationState): boolean {
+  // Deliberately an equality and not a set of exclusions. Written as
+  // `state !== "denied"`, every state added later would silently become
+  // evidence -- which is how `undisclosed` would have started licensing
+  // conclusions about a body nobody looked at.
   return state === "authorised";
 }
