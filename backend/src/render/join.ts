@@ -136,10 +136,10 @@ export async function joinVideos(options: JoinOptions): Promise<JoinResult> {
   }
 
   mkdirSync(dirname(options.listFile), { recursive: true });
-  // Single quotes, and any quote inside a path doubled — ffmpeg's own escaping
-  // for the concat list. Render names are `[a-z0-9-]` so this cannot bite
-  // today; it is here so that a name rule loosened later does not silently
-  // become a way to write a directive into the list file.
+  // Single quotes, and a quote inside a path closed, escaped and reopened —
+  // `'\''`, the concat demuxer's own convention. Render names are `[a-z0-9-]`
+  // so this cannot bite today; it is here so that a name rule loosened later
+  // does not silently become a way to write a directive into the list file.
   writeFileSync(
     options.listFile,
     `${options.parts.map((part) => `file '${part.replace(/'/gu, "'\\''")}'`).join("\n")}\n`,

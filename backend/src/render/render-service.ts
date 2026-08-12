@@ -599,7 +599,13 @@ export class RenderService {
     // the first one ends on, so it cannot be submitted until that frame exists
     // — which is also what keeps the failure story simple: nothing has been
     // spent when this refuses, exactly as before.
-    const head = planned[0] as PlannedPart;
+    const head = planned[0];
+    if (head === undefined) {
+      // `#plan` always returns at least one generation. Checked rather than
+      // cast, because a cast is a promise to the compiler and this file
+      // already carries the scar of one that was not kept.
+      return { ok: false, reason: "I could not work out how to make that shot.", retryable: false };
+    }
     const submitted = await this.#backend.submit({
       model: DEFAULTS.model,
       promptImage: this.#promptImage(head),
@@ -913,7 +919,8 @@ export class RenderService {
 
     let current = record;
     for (let index = 0; index < current.parts.length; index += 1) {
-      const part = current.parts[index] as RenderPart;
+      const part = current.parts[index];
+      if (part === undefined) return;
       if (part.video !== null && existsSync(part.video)) continue;
 
       let taskId = part.taskId;
@@ -922,7 +929,7 @@ export class RenderService {
         // opening picture is a frame OF the first, which is what makes the cut
         // land on one frame rather than on two renderings of a similar one.
         const previous = current.parts[index - 1];
-        if (previous?.video == null) {
+        if (previous === undefined || previous.video === null) {
           this.#fail(current, "The half this one continues from is not on disk, so I stopped here.");
           return;
         }
