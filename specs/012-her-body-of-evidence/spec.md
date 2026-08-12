@@ -72,12 +72,20 @@ exception.
 
 **Retention: 60 days** at full resolution.
 
+**A health message may be `time-sensitive` and break through Focus.** His ruling,
+2026-08-12. This is a stronger permission than it looks: `time-sensitive` is the
+level that exists to pierce Focus, and Focus is on exactly when an interruption is
+most costly and most valuable. It is currently reserved for commitments and urgent
+reminders. Health joins that list — with the entitlement already carried by this
+app, and `syl-kqc` as the reminder that a payload claiming a level the binary was
+not signed for is accepted, downgraded, and delivered silently.
+
 **The admin shows the raw data**, not only what she made of it.
 
 ### Types, at the start
 
-Four he named — **heart rate, HRV, sleep, steps** — plus two this spec adds and
-flags for his veto:
+Five he named — **heart rate, HRV, sleep, steps, workouts** — plus two this spec
+adds, both of which he has since seen:
 
 - **Resting heart rate**, kept distinct from raw heart rate. It is the baseline
   signal almost every conclusion will lean on, and raw HR is the highest-volume
@@ -88,8 +96,8 @@ flags for his veto:
   knows he wants, which makes the conclusion layer useful on day one rather than
   after a month of baseline-building.
 
-Workouts are deliberately deferred. Adding a type later is cheap; removing one is
-not.
+**Seven types at the start.** Workouts were deferred in the first draft and added on
+his instruction, 2026-08-12.
 
 ---
 
@@ -178,7 +186,7 @@ No metered call anywhere in this feature.
   a health rule — it is Proposal A's astrology rule, already in force everywhere.
 - Background delivery, at first. *"A capability we do not rely on is one we should
   not ask for."*
-- Workouts, weight-trend prediction, or any second device.
+- Weight-trend prediction, or any second device.
 
 ---
 

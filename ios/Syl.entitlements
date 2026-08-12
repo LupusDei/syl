@@ -53,5 +53,34 @@
 	<string>$(APS_ENVIRONMENT)</string>
 	<key>com.apple.developer.usernotifications.time-sensitive</key>
 	<true/>
+
+	<!--
+	  HealthKit. `syl-t9tj.1.1`.
+
+	  Same three-part shape as time-sensitive above, and it is worth stating that
+	  the lesson transferred rather than being learned twice:
+
+	    1. this key, here                              — done
+	    2. HealthKit on the App ID, so the provisioning
+	       profile carries it                          — done, by the Commander, 2026-08-12
+	    3. his per-type grant, at runtime, on the phone — asked for on first read
+
+	  HealthKit's authorisation is ASYMMETRIC in a way that makes a missing step
+	  silent, and worse than the time-sensitive case. A type he has not granted
+	  does not error and does not report denial — IT READS AS EMPTY. So a build
+	  that was never authorised and a Commander who genuinely took no steps are
+	  the same answer from here down, forever, with every layer reporting success.
+
+	  That is why `HealthReader` reports what it was AUTHORISED FOR alongside what
+	  it read, and why the server refuses to interpret silence it cannot
+	  attribute. The entitlement is not the guarantee; the report is.
+
+	  Read-only, deliberately: `NSHealthShareUsageDescription` and no
+	  `NSHealthUpdateUsageDescription`. Syl reads his body and never writes to it.
+	  A capability we do not rely on is one we should not ask for — the same rule
+	  that kept `UIBackgroundModes` out of this file.
+	-->
+	<key>com.apple.developer.healthkit</key>
+	<true/>
 </dict>
 </plist>
