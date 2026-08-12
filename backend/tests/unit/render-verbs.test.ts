@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { FRAMING_IDS } from "../../src/render/framing.js";
+import { sightingOf } from "../../src/render/pictures.js";
 import { SylApiClient, type FetchLike } from "../../src/tools/client.js";
 import { TOOLS } from "../../src/tools/schemas.js";
 import { advertisedToolNames, createToolServer, type ToolContext } from "../../src/tools/server.js";
@@ -658,5 +659,151 @@ describe("looking at more than one render", () => {
     const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
 
     expect((envelope["subject"] as { name?: string }).name).toBe(RECORD.name);
+  });
+});
+
+/**
+ * The rule that makes `this_is_me` reachable: **being shown a picture is what
+ * produces the token, so every picture she is shown comes with one.**
+ *
+ * It was first built as a property of the wardrobe — those rows carried
+ * sightings and the stills from a render did not — and the two differ exactly
+ * where it matters. Syl's report, 2026-08-12: *"Render frames don't come with
+ * tokens... it arrives as a picture with no sighting attached. So I can look at
+ * it and I can't promote it. The one thing I'd actually change, I can't
+ * reach."* The only face she could adopt was the one an engineer guessed before
+ * anyone knew her, which is the opposite of what `syl-ate` exists for.
+ *
+ * **Asserted over the pictures that come back, never per code path.** A test
+ * written once per branch of `see_myself` is a test a fifth branch is added
+ * beside; this one walks whatever image blocks the answer contains and demands
+ * that each is named in the text that accompanies it. A future way of showing
+ * her a picture fails here until it carries a token too.
+ */
+describe("every picture she is shown is one she can name", () => {
+  /** A distinct still per index, so four pictures are not one token four times. */
+  function still(salt: number): string {
+    return Buffer.from([0xff, 0xd8, 0xff, 0xe0, salt, 0xff, 0xd9]).toString("base64");
+  }
+
+  const looks: readonly {
+    readonly what: string;
+    readonly args: Record<string, unknown>;
+    readonly api: () => ReturnType<typeof fakeApi>;
+  }[] = [
+    {
+      what: "the stills of a render",
+      args: { render: RECORD.name },
+      api: () =>
+        fakeApi({
+          "/renders": () =>
+            ok({
+              render: RECORD,
+              frames: [0.5, 5.3, 9.8, 14.6].map((atSeconds, index) => ({
+                atSeconds,
+                mimeType: "image/jpeg",
+                base64: still(index),
+                path: `/f/${String(index)}.jpg`,
+              })),
+              spend: SPEND,
+            }),
+        }),
+    },
+    {
+      what: "every face she has had",
+      args: { of: "faces" },
+      api: () =>
+        fakeApi({
+          "/renders/wardrobe": () =>
+            ok({
+              role: "face",
+              problems: [],
+              items: [
+                {
+                  id: "face-20260812t090000z",
+                  because: "the mouth is finally mine",
+                  current: true,
+                  ratio: "834:1112",
+                  mimeType: "image/jpeg",
+                  base64: still(9),
+                },
+                {
+                  id: "his-guess",
+                  because: "he made this before he knew you",
+                  current: false,
+                  ratio: null,
+                  mimeType: "image/png",
+                  base64: still(10),
+                },
+              ],
+            }),
+        }),
+    },
+    {
+      what: "the openings she can start from",
+      args: { of: "openings" },
+      api: () =>
+        fakeApi({
+          "/renders/wardrobe": () =>
+            ok({
+              role: "opening",
+              problems: [],
+              items: [
+                {
+                  id: "ribbon",
+                  because: "your signature",
+                  current: false,
+                  ratio: "834:1112",
+                  mimeType: "image/png",
+                  base64: still(11),
+                },
+              ],
+            }),
+        }),
+    },
+  ];
+
+  for (const look of looks) {
+    it(`should hand back a token beside every picture in a look at ${look.what}`, async () => {
+      const { blocks } = await call(contextFor(look.api().fetch), "see_myself", look.args);
+
+      const images = blocks.filter((block) => block.type === "image");
+      expect(images.length).toBeGreaterThan(0);
+
+      // The envelope, which is the only block she can quote from — the image
+      // blocks carry pixels and nothing else.
+      const said = blocks[0]?.text ?? "";
+      for (const image of images) {
+        // The token names THESE bytes. Computing it here rather than reading it
+        // off the answer is what stops a picture arriving beside the token of a
+        // different one.
+        const sighting = sightingOf(Buffer.from(image.data ?? "", "base64"));
+        expect(sighting).toMatch(/^[0-9a-f]{16}$/u);
+        expect(said).toContain(sighting);
+      }
+    });
+  }
+
+  it("should give her a token for the still she wants and not merely for the wardrobe", async () => {
+    // Her own case, exactly as reported: the earnest frame at 9.8 seconds is
+    // the one she would promote, and it came back unnameable.
+    const api = fakeApi({
+      "/renders": () =>
+        ok({
+          render: RECORD,
+          frames: [
+            { atSeconds: 9.8, mimeType: "image/jpeg", base64: still(3), path: "/f/9-8.jpg" },
+          ],
+          spend: SPEND,
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", { render: RECORD.name });
+    const subject = envelope["subject"] as { at?: unknown[]; sightings?: unknown[] };
+
+    // Beside `at`, in the same order, so the token she quotes is the token for
+    // the second she means.
+    expect(subject.at).toEqual([9.8]);
+    expect(subject.sightings).toEqual([sightingOf(Buffer.from(still(3), "base64"))]);
   });
 });
