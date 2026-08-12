@@ -22,7 +22,7 @@ import { advertisedToolNames } from "../../src/tools/server.js";
 import { testDatabase } from "../helpers/service.js";
 
 /**
- * The morning brief PLANS the day (`syl-agd2`).
+ * The morning brief PLANS the day (`syl-agd.3`).
  *
  * The Commander's words, and they are the specification: *"the morning review
  * should prepare the day. It should look at all the todos reminders and the
