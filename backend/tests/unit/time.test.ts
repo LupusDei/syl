@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 
+import { DEFAULT_QUIET_HOURS } from "../../src/config.js";
+import { shiftWallTime } from "../../src/harness/schedule.js";
 import { fixedClock } from "../../src/services/clock.js";
 import {
   MAX_HORIZON_DAYS,
@@ -227,13 +229,17 @@ describe("resolveTime — a part of the day (\"tomorrow morning\")", () => {
 
     expect(result.wallTime).toBe(PART_OF_DAY.morning);
     expect(result.date).toBe("2026-08-10");
-    expect(result.fireAt).toBe("2026-08-10T13:00:00.000Z");
+    // 07:00 CDT on 10 August is 12:00Z. The instant is the point here: the
+    // convention has to survive the trip through the zone intact.
+    expect(result.fireAt).toBe("2026-08-10T12:00:00.000Z");
   });
 
   it("should place morning at the end of quiet hours, so it is never deferred on arrival", () => {
-    // The convention is not a magic hour: 08:00 is when the Commander has
-    // already declared himself reachable (DEFAULT_QUIET_HOURS.end).
-    expect(PART_OF_DAY.morning).toBe("08:00");
+    // The convention is not a magic hour: it is the minute the Commander has
+    // already declared himself reachable. Asserted against the window rather
+    // than against a copy of today's value — a copy is the arrangement that
+    // let this constant and the window disagree in the first place.
+    expect(PART_OF_DAY.morning).toBe(DEFAULT_QUIET_HOURS.quiet.end);
   });
 
   it("should DISCLOSE the convention, because a convention he cannot hear is a guess", () => {
@@ -242,7 +248,9 @@ describe("resolveTime — a part of the day (\"tomorrow morning\")", () => {
     );
 
     expect(result.assumption).not.toBeNull();
-    expect(result.assumption).toContain("8:00");
+    // The hour he would actually hear, not a stored 24-hour string — and taken
+    // from the convention, so a window that moves moves what she says too.
+    expect(result.assumption).toContain(PART_OF_DAY.morning.replace(/^0/u, ""));
   });
 
   it("should resolve today's part when it is still ahead", () => {
@@ -250,7 +258,7 @@ describe("resolveTime — a part of the day (\"tomorrow morning\")", () => {
       resolve("this morning", { kind: "part_of_day", day: "today", part: "morning" }),
     );
     expect(result.date).toBe("2026-08-09");
-    expect(result.fireAt).toBe("2026-08-09T13:00:00.000Z");
+    expect(result.fireAt).toBe("2026-08-09T12:00:00.000Z");
   });
 
   it("should ask rather than silently move a part of today that has already gone", () => {
@@ -264,9 +272,13 @@ describe("resolveTime — a part of the day (\"tomorrow morning\")", () => {
   });
 
   it.each([
+    // `afternoon` and `evening` are free-standing conventions, so their hours
+    // are written down. `night` is not: it is an hour before his sleep starts,
+    // so that an evening reminder is not created only to be deferred to the
+    // morning, and it has to move when the window does.
     ["afternoon", "13:00"],
     ["evening", "18:00"],
-    ["night", "21:00"],
+    ["night", shiftWallTime(DEFAULT_QUIET_HOURS.quiet.start, -60)],
   ])("should carry a stated convention for %s too", (part, expected) => {
     const result = expectResolved(
       resolve(`tomorrow ${part}`, { kind: "part_of_day", day: "tomorrow", part }),
@@ -561,8 +573,8 @@ describe("resolveTime — a zone that is not the server's", () => {
     const result = expectResolved(
       resolve("tomorrow morning", { kind: "part_of_day", day: "tomorrow", part: "morning" }, { tz: TOKYO }),
     );
-    // 08:00 on 10 August in Tokyo is 23:00Z on the 9th.
-    expect(result.fireAt).toBe("2026-08-09T23:00:00.000Z");
+    // 07:00 on 10 August in Tokyo (UTC+9) is 22:00Z on the 9th.
+    expect(result.fireAt).toBe("2026-08-09T22:00:00.000Z");
   });
 
   it("should work in a zone with a half-hour offset", () => {

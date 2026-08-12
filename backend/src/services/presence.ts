@@ -1,5 +1,6 @@
 import type { PresenceState } from "@syl/shared";
 
+import { DEFAULT_QUIET_HOURS as QUIET_HOURS_SETTING } from "../config.js";
 import { isWithinQuietHours, type QuietHours } from "../harness/schedule.js";
 import { instant, systemClock, type Clock } from "./clock.js";
 import type { AffectHint } from "./message-store.js";
@@ -47,11 +48,23 @@ import type { AffectHint } from "./message-store.js";
  * would lapse.
  */
 
-/** The Commander's zone. An IANA name, never a fixed offset. */
-export const DEFAULT_TIMEZONE = "America/Chicago";
+/**
+ * The Commander's zone. An IANA name, never a fixed offset.
+ *
+ * Taken from `config.ts`, not written down again here.
+ */
+export const DEFAULT_TIMEZONE: string = QUIET_HOURS_SETTING.tz;
 
-/** No character between these wall-clock times. */
-export const DEFAULT_QUIET_HOURS: QuietHours = { start: "23:00", end: "08:00" };
+/**
+ * No character between these wall-clock times.
+ *
+ * The service's own window, reached through `config.ts`. This module used to
+ * export the same name with a different value — 23:00-08:00 against the live
+ * 22:00-08:00 — so presence went `absent` an hour after the outbox started
+ * holding notifications, and neither module was wrong about anything it could
+ * see. Import, never restate.
+ */
+export const DEFAULT_QUIET_HOURS: QuietHours = QUIET_HOURS_SETTING.quiet;
 
 /**
  * How long each state stays valid without a further frame.

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { Job } from "@syl/shared";
 
+import { DEFAULT_QUIET_HOURS } from "../../src/config.js";
 import type { QuietHours } from "../../src/harness/schedule.js";
 import type { TurnResult } from "../../src/harness/session.js";
 import {
@@ -42,7 +43,16 @@ import { testDatabase } from "../helpers/service.js";
  */
 
 const TZ = "America/Chicago";
-const QUIET: QuietHours = { start: "22:00", end: "08:00" };
+
+/**
+ * His window, not a copy of it.
+ *
+ * These tests are about the hour NOT reaching him while he is asleep, so the
+ * thing under test is the real window; a literal here would keep passing
+ * against yesterday's sleep after he changed it. The instants below are named
+ * for where they sit relative to it, and each stays on its own side.
+ */
+const QUIET: QuietHours = DEFAULT_QUIET_HOURS.quiet;
 
 /** 09:07 CDT on Tuesday 11 August 2026 — mid-morning, well clear of the window. */
 const MORNING = Date.UTC(2026, 7, 11, 14, 7);
@@ -320,8 +330,11 @@ describe("the prompt she is woken with", () => {
   it("should name the quiet window and forbid reaching him inside it", () => {
     const prompt = heartbeatPrompt({ ...moment, now: SMALL_HOURS, inQuietHours: true });
 
-    expect(prompt).toContain("22:00");
-    expect(prompt).toContain("08:00");
+    // Both ends, taken from the window: she cannot respect an hour she has not
+    // been told, and a hardcoded pair here would go on asserting that she was
+    // told the old one.
+    expect(prompt).toContain(QUIET.start);
+    expect(prompt).toContain(QUIET.end);
     expect(prompt.toLowerCase()).toMatch(/asleep|sleep/);
   });
 

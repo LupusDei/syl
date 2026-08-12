@@ -35,7 +35,7 @@ const HOUR = 60 * MINUTE;
  * early.
  */
 const BEFORE_DST = Date.parse("2027-03-12T18:00:00.000Z");
-/** 09:00 Chicago, chosen to sit outside the 22:00–08:00 quiet window. */
+/** 09:00 Chicago, chosen to sit clear of the quiet window at either end. */
 const MORNING_CST = "2027-03-13T15:00:00.000Z";
 const MORNING_CDT = "2027-03-14T14:00:00.000Z";
 const MORNING_AFTER = "2027-03-15T14:00:00.000Z";
@@ -132,16 +132,21 @@ describe("across days", () => {
     });
 
     /**
-     * Not a defect — a consequence worth having written down.
+     * The boundary, end to end, through the live service and a real push.
      *
-     * The quiet window defaults to 22:00–08:00, and only `urgent` crosses it.
-     * `kind: "commitment"` buys a time-sensitive interruption level, which is
-     * about Focus rather than about the gate. So "take the tablet at 07:00"
-     * arrives at 08:00, marked late, every single day — and the lateness is
-     * true in the sense the outbox means it and misleading in the sense the
-     * Commander will read it, because nothing was late except the window.
+     * The window ends at 07:00 and `isWithinQuietHours` is end-EXCLUSIVE, so
+     * 07:00 is already out of it. That one comparison is what the Commander's
+     * whole rhythm rests on: the morning brief is composed at 06:45 and its
+     * notification is created at 07:00, and an end that included its own last
+     * minute would hold it for another cycle — which is exactly what an 08:00
+     * end did on 2026-08-12, holding the brief for seventy-five minutes.
+     *
+     * This test used to record the opposite as a consequence worth living
+     * with: "take the tablet at 07:00" arriving at 08:00 marked late, every
+     * day, with nothing late about it except the window. Nothing is held now,
+     * so nothing is late.
      */
-    it("should hold a 07:00 commitment until 08:00 and mark it late, every day", async () => {
+    it("should deliver a 07:00 commitment AT 07:00, neither held nor marked late", async () => {
       await expectData<Reminder>(
         await syl.api("/reminders", {
           method: "POST",
@@ -158,16 +163,21 @@ describe("across days", () => {
       const { runner, close } = runnerAgainst(apple);
       try {
         await runner.start();
-        // Through 07:00 CST on the 13th (13:00Z) and out the far side of 08:00.
-        await passesUntil(runner, Date.parse("2027-03-13T15:00:00.000Z"));
+        // Up to 07:00 CST on the 13th (13:00Z) and NOT one tick past it, so a
+        // push here cannot be a later cycle catching up.
+        await passesUntil(runner, Date.parse("2027-03-13T13:00:00.000Z"));
+
+        expect(apple.pushes, "07:00 waited for a later pass").toHaveLength(1);
 
         const rows = (await expectData<{ items: Delivery[] }>(await syl.api("/deliveries"))).items;
         expect(rows).toHaveLength(1);
         expect(rows[0]?.scheduledFor).toBe("2027-03-13T13:00:00.000Z");
-        expect(rows[0]?.late).toBe(true);
-        // Released at 08:00 Chicago, an hour after he asked for it.
-        expect(rows[0]?.deliveredAt).not.toBeNull();
-        expect(apple.pushes).toHaveLength(1);
+        // Delivered at the instant it was due, not at the end of some later
+        // window: the row's own record of when it went out.
+        expect(rows[0]?.deliveredAt, "the outbox held a notification it should not have").toBe(
+          "2027-03-13T13:00:00.000Z",
+        );
+        expect(rows[0]?.late, "nothing was late — the window had already lifted").toBe(false);
       } finally {
         await close();
       }
