@@ -47,12 +47,12 @@
     "prebuild": "npm run check:env",
     "build": "npm run build --workspaces --if-present",
     "pretest": "npm run check:env",
-    "test": "vitest run",
+    "test": "node scripts/run-tests.mjs",
     "pretest:gate": "npm run check:env",
-    "test:gate": "rm -f tests/.vitest-results.json && vitest run --reporter=default --reporter=json --outputFile.json=tests/.vitest-results.json; node scripts/check-expected-failures.mjs",
+    "test:gate": "node scripts/run-tests.mjs --gate",
     "test:watch": "vitest",
     "pretest:coverage": "npm run check:env",
-    "test:coverage": "rm -f tests/.vitest-results.json && vitest run --coverage --reporter=default --reporter=json --outputFile.json=tests/.vitest-results.json; node scripts/check-expected-failures.mjs && node scripts/check-coverage.mjs",
+    "test:coverage": "node scripts/run-tests.mjs --gate --coverage",
     "verify": "npm run typecheck && npm run test:gate",
     "premock": "npm run check:env",
     "mock": "tsx shared/src/cli/mock.ts",
@@ -71,9 +71,21 @@
     "video": "node scripts/video/generate.mjs",
     "check:nul": "node scripts/check-no-nul-bytes.mjs"
   },
+  "//devDependencies": [
+    "The three istanbul packages are `scripts/merge-coverage.mjs`'s. The suite",
+    "runs as two vitest processes, vitest 2.1 has no --merge-reports, and its",
+    "v8 provider keeps per-worker coverage in an in-process Map — so the two",
+    "coverage-final.json files have to be merged by hand into the one report",
+    "`scripts/check-coverage.mjs` reads. They arrive anyway as transitive",
+    "dependencies of @vitest/coverage-v8; declared here because a script that",
+    "imports a package should say so, and hoisting is not a contract."
+  ],
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@vitest/coverage-v8": "^2.1.9",
+    "istanbul-lib-coverage": "^3.2.2",
+    "istanbul-lib-report": "^3.0.1",
+    "istanbul-reports": "^3.2.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

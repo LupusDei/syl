@@ -50,9 +50,32 @@ if (!existsSync(summaryPath)) {
 }
 
 // Read the thresholds from the one place that defines them.
+//
+// Anchored on `thresholds: {` — the config KEY followed by an inline object —
+// and not on the bare word. This scrape used to start at the first "thresholds"
+// anywhere in the file, and the day `PER_PASS_COVERAGE_THRESHOLDS` was added
+// above it (with the word in its docblock) the floor silently became
+// `lines: 0`. It printed `coverage ok — lines 89.22% (>=0%)`, which is a pass
+// notice for a check that was no longer checking: precisely the failure this
+// script exists to prevent, in the script itself.
 const shared = readFileSync(join(root, "vitest.shared.ts"), "utf8");
+const anchor = shared.indexOf("thresholds: {");
+if (anchor < 0) {
+  console.error(
+    [
+      "",
+      "[syl] could not find `thresholds: {` in vitest.shared.ts.",
+      "",
+      "  That block is the single definition of the coverage floor (constitution",
+      "  rule 1). Refusing to run rather than guessing a floor.",
+      "",
+    ].join("\n"),
+  );
+  process.exit(1);
+}
+const block = shared.slice(anchor);
 const threshold = (name) => {
-  const match = new RegExp(`${name}:\\s*(\\d+)`).exec(shared.slice(shared.indexOf("thresholds")));
+  const match = new RegExp(`${name}:\\s*(\\d+)`).exec(block);
   if (match === null) throw new Error(`could not read the ${name} threshold from vitest.shared.ts`);
   return Number(match[1]);
 };
@@ -62,6 +85,28 @@ const required = {
   branches: threshold("branches"),
   functions: threshold("functions"),
 };
+
+// A ZERO FLOOR IS NOT A FLOOR, and a scrape is exactly the kind of mechanism
+// that fails by finding the wrong number rather than by finding none. Every
+// value here must be a real bar, so a misread announces itself instead of
+// congratulating everybody.
+const notAFloor = Object.entries(required).filter(([, floor]) => floor <= 0);
+if (notAFloor.length > 0) {
+  console.error(
+    [
+      "",
+      "[syl] the coverage floor read as zero, which is not a floor.",
+      "",
+      ...notAFloor.map(([metric, floor]) => `    ${metric}: ${String(floor)}`),
+      "",
+      "  This script reads vitest.shared.ts. Either the thresholds really were",
+      "  lowered — constitution rule 1 says raise the coverage, not the file —",
+      "  or the scrape matched the wrong block.",
+      "",
+    ].join("\n"),
+  );
+  process.exit(1);
+}
 
 const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
 const total = summary.total;

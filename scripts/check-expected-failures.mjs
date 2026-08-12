@@ -21,38 +21,113 @@
  *   3. DECLARED TEST THAT NO LONGER EXISTS — renamed or deleted. A requirement
  *      must not be retirable by accident.
  *
- * Usage: `npm run test:gate` (vitest writes JSON, this reads it).
+ * ## A fourth way, added when the suite was split in two
+ *
+ * The suite now runs as two vitest processes — the cheap majority, and the
+ * spawn-heavy files alone on the machine (`scripts/run-tests.mjs`). That is one
+ * edit away from a gate that stopped checking: run one pass, read one results
+ * file, report green, and the deploy gate goes quiet about exactly the tests
+ * that guard the most.
+ *
+ * So this checker no longer trusts what it is handed. It enumerates every test
+ * file on disk, from the workspaces the root `package.json` declares, and fails
+ * if any of them is absent from the results it was given. A pass that did not
+ * run, a config whose glob stopped matching, a file in neither pass — all of
+ * them now say so, on the deploy gate's own path, rather than reading as a
+ * clean run.
+ *
+ * `--newer-than` closes the other half of `syl-b18b`: a results file left by an
+ * earlier run in the same worktree is refused rather than graded.
+ *
+ * Usage: `npm run test:gate`, which is `scripts/run-tests.mjs --gate`.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
 
-const manifestPath = join(root, "tests", "expected-failures.json");
-const resultsPath = join(root, "tests", ".vitest-results.json");
+const args = process.argv.slice(2);
+const newerThan = Number(
+  (args.find((arg) => arg.startsWith("--newer-than=")) ?? "--newer-than=0").slice("--newer-than=".length),
+);
+const resultsPaths = args.filter((arg) => !arg.startsWith("--"));
 
-if (!existsSync(resultsPath)) {
-  console.error(`[syl] no vitest results at ${resultsPath} — did the test run crash?`);
+if (resultsPaths.length === 0) {
+  console.error(
+    "[syl] check-expected-failures: give me one or more vitest JSON results files.\n" +
+      "      `npm run test:gate` passes both of the suite's passes.",
+  );
   process.exit(1);
 }
 
+const manifestPath = join(root, "tests", "expected-failures.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 const declared = new Map((manifest.expected ?? []).map((e) => [e.test, e]));
 
-const results = JSON.parse(readFileSync(resultsPath, "utf8"));
-
-/** Every test vitest actually ran, by its full name. */
+/** Every test vitest actually ran, by its full name, across every pass. */
 const seen = new Map();
-for (const file of results.testResults ?? []) {
-  for (const assertion of file.assertionResults ?? []) {
-    // `fullName` is the describe chain plus the test name — the same string a
-    // human reads in the reporter, so a manifest entry is copy-pasteable.
-    seen.set(assertion.fullName, assertion.status);
+/** Every test FILE a pass reported on, absolute. */
+const filesRun = new Set();
+
+for (const path of resultsPaths) {
+  const absolute = join(root, path);
+  if (!existsSync(absolute)) {
+    console.error(`[syl] no vitest results at ${absolute} — did that pass crash?`);
+    process.exit(1);
+  }
+  if (statSync(absolute).mtimeMs < newerThan) {
+    console.error(
+      `[syl] ${path} predates this run. Refusing to grade one run's failures against another's\n` +
+        `      results — two vitest runs in one worktree is exactly how that happens (syl-b18b).`,
+    );
+    process.exit(1);
+  }
+  const results = JSON.parse(readFileSync(absolute, "utf8"));
+  for (const file of results.testResults ?? []) {
+    if (typeof file.name === "string") filesRun.add(file.name);
+    for (const assertion of file.assertionResults ?? []) {
+      // `fullName` is the describe chain plus the test name — the same string a
+      // human reads in the reporter, so a manifest entry is copy-pasteable.
+      // A test that passed in one pass and failed in another cannot happen (no
+      // file is in both passes), but if it ever did, failure wins.
+      const existing = seen.get(assertion.fullName);
+      if (existing !== "failed") seen.set(assertion.fullName, assertion.status);
+    }
   }
 }
+
+/** Every `*.test.ts` under a declared workspace's `tests/`, absolute. */
+function testFilesOnDisk() {
+  const rootPkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  const found = [];
+  const walk = (directory) => {
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      // A workspace with no tests yet is normal. Anything else must not be
+      // swallowed: this is a gate, and a gate that fails open is worse than
+      // none.
+      if (error.code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const full = join(directory, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".test.ts")) found.push(full);
+    }
+  };
+  for (const workspace of rootPkg.workspaces ?? []) walk(join(root, workspace, "tests"));
+  return found;
+}
+
+const onDisk = testFilesOnDisk();
+const neverRan = onDisk.filter((file) => !filesRun.has(file));
 
 const failed = [...seen].filter(([, status]) => status === "failed").map(([name]) => name);
 
@@ -61,6 +136,27 @@ const passingButDeclared = [...declared.keys()].filter((name) => seen.get(name) 
 const vanished = [...declared.keys()].filter((name) => !seen.has(name));
 
 const problems = [];
+
+if (onDisk.length === 0) {
+  problems.push(
+    "",
+    "  No test files were found on disk at all, so 'every file ran' could not be",
+    "  checked. Something is wrong with this checkout, not with the tests.",
+  );
+}
+
+if (neverRan.length > 0) {
+  problems.push(
+    "",
+    `  ${String(neverRan.length)} test file(s) exist on disk and were run by NO pass:`,
+    ...neverRan.map((n) => `    ⃠ ${relative(root, n).split(sep).join("/")}`),
+    "",
+    "  The suite runs in two passes (scripts/run-tests.mjs). A file matched by",
+    "  neither config never runs, and a gate that has stopped covering it says",
+    "  nothing — which is this project's signature defect. Fix the include and",
+    "  exclude globs in vitest.config.ts / vitest.heavy.config.ts.",
+  );
+}
 
 if (undeclared.length > 0) {
   problems.push(
@@ -101,6 +197,11 @@ if (problems.length > 0) {
   console.error(["", "[syl] the test gate failed.", ...problems, ""].join("\n"));
   process.exit(1);
 }
+
+console.error(
+  `[syl] ${String(onDisk.length)} test file(s) on disk, all of them run across ` +
+    `${String(resultsPaths.length)} pass(es).`,
+);
 
 if (declared.size > 0) {
   // Printed every run, on purpose. A number buried in a file is not a
