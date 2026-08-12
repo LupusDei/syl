@@ -100,7 +100,10 @@ frontend/                         web admin — Vite + React (npm workspace)
 shared/                           THE CONTRACT — OpenAPI, generated types, fixtures (npm workspace)
 ios/                              SylKit (SPM) + the app target — Swift, not a workspace
 tsconfig.base.json                strict + noUncheckedIndexedAccess; every workspace extends it
-vitest.shared.ts                  base vitest config; every workspace merges it
+vitest.shared.ts                  base vitest config, the heavy-file set, and the two timeout budgets
+vitest.config.ts                  the LIGHT pass — every test EXCEPT the ones that spawn
+vitest.heavy.config.ts            the HEAVY pass — acceptance + integration, serial, alone
+scripts/run-tests.mjs             both passes, one command; there is no way to run one
 SOUL.md                           Syl's standing orders, appended to the system prompt
 docs/CONTEXT.md                   exploration record and decision log
 ```
@@ -182,13 +185,28 @@ keeping them testable without spawning a process is worth the seam.
 All of these run from the repo root and cover every workspace.
 
 ```sh
-npm test          # every workspace's unit tests, one pass
+npm test          # every workspace's tests, in TWO passes — see below
 npm run typecheck # root tooling + tsc --noEmit per workspace
 npm run verify    # typecheck + test — run this before pushing
-npm test -w backend             # one workspace, focused
+npm test -w backend             # one workspace, focused (one pass, everything)
 npm run ping -- "your prompt"   # live end-to-end check
 npm run deploy -- --dry-run     # what a deploy would do, touching nothing
 ```
+
+**The suite runs in two passes, and both of them are the gate.**
+`scripts/run-tests.mjs` runs the cheap majority first, then everything under
+`tests/acceptance/` and `tests/integration/` alone in a second vitest process.
+Vitest dispatches its pools with `Promise.all`, so the old `poolMatchGlobs`
+split stopped those files starving *each other* and did nothing about the three
+worker threads and five thousand unit tests beside them: six files were timing
+out at 20 000ms under fleet load, and the test that stops an unattended turn
+waking the Commander at 3am passed with **282ms of headroom**.
+
+There is no way to run one pass. `npm run verify` — and therefore
+`npm run deploy` — runs both, and `check-expected-failures.mjs` enumerates the
+test files on disk and fails if any of them was run by neither. If you run a
+heavy file by path, pass `--config vitest.heavy.config.ts`; the root config
+excludes them, so a bare `vitest run <path>` matches nothing.
 
 **Adding a workspace**: create `<name>/package.json` and a `<name>/tsconfig.json`
 extending `tsconfig.base.json`, then add `<name>` to `workspaces` in the root

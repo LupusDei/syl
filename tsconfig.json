@@ -2,5 +2,5 @@
 // workspace's own tsconfig.json — see `npm run typecheck`.
 {
   "extends": "./tsconfig.base.json",
-  "include": ["vitest.config.ts", "vitest.shared.ts"]
+  "include": ["vitest.config.ts", "vitest.heavy.config.ts", "vitest.shared.ts"]
 }

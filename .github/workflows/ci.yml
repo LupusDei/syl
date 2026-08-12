@@ -57,6 +57,14 @@ jobs:
       # It also blocked the auto-deployer before it existed: the update job
       # deploys only CI-green commits, so it would have declined every commit
       # forever, silently — the exact failure class syl-dep1 exists to kill.
+      #
+      # ONE STEP, TWO PASSES. `test:gate` is `scripts/run-tests.mjs --gate`,
+      # which runs the cheap majority and then the spawn-heavy files alone in a
+      # second vitest process — the isolation that stopped six files timing out
+      # under load. Deliberately not split into two CI steps: a step can be
+      # deleted, and a gate that covers half the suite while looking green is
+      # this project's signature defect. The script runs both, and the checker
+      # fails if any test file on disk was run by neither.
       - name: Test (every workspace)
         run: npm run test:gate
 
