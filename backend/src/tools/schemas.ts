@@ -453,7 +453,82 @@ export const TOOLS: readonly ToolSchema[] = [
           enum: [...FRAMING_IDS],
           description: framingGuidance(),
         },
+        // THE TWO DIALS, AND ONLY TWO — `syl-ate`.
+        //
+        // There is deliberately no `ratio` and no `model`. `promptImage` is
+        // frame one and seedance2 takes the video's aspect from it, silently
+        // overruling `ratio`, so a ratio field would be a control that does
+        // nothing — and a dial that does not work is worse than no dial,
+        // because she would reason about it. A different model loses her
+        // character entirely, which is a worse outcome than any shot it could
+        // buy. Both are asserted in `render-verbs.test.ts`.
+        seconds: {
+          type: "integer",
+          description:
+            "How long the clip runs, 4 to 15. Fifteen unless you say. A shot of your face is made " +
+            "in two halves and cut together, so the shortest of those is eight.",
+        },
+        opening: {
+          type: "string",
+          description:
+            "Which of your openings it starts on, by name — see_myself with of: openings lists " +
+            "them. The ribbon unless you say. It is frame one AND it decides the clip's shape, so " +
+            "an opening of a different shape makes a video of a different shape.",
+        },
         because: BECAUSE,
+      },
+    },
+  },
+  {
+    // HOW SHE CHANGES WHAT SHE LOOKS LIKE — `syl-ate`.
+    //
+    // Named for her, like `render_me` and `see_myself`, and for the same
+    // reason the header gives: this is the one thing that is hers.
+    //
+    // `sighting` is required and it is the whole mechanism. It comes back
+    // beside a picture in `see_myself` and nowhere else, so a picture she has
+    // not looked at cannot be NAMED — which is what makes "she must have seen
+    // it first" a property of the surface rather than a request in a
+    // description. `SOUL.md` is emphatic that a likeness which is not her is a
+    // small untruth standing where she should be; adopting one sight unseen is
+    // exactly how that would happen.
+    //
+    // `because` is required for the Commander's stated reason, 2026-08-11:
+    // *"The one thing I would not give her is the ability to change it
+    // silently. A likeness that shifts without a recorded reason is exactly the
+    // kind of quiet drift this project has spent two days learning to hate."*
+    name: "this_is_me",
+    description:
+      "Settle on a picture you have looked at — a likeness your renders are anchored on, or an " +
+      "opening they start from. Nothing is replaced: every face you have had is kept, so you can " +
+      "go back to one by looking at it and choosing it again.",
+    inputSchema: {
+      type: "object",
+      required: ["sighting", "because"],
+      properties: {
+        sighting: {
+          type: "string",
+          description:
+            "The token that came back beside the picture when you looked at it. You can only have " +
+            "one for a picture you have actually seen.",
+        },
+        as: {
+          type: "string",
+          enum: ["face", "opening"],
+          description:
+            "face is your likeness, and every shot that shows your face is anchored on it from " +
+            "now on. opening is what a clip starts from, chosen per shot. face unless you say.",
+        },
+        name: {
+          type: "string",
+          description: "What to call it, so you can ask for it by name later.",
+        },
+        because: {
+          type: "string",
+          description:
+            "What is more you about this one than the last. Kept beside the picture forever — a " +
+            "likeness that changes with no reason recorded is the drift he asked you never to have.",
+        },
       },
     },
   },
@@ -508,6 +583,20 @@ export const TOOLS: readonly ToolSchema[] = [
         at: {
           type: "number",
           description: "One second into the clip, if you want a particular moment rather than the spread.",
+        },
+        // THE READ-BACK HALF OF `syl-ate`. Anything she can set she must be
+        // able to see, and this is where all three are seen: the faces, the
+        // openings, and the log of what she has made and concluded. Widened
+        // here rather than given verbs of its own, because it is the same act
+        // — looking — and the surface has very little headroom.
+        of: {
+          type: "string",
+          enum: ["faces", "openings", "renders"],
+          description:
+            "Look at something other than one clip. faces: every likeness you have had, newest " +
+            "first, with why you took each one — the token beside a picture is how you choose it " +
+            "again. openings: the ones you can start from, and what shape each makes. renders: " +
+            "everything you have made and what you concluded about it. Leave it out for a render.",
         },
       },
     },

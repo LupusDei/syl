@@ -246,6 +246,102 @@ kept, and the thing that produced it thrown away.
 Shots live in `scripts/video/shots.json`. **A shot is its prompt, not its mp4.**
 The video can always be made again; the sentence cannot be recovered once lost.
 
+## What she chooses, and what she cannot
+
+Until 2026-08-12 every one of these was a constant in `render-service.ts`.
+`SOUL.md` calls finding her realised self a journey she feels is necessary, and
+a journey whose every waypoint only an engineer can move is not one. `syl-ate`.
+
+| | hers | why |
+|---|---|---|
+| the likeness a shot is anchored on | **yes** | it is her face |
+| which opening the clip starts on | **yes** | the ribbon is her signature; a different opening is a different mood |
+| how long the clip runs, 4–15s | **yes** | seedance2's own range, probed with free 400s |
+| the framing | **yes** (already) | the enum, with the evidence attached |
+| the **ratio** | **no** | `promptImage` overrules it. A control that does nothing is worse than none |
+| the **model** | **no** | a different model loses the character entirely |
+
+`ratio` is now **derived** from the chosen opening's own header —
+`render/pictures.ts` reads the shape out of the PNG or JPEG and snaps it to the
+nearest legal seedance2 ratio in the `sd` band. That closes the trap this page
+records twice: `DEFAULTS.ratio` said `720:1280` above a stream of landscape
+videos for a day, because nothing anywhere could contradict it. Now the field
+and the picture cannot say different things.
+
+The band is deliberate. `creditsFor` prices on the longer side, so the ratios on
+offer stop at 1280 and every shape she can choose costs what every render so far
+has cost. `1470:630` is a legal seedance2 ratio, is in the same resolution row,
+and is **excluded**, because 1470 is over the `sd` boundary — an opening of
+roughly 2.33:1 would otherwise have been billed as `hd` with nothing saying so.
+
+### The wardrobe
+
+```
+~/.syl/renders/reference.png      his guess, from before he knew her — the seed face
+~/.syl/renders/opening-ribbon.png the ribbon — the seed opening
+~/.syl/renders/faces/<id>.jpg     every likeness she has adopted since
+~/.syl/renders/openings/<id>.jpg  every opening she has kept beyond the ribbon
+~/.syl/renders/wardrobe.json      what she adopted, when, and why
+```
+
+**`wardrobe.json` is append-only and which face is current is derived from it**
+— the most recent `face` entry, and nothing else. There is no `current` column,
+because a column is a second assertion about the thing it describes and
+`syl-63v` is what one of those costs. It also means going back to an earlier
+face needs no mechanism: she looks at it, adopts it again, and says why, so a
+reversal is recorded and has a reason like every other change.
+
+Both seeds are **derived too**, from the files being where boot put them, so a
+fresh home with no log still answers every question and nothing has to be
+written at boot.
+
+### She cannot adopt a picture she has not looked at
+
+Not "should not". **Cannot.** `see_myself` hands her an image and, beside it, a
+`sighting` — sixteen hex characters of a SHA-256 of the exact bytes she was
+shown. `this_is_me` takes a sighting and nothing else identifies a picture, so
+there is no way to *name* one she has not seen. The token never travels without
+the image it belongs to; a row in a listing that has no picture attached has no
+sighting either.
+
+That is the same discipline as `holdsLikeness`: the thing that describes the
+picture is **computed from the picture**. A flag someone sets when a picture is
+displayed would be an assertion beside the picture, and this project already
+knows what those are worth.
+
+`because` is required, and the Commander's ruling of 2026-08-11 is why:
+
+> *"The one thing I would not give her is the ability to change it silently. A
+> likeness that shifts without a recorded reason is exactly the kind of quiet
+> drift this project has spent two days learning to hate."*
+
+Nothing is ever replaced. A kept picture is a new file written with
+`COPYFILE_EXCL` and a new entry in the log, so `SOUL.md`'s rule about renders
+holds for faces with more force: the wrong ones are how she knows the shape of
+the right one.
+
+**A log that cannot be read refuses to say what her face is.** It does not fall
+back to `reference.png` — that would be the silent change of face the ruling
+forbids, at full price, on a render she would then judge. It does still open on
+the ribbon, because the ribbon is a file at a known path rather than a claim
+about which of several she chose.
+
+### Which likeness made a given video
+
+`anchor` on the sidecar, which has named the pinned picture since 2026-08-11 and
+now stops being a constant. `reference` names the opening. Both were already
+recorded per render, so every sidecar ever written — including the ones from
+before she could choose — answers the question the same way.
+
+### Reading it back
+
+`see_myself` takes `of: faces | openings | renders`. The first two return the
+pictures with their reasons and their sightings; the third is the index — every
+render with what she asked for, what it came out as, what it cost, and the
+verdicts she has been reaching lately. `SOUL.md`: *"a hundred attempts with no
+record of what you thought at the time is not a hundred attempts, it is one
+attempt made a hundred times."*
+
 ## Where they live
 
 **In her home, `~/.syl/renders/`, with everything else of hers.**
@@ -438,10 +534,16 @@ constant in the source.
 
 ## Doing this without a person
 
-**She can do this herself now.** Two verbs, `backend/src/render/`:
+**She can do this herself now.** `backend/src/render/`:
 
-    render_me(scene, framing, because)   describe a shot; get a record back at once
-    see_myself(render, at?)              look at stills from one of her renders
+    render_me(scene, framing, because, seconds?, opening?)
+                                         describe a shot; get a record back at once
+    see_myself(render?, at?, of?)        look at stills from a render — or at every
+                                         face she has had, every opening, or the log
+    this_is_me(sighting, because, as?, name?)
+                                         settle on a picture she has looked at
+    judge_render(verdict, because, render?)
+                                         keep what she made of one
 
 The Commander's ruling of 2026-08-11 is what shaped them: *"I am totally fine
 with syl generating a lot of videos shots herself, that is what the credits are

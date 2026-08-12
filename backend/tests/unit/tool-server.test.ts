@@ -378,6 +378,11 @@ describe("the tool surface she is offered", () => {
       // `because` here says why she was LOOKING, and "he asked" and "I came
       // back to it myself" are different acts.
       verdict: "The smile is right. The eyes sit too wide.",
+      // `this_is_me` — the write that changes what every later render looks
+      // like, and the one whose reason the Commander ruled on by name. The
+      // token stands for a picture she has been shown; this guard is about the
+      // reason, so the look is supplied and only `because` is withheld.
+      sighting: "0123456789abcdef",
     };
 
     for (const tool of advertisedTools()) {

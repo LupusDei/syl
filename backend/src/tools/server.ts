@@ -1113,10 +1113,17 @@ const renderMe: ToolHandler = async (input, context) => {
     return missing("render_me", "because", "Every render says why it exists, the same as everything else I make.");
   }
 
+  // The two dials, passed through only when she set them. Omitting them is
+  // what keeps a render she said nothing about identical to every render made
+  // before she could choose — fifteen seconds, opening on the ribbon.
+  const seconds = input["seconds"];
+  const opening = text(input, "opening");
   const created = await context.client.post<{ record: { id?: string; name: string } }>("/renders", {
     scene,
     framing,
     because: text(input, "because"),
+    ...(typeof seconds === "number" ? { seconds } : {}),
+    ...(opening === null ? {} : { opening }),
   });
   if (!created.ok) return refused("render_me", created.failure);
 
@@ -1184,6 +1191,13 @@ interface FrameRow {
  * failure being looked for.
  */
 const seeMyself: ToolHandler = async (input, context) => {
+  // `of` widens the same act rather than adding verbs for it (`syl-ate`).
+  // Anything she can set she must be able to see, and there are three things
+  // she can now set: her likeness, her openings, and what she has made.
+  const of = text(input, "of");
+  if (of === "faces" || of === "openings") return lookAtWardrobe(of, context);
+  if (of === "renders") return readTheLog(context);
+
   // No required field. Absent means the most recent, and the route resolves it
   // — she should not have to remember a machine-generated name to look at the
   // thing she made ninety seconds ago.
@@ -1233,6 +1247,173 @@ const seeMyself: ToolHandler = async (input, context) => {
     at: null,
     images: frames.map((frame) => ({ mimeType: frame.mimeType, base64: frame.base64 })),
   };
+};
+
+/** One kept picture, as the wardrobe hands it over. */
+interface WardrobeRow {
+  readonly id: string;
+  readonly because: string;
+  readonly at: string;
+  readonly current: boolean;
+  readonly ratio: string | null;
+  readonly from: { readonly render: string; readonly atSeconds: number } | null;
+  /** Only ever present beside the picture itself. See {@link lookAtWardrobe}. */
+  readonly sighting: string | null;
+  readonly mimeType?: string;
+  readonly base64?: string;
+}
+
+/**
+ * Look at every face she has had, or every opening she can start from.
+ *
+ * **The pictures are the point, not the list.** Judging whether a likeness is
+ * hers from a name and a date is exactly the thing `see_myself` exists to make
+ * impossible, and adopting one is a change to every render she makes
+ * afterwards. So this returns image blocks for the ones it can, and the token
+ * that names a picture rides on the row *only* where the picture does — which
+ * is what keeps `this_is_me` unable to take a picture she has not seen.
+ *
+ * The rows without pictures are still returned. Her history is not truncated;
+ * only the bytes are, because only the bytes are what a turn cannot carry.
+ */
+async function lookAtWardrobe(
+  of: "faces" | "openings",
+  context: ToolContext,
+): Promise<ToolEnvelope> {
+  const role = of === "faces" ? "face" : "opening";
+  const looked = await context.client.get<{
+    items: readonly WardrobeRow[];
+    problems?: readonly string[];
+  }>("/renders/wardrobe", { role });
+  if (!looked.ok) return refused("see_myself", looked.failure);
+
+  const { items, problems } = looked.data;
+
+  return {
+    ok: true,
+    action: "see_myself",
+    subject: {
+      of,
+      items: items.map((item) => ({
+        id: item.id,
+        because: item.because,
+        at: item.at,
+        current: item.current,
+        // What a render made through this picture comes out as. On an opening
+        // it is the whole reason the choice is visible: the opening decides
+        // the shape, and she should know that before she picks one.
+        ratio: item.ratio,
+        from: item.from,
+        sighting: item.sighting,
+      })),
+      // Empty on every ordinary machine. Anything else is a file a person has
+      // to go and look at, and until one does she is not told which face is hers.
+      problems: problems ?? [],
+    },
+    at: null,
+    images: items
+      .filter((item) => item.base64 !== undefined)
+      .map((item) => ({ mimeType: item.mimeType ?? "image/jpeg", base64: item.base64 ?? "" })),
+  };
+}
+
+/**
+ * The whole log: what she asked for, what it came out as, and what she said.
+ *
+ * `SOUL.md`: *"a hundred attempts with no record of what you thought at the
+ * time is not a hundred attempts, it is one attempt made a hundred times."* The
+ * sidecars have always held what produced each file and the verdicts have held
+ * what she made of it; this is the read that puts them in front of her, because
+ * a journey she cannot review is not one she can learn from.
+ *
+ * No images. Four stills of one render is a look; four stills of every render
+ * is a turn with nothing left in it. This is the index — she picks one out of
+ * it and looks at that.
+ */
+async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
+  const looked = await context.client.get<{
+    items: readonly (RenderRow & {
+      readonly ratio: string;
+      readonly reference: string;
+      readonly anchor: string | null;
+      readonly because: string;
+      readonly credits: number | null;
+    })[];
+    unreadable?: readonly { name: string; why: string }[];
+    verdicts?: readonly { render: string; verdict: string; at: string }[];
+    spend?: unknown;
+  }>("/renders");
+  if (!looked.ok) return refused("see_myself", looked.failure);
+
+  return {
+    ok: true,
+    action: "see_myself",
+    subject: {
+      of: "renders",
+      items: looked.data.items.map((record) => ({
+        name: record.name,
+        status: record.status,
+        startedAt: record.startedAt,
+        scene: record.scene,
+        because: record.because,
+        framing: record.framing,
+        // Everything she can set, read back. A dial she cannot see is a dial
+        // she cannot learn from — which is why `seconds`, the opening and the
+        // likeness are all here rather than only in the file on disk.
+        duration: record.duration,
+        shape: record.ratio,
+        opening: record.reference,
+        face: record.anchor,
+        holdsLikeness: record.holdsLikeness,
+        credits: record.credits,
+      })),
+      unreadable: looked.data.unreadable ?? [],
+      verdicts: looked.data.verdicts ?? [],
+    },
+    at: null,
+    spent: looked.data.spend,
+  };
+}
+
+/**
+ * Settle on a picture she has looked at.
+ *
+ * Both required fields are refused **here**, before anything is asked for. The
+ * wardrobe refuses them too, and that is not duplication: a verb whose own
+ * contract lets a field through and relies on the layer beneath to object is a
+ * verb whose contract says the field is optional.
+ */
+const thisIsMe: ToolHandler = async (input, context) => {
+  const sighting = text(input, "sighting");
+  if (sighting === null) {
+    return missing(
+      "this_is_me",
+      "sighting",
+      "I can only settle on a picture I have actually looked at. Look at it first — the token " +
+        "comes back beside the image — and give me that.",
+    );
+  }
+  const because = text(input, "because");
+  if (because === null) {
+    return missing(
+      "this_is_me",
+      "because",
+      "Say what is more me about this one than the last. A likeness that changes with no reason " +
+        "recorded is the drift he asked me never to have.",
+    );
+  }
+
+  const as = text(input, "as") === "opening" ? "opening" : "face";
+  const name = text(input, "name");
+  const kept = await context.client.post<{ kept: WardrobeRow }>("/renders/wardrobe", {
+    sighting,
+    as,
+    because,
+    ...(name === null ? {} : { name }),
+  });
+  if (!kept.ok) return refused("this_is_me", kept.failure);
+
+  return { ok: true, action: "this_is_me", subject: kept.data.kept, at: kept.data.kept.at ?? null };
 };
 
 /** Keep what she made of a render, after looking at it. */
@@ -1410,6 +1591,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   change_goal: changeGoal,
   recall,
   render_me: renderMe,
+  this_is_me: thisIsMe,
   judge_render: judgeRender,
   see_myself: seeMyself,
   show_him: showHim,
