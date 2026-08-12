@@ -371,6 +371,18 @@ describe("the tool surface she is offered", () => {
       // from a machine acting on his behalf without it.
       words: "I thought of you when the light did that thing.",
       renderName: THE_RENDER,
+      // `judge_render` — a write about her own face rather than about him, and
+      // the one where the exemption was most tempting: the verdict is its own
+      // argument, so a reason for BELIEVING it would be decoration. The guard
+      // was right to refuse that reading, and the field was reframed instead —
+      // `because` here says why she was LOOKING, and "he asked" and "I came
+      // back to it myself" are different acts.
+      verdict: "The smile is right. The eyes sit too wide.",
+      // `this_is_me` — the write that changes what every later render looks
+      // like, and the one whose reason the Commander ruled on by name. The
+      // token stands for a picture she has been shown; this guard is about the
+      // reason, so the look is supplied and only `because` is withheld.
+      sighting: "0123456789abcdef",
     };
 
     for (const tool of advertisedTools()) {

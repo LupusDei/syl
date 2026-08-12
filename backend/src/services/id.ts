@@ -66,6 +66,12 @@ export type IdType =
   // on disk and this addresses the promise to come back to it — the two have
   // different lifetimes, and the file outlives the decision.
   | "render_watch"
+  // What she made of a render after looking at it (`0030_render_verdicts.sql`).
+  // Deliberately NOT a `memory_node`: the Commander's ruling that a verdict on
+  // her own face is not a fact about his life, and that the whole exercise ends
+  // once she settles on a likeness. A separate id shape is what keeps that
+  // store droppable.
+  | "render_verdict"
   // Telemetry, not memory. A dream session is a row in the dream log
   // (`0013_dream_log.sql`) and never a node in the graph — see the header of
   // that migration for why the two must not touch.

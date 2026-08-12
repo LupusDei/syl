@@ -298,6 +298,11 @@ export class VoiceService {
       // "The composed prompt, exactly as it was sent" — for a voiced clip that
       // is the text `seed_audio` was asked to say, verbatim.
       prompt: words,
+      // The generations the picture track came from, carried over whole. A
+      // voiced copy adds audio to a video somebody already paid for; claiming
+      // it was made from one generation when the source was made from two
+      // would lose the only record of how the picture was made.
+      parts: source.parts,
       scene: source.scene,
       holdsLikeness: source.holdsLikeness,
       because,

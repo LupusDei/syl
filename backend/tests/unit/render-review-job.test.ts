@@ -95,6 +95,12 @@ function render(overrides: Partial<RenderRecord> = {}): RenderRecord {
     reference: "reference.png",
     framing: "mid_face_visible",
     prompt: "…",
+    // One generation, which is what an unanchored framing is. The review job
+    // cares about the finished clip, so this is here to make the record whole
+    // rather than because anything below reads it.
+    parts: [
+      { taskId: "task-1", prompt: "…", duration: 15, first: "renders/opening-ribbon.png", last: null, video: "/studio/syl-2026-08-11-135500-medium.mp4", credits: 120 },
+    ],
     scene: "I am turning towards him as the ribbon unravels.",
     holdsLikeness: true,
     because: "He said the ribbon shot was the one that felt like me.",
