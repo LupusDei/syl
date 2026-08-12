@@ -8,6 +8,7 @@ import { extractFrames, ffmpegRunner, type ExtractResult, type FrameRunner } fro
 import { joinVideos, lastFrame } from "./join.js";
 import { isTerminal, type RenderBackend, type PositionedImage } from "./runway.js";
 import { isRenderName, RENDER_PREFIX, type Studio } from "./studio.js";
+import { Wardrobe } from "./wardrobe.js";
 
 /**
  * Syl rendering herself, and being able to say what it cost.
@@ -230,6 +231,31 @@ export interface StartInput {
   readonly scene: string;
   readonly framing: string;
   readonly because: string;
+  /**
+   * How long the finished clip is, in seconds. Absent means fifteen.
+   *
+   * A **dial**, and one of only two. seedance2 takes an integer 4–15 — probed
+   * 2026-08-11 with free 400s, which is also how the floor is known — and a
+   * value outside that is refused here rather than discovered by Runway after a
+   * generation is already paid for.
+   *
+   * A shot whose subject is her face is two generations, so the shortest one
+   * that exists is eight. {@link halvesOf} rounds up rather than collapsing, and
+   * `duration` on the record is the halves added up, so the number she reads
+   * back is the number that was made.
+   */
+  readonly seconds?: number;
+  /**
+   * Which of her openings the clip starts on. Absent means the ribbon.
+   *
+   * The other dial, and the one with a consequence worth saying out loud: the
+   * opening is `promptImage`, `promptImage` is frame one, and seedance2 takes
+   * the video's **aspect** from it and silently overrules `ratio`. So choosing a
+   * differently shaped opening changes the shape of the video. The record's
+   * `ratio` is derived from the opening's own header for exactly that reason —
+   * see `pictures.ts`.
+   */
+  readonly opening?: string;
 }
 
 /**
@@ -331,6 +357,15 @@ const UNRAVELLING_CLAUSE =
  *
  * Costs the same either way: `creditsFor` bands on the longer side, and 1112
  * and 1280 are both under the 1280 that ends the `sd` band.
+ *
+ * **`ratio` is now a FALLBACK rather than the value** (`syl-ate`). She can
+ * choose which opening a clip starts on, and the opening decides the aspect, so
+ * the ratio that is sent is derived from the chosen opening's own header —
+ * `pictures.ts`. This is what that derivation answers when the opening's shape
+ * cannot be read at all, which on a real machine means only the seed: every
+ * opening she adopts has a readable shape, because `Wardrobe.keep` refuses one
+ * that does not. It is the shape the seed ribbon actually is, so the fallback
+ * and the file still agree.
  */
 const DEFAULTS = {
   model: "seedance2",
@@ -349,6 +384,15 @@ const DEFAULTS = {
  * already paid for.
  */
 const MIN_SECONDS = 4;
+
+/**
+ * The longest generation seedance2 will make, probed the same way.
+ *
+ * `duration: 99` answers *"<=15"*. It is the ceiling of the one length dial she
+ * has, and it is checked here so a value outside it is a refusal that costs
+ * nothing rather than a 400 after the first half of a joined render is paid for.
+ */
+const MAX_SECONDS = 15;
 
 /**
  * A render's seconds, split across the two generations it is made of.
@@ -440,6 +484,15 @@ const GIVE_UP_AFTER_POLLS = 240;
 
 export interface RenderServiceOptions {
   readonly studio: Studio;
+  /**
+   * What she looks like and what her clips open on, as things she chooses.
+   *
+   * Optional, and built from the studio when it is absent, because a wardrobe
+   * is entirely a function of her home — there is nothing a caller could supply
+   * that this could not work out. The seam exists so a test can hold the clock
+   * still, not so two of them can disagree about which face is hers.
+   */
+  readonly wardrobe?: Wardrobe;
   /** `null` on a machine with no `RUNWAYML_API_SECRET`, which is most of them. */
   readonly backend: RenderBackend | null;
   readonly clock?: Clock;
@@ -477,6 +530,7 @@ export interface RenderServiceOptions {
 
 export class RenderService {
   readonly #studio: Studio;
+  readonly #wardrobe: Wardrobe;
   readonly #backend: RenderBackend | null;
   readonly #clock: Clock;
   readonly #sleep: (ms: number) => Promise<void>;
@@ -490,8 +544,10 @@ export class RenderService {
 
   constructor(options: RenderServiceOptions) {
     this.#studio = options.studio;
-    this.#backend = options.backend;
     this.#clock = options.clock ?? systemClock;
+    this.#wardrobe =
+      options.wardrobe ?? new Wardrobe({ studio: options.studio, clock: this.#clock });
+    this.#backend = options.backend;
     this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#pollMs = options.pollMs ?? POLL_MS;
     this.#giveUpAfterPolls = options.giveUpAfterPolls ?? GIVE_UP_AFTER_POLLS;
@@ -547,6 +603,21 @@ export class RenderService {
       };
     }
 
+    // The one length dial, checked against what seedance2 actually makes.
+    // Refused before anything is spent rather than after the first half of a
+    // joined render is already bought.
+    const seconds = input.seconds ?? DEFAULTS.duration;
+    if (!Number.isInteger(seconds) || seconds < MIN_SECONDS || seconds > MAX_SECONDS) {
+      return {
+        ok: false,
+        reason:
+          `A clip is a whole number of seconds between ${String(MIN_SECONDS)} and ` +
+          `${String(MAX_SECONDS)}, which is what seedance2 makes — ${String(seconds)} is not one. ` +
+          "A shot of my face is two generations cut together, so the shortest of those is eight.",
+        retryable: true,
+      };
+    }
+
     if (this.#backend === null) {
       return {
         ok: false,
@@ -557,19 +628,38 @@ export class RenderService {
       };
     }
 
-    // The picture that is actually sent, and therefore the video's first frame.
-    // Checked rather than assumed: without it there is nothing to start the
-    // clip from, and the failure mode of getting this wrong is not an error —
-    // it is fifteen seconds that open on the wrong thing, at full price.
-    const opening = this.#studio.opening();
-    if (!existsSync(opening)) {
+    // The picture that is actually sent, and therefore the video's first frame
+    // AND the video's shape. Hers to choose since `syl-ate`: the ribbon unless
+    // she names another, because that is her signature and what every clip in
+    // the reel opens on.
+    const opening = this.#wardrobe.opening(input.opening);
+    // Checked rather than assumed: without a picture there is nothing to start
+    // the clip from, and the failure mode of getting this wrong is not an error
+    // — it is fifteen seconds that open on the wrong thing, at full price.
+    //
+    // TWO REFUSALS WEARING ONE SHAPE, and one of them is hers to fix. A name
+    // she got wrong is answered with the list; the ribbon missing off the disk
+    // is answered with the path, because there is nothing she can retry.
+    if (opening === null || !existsSync(opening.path)) {
+      const named = (input.opening ?? "").trim();
+      if (named === "" || opening !== null) {
+        return {
+          ok: false,
+          reason:
+            `The opening my clips would start on is not where it should be ` +
+            `(${opening?.path ?? this.#studio.opening()}). It is the first frame of every render ` +
+            "— without it the video would begin somewhere else, and it would not cut against the " +
+            "others.",
+          retryable: false,
+        };
+      }
       return {
         ok: false,
         reason:
-          `The ribbon my clips open on is not where it should be (${opening}). It is the first ` +
-          "frame of every render — without it the video would begin somewhere else, and it would " +
-          "not cut against the others.",
-        retryable: false,
+          `I do not have an opening called "${named}". The ones I have are: ` +
+          `${this.#wardrobe.openings().map((one) => one.id).join(", ")}. Leave it out for the ` +
+          "ribbon, which is what the reel opens on.",
+        retryable: true,
       };
     }
 
@@ -579,21 +669,59 @@ export class RenderService {
     // price — so it is refused here rather than discovered on the other side.
     // Only for the framings that need it: `face_turned_away` holds without a
     // face at all, and must not stop working because a likeness is missing.
-    const anchor = framing.anchor === "none" ? null : this.#studio.reference();
-    if (anchor !== null && !existsSync(anchor)) {
-      return {
-        ok: false,
-        reason:
-          `This shot is my face, and the picture that holds my likeness is not where it should ` +
-          `be (${anchor}). Without it the model has nothing to copy and would give you somebody ` +
-          "else. Nothing has been spent.",
-        retryable: false,
-      };
+    let anchor: string | null = null;
+    if (framing.anchor !== "none") {
+      const chosen = this.#wardrobe.face();
+      if (chosen === null) {
+        // TWO DIFFERENT REFUSALS, AND THEY MUST NOT WEAR ONE SENTENCE. Either
+        // there is no likeness on this machine at all, or the log of what she
+        // has adopted cannot be read — and in the second case falling back to
+        // the picture he guessed would be the silent change of face the
+        // Commander forbade, at full price, on a render she would then judge.
+        const problems = this.#wardrobe.problems();
+        return {
+          ok: false,
+          reason:
+            problems.length > 0
+              ? `${problems.join(" ")} So I will not render a shot of my face until that file is readable.`
+              : `This shot is my face, and there is no picture of me on this machine to hold it ` +
+                `(nothing at ${this.#studio.reference()}). Without one the model has nothing to ` +
+                "copy and would give you somebody else. Nothing has been spent.",
+          retryable: false,
+        };
+      }
+      if (!existsSync(chosen.path)) {
+        return {
+          ok: false,
+          reason:
+            `This shot is my face, and the picture I chose to hold it is not where it should be ` +
+            `(${chosen.path}). Without it the model has nothing to copy and would give you ` +
+            "somebody else. Nothing has been spent.",
+          retryable: false,
+        };
+      }
+      anchor = chosen.path;
     }
+
+    // DERIVED FROM THE OPENING, never written down beside it. `promptImage`
+    // decides the aspect and overrules this field without saying so, so the
+    // only thing `ratio` can do is agree with the picture or lie about it —
+    // and it lied for a day, saying `720:1280` above a stream of landscape
+    // videos. The fallback is the shape the seed ribbon is; every opening she
+    // adopts has a readable shape, because `Wardrobe.keep` refuses one that
+    // does not.
+    const ratio = opening.ratio ?? DEFAULTS.ratio;
 
     const now = this.#clock();
     const name = this.#nameFor(now, framing.id);
-    const planned = this.#plan({ name, framing, scene, opening, anchor });
+    const planned = this.#plan({
+      name,
+      framing,
+      scene,
+      opening: opening.path,
+      anchor,
+      seconds,
+    });
 
     // Only the FIRST half goes over now. The second one starts from the frame
     // the first one ends on, so it cannot be submitted until that frame exists
@@ -610,7 +738,7 @@ export class RenderService {
       model: DEFAULTS.model,
       promptImage: this.#promptImage(head),
       promptText: head.prompt,
-      ratio: DEFAULTS.ratio,
+      ratio,
       duration: head.duration,
     });
 
@@ -628,7 +756,7 @@ export class RenderService {
       first: this.#relativeTo(part.first),
       last: part.last === null ? null : this.#relativeTo(part.last),
       video: null,
-      credits: creditsFor({ model: DEFAULTS.model, ratio: DEFAULTS.ratio, seconds: part.duration }),
+      credits: creditsFor({ model: DEFAULTS.model, ratio, seconds: part.duration }),
     }));
 
     const record: RenderRecord = {
@@ -637,9 +765,9 @@ export class RenderService {
       renderedAt: null,
       taskId: submitted.data.id,
       model: DEFAULTS.model,
-      ratio: DEFAULTS.ratio,
+      ratio,
       duration: planned.reduce((total, part) => total + part.duration, 0),
-      reference: this.#relativeTo(opening),
+      reference: this.#relativeTo(opening.path),
       anchor: anchor === null ? null : this.#relativeTo(anchor),
       framing: framing.id,
       prompt: planned.map((part) => part.prompt).join("\n\n"),
@@ -842,16 +970,18 @@ export class RenderService {
     readonly scene: string;
     readonly opening: string;
     readonly anchor: string | null;
+    /** What she asked for, already checked against seedance2's 4–15. */
+    readonly seconds: number;
   }): readonly PlannedPart[] {
     const stem = `${IDENTITY} ${input.scene} ${input.framing.clause}`;
 
     if (input.anchor === null) {
       return [
-        { prompt: `${stem} ${LOOP_CLAUSE}`, duration: DEFAULTS.duration, first: input.opening, last: null },
+        { prompt: `${stem} ${LOOP_CLAUSE}`, duration: input.seconds, first: input.opening, last: null },
       ];
     }
 
-    const [gathering, unravelling] = halvesOf(DEFAULTS.duration);
+    const [gathering, unravelling] = halvesOf(input.seconds);
     return [
       { prompt: `${stem} ${GATHERING_CLAUSE}`, duration: gathering, first: input.opening, last: input.anchor },
       {
