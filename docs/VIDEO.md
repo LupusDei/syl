@@ -182,6 +182,13 @@ Pull it with `-sseof`, seeking from the end: the duration Runway reports is the
 one it was *asked* for, not the one it produced — the 4-second probe came back
 4.041667s — so there is no number on the request side to seek to.
 
+**The render that proves it** is `syl-20260811t235451677z-close-portrait.mp4`,
+made through the service at its own defaults: 834x1112, 15.14s, 540 credits.
+Frame one is the bare ribbon on empty starfield; at 4s she has gathered out of
+it; at 7.6s and 8.4s — either side of the join — the same face, with no visible
+cut; at 12s she is streaming back into the light; the last frame is the bare
+ribbon again. 684 credits including the probe that measured the direction.
+
 | framing | face toward camera | anchor | holds her likeness |
 |---|---|---|---|
 | `face_turned_away` | no | none | **yes** — no face to get wrong |

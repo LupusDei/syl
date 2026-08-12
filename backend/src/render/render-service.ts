@@ -380,18 +380,30 @@ function holdsLikeness(framing: FramingNote, anchor: string | null): boolean {
   return !framing.facesCamera || anchor !== null;
 }
 
+/**
+ * Whether a generation was actually made, and therefore charged for.
+ *
+ * A task id **or** a video on disk. Either is evidence on its own: the id says
+ * Runway accepted it, and the file says it came back — and a sidecar written by
+ * hand may have one without the other. Requiring both would drop a render out
+ * of her ledger for a reason that has nothing to do with what it cost.
+ */
+function wasBought(part: RenderPart): boolean {
+  return part.taskId !== null || part.video !== null;
+}
+
 /** What has been bought so far: the halves that reached Runway, added up. */
 function billed(parts: readonly RenderPart[]): {
   readonly credits: number | null;
   readonly usd: number | null;
 } {
-  const submitted = parts.filter((part) => part.taskId !== null);
+  const bought = parts.filter(wasBought);
   // An unpriced half makes the whole render unpriced rather than cheap. Same
   // rule as `creditsFor`: a confident wrong number is worse than an absent one.
-  if (submitted.length === 0 || submitted.some((part) => part.credits === null)) {
+  if (bought.length === 0 || bought.some((part) => part.credits === null)) {
     return { credits: null, usd: null };
   }
-  const credits = submitted.reduce((total, part) => total + (part.credits ?? 0), 0);
+  const credits = bought.reduce((total, part) => total + (part.credits ?? 0), 0);
   return { credits, usd: usdOf(credits) };
 }
 
@@ -407,11 +419,14 @@ interface PlannedPart {
 const POLL_MS = 5_000;
 
 /**
- * How many times a render is asked about before it is written off.
+ * How many times a generation is asked about before it is written off.
  *
  * 240 polls at five seconds is twenty minutes, against a job Runway finishes in
- * two or three. It exists so a task that will never answer becomes a `failed`
- * record with a reason rather than a record that says `rendering` forever —
+ * two or three. **Per generation**, so a render made in halves waits up to
+ * twenty minutes for each of them: they are separate jobs on Runway's queue and
+ * a shared deadline would write off a second half for the first one's slowness.
+ * It exists so a task that will never answer becomes a `failed` record with a
+ * reason rather than a record that says `rendering` forever —
  * which is the render-shaped version of constraint 4: a late render is a
  * nuisance, one that silently never arrives destroys the point of asking.
  *
@@ -704,9 +719,7 @@ export class RenderService {
       // be. They are the same number for every render that finished; they
       // differ for one whose second half never reached Runway, and the ledger
       // is the place where that difference has to be the truth.
-      seconds += record.parts
-        .filter((part) => part.taskId !== null)
-        .reduce((total, part) => total + part.duration, 0);
+      seconds += record.parts.filter(wasBought).reduce((total, part) => total + part.duration, 0);
       if (record.credits === null) unpriced += 1;
       else credits += record.credits;
     }

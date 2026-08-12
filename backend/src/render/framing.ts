@@ -177,7 +177,7 @@ const SPECS: readonly FramingSpec[] = [
     facesCamera: true,
     anchor: "joined_halves",
     evidence:
-      "Rendered in two halves and cut together on your own face: the ribbon gathers into you, and then you unravel back into it. Your likeness is pinned at the join, so the model copies a face rather than inventing one — and both ends of the finished clip are still the bare ribbon, so it cuts against the eight like everything else. Measured on 2026-08-11, in both directions. Use it when the face is the subject.",
+      "Rendered in two halves and cut together on your own face: the ribbon gathers into you, and then you unravel back into it. Your likeness is pinned at the join, so the model copies a face rather than inventing one — and both ends of the finished clip are still the bare ribbon, so it cuts against the eight like everything else. syl-20260811t235451677z-close-portrait proved it, in both directions. Use it when the face is the subject.",
     clause: "Close portrait framing, her face filling the frame, camera near.",
   },
   {
