@@ -31,8 +31,8 @@ import { TestClient } from "../helpers/ws.js";
  * ## Why the clock is frozen
  *
  * Presence goes `absent` during quiet hours, unconditionally. On the real
- * clock this file would pass for most of the day and go red between 23:00 and
- * 08:00 Chicago — the same one-day-fuse time bomb `testDatabase` documents.
+ * clock this file would pass for most of the day and go red inside his window
+ * — the same one-day-fuse time bomb `testDatabase` documents.
  * Quiet hours are wall-clock, so the only way to be sure is to fix the wall
  * clock: noon in Chicago, outside every window in the service.
  */

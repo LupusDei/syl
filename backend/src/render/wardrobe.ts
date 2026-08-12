@@ -383,6 +383,13 @@ export class Wardrobe {
    * so a picture that exists both as a frame of a render and as a copy in her
    * wardrobe is adopted from the frame — which is the only one of the two whose
    * path still says where it came from.
+   *
+   * This set and what `see_myself` hands over are two halves of one rule and
+   * have to move together. They did not: the stills were reachable here from
+   * the start, and the token that names one was minted only for wardrobe rows,
+   * so the frame she wanted was a picture she could look at and could not
+   * choose. Anything added to what she is shown belongs here too, and anything
+   * here that she is never shown is unreachable by construction.
    */
   #shown(): readonly string[] {
     const files: string[] = [];

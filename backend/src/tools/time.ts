@@ -1,5 +1,5 @@
-import { isIanaTimeZone } from "../config.js";
-import { nextDailyOccurrence } from "../harness/schedule.js";
+import { DEFAULT_QUIET_HOURS, isIanaTimeZone } from "../config.js";
+import { nextDailyOccurrence, shiftWallTime } from "../harness/schedule.js";
 import { instant, type Clock } from "../services/clock.js";
 import {
   RruleUnsupportedError,
@@ -56,25 +56,29 @@ export type PartOfDay = "morning" | "afternoon" | "evening" | "night";
 /**
  * The conventions, stated once rather than scattered as magic hours.
  *
- * `morning` is 08:00 because that is `DEFAULT_QUIET_HOURS.end` — the first
- * moment the Commander has already declared himself reachable. Deriving it
- * from the quiet window rather than picking a pleasant-looking hour means a
- * "tomorrow morning" reminder is never created only to be deferred on arrival,
- * and it moves with the setting instead of drifting away from it.
+ * Two of the four are **computed from the quiet window**, not written down
+ * beside it. `morning` is the moment it ends — the first the Commander has
+ * already declared himself reachable — and `night` is an hour before it
+ * begins, so an evening reminder is not created only to be pushed to the next
+ * morning.
+ * Either one written as a literal is a constant restating another constant,
+ * and the comment claiming they agree stays true-looking after the value
+ * diverges. That is precisely what `morning: "08:00"` was, with this comment
+ * asserting it equalled `DEFAULT_QUIET_HOURS.end`; both moved on 2026-08-12 and
+ * only one of them would have.
  *
- * The other three are ordinary conventions and nothing more: just past midday,
- * the end of the working day, and an hour before quiet hours begin so an
- * evening reminder is not immediately pushed to the next morning.
+ * The other two are ordinary conventions and nothing more: just past midday,
+ * and the end of the working day.
  *
  * A convention is not a guess **provided it is said out loud**, which is why
  * every resolution that applies one carries an `assumption` the caller is
  * expected to repeat back.
  */
 export const PART_OF_DAY: Readonly<Record<PartOfDay, string>> = {
-  morning: "08:00",
+  morning: DEFAULT_QUIET_HOURS.quiet.end,
   afternoon: "13:00",
   evening: "18:00",
-  night: "21:00",
+  night: shiftWallTime(DEFAULT_QUIET_HOURS.quiet.start, -60),
 };
 
 /**

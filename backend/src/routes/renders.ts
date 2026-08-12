@@ -391,6 +391,11 @@ export function createRenderRouter(options: RenderRouterOptions): Router {
 
         sendOk(response, {
           render: looked.record,
+          // Each still carries the token that names it, exactly as a wardrobe
+          // row does. The rule is about being shown a picture rather than about
+          // which table it came out of, and until 2026-08-12 only half of it was
+          // built: she could look at a frame of a render and could not adopt it,
+          // so the only face she could choose was the one he guessed.
           frames: looked.frames.frames,
           // WHAT SHE ALREADY CONCLUDED, handed back with the pictures.
           //

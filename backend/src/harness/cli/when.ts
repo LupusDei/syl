@@ -1,25 +1,18 @@
 /**
  * Inspect the scheduler without waiting for a reminder to fire.
  *
- *   npm run when -- 07:00
+ *   npm run when -- 07:00        (the boundary: arrives at 07:00, not deferred)
  *   npm run when -- 03:00        (lands in quiet hours, shows the deferral)
  *   npm run when -- 02:30        (does not exist on spring-forward night)
  *
  * The scheduler is pure, so this just asks it questions and prints the answers.
  */
-import {
-  deferPastQuietHours,
-  isWithinQuietHours,
-  nextDailyOccurrence,
-  type QuietHours,
-} from "../schedule.js";
+import { loadQuietHours } from "../../config.js";
+import { deferPastQuietHours, isWithinQuietHours, nextDailyOccurrence } from "../schedule.js";
 
-const TZ = "America/Chicago";
-const QUIET: QuietHours = { start: "23:00", end: "08:00" };
-
-function local(instant: Date): string {
+function local(instant: Date, timeZone: string): string {
   return instant.toLocaleString("en-US", {
-    timeZone: TZ,
+    timeZone,
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -38,10 +31,17 @@ function relative(from: Date, to: Date): string {
 }
 
 function main(): void {
+  // The window this environment would actually run on, not a copy of it. This
+  // file used to hardcode 23:00-08:00 while the service ran 22:00-08:00, so the
+  // tool built to answer "when would this arrive?" answered for a different
+  // machine. Reading it the way the service does also means a malformed
+  // SYL_QUIET_* is reported here, by name, rather than at the first deferral.
+  const { quiet: QUIET, tz: TZ } = loadQuietHours(process.env);
+
   const spec = process.argv[2] ?? "07:00";
   const now = new Date();
 
-  console.log(`\n  now        ${local(now)}`);
+  console.log(`\n  now        ${local(now, TZ)}`);
   console.log(`  quiet      ${QUIET.start}–${QUIET.end} ${TZ}\n`);
 
   const next = nextDailyOccurrence(spec, now, TZ);
@@ -50,14 +50,14 @@ function main(): void {
   const urgent = deferPastQuietHours(next, QUIET, TZ, { urgent: true });
 
   console.log(`  "${spec}" daily`);
-  console.log(`  next fire  ${local(next)}   (${next.toISOString()})  ${relative(now, next)}`);
+  console.log(`  next fire  ${local(next, TZ)}   (${next.toISOString()})  ${relative(now, next)}`);
   console.log(`  in quiet?  ${quiet ? "yes" : "no"}`);
 
   if (delivered.getTime() !== next.getTime()) {
-    console.log(`  DEFERRED   ${local(delivered)}   (${delivered.toISOString()})`);
-    console.log(`  urgent     ${local(urgent)}   — an urgent reminder still breaks through`);
+    console.log(`  DEFERRED   ${local(delivered, TZ)}   (${delivered.toISOString()})`);
+    console.log(`  urgent     ${local(urgent, TZ)}   — an urgent reminder still breaks through`);
   } else {
-    console.log(`  delivered  ${local(delivered)}   — no deferral needed`);
+    console.log(`  delivered  ${local(delivered, TZ)}   — no deferral needed`);
   }
 
   // The property that Adjutant's scheduler gets wrong: a fixed interval drifts

@@ -57,6 +57,44 @@ import { RHYTHM_GRACE_MS } from "./deliver-reminders.js";
  * turn that looks sees what is true when it looks; a turn that is told sees what
  * was true when the prompt was built, and has no way to tell the difference.
  *
+ * ## The brief PREPARES the day; it does not describe it
+ *
+ * The Commander's specification, and it is five things: *"the morning review
+ * should prepare the day. It should look at all the todos reminders and the
+ * goals. It should then try and consolidate and plan out the best order of
+ * operations and the best approach to accomplish it all and prioritize and
+ * figure out what's at risk of not getting done."*
+ *
+ * It already triaged, and triaged well — *"Ten things are dated for today and
+ * only three of them are real"*. **Nothing did the fifth.** A brief that lists
+ * his day back in a better order is worth something; one that says *these two
+ * will not both happen and here is which to drop* is worth much more, and it is
+ * the only part of this his day does not already contain somewhere.
+ *
+ * The goals are load-bearing for the middle three rather than being a third
+ * list to recite: they are the only thing that makes one item outrank another
+ * for a reason he can argue with. Prioritising without them is a preference
+ * wearing a plan's clothes.
+ *
+ * ## The half of that which is a guard
+ *
+ * Consolidating and prioritising both mean touching his list, and constraint 6
+ * governs: **the system does not silently discard.** So the plan lives in the
+ * BRIEF. She says what she would merge and he merges it — a merge destroys one
+ * of two items, and there is no version of that she may do on her own.
+ *
+ * Scheduling is the one safe write and she keeps it, at a price: **every change
+ * she makes is named in the brief that made it.** He must never open his list
+ * and find it rearranged by something he did not watch, because a move he was
+ * not told about is indistinguishable from his own memory failing.
+ *
+ * The prompt is an instruction and instructions are not guarantees — nothing in
+ * the harness can stop a turn using a verb it has, and `budget.allowedTools` is
+ * a catalogue record that enforces nothing. So the guarantee actually available
+ * is that it cannot happen QUIETLY: {@link prunedHisList} reads the turn's own
+ * events and {@link createMorningAgendaHandler} says so in the log, on the
+ * morning it happened, naming the verb.
+ *
  * ## A morning with no brief in it is loud, and still a success
  *
  * Recording an empty morning as a *failure* would walk the job's circuit breaker
@@ -109,6 +147,27 @@ export const MORNING_AGENDA_WALL_TIME = agendaWallTime();
  * which is precisely the state this job was written to end.
  */
 export const PUTS_IT_IN_FRONT_OF_HIM: readonly string[] = ["remind_me", "show_him"];
+
+/**
+ * The verbs whose effect is that something he had is no longer there.
+ *
+ * Not "dangerous verbs" and not a permission list — she has all of these all
+ * day, and on his own instruction she uses them when he tells her to. This is
+ * the set that has no business in a **planning** turn: the morning brief reads
+ * his day and proposes, and every one of these concludes something instead. If
+ * an inference behind one is wrong the item is gone and he never learns it
+ * existed, which is the silent discard constraint 4 exists to forbid.
+ *
+ * `change_goal` is deliberately absent even though it can retire a goal: the
+ * same verb also merely rewords one, so watching it would report a correction
+ * as a loss. The prompt covers the goal case in words; this covers the three
+ * that can only take something away.
+ */
+export const TAKES_SOMETHING_OFF_HIS_LIST: readonly string[] = [
+  "finish_todo",
+  "drop_todo",
+  "cancel_reminder",
+];
 
 /** The longest of her own sentences the run record keeps. */
 const SUMMARY_LIMIT = 500;
@@ -212,45 +271,125 @@ export interface AgendaMoment {
 /**
  * What she is woken with.
  *
- * Four things it has to do, and the last two pull against each other:
+ * Three jobs, then the Commander's five, then two that pull against each other:
  *
  * 1. **Say what the turn is for.** A brief, composed now, announced at
  *    {@link AgendaMoment.announcedAt} by a note she did not write.
  * 2. **Send her to look rather than hand her a copy.** `whats_outstanding` is
  *    named because it is the verb she has, and because what it returns is true
- *    at the moment she calls it.
+ *    at the moment she calls it. `of: everything` is named too — a default is
+ *    not an instruction, and a turn told to "look at his day" reaches for the
+ *    to-dos and leaves the goals unread.
  * 3. **Make it clear the brief has to be FILED.** The turn's own text goes to a
  *    run record. If she only answers, the note at 07:00 announces nothing, which
  *    is the exact defect this job was built to end.
+ *
+ * Then read, consolidate, order, prioritise, and name what is at risk — the
+ * header explains why the fifth is the one worth having and why the second and
+ * fourth need a guard around them.
+ *
  * 4. **Let a quiet morning be short.** A daily slot is where an assistant learns
  *    to manufacture content, and `SOUL.md` is unambiguous about what that costs:
  *    *an assistant that speaks constantly gets muted.* Three real lines beat a
  *    page, and no real lines beats three invented ones.
+ * 5. **Let a safe morning be a safe morning.** The same failure at its sharpest:
+ *    a turn asked every day what is at risk will find something. An invented
+ *    risk is worse than a missing one, because it is the sentence that teaches
+ *    him to skip the real one, so "nothing is at risk" has to be a permitted and
+ *    ordinary answer.
  */
 export function agendaPrompt(moment: AgendaMoment): string {
   return [
     `It is ${wallClockIn(new Date(moment.now), moment.tz)} in ${moment.tz}. This is the ` +
-      `morning brief — his day, assembled by you, before he is awake enough to ask for it.`,
+      `morning brief — his day, assembled by you, before he is awake enough to ask for it. It ` +
+      `prepares the day rather than describing it.`,
     `He has a note at ${moment.announcedAt} telling him his objectives are ready. You did not ` +
       `write it and it does not know what you found; it only says the brief exists. So the ` +
       `brief has to exist by then, which is why you are up before it.`,
-    `Look before you write: \`whats_outstanding\` gives you what is actually open right now — ` +
-      `his reminders, his to-dos, his goals. Nothing here has told you what is on them, on ` +
-      `purpose. What you read is true when you read it; what you were handed is true whenever ` +
-      `somebody built the sentence.`,
-    `Then compose it and put it in front of him with your hands, so it is waiting when the ` +
-      `note arrives. Lead with what he has to do today. Say why anything you raise is on the ` +
-      `list — the reason travels with the thing or he cannot tell a good suggestion from a ` +
-      `wrong one.`,
-    `A quiet day is a short brief. Three things that matter beat a page, and nothing worth ` +
-      `saying is worth saying in a sentence — never pad it out because a morning arrived. ` +
-      `Yesterday's brief is gone; this one stands on its own.`,
+    `Look at all of it first: \`whats_outstanding\` with \`of: everything\` gives you his ` +
+      `reminders, his to-dos and his goals as they actually are. Nothing here has told you ` +
+      `what is on them, on purpose. What you read is true when you read it; what you were ` +
+      `handed is true whenever somebody built the sentence. Read the goals as carefully as the ` +
+      `list — the goals are what make an order defensible instead of arbitrary.`,
+    `Consolidate: say where two of his items are the same thing said twice, and where three of ` +
+      `them are really one afternoon's work. Name them and propose the merge in words. Do not ` +
+      `perform it — merging two of his to-dos destroys one, and that is his call, not yours.`,
+    `Order it: anything with an hour on it is a fixed point, and the day is built around those ` +
+      `rather than fitted in beside them. Put the rest in a sequence and say why each one is ` +
+      `where it is — it unblocks the next, it needs him before he is tired, it has to be done ` +
+      `before the call. A list in a better order is not a plan; the reasons are the plan.`,
+    `Prioritise by what a thing serves. A to-do that moves one of his goals outranks one that ` +
+      `does not — say which goal, so he can argue with the ranking and not just the list. ` +
+      `Between two that both serve a goal, the one with a real deadline wins.`,
+    `Then say what is at risk of not getting done, which is the part nothing else in his day ` +
+      `does for him. Not "it will be tight": name the item, say why it will not fit — the ` +
+      `hours it needs against the hours he has, or the thing ahead of it that will overrun — ` +
+      `and say what to do about it: drop it, move it to a day you name, or cut it down to the ` +
+      `part that has to happen today. A warning he cannot act on is not a warning. If nothing ` +
+      `is at risk, say so in a sentence and move on; a risk invented because the morning came ` +
+      `round is what teaches him to ignore the real one.`,
+    handsClause(),
+    `Then put it in front of him with your hands, so it is waiting when the note arrives. Lead ` +
+      `with what he has to do today. This is one brief that has done five things, not five ` +
+      `headings — a quiet day is three sentences and a hard day is still short enough to hold ` +
+      `in his head. Yesterday's brief is gone; this one stands on its own.`,
     quietClause(moment),
     ...(moment.late ? [lateClause(moment)] : []),
     `What you say here is not sent to him. It is written down, and read by nobody unless ` +
       `something went wrong. Putting the brief in front of him is a separate thing you do ` +
       `deliberately, with your hands.`,
   ].join("\n\n");
+}
+
+/**
+ * What she may change on his list this morning, and what she may not.
+ *
+ * The prohibitions are in ENGLISH rather than in verb names, deliberately. The
+ * rule `tools/schemas.ts` states — prose that says "you may not X" goes stale
+ * the day X is allowed, and a stale instruction fails silently by being acted
+ * out — bites hardest when the prose names identifiers, because those are what
+ * a rename moves. "Nothing comes off his list this morning" stays true through
+ * any renaming, and {@link prunedHisList} is the half that watches rather than
+ * asks.
+ */
+function handsClause(): string {
+  return (
+    `Your hands may plan and they may not prune. Set a reminder for anything with an hour on ` +
+    `it, and put a date on a to-do — or pin the one thing that leads the day — when the plan ` +
+    `you just made says so. Then say, in the brief, every change you made and why: he must ` +
+    `never open his list and find it rearranged by something he did not watch. Nothing comes ` +
+    `off that list this morning. Do not finish anything, do not drop anything, do not cancel ` +
+    `his reminders, do not retire a goal, and do not fold two of his items into one. You say ` +
+    `what should go; taking it is his.`
+  );
+}
+
+/**
+ * The ceiling on the morning prompt, in bytes.
+ *
+ * A tripwire on a prompt that has run away, not a token economy — the same
+ * shape as `SYSTEM_PROMPT_MAX` in `harness/turn-context.ts`, and here for the
+ * same reason: this is the file where prose grows, every sentence in it is paid
+ * on every morning forever, and the margin was the thing nobody measured when
+ * the system prompt quietly ate its own twice in a day.
+ *
+ * Measured on 2026-08-12: **3,640 bytes**, and 3,855 on a morning that is late.
+ * The five things the Commander asked for cost about 2,100 of that; the brief
+ * used to say only "look, then compose" and ran to roughly 1,600. 6,000 leaves
+ * room for another clause and not for a second brief, which is the size a
+ * tripwire wants — big enough that a paragraph cannot trip it, small enough
+ * that it goes off long before anyone would notice from the bill.
+ *
+ * If a sixth thing the brief must do genuinely does not fit, raise this and
+ * record the new measurement in the same breath; if one clause has bloated,
+ * narrow the clause. Do not raise it without re-measuring — a number in prose
+ * beside a number in code is how the system prompt lost its margin twice.
+ */
+export const AGENDA_PROMPT_MAX_BYTES = 6_000;
+
+/** What this morning's prompt actually costs, counted the way the cap counts it. */
+export function agendaPromptBytes(moment: AgendaMoment): number {
+  return Buffer.byteLength(agendaPrompt(moment), "utf8");
 }
 
 /** The sentence about whether he is awake to receive it. */
@@ -331,6 +470,32 @@ export function composedTheBrief(events: readonly SylEvent[]): boolean {
   return events.some((event) => event.kind === "tool_use" && filing.has(event.name));
 }
 
+/**
+ * Which of {@link TAKES_SOMETHING_OFF_HIS_LIST} this morning used, if any.
+ *
+ * Returns the bare verb names, in the order they were called and without
+ * repeats, so the log line reads as a sentence about what happened rather than
+ * as a tally. Empty on the morning it should be empty on — which is every one.
+ */
+export function prunedHisList(events: readonly SylEvent[]): readonly string[] {
+  // Both spellings, for the same reason `composedTheBrief` accepts both: a real
+  // transcript carries `mcp__syl__drop_todo` and a fixture may carry the bare
+  // name, and a guard that only knows one of them reports every morning clean.
+  const bare = new Map<string, string>();
+  for (const verb of TAKES_SOMETHING_OFF_HIS_LIST) {
+    bare.set(verb, verb);
+    bare.set(mcpToolName(verb), verb);
+  }
+
+  const used: string[] = [];
+  for (const event of events) {
+    if (event.kind !== "tool_use") continue;
+    const verb = bare.get(event.name);
+    if (verb !== undefined && !used.includes(verb)) used.push(verb);
+  }
+  return used;
+}
+
 /** A string cut to length, saying how much was dropped rather than trailing off. */
 function cut(text: string, max: number): string {
   if (text.length <= max) return text;
@@ -391,6 +556,22 @@ export function createMorningAgendaHandler(deps: MorningAgendaDeps): JobHandler 
     }
 
     const spoke = composedTheBrief(result.events);
+
+    const pruned = prunedHisList(result.events);
+    if (pruned.length > 0) {
+      // Loud, and that is all. Not a failure — the brief was still composed and
+      // recording this as one would walk the circuit breaker towards open and
+      // take the whole rhythm away over a question of manners. Not a rollback
+      // either: undoing a write on her behalf would be a second unwatched
+      // change to his list, which is the thing being guarded against. What is
+      // owed here is that it be visible on the morning it happened, with the
+      // verb named, so nobody has to reconstruct it from a summary later.
+      deps.log?.log("warn", "agenda.pruned", {
+        at: instant(now),
+        verbs: pruned,
+        said: summarise(result),
+      });
+    }
 
     if (!spoke) {
       // Not a failure. Five consecutive failures open the circuit breaker and

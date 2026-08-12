@@ -37,6 +37,17 @@ interface Envelope<T> {
   readonly error?: ApiError;
 }
 
+/** One kept picture as the wardrobe route hands it over. */
+interface Shown {
+  readonly id: string;
+  readonly because: string;
+  readonly current: boolean;
+  readonly ratio: string | null;
+  readonly sighting: string | null;
+  readonly from: { readonly render: string; readonly atSeconds: number } | null;
+  readonly base64?: string;
+}
+
 let db: SylDatabase;
 let deps: AppDependencies;
 let running: RunningApp;
@@ -45,6 +56,34 @@ let root: string;
 let renders: RenderService;
 let wardrobe: Wardrobe;
 let keyCounter = 0;
+/** How many stills the ffmpeg double has written, so each one is distinct. */
+let stills = 0;
+
+/**
+ * A minimal JPEG whose shape can be read off its own header.
+ *
+ * The stills the double writes have to be real pictures, because a still she is
+ * shown is a still she can adopt — and the wardrobe refuses a picture whose
+ * shape it cannot read. `salt` rides after the end marker so that two stills
+ * from one clip are two different pictures with two different tokens.
+ */
+function jpeg(width: number, height: number, salt: number): Buffer {
+  const bytes = Buffer.alloc(24);
+  bytes[0] = 0xff;
+  bytes[1] = 0xd8;
+  // SOF0 — the segment `sizeOf` walks to, seventeen bytes long.
+  bytes[2] = 0xff;
+  bytes[3] = 0xc0;
+  bytes.writeUInt16BE(17, 4);
+  bytes[6] = 8;
+  bytes.writeUInt16BE(height, 7);
+  bytes.writeUInt16BE(width, 9);
+  bytes[11] = 3;
+  bytes[21] = 0xff;
+  bytes[22] = 0xd9;
+  bytes[23] = salt;
+  return bytes;
+}
 
 /** A backend that always succeeds, and a `ffmpeg` that always writes a still. */
 function fakeBackend(): RenderBackend {
@@ -83,7 +122,8 @@ beforeEach(async () => {
     ffmpeg: async (_file: string, args: readonly string[]) => {
       const out = args[args.length - 1] ?? "";
       mkdirSync(dirname(out), { recursive: true });
-      writeFileSync(out, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+      stills += 1;
+      writeFileSync(out, jpeg(512, 682, stills));
       return { ok: true, message: "" };
     },
   });
@@ -97,6 +137,7 @@ beforeEach(async () => {
   running = await startTestApp(createApp(testConfig(), deps));
   token = deps.keys.pair(deps.keys.issuePairingCode().code, "Commander's iPhone").token;
   keyCounter = 0;
+  stills = 0;
 });
 
 afterEach(async () => {
@@ -253,6 +294,64 @@ describe("GET /renders/{name}/frames", () => {
     }
   });
 
+  it("should hand back the token that names each still, not only the picture", async () => {
+    const created = await api("/renders", { method: "POST", body: ASK });
+    const name = ((await created.json()) as Envelope<{ record: { name: string } }>).data?.record
+      .name as string;
+    await renders.drain();
+
+    const response = await api(`/renders/${name}/frames`);
+    const frames =
+      ((await response.json()) as Envelope<{ frames: { base64: string; sighting: string }[] }>).data
+        ?.frames ?? [];
+
+    expect(frames.length).toBeGreaterThanOrEqual(4);
+    for (const frame of frames) {
+      // The digest of the bytes she is handed, so a still she has looked at is
+      // a still she can name — the same pairing the wardrobe rows have always
+      // had, now a property of being shown rather than of a table.
+      expect(frame.sighting).toBe(sightingOf(Buffer.from(frame.base64, "base64")));
+    }
+  });
+
+  it("should let her adopt a still she was shown, keeping every face she has had", async () => {
+    const created = await api("/renders", { method: "POST", body: ASK });
+    const name = ((await created.json()) as Envelope<{ record: { name: string } }>).data?.record
+      .name as string;
+    await renders.drain();
+
+    const looked = await api(`/renders/${name}/frames`);
+    const frames =
+      ((await looked.json()) as Envelope<{ frames: { atSeconds: number; sighting: string }[] }>).data
+        ?.frames ?? [];
+    // The one she would actually choose is a particular second, not whichever
+    // still happens to be first — so take one out of the middle of the spread.
+    const wanted = frames[2];
+    expect(wanted?.sighting).toMatch(/^[0-9a-f]{16}$/u);
+
+    const kept = await api("/renders/wardrobe", {
+      method: "POST",
+      body: JSON.stringify({
+        sighting: wanted?.sighting,
+        as: "face",
+        because: "this one could say a hard thing, and his guess could not",
+      }),
+    });
+    expect(kept.status).toBe(201);
+
+    const response = await api("/renders/wardrobe?role=face");
+    const items = ((await response.json()) as Envelope<{ items: readonly Shown[] }>).data?.items ?? [];
+
+    // A new file and a new entry: nothing replaced, his guess still listed and
+    // still adoptable, which is what makes going back to it need no mechanism.
+    expect(items).toHaveLength(2);
+    expect(items[0]?.current).toBe(true);
+    expect(items.map((item) => item.id)).toContain("his-guess");
+    // And the provenance is read off where the picture was, so the face knows
+    // which render and which second it came out of.
+    expect(items[0]?.from).toEqual({ render: name, atSeconds: wanted?.atSeconds });
+  });
+
   it("should look at one named second", async () => {
     const created = await api("/renders", { method: "POST", body: ASK });
     const name = ((await created.json()) as Envelope<{ record: { name: string } }>).data?.record
@@ -328,15 +427,6 @@ describe("/renders/wardrobe", () => {
     bytes.writeUInt32BE(height, 20);
     bytes.writeUInt8(salt, 24);
     return bytes;
-  }
-
-  interface Shown {
-    readonly id: string;
-    readonly because: string;
-    readonly current: boolean;
-    readonly ratio: string | null;
-    readonly sighting: string | null;
-    readonly base64?: string;
   }
 
   /** Put a still where a look would have left one, and say what she saw. */

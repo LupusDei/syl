@@ -10,6 +10,7 @@ import {
   samplePoints,
   type FrameRunner,
 } from "../../src/render/frames.js";
+import { sightingOf } from "../../src/render/pictures.js";
 
 /**
  * How a video becomes something she can actually see.
@@ -104,6 +105,37 @@ describe("pulling frames out of a render", () => {
     // Written outside the repository, next to the renders — and kept, so she
     // has an artefact to show him rather than only something she looked at.
     expect(readdirSync(join(directory, "frames")).length).toBe(result.frames.length);
+  });
+
+  it("should name each still by its own bytes, so a picture she is shown is a picture she can choose", async () => {
+    // An ffmpeg that writes a different still each time, the way a real clip
+    // does. Identical bytes would make one token stand for four pictures and
+    // hide the thing under test.
+    let salt = 0;
+    const salted: FrameRunner = async (_file, args) => {
+      salt += 1;
+      writeFileSync(args[args.length - 1] ?? "", Buffer.from([0xff, 0xd8, 0xff, 0xe0, salt]));
+      return { ok: true, message: "" };
+    };
+
+    const result = await extractFrames({
+      video,
+      seconds: 15,
+      outDir: join(directory, "frames"),
+      run: salted,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    for (const frame of result.frames) {
+      // The token is a digest of the exact bytes that become the image block —
+      // not of the file's name, not of the render it came out of. That is what
+      // makes "she looked at this one" the thing the token asserts.
+      expect(frame.sighting).toBe(sightingOf(Buffer.from(frame.base64, "base64")));
+      expect(frame.sighting).toMatch(/^[0-9a-f]{16}$/u);
+    }
+    expect(new Set(result.frames.map((frame) => frame.sighting)).size).toBe(result.frames.length);
   });
 
   it("should scale the frames down, because judging her own face is not a 4K question", async () => {

@@ -339,10 +339,24 @@ to add is about *additional* surfaces and blocks nothing.
     `SylAgent.busy()` and stands aside rather than queueing behind him or ahead
     of the morning brief (`OUTRANKS_THE_HOUR`).
 - **Quiet hours bound what may REACH him, never what may run.** The dream at
-  03:00 and the brief at 06:45 both run inside his default 22:00–08:00 window on
+  03:00 and the brief at 06:45 both run inside his 23:00–07:00 window on
   purpose, and he asked to keep the overnight hours: *"I think she should be
   able to file things over night."* Anything that starts reading the window as
   "do not run" silently takes those with it.
+- **There is ONE quiet window and it lives in `backend/src/config.ts`.** The
+  value, the zone, and the `SYL_QUIET_*` fallbacks are all that one constant;
+  `presence.ts`, `harness/cli/when.ts` and `tools/time.ts` import it. It ends at
+  **07:00**, and `isWithinQuietHours` is start-inclusive and **end-exclusive**,
+  which is what lets the 07:00 announcement of the 06:45 brief go out at 07:00
+  instead of waiting a cycle — an 08:00 end held his brief for seventy-five
+  minutes on 2026-08-12. Anything defined *relative to* the window is computed
+  from it (`PART_OF_DAY.morning` is its end; `night` is an hour before its
+  start), never written down beside it: there were three windows in the tree,
+  two under the same exported name with different values, plus a constant
+  restating the end with a comment asserting they agreed.
+  `tests/unit/quiet-window.test.ts` scans `backend/src` and fails if a second
+  window literal appears anywhere. A module may *use* the window; a module that
+  writes one down is declaring a second one.
 - **An unattended turn must never be recordable as words the Commander said.**
   `harness/urgency.ts` grants the quiet-hours bypass only for a phrase he
   actually wrote, checked against a file `index.ts` writes from a turn's prompt

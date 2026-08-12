@@ -344,14 +344,36 @@ export function resolveCredentialSource(env: NodeJS.ProcessEnv): string {
 }
 
 /**
- * The default quiet window, and the Commander's zone.
+ * The quiet window and the Commander's zone. **The only definition of either.**
  *
- * An IANA zone, never a fixed UTC offset. An offset is a property of an
- * instant rather than of a place, and one that reaches storage survives
+ * 23:00 to 07:00, his call. The end is what makes his own rhythm able to reach
+ * him: the morning brief is composed at 06:45 and its notification is created
+ * at 07:00, so an end any later than that is the outbox holding his own brief
+ * — which an 08:00 end did, for seventy-five minutes, on 2026-08-12. The
+ * comparison is start-inclusive and end-EXCLUSIVE (`isWithinQuietHours`), so
+ * the 07:00 notification goes out at 07:00 rather than waiting a cycle.
+ *
+ * There were three of these in the tree — here, in `services/presence.ts` under
+ * the same exported name with a different value, and hardcoded again in
+ * `harness/cli/when.ts` — plus a fourth constant in `tools/time.ts` restating
+ * the end with a comment asserting they agreed. **Everything now imports this
+ * one**, and `tests/unit/quiet-window.test.ts` fails if a second window
+ * literal appears anywhere under `src/`. A module may USE the window; a module
+ * that writes one down is declaring a second one.
+ *
+ * It lives here rather than in `harness/schedule.ts` because the window and the
+ * zone travel together and both are read from the environment
+ * (`SYL_QUIET_START`, `SYL_QUIET_END`, `SYL_TZ`) — this module owns that, and
+ * it is also the module that decides whether a window is usable at all. A
+ * default that lived away from its validator could be one the validator would
+ * reject. `schedule.ts` stays a pure algebra with no policy in it.
+ *
+ * The zone is an IANA name, never a fixed UTC offset. An offset is a property
+ * of an instant rather than of a place, and one that reaches storage survives
  * exactly one daylight-saving boundary before moving every window by an hour.
  */
 export const DEFAULT_QUIET_HOURS: QuietHoursSetting = {
-  quiet: { start: "22:00", end: "08:00" },
+  quiet: { start: "23:00", end: "07:00" },
   tz: "America/Chicago",
 };
 
