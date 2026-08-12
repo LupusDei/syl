@@ -182,7 +182,16 @@ export interface Studio {
    * reads sidecars — is never tempted to count a half as a render of its own.
    */
   part(name: string, index: number): string;
-  /** The still a half ends on, and the picture the next half starts from. */
+  /**
+   * The still a half ends on, and the picture the next half starts from.
+   *
+   * `.png` rather than `.jpg`: it goes straight back to Runway as the next
+   * half's opening frame, so the join is exact rather than exact plus a round
+   * of JPEG. At 834x1112 that is ~1MB, ~1.3MB as a data URI — comfortably
+   * inside Runway's 5MB cap. **A 4K render would not be**, so a bigger ratio
+   * needs the ephemeral upload (`POST /v1/uploads`) rather than a data URI, and
+   * the failure would arrive as a union error that reads like a URL problem.
+   */
   partFrame(name: string, index: number): string;
   /** The concat list a join was made from. Kept for the same reason as the halves. */
   partList(name: string): string;
@@ -211,9 +220,6 @@ export function studioAt(root: string): Studio {
     sidecar: (name) => resolve(videoDir, `${name}.mp4.json`),
     frames: (name) => resolve(frameDir, name),
     part: (name, index) => resolve(partDir, `${name}-${String(index)}.mp4`),
-    // `.png` rather than `.jpg`: this still is handed straight back to Runway as
-    // the next half's opening frame, so the join is exact rather than exact plus
-    // one round of JPEG.
     partFrame: (name, index) => resolve(partDir, `${name}-${String(index)}-last.png`),
     partList: (name) => resolve(partDir, `${name}.txt`),
   };
