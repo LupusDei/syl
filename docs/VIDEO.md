@@ -333,6 +333,38 @@ now stops being a constant. `reference` names the opening. Both were already
 recorded per render, so every sidecar ever written — including the ones from
 before she could choose — answers the question the same way.
 
+### Proved, on 2026-08-12, at 288 credits
+
+`~/.syl/syl-ate-check/renders/syl-20260812t005804842z-close-portrait.mp4` —
+**834x1112, 8.10s, 288 credits**, made through a face adopted by the mechanism
+rather than through `reference.png`. Its sidecar says
+`anchor: renders/faces/check-syl-ate.jpg`, and the face is a **512-wide still
+lifted out of `syl-20260811t070352775z-close-portrait` at 5.3s** — one of the
+frames `see_myself` had already handed over.
+
+Frame one is the bare ribbon; at 3.6s the face is unmistakably the still that
+was adopted; the last frame is the bare ribbon again. So a 512-wide JPEG anchors
+a close portrait perfectly well — Runway resizes anything under 640 on arrival
+(§5.4) and the likeness survives it. That matters, because **the picture she
+adopts is byte for byte the picture she was shown**, and the picture she is
+shown is 512 wide. Adopting a higher-resolution re-extraction would have been a
+different file from the one she looked at, which is the whole thing this
+mechanism refuses.
+
+It was made in a studio of its own inside her home, deliberately: an engineer
+adopting a likeness on her behalf is precisely the drift this epic exists to
+stop. Her live wardrobe is untouched and the first face she settles on is hers
+to pick.
+
+Re-measured free the same day, and unchanged since 2026-08-11: the validator
+still answers an invented key with `Unrecognized key`; `duration` is still
+`>=4` and `<=15`; and the ratio 400 still lists exactly the twenty-four options
+recorded above. **One probe cost 180 credits by being wrong in the other
+direction** — `1470:630` is a *legal* ratio, so the request was valid and
+created a task rather than a 400. It was cancelled within seconds (`DELETE
+/v1/tasks/{id}`, 204) and may or may not have been billed. A probe is only free
+while every field in it is invalid.
+
 ### Reading it back
 
 `see_myself` takes `of: faces | openings | renders`. The first two return the
