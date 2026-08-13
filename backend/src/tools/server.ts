@@ -7,6 +7,7 @@ import { AdjutantClient } from "../agents/adjutant-client.js";
 import { mayReach, notOnTheRoster } from "../agents/roster.js";
 
 import { verifyUrgency } from "../harness/urgency.js";
+import { canAnchorLikeness, HOUSE_MODEL, MODELS, type ModelNote } from "../render/models.js";
 import { sightingOf } from "../render/pictures.js";
 
 import { SylApiClient, type ToolFailure, type ToolResult } from "./client.js";
@@ -1194,17 +1195,25 @@ const renderMe: ToolHandler = async (input, context) => {
     return missing("render_me", "because", "Every render says why it exists, the same as everything else I make.");
   }
 
-  // The two dials, passed through only when she set them. Omitting them is
-  // what keeps a render she said nothing about identical to every render made
-  // before she could choose — fifteen seconds, opening on the ribbon.
+  // The dials, passed through only when she set them. Omitting one is what
+  // keeps a render she said nothing about the house render: fifteen seconds,
+  // opening on the ribbon, made on the house model.
+  //
+  // A model she got WRONG is passed straight through rather than checked here,
+  // deliberately. The service refuses it with a sentence about what that model
+  // cannot do, and a second validation on this side would be a second place for
+  // the roster to be written down — which is the drift the registry exists to
+  // end.
   const seconds = input["seconds"];
   const opening = text(input, "opening");
+  const model = text(input, "model");
   const created = await context.client.post<{ record: { id?: string; name: string } }>("/renders", {
     scene,
     framing,
     because: text(input, "because"),
     ...(typeof seconds === "number" ? { seconds } : {}),
     ...(opening === null ? {} : { opening }),
+    ...(model === null ? {} : { model }),
   });
   if (!created.ok) return refused("render_me", created.failure);
 
@@ -1290,6 +1299,7 @@ const seeMyself: ToolHandler = async (input, context) => {
   const of = text(input, "of");
   if (of === "faces" || of === "openings") return lookAtWardrobe(of, context);
   if (of === "renders") return readTheLog(context);
+  if (of === "models") return readTheRoster();
 
   // No required field. Absent means the most recent, and the route resolves it
   // — she should not have to remember a machine-generated name to look at the
@@ -1434,6 +1444,9 @@ async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
       readonly anchor: string | null;
       readonly because: string;
       readonly credits: number | null;
+      readonly model: string;
+      /** `null` on every sidecar written before models could be chosen. */
+      readonly keyframes: number | null;
     })[];
     unreadable?: readonly { name: string; why: string }[];
     verdicts?: readonly { render: string; verdict: string; at: string }[];
@@ -1458,6 +1471,13 @@ async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
         // likeness are all here rather than only in the file on disk.
         duration: record.duration,
         shape: record.ratio,
+        // WHICH MODEL MADE IT, and how many keyframes it had at the time. The
+        // back catalogue is a mixture now, so a log without this cannot answer
+        // "which of these can hold my face" — and the arity is the durable half
+        // of that answer: one slot cannot pin a likeness, which stays true of a
+        // model nobody has heard of yet.
+        model: record.model,
+        keyframes: record.keyframes,
         opening: record.reference,
         face: record.anchor,
         holdsLikeness: record.holdsLikeness,
@@ -1468,6 +1488,55 @@ async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
     },
     at: null,
     spent: looked.data.spend,
+  };
+}
+
+/**
+ * What she can render on, and what each one will and will not do.
+ *
+ * **The read-back half of the model dial** (`syl-023`). Anything she can set she
+ * must be able to see, and a dial she cannot read back is one she cannot learn
+ * from — which is the whole of this line of work, because what she is learning
+ * is what she looks like.
+ *
+ * No round trip. The roster is a static module measured by probe and compiled
+ * into this process, exactly as `framingGuidance` is, so asking the service for
+ * it would add a hop and a failure mode to reach the same constant. There is
+ * nothing per-machine about which keyframe slots `grok_imagine_1_5` has.
+ *
+ * `holdsYou` is **derived from the slots and never stored**, the same rule
+ * `framing.ts` and the sidecar both follow, and for the same reason: a flag is a
+ * second assertion about a fact and the two drift apart in silence. `syl-63v`.
+ */
+function readTheRoster(): ToolEnvelope {
+  const rates = (model: ModelNote): number[] => Object.values(model.creditsPerSecond);
+
+  return {
+    ok: true,
+    action: "see_myself",
+    subject: {
+      of: "models",
+      house: HOUSE_MODEL.id,
+      items: MODELS.map((model) => ({
+        id: model.id,
+        seconds: `${String(model.duration.min)}-${String(model.duration.max)}`,
+        // Null rather than zero for a model nobody has measured. A render on it
+        // lands in the ledger as unpriced, and she should know that before she
+        // picks it rather than after.
+        creditsPerSecond: rates(model).length === 0 ? null : Math.min(...rates(model)),
+        keyframes: [...model.positions],
+        // THE ONE THAT DECIDES A SHOT OF HER FACE. Two slots means her likeness
+        // can be pinned at the join; one means the model invents a face and
+        // hands her a stranger, which was rendered on 2026-08-13 rather than
+        // reasoned about.
+        holdsYou: canAnchorLikeness(model),
+        measuredOn: model.measuredOn,
+        // The evidence travels with the choice instead of standing in front of
+        // it — the `because` rule, applied to a table she reads.
+        note: model.evidence,
+      })),
+    },
+    at: null,
   };
 }
 

@@ -359,6 +359,8 @@ export function testReadyRenders(): RenderSource {
     taskId: "task-test",
     model: "seedance2",
     ratio: "720:1280",
+    resolution: null,
+    keyframes: 2,
     duration: 15,
     reference: "reference.png",
     framing: "close_portrait",

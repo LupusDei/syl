@@ -6,6 +6,7 @@ import type { ApiError } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp, type AppDependencies } from "../../src/index.js";
+import { HOUSE_MODEL } from "../../src/render/models.js";
 import { RenderService } from "../../src/render/render-service.js";
 import type { RenderBackend } from "../../src/render/runway.js";
 import { sightingOf } from "../../src/render/pictures.js";
@@ -226,8 +227,13 @@ describe("GET /renders", () => {
     expect(response.status).toBe(200);
     expect(body.data?.items.length).toBe(1);
     expect(body.data?.items[0]?.status).toBe("ready");
-    expect(body.data?.spend.credits).toBe(540);
-    expect(body.data?.spend.usd).toBeCloseTo(5.4, 5);
+    // Fifteen seconds at the house model's rate, taken from the registry. It
+    // said 540 — `seedance2` at 36 a second — which was right until the day the
+    // default moved to a model that costs 30, and then it named the wrong
+    // change.
+    const rate = HOUSE_MODEL.creditsPerSecond.sd ?? 0;
+    expect(body.data?.spend.credits).toBe(rate * 15);
+    expect(body.data?.spend.usd).toBeCloseTo(rate * 0.15, 5);
   });
 });
 

@@ -292,13 +292,15 @@ export function createRenderRouter(options: RenderRouterOptions): Router {
         scene: requireText(body, "scene"),
         framing: requireText(body, "framing"),
         because: requireText(body, "because"),
-        // The two dials. Absent means the defaults everything before `syl-ate`
-        // was made with: fifteen seconds, opening on the ribbon. A value that
-        // is present and wrong is passed straight through, so the refusal is
-        // the service's own sentence about what seedance2 makes rather than a
-        // second validation here that could drift from it.
+        // The dials. Absent means the house render: fifteen seconds, opening on
+        // the ribbon, on the model `models.ts` names as hers. A value that is
+        // present and wrong is passed straight through, so the refusal is the
+        // service's own sentence about what that model makes rather than a
+        // second validation here that could drift from it — which for `model`
+        // would mean a second copy of the roster.
         ...(body["seconds"] === undefined ? {} : { seconds: Number(body["seconds"]) }),
         ...(typeof body["opening"] === "string" ? { opening: body["opening"] } : {}),
+        ...(typeof body["model"] === "string" ? { model: body["model"] } : {}),
       });
 
       if (!started.ok) {

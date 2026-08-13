@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { FrameRunner } from "../../src/render/frames.js";
+import { HOUSE_MODEL } from "../../src/render/models.js";
 import { sightingOf } from "../../src/render/pictures.js";
 import { RenderService } from "../../src/render/render-service.js";
 import type { RenderBackend, RunwayTask, SubmitSpec } from "../../src/render/runway.js";
@@ -281,21 +282,39 @@ describe("how long the shot is", () => {
   });
 
   it("should tell her the length she will actually get when a joined shot cannot be that short", async () => {
-    // A close portrait is two generations and seedance2's floor is four
+    // A close portrait is two generations and the model's floor is four
     // seconds, so eight is the shortest one that exists. The record's duration
     // is the halves added up, so the number she is told is the number that was
     // made — a dial she can read back, even when it did not do what she asked.
-    const started = await serviceWith(fakeBackend()).start({ ...ASK, seconds: 5 });
+    //
+    // The ASK is deliberately one under the joined floor, computed from the
+    // model rather than typed, so a model with a different floor still tests
+    // the rounding rather than accidentally testing the refusal.
+    const joinedFloor = HOUSE_MODEL.duration.min * 2;
+    const started = await serviceWith(fakeBackend()).start({
+      ...ASK,
+      seconds: joinedFloor - 1,
+    });
 
     expect(started.ok).toBe(true);
     if (!started.ok) return;
-    expect(started.record.duration).toBe(8);
+    expect(started.record.duration).toBe(joinedFloor);
   });
 
-  it("should refuse a length seedance2 does not make, without spending anything", async () => {
+  it("should refuse a length the chosen model does not make, without spending anything", async () => {
+    // The range is the MODEL's, not a constant — an anchored shot is two
+    // generations so it reaches twice as far, which is why the too-long case is
+    // derived rather than typed. `20` used to be out of range and is now well
+    // inside it, which is exactly the drift a literal here would have hidden.
     const backend = fakeBackend();
-    const tooLong = await serviceWith(backend).start({ ...ASK, seconds: 20 });
-    const tooShort = await serviceWith(backend).start({ ...ASK, seconds: 3 });
+    const tooLong = await serviceWith(backend).start({
+      ...ASK,
+      seconds: HOUSE_MODEL.duration.max * 2 + 1,
+    });
+    const tooShort = await serviceWith(backend).start({
+      ...ASK,
+      seconds: HOUSE_MODEL.duration.min - 1,
+    });
     const notWhole = await serviceWith(backend).start({ ...ASK, seconds: 7.5 });
 
     for (const refused of [tooLong, tooShort, notWhole]) {
@@ -322,8 +341,10 @@ describe("how long the shot is", () => {
 
     expect(started.ok).toBe(true);
     if (!started.ok) return;
-    // 36 credits a second in the `sd` band, which is where every shape she can
-    // choose lands.
-    expect(started.record.credits).toBe(6 * 36);
+    // The house model's rate in the `sd` band, which is where every shape she
+    // can choose lands. Taken from the registry rather than typed: `36` was
+    // `seedance2`'s, and it stayed right here for exactly as long as
+    // `seedance2` was the default.
+    expect(started.record.credits).toBe(6 * (HOUSE_MODEL.creditsPerSecond.sd ?? 0));
   });
 });
