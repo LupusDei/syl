@@ -331,7 +331,7 @@ export class IntakeStore {
   }
 
   /**
-   * How many sources one principal has submitted since an instant.
+   * How many sources one requester has submitted since an instant.
    *
    * Counted from `created_at` over a rolling window rather than from a local
    * day. A day is the right unit for something the Commander experiences — the
@@ -339,9 +339,12 @@ export class IntakeStore {
    * wrong one for something that only spends: a local midnight lets twenty
    * readings happen in two minutes and still be two lawful days.
    *
-   * Every channel counts, not only the one the caller is using. The ceiling is
-   * about what one principal has set running, and a principal that could reset
-   * it by relabelling its own submissions would have no ceiling.
+   * Every channel counts, not only the one the caller is using: the channel is
+   * a field in the request body, so a caller that could reset its own ceiling
+   * by relabelling its submissions would have no ceiling. What separates one
+   * requester from another is the CREDENTIAL that submitted, which the route
+   * writes into `requested_by` — not the principal, since every key in this
+   * service resolves to the same one. See `SYL_HERSELF` in `intake-route.ts`.
    */
   countSince(requestedBy: string, since: string): number {
     const row = this.#db
