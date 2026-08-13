@@ -319,13 +319,36 @@ const NODE_COLUMNS_QUALIFIED = NODE_COLUMNS.split(", ")
  * This also makes salience VARY on a graph that has no inferred edges yet,
  * which matters more than it sounds: until digestion lands, a constant ranking
  * key means the projection is ordered by nothing at all.
+ *
+ * ## The two kinds `syl-024.1` added, and why they sit where they do
+ *
+ * **`instruction` is the highest floor in the table, above `person`.** It is
+ * what the Commander told her to BE — the humour, that he prefers renders with
+ * a face — and the failure this floor is set against is precisely the one
+ * measured for his family: a standing order evicted by whatever was said this
+ * morning. It outranks even the anchors because an anchor is something she
+ * KNOWS and an instruction is something she was TOLD; getting the second wrong
+ * is a breach of the bond rather than a gap in the file. Its rank is only half
+ * the protection — `working.ts` pins standing orders at admission
+ * (`syl-024.3`), because a floor decides ORDER and admission decides whether
+ * there was room at all.
+ *
+ * **`self` sits at the `event` floor.** A finding about what she is is a thing
+ * that compounds rather than a loose claim, so it belongs above the 0.5 that
+ * facts and memories fall through to — and well below the anchors, because it
+ * is never the answer to "who is this man". `working.ts` excludes it from that
+ * projection outright (`syl-024.2`), so this floor is load-bearing for the
+ * OTHER readers of salience — the constellation the phone draws, and the
+ * digest's window — and not for the preamble.
  */
 const KIND_FLOOR_SQL =
   `CASE n.kind ` +
+  `WHEN 'instruction' THEN 4.0 ` +
   `WHEN 'person' THEN 3.0 ` +
   `WHEN 'goal' THEN 3.0 ` +
   `WHEN 'decision' THEN 2.0 ` +
   `WHEN 'event' THEN 1.0 ` +
+  `WHEN 'self' THEN 1.0 ` +
   `WHEN 'source' THEN 0.0 ` +
   `ELSE 0.5 END`;
 

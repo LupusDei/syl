@@ -6,6 +6,7 @@ import {
   buildWorkingMemory,
   toCandidate,
   WORKING_MEMORY_EMPTY,
+  WORKING_MEMORY_EXCLUDED_KINDS,
   WORKING_MEMORY_MAX_BYTES,
   WORKING_MEMORY_MAX_LINES,
   WORKING_MEMORY_NOTE,
@@ -218,18 +219,113 @@ describe("buildWorkingMemory", () => {
     expect(plan.dropped.length).toBeGreaterThan(0);
   });
 
-  it("should have a section for every node kind, so nothing hot is unrenderable", () => {
+  it("should account for every node kind — rendered or deliberately excluded", () => {
     // A new kind added to `MEMORY_NODE_KINDS` with no section here would be
     // selected into the projection and then rendered nowhere — hot, chosen,
-    // and invisible, with nothing failing.
+    // and invisible, with nothing failing. `syl-024.2` adds the second half:
+    // a kind may instead be excluded ON PURPOSE, and that has to be DECLARED
+    // rather than achieved by leaving it out of the list, which looks
+    // identical from here and is the same silent invisibility.
     const kinds = WORKING_MEMORY_SECTIONS.map((section) => section.kind);
+    const excluded = [...WORKING_MEMORY_EXCLUDED_KINDS];
 
     expect(new Set(kinds).size).toBe(kinds.length);
-    expect([...kinds].sort()).toEqual([...MEMORY_NODE_KINDS].sort());
+    // Disjoint: a kind that is both rendered and excluded is two answers to
+    // one question, and which one wins would depend on where you read.
+    expect(kinds.filter((kind) => excluded.includes(kind))).toEqual([]);
+    expect([...kinds, ...excluded].sort()).toEqual([...MEMORY_NODE_KINDS].sort());
     expect(
       buildWorkingMemory(kinds.map((kind, index) => candidate({ id: `n${String(index)}`, kind })))
         .dropped,
     ).toEqual([]);
+  });
+});
+
+/**
+ * `syl-024.2` — namespacing, not isolation.
+ *
+ * The first attempt kept her self-findings out of "what do I know about him" by
+ * refusing to give them edges. That works, in the sense that a node nothing
+ * points at is absent from every projection — including the ones that should
+ * have it. Her diagnosis: *"a render note should be absent from 'what do I know
+ * about Justin' because the query excludes it, not because it's connected to
+ * nothing."*
+ *
+ * So the test that carries the bead asserts BOTH halves in one place. Either
+ * alone is satisfied by the version this replaces: absence alone is what
+ * isolation gave, and reachability alone is what it gave up.
+ */
+describe("a self-finding is namespaced, not isolated", () => {
+  it("should be absent from the projection about him and still reachable by traversal", () => {
+    const commander = graph.addNode({ kind: "person", label: "the Commander" });
+    const order = graph.addNode({ kind: "instruction", label: "she is allowed to be funny" });
+    const self = graph.addNode({
+      kind: "self",
+      label: "she keeps reaching for the engineer's voice",
+      body: "asked who she was, she described this codebase",
+    });
+    // The three edges the Commander asked for by name: to his person node, to
+    // an instruction, and to a fact about his life.
+    const fact = graph.addNode({ kind: "fact", label: "he works late" });
+    for (const target of [commander.id, order.id, fact.id]) {
+      graph.observe({
+        sourceNode: self.id,
+        targetNode: target,
+        relation: "about",
+        assertedBy: commander.id,
+      });
+    }
+
+    const memory = new WorkingMemory({ db, graph, clock: fixedClock(NOW) });
+    const result = memory.regenerate();
+
+    // Absent — by the WHERE clause, not by eviction. It is not in the text, not
+    // admitted, and not in the overflow either: a notice reading "1 note about
+    // myself" would hand back exactly what the filter removed.
+    expect(result.row.text).not.toContain("engineer's voice");
+    expect(result.plan.included).not.toContain(self.id);
+    expect(result.plan.dropped).not.toContain(self.id);
+    expect(memory.overflow({ limit: 1_000 }).items.map((item) => item.id)).not.toContain(self.id);
+    expect(memory.overflow({ limit: 1_000 }).byKind.map((entry) => entry.kind)).not.toContain(
+      "self",
+    );
+
+    // And reachable. Every edge survives, in the hot tier, from his side.
+    const around = graph.neighbourhood(commander.id);
+    expect(around.nodes.map((node) => node.id)).toContain(self.id);
+    expect(graph.edgesTouching(self.id)).toHaveLength(3);
+    expect(graph.getNode(self.id)?.tier).toBe("hot");
+  });
+
+  it("should still answer with what he told her — an instruction is his, not hers", () => {
+    // The filter is one kind wide. `instruction` is something he SAID, so it
+    // belongs in the answer to what she knows about him; excluding both
+    // together would be the isolation bug wearing the new vocabulary.
+    graph.addNode({ kind: "instruction", label: "he prefers renders with a face" });
+    graph.addNode({ kind: "self", label: "her renders keep drifting off-model" });
+
+    const text = new WorkingMemory({ db, graph, clock: fixedClock(NOW) }).regenerate().row.text;
+
+    expect(text).toContain("## Standing orders");
+    expect(text).toContain("he prefers renders with a face");
+    expect(text).not.toContain("off-model");
+  });
+
+  it("should rank a standing order above the anchors, and a self-finding below them", () => {
+    // The floor is what stops a standing order being evicted by whatever was
+    // said this morning — the failure measured on his own family (`syl-ulf`).
+    // Ranking is only half of it; admission is `syl-024.3`.
+    graph.addNode({ kind: "instruction", label: "be funny" });
+    graph.addNode({ kind: "person", label: "the Commander" });
+    graph.addNode({ kind: "self", label: "she reaches for the engineer's voice" });
+    graph.addNode({ kind: "fact", label: "he works late" });
+
+    // No edges anywhere, so each node scores exactly its kind floor.
+    const scored = new Map(graph.listSalientNodes().map((node) => [node.kind, node.salience]));
+
+    expect(scored.get("instruction")).toBeGreaterThan(scored.get("person") ?? 0);
+    expect(scored.get("self")).toBeLessThan(scored.get("person") ?? 0);
+    expect(scored.get("self")).toBeGreaterThan(scored.get("fact") ?? 0);
   });
 });
 

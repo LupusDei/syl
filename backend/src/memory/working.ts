@@ -231,11 +231,53 @@ export const WORKING_MEMORY_SECTIONS: readonly {
   { kind: "fact", heading: "## Facts" },
   { kind: "event", heading: "## Recently" },
   { kind: "memory", heading: "## Memories" },
-  // A finding about what she is, and it has a section for the same reason every
-  // kind does: a hot node with nowhere to render is chosen and then invisible.
-  { kind: "self", heading: "## Myself" },
+  // No `self` section, and the absence is the feature — see
+  // {@link WORKING_MEMORY_EXCLUDED_KINDS}. `syl-024.1` gave it one on the
+  // general rule that a hot node with nowhere to render is chosen and then
+  // invisible, and said in the same breath that `syl-024.2` decides the filter.
+  // The filter is here now, so the heading would be a claim this projection
+  // never makes good on.
   { kind: "source", heading: "## Sources" },
 ];
+
+/**
+ * Kinds this projection does not answer with, however hot they are.
+ *
+ * **This document answers one question — *what do I know about him?* — and a
+ * finding about what SHE is is not an answer to it.** Syl's own diagnosis of
+ * the first attempt: *"what you wanted was NAMESPACING, and what got built was
+ * ISOLATION. Separate them at read time with a kind filter, not at write time
+ * by cutting the edges. A render note should be absent from 'what do I know
+ * about Justin' because the query excludes it, not because it's connected to
+ * nothing."*
+ *
+ * So this is a WHERE clause and not a wall, and the difference is everything a
+ * `self` node can still do. It keeps every edge it has — to his person node, to
+ * an `instruction`, to a fact about his life — and stays reachable by
+ * traversal, by `recall`, by id. The Commander's requirement, in his words:
+ * *"her memories about herself still need notes and edges, and even the ability
+ * to connect to memories about me and my life and my preferences."* An
+ * unconnected node is unreachable to everyone, which is what the isolation
+ * version cost.
+ *
+ * Applied in {@link buildWorkingMemory} rather than in the graph read, so a
+ * `self` node is neither admitted nor **counted in the overflow**. The notice
+ * is part of this projection's answer: *"…and 2 notes about myself"* would leak
+ * back exactly what the filter removed, and hand him a count he cannot open
+ * from here.
+ *
+ * `instruction` is deliberately NOT here. A standing order is something he
+ * told her, so it belongs in the answer to what she knows about him — it is
+ * pinned rather than filtered (`syl-024.3`).
+ *
+ * `source` is not here either, and that is not an oversight: a handle renders
+ * under `## Sources`, and what it is excluded from is the emptiness test in
+ * {@link render} — a projection holding nothing but handles is empty however
+ * many rows it has.
+ */
+export const WORKING_MEMORY_EXCLUDED_KINDS: readonly MemoryNodeKind[] = ["self"];
+
+const EXCLUDED_KINDS = new Set<MemoryNodeKind>(WORKING_MEMORY_EXCLUDED_KINDS);
 
 const SECTION_RANK = new Map<MemoryNodeKind, number>(
   WORKING_MEMORY_SECTIONS.map((section, index) => [section.kind, index]),
@@ -502,6 +544,10 @@ function render(
  * trial renders the WHOLE text — including the overflow notice sized for the
  * count it would carry — so the budget check is measured against the real
  * output rather than an estimate that could drift from it.
+ *
+ * {@link WORKING_MEMORY_EXCLUDED_KINDS} is applied first, before ranking, so an
+ * excluded kind is neither admitted nor reported as dropped: it is not part of
+ * this question at all.
  */
 export function buildWorkingMemory(
   candidates: readonly WorkingMemoryCandidate[],
@@ -510,7 +556,8 @@ export function buildWorkingMemory(
   const maxBytes = options.maxBytes ?? WORKING_MEMORY_MAX_BYTES;
   const maxLines = options.maxLines ?? WORKING_MEMORY_MAX_LINES;
 
-  const ordered = [...candidates].sort(rank);
+  const asked = candidates.filter((candidate) => !EXCLUDED_KINDS.has(candidate.kind));
+  const ordered = [...asked].sort(rank);
   const admitted: WorkingMemoryCandidate[] = [];
 
   for (const candidate of ordered) {
