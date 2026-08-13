@@ -531,6 +531,33 @@ export interface DreamJudgeOptions {
   readonly turnOptions?: Pick<TurnOptions, "cwd" | "model" | "claudeBin">;
   /** Fail if the CLI reported a non-empty tool surface. Defaults to true. */
   readonly requireEmptyToolSurface?: boolean;
+  /**
+   * Other unattended work that runs at the top of the night, inside this
+   * session and under this ceiling. `syl-t9tj.4.5`.
+   *
+   * There is one of these today: the nightly review of the Commander's health
+   * observations. It is here rather than on a loop of its own because the
+   * consolidation lane already runs unattended, already runs in the quiet gap,
+   * and already yields to him — and a second nightly loop would be a second
+   * thing competing for the one rate-limit pool with no idea the first exists.
+   *
+   * **It shares the ceiling, and that is why `dream_turns.subject` exists.** A
+   * second consumer quietly spending the night's budget is how a night starts
+   * failing to finish, invisibly, looking exactly like the dream getting
+   * slower. The reviewer declares its own share, refuses to start when the
+   * night cannot afford it, and books what it spends against `health` so
+   * `DreamLog.tokensSpentOn` can say where the night went.
+   *
+   * **Called first, before the sweep**, because the review is one turn against
+   * the judgment's ~180: last in the queue is never.
+   *
+   * A one-method structural type rather than an import: the memory layer has no
+   * business depending on `health/`, and that direction never reverses. See
+   * `0032_health_observations.sql`.
+   */
+  readonly nightlyReview?: {
+    review(input: { sessionId: string; night: string; tz: string }): Promise<void>;
+  };
 }
 
 export interface JudgeNight {
@@ -578,6 +605,7 @@ export class DreamJudge {
   readonly #budget: JudgeBudget;
   readonly #turnOptions: Pick<TurnOptions, "cwd" | "model" | "claudeBin">;
   readonly #requireEmptyToolSurface: boolean;
+  readonly #nightlyReview: DreamJudgeOptions["nightlyReview"];
 
   constructor(options: DreamJudgeOptions) {
     this.#sweep = options.sweep;
@@ -589,6 +617,7 @@ export class DreamJudge {
     this.#budget = { ...DEFAULT_JUDGE_BUDGET, ...options.budget };
     this.#turnOptions = options.turnOptions ?? {};
     this.#requireEmptyToolSurface = options.requireEmptyToolSurface ?? true;
+    this.#nightlyReview = options.nightlyReview;
   }
 
   get budget(): JudgeBudget {
@@ -611,6 +640,25 @@ export class DreamJudge {
     });
 
     try {
+      // First, and never on a resume: one bounded turn against the judgment's
+      // ~180, and last in the queue is never. It books its own tokens against
+      // `subject = 'health'` and refuses to start if the night cannot afford
+      // it. A failure here must not take the night with it — the graph is the
+      // thing he actually depends on — so it is caught and left in the log.
+      if (this.#nightlyReview !== undefined) {
+        try {
+          await this.#nightlyReview.review({
+            sessionId: session.id,
+            night: input.night,
+            tz: input.tz,
+          });
+        } catch {
+          // Already recorded as a failed turn of this session by the reviewer
+          // itself. Swallowed here so a bad reply about his step count cannot
+          // cost him a night of consolidation.
+        }
+      }
+
       const swept = await this.#sweep.run({
         sessionId: session.id,
         night: input.night,

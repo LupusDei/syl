@@ -1,0 +1,60 @@
+-- 0033_dream_turn_subject.sql — whose ceiling did this turn spend?
+--
+-- `syl-t9tj.4.5` (T018). The nightly health review runs on the lane that
+-- already exists, in the session that already exists, under the ceiling that
+-- already exists. That is the whole point of the bead — *"not a new loop"* —
+-- and it creates exactly one problem, which this column is the answer to:
+--
+--   **A second consumer that quietly spends the night's budget is how a night
+--   starts failing to finish.**
+--
+-- Without this, a night that ran short would show `tokens_spent` climbing and
+-- nothing anywhere saying that some of it went on his heart rate rather than on
+-- judging memories. The dream would look like it had got slower. That failure
+-- is invisible by construction — every turn succeeded, the ceiling did what it
+-- was told — and it is exactly the shape of the stale-build problem in
+-- `ops/build-info.ts`: every check passes and the answer is still wrong.
+--
+-- So the cost is attributed at the row that carries it. `SUM(tokens_spent)
+-- GROUP BY subject` over one session answers "what did the health review cost
+-- the dream tonight" in one query, and `DreamLog.tokensSpentOn` is that query.
+--
+--
+-- ## Why a new column and not a new value for `phase`
+--
+-- `phase` is `sweep | judge`, and those name a TIER rather than a topic:
+-- `sweep` is Tier 1, local and free; `judge` is Tier 2, one subscription-billed
+-- turn that decides. A health review turn is genuinely a Tier 2 judgment — it
+-- is billed, it decides, it is bounded the same way — so widening that
+-- vocabulary would be putting the wrong distinction in the wrong field.
+--
+-- The practical argument agrees with the principled one. `phase` carries an
+-- inline `CHECK (phase IN (...))`, SQLite has no `ALTER TABLE ... DROP
+-- CONSTRAINT`, and two tables carry composite foreign keys into
+-- `(session_id, turn_index)` — so widening it means the full rebuild recipe of
+-- `0029_memory_places.sql`, three rollup triggers dropped and re-created, and a
+-- deferred-foreign-key window across the whole table. All of that to record a
+-- fact that is orthogonal to what `phase` means.
+--
+-- `ALTER TABLE ... ADD COLUMN` with a CHECK and a NOT NULL default is legal,
+-- is legal INSIDE the `BEGIN IMMEDIATE` that `applyMigrations` wraps every
+-- migration in, and enforces the CHECK on every row written afterwards.
+-- Verified on Node 22.23.1 / SQLite 3.51.3 before this file was written, not
+-- assumed — the failure mode of guessing is a migration that half-applies.
+--
+--
+-- ## Existing rows become `memory`, and that is true rather than convenient
+--
+-- Every turn ever taken before this column existed was a dream turn about the
+-- memory graph, because nothing else has ever spent a dream session's budget.
+-- The default is a statement of fact about the history, not a placeholder.
+
+ALTER TABLE dream_turns
+  ADD COLUMN subject TEXT NOT NULL DEFAULT 'memory'
+    -- `memory` — the sweep and the judgment turns, the dream proper.
+    -- `health`  — the nightly review of his observations (`syl-t9tj.4`), which
+    --             reads `health_samples`, derives, judges, and writes what it
+    --             concludes through `remember()`. It never touches this log's
+    --             graph tables and it writes no checkpoint: it is one bounded
+    --             turn, and a night is never resumed into the middle of it.
+    CHECK (subject IN ('memory', 'health'));

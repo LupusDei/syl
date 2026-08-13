@@ -217,6 +217,43 @@ export function localDate(instant: Date, timeZone: string): string {
 }
 
 /**
+ * The instant local midnight begins on a given `YYYY-MM-DD`, in a zone.
+ *
+ * The inverse of {@link localDate}, and the pair are what let a caller say "all
+ * of Tuesday, HIS Tuesday" as a half-open range of instants:
+ * `[startOfLocalDay(d), startOfLocalDay(next(d)))`.
+ *
+ * Here rather than beside its caller because the DST arithmetic is already
+ * here and is already right. A zone that springs forward AT midnight — Chile
+ * and Cuba both do — has no 00:00 on that date at all, and
+ * `resolveLocalDateTime` returns the first instant that does exist rather than
+ * a time that does not. A second implementation of this would get that wrong
+ * once a year, in one hemisphere, and look like data corruption.
+ *
+ * `syl-t9tj.2.7`: the 60-day downsample folds a day of measurements into one
+ * row, and which day a 23:40 reading belongs to is a question about his clock.
+ *
+ * @throws {Error} if `day` is not `YYYY-MM-DD`.
+ */
+export function startOfLocalDay(day: string, timeZone: string): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!match) {
+    throw new Error(`Invalid day "${day}": expected a calendar date (YYYY-MM-DD).`);
+  }
+  return resolveLocalDateTime(
+    {
+      year: Number(match[1]),
+      month: Number(match[2]),
+      day: Number(match[3]),
+      hour: 0,
+      minute: 0,
+    },
+    { hour: 0, minute: 0 },
+    timeZone,
+  );
+}
+
+/**
  * The instant as HE would read it: his weekday, his date, his 24-hour clock.
  *
  * For the prompts of unattended turns, which have to state the hour they are in

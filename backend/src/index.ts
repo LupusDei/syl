@@ -76,6 +76,8 @@ import { assessPower, describePower } from "./ops/power.js";
 import { installShutdownHandlers } from "./ops/shutdown.js";
 import { tailnetCertProbe } from "./ops/tailnet-cert.js";
 import { RenderService } from "./render/render-service.js";
+import { downsampleHealth } from "./health/downsample.js";
+import { HealthReview } from "./health/review.js";
 import { HealthSamples } from "./health/samples.js";
 import { RenderVerdicts } from "./render/verdicts.js";
 import { Wardrobe } from "./render/wardrobe.js";
@@ -120,6 +122,7 @@ import { ConversationDigester, DigestionStore } from "./memory/digest-apply.js";
 import { ConversationExtractor, ExtractionStore } from "./memory/extract-apply.js";
 import { MemoryGraph } from "./memory/graph.js";
 import { HerOwnMemory } from "./memory/remember.js";
+import { ENTITY_NODE_KINDS } from "./memory/schema.js";
 import { WorkingMemory } from "./memory/working.js";
 import { MemoryMetrics } from "./memory/metrics.js";
 import { EdgeWeights } from "./memory/weights.js";
@@ -1776,6 +1779,7 @@ function buildDreamJudge(
   deps: ServiceDependencies,
   clock: Clock,
   options: StartSylOptions,
+  database: SylDatabase,
 ): NightDreamer | null {
   const searchable = deps.memoryRuntime.trySearchable();
   if (searchable === null) return null;
@@ -1794,6 +1798,12 @@ function buildDreamJudge(
     sweep,
     log: deps.memory.dreams,
     clock,
+    // His health, reviewed at the top of the night, in this session and under
+    // this ceiling (`syl-t9tj.4.5`). Not a second nightly loop: there is one
+    // rate-limit pool and one job runner, and a second loop would know about
+    // neither. It declares its share, stands aside when the night cannot afford
+    // it, and books what it spends against `subject = 'health'`.
+    nightlyReview: buildHealthReview(config, deps, clock, options, database),
     sessionStore: sessionStoreFor(config),
     // Both bounds. The Commander talking pauses it; the quiet window closing
     // ENDS it — and that second one is what keeps a six-hour night off the
@@ -1809,6 +1819,65 @@ function buildDreamJudge(
     ...(options.runner === undefined ? {} : { runTurn: options.runner }),
     ...(claudeBin === undefined ? {} : { turnOptions: { claudeBin } }),
   });
+}
+
+/**
+ * The nightly health review, wired to the stores it reads and the one verb it
+ * writes through.
+ *
+ * `syl-t9tj.4`. Three deliberate choices are visible here and each is argued at
+ * length in `health/review.ts`:
+ *
+ *  - **`deps.memory.hers`, and nothing else.** The only path into the graph is
+ *    `remember()`, which hard-codes `kind: "memory"`. There is no argument at
+ *    this call site that could make a conclusion into a `fact`.
+ *  - **The entity labels are fetched per night**, not snapshotted at boot: the
+ *    graph moves, and `Get back to 185 pounds` being in it is the whole reason
+ *    a weight conclusion has anything to attach to.
+ *  - **The 60-day fold rides along** (`syl-t9tj.2.7`). It costs no turn and
+ *    wants the same moment — the small hours, when the phone is not uploading.
+ */
+function buildHealthReview(
+  config: SylConfig,
+  deps: ServiceDependencies,
+  clock: Clock,
+  options: StartSylOptions,
+  database: SylDatabase,
+): HealthReview {
+  const claudeBin = options.turn?.claudeBin;
+  return new HealthReview({
+    samples: deps.health,
+    hers: deps.memory.hers,
+    log: deps.memory.dreams,
+    tz: config.quietHours.tz,
+    clock,
+    entities: () => entityLabels(database),
+    fold: () => {
+      downsampleHealth({ db: database.handle, tz: config.quietHours.tz, clock });
+    },
+    ...(options.runner === undefined ? {} : { runTurn: options.runner }),
+    ...(claudeBin === undefined ? {} : { turnOptions: { claudeBin } }),
+  });
+}
+
+/**
+ * The things she may say a conclusion is *about*, as the graph spells them.
+ *
+ * Entity kinds only — `remember()` resolves `about` against those and refuses
+ * to hang a conclusion off another claim, because a claim about a claim builds
+ * a chain of inference nobody can read back. Bounded, because this is text that
+ * goes into a prompt and a graph of ten thousand nodes must not become a
+ * ten-thousand-line one.
+ */
+function entityLabels(database: SylDatabase): readonly string[] {
+  const rows = database.handle
+    .prepare(
+      `SELECT label FROM memory_nodes
+        WHERE tier = 'hot' AND kind IN (${ENTITY_NODE_KINDS.map(() => "?").join(", ")})
+        ORDER BY updated_at DESC, id LIMIT 200`,
+    )
+    .all(...ENTITY_NODE_KINDS);
+  return rows.map((row) => (row as unknown as { label: string }).label);
 }
 
 /** Syl, up: the store, the socket, and the loop that makes reminders arrive. */
@@ -1982,7 +2051,7 @@ export async function startSyl(
         createNightlyDreamHandler({
           log: deps.memory.dreams,
           ...dreamSchedule,
-          judge: () => buildDreamJudge(config, deps, clock, options),
+          judge: () => buildDreamJudge(config, deps, clock, options, database),
         }),
       ],
       [

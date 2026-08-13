@@ -77,6 +77,18 @@ export type DreamSessionOutcome =
 /** Tier 1 proposes locally and free; Tier 2 is the subscription-billed turn. */
 export type DreamTurnPhase = "sweep" | "judge";
 
+/**
+ * What a turn spent the night's ceiling ON. `0033_dream_turn_subject.sql`.
+ *
+ * Orthogonal to {@link DreamTurnPhase}, which names a tier rather than a topic.
+ * The nightly health review is a Tier 2 judgment turn like any other — billed,
+ * bounded, deciding — and it runs inside the same session under the same
+ * ceiling, because the bead's whole instruction is *"not a new loop"*. This is
+ * the field that keeps that from being invisible: without it, a night that ran
+ * short would look like the dream getting slower.
+ */
+export type DreamTurnSubject = "memory" | "health";
+
 /** How one turn ended. `timeout` is the ten-minute kill, called out on purpose. */
 export type DreamTurnOutcome = "abandoned" | "success" | "timeout" | "error" | "yielded";
 
@@ -154,6 +166,8 @@ export interface DreamTurn {
   readonly sessionId: string;
   readonly turnIndex: number;
   readonly phase: DreamTurnPhase;
+  /** Whose work this turn was. See {@link DreamTurnSubject}. */
+  readonly subject: DreamTurnSubject;
   /** The `claude` CLI session id, known before the spawn. */
   readonly claudeSessionId: string | null;
   readonly startedAt: string;
@@ -246,6 +260,8 @@ export interface OpenDreamSession {
 
 export interface StartDreamTurn {
   readonly phase: DreamTurnPhase;
+  /** Defaults to `memory`, which every turn taken before `0033` truthfully was. */
+  readonly subject?: DreamTurnSubject;
   readonly claudeSessionId?: string | null;
   readonly batchSize?: number;
 }
@@ -448,6 +464,7 @@ interface TurnRow {
   readonly session_id: string;
   readonly turn_index: number;
   readonly phase: DreamTurnPhase;
+  readonly subject: DreamTurnSubject;
   readonly claude_session_id: string | null;
   readonly started_at: string;
   readonly ended_at: string | null;
@@ -510,8 +527,8 @@ const SESSION_COLUMNS =
   "resumed_count, run_id";
 
 const TURN_COLUMNS =
-  "session_id, turn_index, phase, claude_session_id, started_at, ended_at, outcome, error, " +
-  "tokens_spent, cost_usd, num_turns, batch_size, candidates_judged, checkpoint_json";
+  "session_id, turn_index, phase, subject, claude_session_id, started_at, ended_at, outcome, " +
+  "error, tokens_spent, cost_usd, num_turns, batch_size, candidates_judged, checkpoint_json";
 
 const REASONING_COLUMNS =
   "id, session_id, turn_index, disposition, edge_id, source_node, target_node, tier_before, " +
@@ -562,6 +579,7 @@ function toTurn(row: TurnRow): DreamTurn {
     sessionId: row.session_id,
     turnIndex: row.turn_index,
     phase: row.phase,
+    subject: row.subject,
     claudeSessionId: row.claude_session_id,
     startedAt: row.started_at,
     endedAt: row.ended_at,
@@ -733,6 +751,27 @@ export class DreamLog {
   }
 
   /**
+   * How much of a night went on one subject.
+   *
+   * `0033_dream_turn_subject.sql` exists for this query. The health review
+   * shares the dream's session and the dream's ceiling deliberately — *"not a
+   * new loop"* — and a second consumer spending an unattributed share of a
+   * budget is how a night starts failing to finish while every check still
+   * passes. `tokensSpentOn(id, "health")` is the number that makes it visible,
+   * and `syl-t9tj.4.5` is where it is asserted.
+   */
+  tokensSpentOn(id: string, subject: DreamTurnSubject): number {
+    this.#requireSession(id);
+    const row = this.#db
+      .prepare(
+        `SELECT COALESCE(SUM(tokens_spent), 0) AS spent FROM dream_turns
+          WHERE session_id = ? AND subject = ?`,
+      )
+      .get(id, subject);
+    return Number((row as unknown as { spent: number }).spent);
+  }
+
+  /**
    * Pick a night back up.
    *
    * Seals whatever turn was in flight when the process stopped — it stays
@@ -827,13 +866,14 @@ export class DreamLog {
     this.#db
       .prepare(
         `INSERT INTO dream_turns
-           (session_id, turn_index, phase, claude_session_id, started_at, batch_size)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+           (session_id, turn_index, phase, subject, claude_session_id, started_at, batch_size)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         sessionId,
         turnIndex,
         input.phase,
+        input.subject ?? "memory",
         input.claudeSessionId ?? null,
         instant(this.#clock()),
         input.batchSize ?? 0,
