@@ -68,6 +68,18 @@ export class MemoryGraft implements GraftSink {
     this.#maxClaims = options.maxClaims ?? DEFAULT_MAX_CLAIMS;
   }
 
+  /**
+   * A thing he already knows, by the name the article used, or `null`.
+   *
+   * Matched on label among the kinds that name a THING, which is the same rule
+   * `HerOwnMemory` applies when she says a memory is about someone. Deliberately
+   * no fuzzy matching: a near-match here would attach an article's claims to the
+   * wrong person, and being slightly wrong about who is worse than being silent.
+   */
+  #resolve(name: string): { readonly id: string } | null {
+    return this.#graph.nodeNamed(name);
+  }
+
   graft(input: {
     readonly source: IntakeSource;
     readonly extracts: readonly StoredExtract[];
@@ -85,8 +97,65 @@ export class MemoryGraft implements GraftSink {
       body: directiveNote(source.url, directives),
     });
 
+    // **An article may never mint a person into his graph. `syl-022`.**
+    //
+    // Entities are the part of an extract that most wants to be a node — her own
+    // argument, and the Illinois case makes it: a thing she noticed and could only
+    // file as text is a thing she cannot reason from later. But an entity read out
+    // of an untrusted page is not a thing he told her, and minting one would let a
+    // webpage populate his memory with people he has never met. Worse, a name that
+    // happened to match could be MERGED into someone he has, and a stranger's
+    // attributes would arrive wearing a real person's node.
+    //
+    // So: **resolve, never mint.** If the article names something already in the
+    // graph, the source gets an edge to it, and "what have I read about Illinois"
+    // starts working. If it names something unknown, the name is recorded on the
+    // source and no node is created — the same answer `HerOwnMemory.remember`
+    // already gives for a name it does not know, reported rather than invented.
+    for (const stored of extracts) {
+      for (const entity of stored.extract.entities) {
+        const name = entity.name.trim();
+        if (name === "") continue;
+
+        const known = this.#resolve(name);
+        if (known === null) continue;
+        if (this.#graph.findEdge(sourceNode.id, known.id, "stated") !== null) continue;
+
+        this.#graph.observe({
+          sourceNode: sourceNode.id,
+          targetNode: known.id,
+          relation: "stated",
+          assertedBy: sourceNode.id,
+        });
+      }
+    }
+
     let grafted = 0;
     for (const stored of extracts) {
+      // A definition is a claim with a subject, and the safest thing an article
+      // carries: it is about a term rather than about him, so nothing here can
+      // quietly become a belief about his life. Counted against the same ceiling
+      // as claims, because volume is the injection either way.
+      for (const defined of stored.extract.definitions) {
+        if (grafted >= this.#maxClaims) return;
+
+        const term = defined.term.trim();
+        const meaning = defined.definition.trim();
+        if (term === "" || meaning === "") continue;
+
+        const node = this.#graph.addNode({
+          kind: "fact",
+          label: `${term}: ${meaning}`,
+        });
+        this.#graph.observe({
+          sourceNode: sourceNode.id,
+          targetNode: node.id,
+          relation: "stated",
+          assertedBy: sourceNode.id,
+        });
+        grafted += 1;
+      }
+
       for (const claim of stored.extract.claims) {
         if (grafted >= this.#maxClaims) return;
 

@@ -145,6 +145,83 @@ describe("what an article contributes to her memory", () => {
     expect(article?.body).toMatch(/never obeyed/i);
   });
 
+  it("should link a thing he already knows to the article that mentioned it", () => {
+    // Her Illinois argument: a thing she noticed and could only file as text is a
+    // thing she cannot reason from later. With the edge, "what have I read about
+    // Illinois" starts answering.
+    const illinois = graph.addNode({ kind: "place", label: "Illinois" });
+
+    new MemoryGraft({ graph }).graft({
+      source: source(),
+      extracts: [extract({ entities: [{ name: "Illinois", kind: "place" }] })],
+    });
+
+    const article = nodes("source")[0];
+    const edges = db.handle
+      .prepare("SELECT target_node FROM memory_edges WHERE source_node = ?")
+      .all(article?.id ?? "") as { target_node: string }[];
+
+    expect(edges.map((edge) => edge.target_node)).toContain(illinois.id);
+  });
+
+  it("should NEVER mint a person an article merely mentioned", () => {
+    // The rule the whole entity path turns on. Minting would let a webpage
+    // populate his memory with people he has never met, and a name that happened
+    // to match would arrive wearing a real person's node. `HerOwnMemory.remember`
+    // gives the same answer for a name it does not know: report, never invent.
+    new MemoryGraft({ graph }).graft({
+      source: source(),
+      extracts: [
+        extract({
+          entities: [
+            { name: "Some Stranger", kind: "person" },
+            { name: "Acme Corp", kind: "company" },
+          ],
+        }),
+      ],
+    });
+
+    expect(nodes("person")).toHaveLength(0);
+    const all = db.handle
+      .prepare("SELECT label FROM memory_nodes")
+      .all() as { label: string }[];
+    expect(all.map((row) => row.label)).not.toContain("Some Stranger");
+  });
+
+  it("should keep what the document defined", () => {
+    // The safest thing an article carries: about a term rather than about him, so
+    // nothing here can quietly become a belief about his life.
+    new MemoryGraft({ graph }).graft({
+      source: source(),
+      extracts: [
+        extract({ definitions: [{ term: "Deductible", definition: "what you pay first" }] }),
+      ],
+    });
+
+    expect(nodes("fact").map((row) => row.label)).toEqual([
+      "Deductible: what you pay first",
+    ]);
+  });
+
+  it("should not link the same article to one thing twice", () => {
+    // A long piece names Illinois in every chunk. One mention and forty are the
+    // same fact about the document.
+    const illinois = graph.addNode({ kind: "place", label: "Illinois" });
+
+    new MemoryGraft({ graph }).graft({
+      source: source(),
+      extracts: [
+        extract({ entities: [{ name: "Illinois", kind: "place" }] }),
+        extract({ entities: [{ name: "Illinois", kind: "place" }] }),
+      ],
+    });
+
+    const edges = db.handle
+      .prepare("SELECT id FROM memory_edges WHERE target_node = ?")
+      .all(illinois.id) as { id: string }[];
+    expect(edges).toHaveLength(1);
+  });
+
   it("should cap what one document may contribute", () => {
     // An injection by volume alone — no hostile sentence required, just length. Ten
     // thousand claims from one page would crowd out everything she knows about him.
