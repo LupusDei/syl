@@ -344,14 +344,38 @@ export function createRenderRouter(options: RenderRouterOptions): Router {
    */
   router.post("/renders/:name/verdicts", (request, response) => {
     const asked = nameOf(request.params["name"]);
-    const name = asked === "latest" ? (renders.latest()?.name ?? null) : asked;
+    // The RECORD, not just the name, because it names the face this render was
+    // anchored on and she should not have to. A missing record is still not a
+    // refusal for a named render — `0030` gives this table no foreign key on
+    // purpose, so a verdict about an attempt whose sidecar is gone (or which
+    // produced a stranger and left nothing) is storable. Only `latest` needs a
+    // record, because without one there is nothing for `latest` to mean.
+    const record = asked === "latest" ? renders.latest() : renders.get(asked);
+    const name = asked === "latest" ? (record?.name ?? null) : asked;
     if (name === null) throw new ApiFailure("NOT_FOUND", "There is no render by that name.");
 
     const body = bodyOf(request);
     const verdict = typeof body["verdict"] === "string" ? body["verdict"] : "";
+    // The chain, and the face it was anchored on (`syl-024.4`). Both optional
+    // and both passed straight through: the store owns what a blank one means
+    // and what an unknown correction costs, and a second opinion here would be
+    // a copy of those rules to keep in step with the real ones.
+    const supersedes = typeof body["supersedes"] === "string" ? body["supersedes"] : undefined;
+    // Hers wins; the render's own anchor fills in otherwise. Derived rather
+    // than asked for because an edge she has to remember to draw is one that is
+    // drawn on the turns she happens to think of it — and then "which face
+    // rendered a stranger" is answerable for some verdicts and not others,
+    // which is worse than not having it.
+    const anchorFace =
+      typeof body["anchorFace"] === "string" ? body["anchorFace"] : (record?.anchor ?? undefined);
     try {
-      response.status(201);
-      sendOk(response, verdicts.record({ render: name, verdict }));
+      // `201` passed to `sendOk`, not set on the response first: `sendOk`
+      // takes a status argument and DEFAULTS IT TO 200, so the earlier
+      // `response.status(201)` here was overwritten on every call and this
+      // route had been answering 200 to a create since `syl-b0i`. Nothing
+      // depended on it, because nothing asserted it — found by the first test
+      // that did (`syl-024.4`).
+      sendOk(response, verdicts.record({ render: name, verdict, supersedes, anchorFace }), 201);
     } catch (error) {
       if (error instanceof VerdictError) {
         throw new ApiFailure("VALIDATION_FAILED", error.message, {

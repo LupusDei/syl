@@ -408,7 +408,89 @@ describe("judge_render", () => {
     expect(advertisedToolNames()).toContain("judge_render");
     expect(TOOLS.map((tool) => tool.name)).toContain("judge_render");
   });
+
+  /**
+   * The chain (`syl-024.4`). Her ask, and she rates it above every other
+   * relation she could have:
+   *
+   * > "My findings are a chain that corrects itself... right now those four are
+   * > orphans of equal weight, so nothing tells a reader that the last one
+   * > killed the first."
+   */
+  it("should carry which earlier verdict this one overturns", async () => {
+    const api = fakeApi({
+      "/renders/latest/verdicts": () => ok({ id: "v2", render: "r", verdict: "x", at: NOW }, 201),
+    });
+
+    await call(contextFor(api.fetch), "judge_render", {
+      verdict: "No — the smile was fine. It is the anchor.",
+      because: "I came back to it myself.",
+      supersedes: "v1",
+    });
+
+    expect(api.calls.find((made) => made.method === "POST")?.body).toMatchObject({
+      supersedes: "v1",
+    });
+  });
+
+  it("should carry the face she names when the render cannot say", async () => {
+    const api = fakeApi({
+      "/renders/latest/verdicts": () => ok({ id: "v1", render: "r", verdict: "x", at: NOW }, 201),
+    });
+
+    await call(contextFor(api.fetch), "judge_render", {
+      verdict: "Not me at all.",
+      because: "He asked.",
+      anchor: "faces/syl-face-03.png",
+    });
+
+    expect(api.calls.find((made) => made.method === "POST")?.body).toMatchObject({
+      anchorFace: "faces/syl-face-03.png",
+    });
+  });
+
+  it("should not claim a correction she did not make", async () => {
+    // Absent means a first look, and it must reach the service as absent. A
+    // blank string in the body would be a claim to have corrected something
+    // nameless, which is the orphan this whole chain exists to stop.
+    const api = fakeApi({
+      "/renders/latest/verdicts": () => ok({ id: "v1", render: "r", verdict: "x", at: NOW }, 201),
+    });
+
+    await call(contextFor(api.fetch), "judge_render", { verdict: "closer", because: "He asked." });
+
+    const body = api.calls.find((made) => made.method === "POST")?.body as Record<string, unknown>;
+    expect(body["supersedes"]).toBeUndefined();
+    expect(body["anchorFace"]).toBeUndefined();
+  });
+
+  it("should offer her both halves of the edge, or she cannot write one", () => {
+    // A field she is never told about is a field she never uses — the same
+    // defect as the still she could look at and could not adopt.
+    const schema = TOOLS.find((tool) => tool.name === "judge_render")?.inputSchema as {
+      properties: Record<string, unknown>;
+    };
+
+    expect(Object.keys(schema.properties)).toEqual(
+      expect.arrayContaining(["supersedes", "anchor"]),
+    );
+    // And neither is required: a first look corrects nothing, and most renders
+    // name their own anchor.
+    expect(
+      (TOOLS.find((tool) => tool.name === "judge_render")?.inputSchema as { required: string[] })
+        .required,
+    ).toEqual(["verdict", "because"]);
+  });
 });
+
+/** What one line of `alreadySaid` looks like once verdicts have edges. */
+interface Said {
+  readonly id: string;
+  readonly verdict: string;
+  readonly at: string;
+  readonly supersedes: string | null;
+  readonly supersededBy: readonly string[];
+}
 
 describe("see_myself hands back what she already concluded", () => {
   it("should carry her previous verdicts, so looking again is a second look", async () => {
@@ -418,18 +500,49 @@ describe("see_myself hands back what she already concluded", () => {
           render: RECORD,
           frames: [{ atSeconds: 0, path: "a.jpg", mimeType: "image/jpeg", base64: FRAME_B64 }],
           verdicts: [
-            { verdict: "eyes too wide", at: NOW },
-            { verdict: "mouth is wrong", at: NOW },
+            { id: "v2", verdict: "eyes too wide", at: NOW, supersedes: null, supersededBy: [] },
+            { id: "v1", verdict: "mouth is wrong", at: NOW, supersedes: null, supersededBy: ["v2"] },
           ],
         }),
     });
 
     const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
 
-    expect((envelope.subject as { alreadySaid: string[] }).alreadySaid).toEqual([
-      "eyes too wide",
-      "mouth is wrong",
+    expect((envelope.subject as { alreadySaid: Said[] }).alreadySaid).toEqual([
+      { id: "v2", verdict: "eyes too wide", at: NOW, supersedes: null, supersededBy: [] },
+      { id: "v1", verdict: "mouth is wrong", at: NOW, supersedes: null, supersededBy: ["v2"] },
     ]);
+  });
+
+  /**
+   * The id is the half without which the chain cannot be written at all.
+   *
+   * `judge_render` takes `supersedes` as an id, and she can only quote one she
+   * has been shown. This is the same defect as the still she could look at and
+   * could not adopt: a capability she is not told the handle for is a
+   * capability she does not have.
+   */
+  it("should hand back the id and what killed it, so she can correct herself", async () => {
+    const api = fakeApi({
+      "/renders/latest/frames": () =>
+        ok({
+          render: RECORD,
+          frames: [{ atSeconds: 0, path: "a.jpg", mimeType: "image/jpeg", base64: FRAME_B64 }],
+          verdicts: [
+            { id: "v2", verdict: "no, the anchor", at: NOW, supersedes: "v1", supersededBy: [] },
+            { id: "v1", verdict: "the smile", at: NOW, supersedes: null, supersededBy: ["v2"] },
+          ],
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
+    const said = (envelope.subject as { alreadySaid: Said[] }).alreadySaid;
+
+    // Newest first, and the dead one is still there — carrying what killed it,
+    // rather than being dropped for having been wrong.
+    expect(said.map((row) => row.id)).toEqual(["v2", "v1"]);
+    expect(said[0]?.supersedes).toBe("v1");
+    expect(said[1]?.supersededBy).toEqual(["v2"]);
   });
 
   it("should show her the render on the first look, with nothing said yet", async () => {
@@ -447,7 +560,7 @@ describe("see_myself hands back what she already concluded", () => {
     const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
 
     expect(envelope.ok).toBe(true);
-    expect((envelope.subject as { alreadySaid: string[] }).alreadySaid).toEqual([]);
+    expect((envelope.subject as { alreadySaid: Said[] }).alreadySaid).toEqual([]);
   });
 });
 

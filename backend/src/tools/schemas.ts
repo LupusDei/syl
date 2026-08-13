@@ -587,6 +587,25 @@ export const TOOLS: readonly ToolSchema[] = [
           description:
             "Why you were looking — he asked, or you came back to it yourself. Not why you believe the verdict; the verdict says that.",
         },
+        // THE CHAIN (`syl-024.4`), in her word for it. "Being wrong in a
+        // recorded, ordered way is how the search actually works" — and four
+        // findings of equal weight are one finding recorded four times.
+        // Nothing is deleted when this is set: the earlier verdict stays, and
+        // stays readable, now carrying what killed it.
+        supersedes: {
+          type: "string",
+          description:
+            "The id of an earlier verdict this one overturns — no, it was not the smile, it was the anchor. The old one is kept, not deleted: what you were wrong about is how the search moves. Ids come back beside what you already said when you look.",
+        },
+        // Deliberately NOT the anchor's usual source: the render's own record
+        // names the face it was built on, and the service fills that in. This
+        // is for the case it cannot — a verdict on an attempt with no record
+        // left, which is exactly artanis's refusal case.
+        anchor: {
+          type: "string",
+          description:
+            "The face this was anchored on, if you know it and the render does not say. Filled in for you otherwise.",
+        },
       },
     },
   },

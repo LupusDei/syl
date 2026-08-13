@@ -1311,7 +1311,13 @@ const seeMyself: ToolHandler = async (input, context) => {
   const looked = await context.client.get<{
     render: RenderRow;
     frames: readonly FrameRow[];
-    verdicts?: readonly { verdict: string; at: string }[];
+    verdicts?: readonly {
+      id: string;
+      verdict: string;
+      at: string;
+      supersedes: string | null;
+      supersededBy: readonly string[];
+    }[];
   }>(
     `/renders/${encodeURIComponent(which)}/frames`,
     second === undefined ? {} : { at: second },
@@ -1324,7 +1330,23 @@ const seeMyself: ToolHandler = async (input, context) => {
   // second call. This is the half that makes `judge_render` a loop rather than
   // a diary — "a hundred renders with no record of what I made of them isn't a
   // hundred attempts, it's one attempt made a hundred times".
-  const alreadySaid = (verdicts ?? []).map((row) => row.verdict);
+  //
+  // Rows rather than bare sentences since `syl-024.4`, and the ID IS WHY: a
+  // verdict corrects an earlier one BY ID, so a chain she is never shown the
+  // handles for is a chain she cannot write. Same defect as the still she could
+  // look at and could not adopt.
+  //
+  // Newest first, with the superseded ones still in the list carrying what
+  // killed them. A read that dropped them would be the thing she asked against
+  // — being wrong in a recorded, ordered way is how the search works, and a
+  // chain with the wrong answers removed is one answer written once.
+  const alreadySaid = (verdicts ?? []).map((row) => ({
+    id: row.id,
+    verdict: row.verdict,
+    at: row.at,
+    supersedes: row.supersedes,
+    supersededBy: row.supersededBy,
+  }));
 
   // Every still, named by its own bytes. A picture she is shown and cannot
   // adopt is the defect this closes: the frame she wanted was nine seconds into
@@ -1604,9 +1626,26 @@ const judgeRender: ToolHandler = async (input, context) => {
   // to judge the thing she is looking at without knowing its generated name.
   const which = text(input, "render") ?? "latest";
 
+  // THE CHAIN, and the face (`syl-024.4`). Both spread rather than sent as
+  // `null`: absent means she is not claiming anything, and a key present with
+  // an empty value is a claim to have corrected something nameless. `text()`
+  // has already turned a blank one into `null`, so a field she left as
+  // whitespace never reaches the body at all.
+  //
+  // The anchor is usually filled in by the service from the render's own
+  // record, which names the picture it was built on. This carries hers when she
+  // states one — a verdict on an attempt whose record is gone still needs to
+  // say which face produced the stranger.
+  const supersedes = text(input, "supersedes");
+  const anchorFace = text(input, "anchor");
+
   const kept = await context.client.post<{ readonly at: string }>(
     `/renders/${encodeURIComponent(which)}/verdicts`,
-    { verdict },
+    {
+      verdict,
+      ...(supersedes === null ? {} : { supersedes }),
+      ...(anchorFace === null ? {} : { anchorFace }),
+    },
   );
   if (!kept.ok) return refused("judge_render", kept.failure);
 
