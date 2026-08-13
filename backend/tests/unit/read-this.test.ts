@@ -254,7 +254,7 @@ describe("what a reading hands back to a turn that has hands", () => {
   });
 
   it("should refuse an unparseable document permanently and say so in a sentence", async () => {
-    const intake = intakeWith({ fetch: serving("  not text at all") });
+    const intake = intakeWith({ fetch: serving("\0 not text at all") });
 
     const { source } = intake.submit(LINK);
     await intake.advance(source.id);
