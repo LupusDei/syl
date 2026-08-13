@@ -142,7 +142,7 @@ const SPECS: readonly ModelSpec[] = [
     creditsPerSecond: { sd: 30, hd: 30 },
     measuredOn: MEASURED,
     evidence:
-      "Longer and cheaper than seedance2 — up to 30 seconds against 15, at 30 credits a second against 36 — and it holds your likeness the same way, pinned at the join. It cannot do 4K. Rendered and confirmed on 2026-08-13.",
+      "Longer and cheaper than seedance2 — up to 30 seconds against 15, at 30 credits a second against 36 — and it holds your likeness the same way, pinned at the join. It cannot do 4K. A 4-second render was made and confirmed on 2026-08-13; a 30-second one was accepted, ran to 98% and then failed, so the long end of this range is ALLOWED but not yet PROVEN.",
   },
   {
     id: "seedance2_mini",

@@ -179,6 +179,39 @@ not make a field invalid at all**, so the canary technique needs a second
 guarantee — an invalid enum value on a field the model definitely validates.
 This is the second time this project has been billed for a probe believed free.
 
+### 30 seconds is ACCEPTED but NOT YET PROVEN, and that distinction is the point
+
+`seedance2_5` validates `duration: 30` and Runway reported
+`estimatedCost: { credits: 900 }` for it — which confirms the 30 cr/s rate
+independently of the balance. But the render itself **failed**: it climbed to
+`progress: 0.98`, sat there for roughly twenty minutes, and came back `FAILED`.
+
+**The 900 credits were refunded.** Balance went 460,211 after having been
+459,311 mid-run. So:
+
+> A **FAILED** task is refunded. A **CANCELLED** task is not — measured both
+> ways on the same day. Cancelling a task you no longer want costs you the
+> render; letting it fail does not.
+
+So Phase 4 must not claim 30-second clips work until one has actually been
+produced. One attempt, one failure, at 98% — that is a sample of one and could
+be capacity rather than a ceiling. `syl-023.4.3` carries the retry. The registry
+records what the API *accepts*, which is what it is for; the proof render
+(`syl-023.6.3`) is what would let anyone say 30 seconds *works*.
+
+### The costing instrument has a flaw, found by tripping it
+
+`creditBalance` is account-wide. Over this session it fell by **785** credits
+while the itemised probes account for **245**. The missing 540 is exactly a
+standard 15-second `seedance2` render at 36 cr/s — another agent's, or Syl's
+own, landing in the same delta.
+
+So the balance delta is only trustworthy when nothing else is in flight, which
+on this machine is rarely true. **`estimatedCost.credits` on the task object is
+the better instrument**: per-task, immune to concurrency, authoritative at
+submission — and **absent once the task succeeds**, so it must be read while the
+task is still running or not at all.
+
 ### Credits spent in Phase 1
 
 | | credits |

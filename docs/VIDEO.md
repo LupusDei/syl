@@ -643,6 +643,29 @@ Two instruments, and prefer the second:
    confirming 30 credits/second. It is **absent once the task succeeds**, so
    read it while the task is still running or not at all.
 
+Instrument 1 was caught out during this very measurement: the balance fell by
+785 credits while the itemised probes accounted for 245, and the missing 540 is
+exactly one 15s `seedance2` render — another agent's, landing in the same delta.
+
+**And the two statuses are billed differently, measured both ways on the same
+day:**
+
+| outcome | billed? |
+|---|---|
+| `SUCCEEDED` | yes |
+| `CANCELED` (you cancelled it) | **yes — no refund** |
+| `FAILED` (Runway could not finish it) | **no — refunded in full** |
+
+Cancelling a task you no longer want costs you the render. Letting it fail does
+not. This is why the four accidental `gen4_image` tasks cost 32 credits despite
+being cancelled within seconds.
+
+**30 seconds is accepted but not yet proven.** `seedance2_5` validates
+`duration: 30` and quotes 900 credits for it, but the one attempt made climbed
+to 98%, sat there twenty minutes and came back `FAILED` (refunded). One sample.
+It may be capacity rather than a ceiling — `syl-023.4.3` is the retry, and until
+one exists, nothing should claim a 30-second render works.
+
 Artefacts for all of the above: `~/.syl/model-discovery/renders/`, written to a
 studio of its own. Nothing under `~/.syl/renders/` was touched.
 
