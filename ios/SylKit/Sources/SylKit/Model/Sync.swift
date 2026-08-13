@@ -2,12 +2,23 @@ import Foundation
 
 /// Every resource `GET /sync` can name.
 ///
-/// **This list has to be complete, not merely sufficient.** ``SyncChange/type`` is a
-/// non-optional enum, so one value this enum does not know fails the decode of the
-/// change, which fails the decode of the array, which fails the whole page — every pass,
-/// for as long as the row exists. It is not a change that is skipped; it is sync that
-/// stops. `sending` was added to the contract with the sendings backend and is here for
-/// that reason, whether or not the client stores one.
+/// **A value this enum does not know must never fail the page.** ``SyncChange/type`` is
+/// non-optional, so an unrecognised string used to fail the decode of the change, which
+/// failed the decode of the array, which failed the whole page — every pass, for as long
+/// as the row existed. Not a change skipped: sync stopped.
+///
+/// The old answer was "keep this list complete". That is not achievable, because **the
+/// app and the server ship separately in both directions**. A server ahead of the phone
+/// sends a type this build has never heard of; a phone ahead of the server still
+/// receives types the server has stopped writing but has not yet finished draining.
+/// `syl-020` produced the second case exactly: `job` and `run` left the contract, and
+/// between this build reaching a device and the migration reaching the service, every
+/// page would have carried a `job` row this enum could not name — and sync would have
+/// died completely, silently, for anyone who updated first.
+///
+/// So an unknown value decodes to ``unrecognised`` and is ignored like any other type
+/// the device does not store. Completeness is now a nicety rather than a load-bearing
+/// promise, which is the only version of this that survives contact with deploys.
 public enum SyncResourceType: String, Codable, Equatable, Sendable, CaseIterable {
     // `job` and `run` were here until `syl-020`. They were 98% of the change log and
     // no client stored one — the admin reads `/jobs` and `/runs` directly and the phone
@@ -16,6 +27,14 @@ public enum SyncResourceType: String, Codable, Equatable, Sendable, CaseIterable
     // an endpoint answering 200 with an empty page, forever, for a resource that
     // silently never arrives.
     case conversation, message, reminder, todo, goal, device, delivery, sending
+
+    /// A type this build has never heard of. Never sent, only received.
+    case unrecognised
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = SyncResourceType(rawValue: raw) ?? .unrecognised
+    }
 }
 
 public enum SyncChangeOp: String, Codable, Equatable, Sendable, CaseIterable {
