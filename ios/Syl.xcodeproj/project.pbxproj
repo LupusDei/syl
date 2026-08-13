@@ -309,6 +309,7 @@
 				   awaiting the export-compliance answer and is not installable by a
 				   tester, while CI reports a clean success. */
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Syl does not use Health data and never asks for access to it. Apple requires this text because a framework the app links for crash and hang reporting references the Health API.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -343,6 +344,7 @@
 				   awaiting the export-compliance answer and is not installable by a
 				   tester, while CI reports a clean success. */
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Syl does not use Health data and never asks for access to it. Apple requires this text because a framework the app links for crash and hang reporting references the Health API.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
