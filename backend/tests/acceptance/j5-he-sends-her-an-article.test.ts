@@ -84,7 +84,9 @@ describe("Journey 5 — he sends her an article", () => {
       const source = await submit("https://example.com/tidy-desks");
 
       // Provenance: who asked, how it arrived, and how long it may be kept.
-      // `requestedBy` comes from the verified principal, never from the body.
+      // `requestedBy` comes from the verified credential, never from the body —
+      // which credential is what lets the reading ceiling tell a link he shared
+      // from one Syl started. See `SYL_HERSELF` in `intake-route.ts`.
       expect(source.url).toBe("https://example.com/tidy-desks");
       expect(source.channel).toBe("share");
       expect(source.requestedBy).not.toBe("unknown");

@@ -1696,6 +1696,25 @@ interface IntakeAnswer {
  * EOF, and waiting means the Commander watching a cursor while a hostile server
  * takes its time. She calls it again with the same link, the submission is
  * idempotent on the canonical URL, and the second answer carries the extract.
+ *
+ * ## A reading is one act, and it does NOT become a subscription
+ *
+ * Deliberate, and worth stating because the code invites the opposite reading:
+ * the row is called an `IntakeSource`, the mail poller a few files over polls
+ * on a cadence, and "source" is exactly the word a feed would use. It is not
+ * one. The ladder is `fetch -> read -> graft -> done`, it is terminal, and
+ * nothing re-arms it.
+ *
+ * Making an ad-hoc read recur would be an accumulation nobody chose. He sends
+ * her a link on a Tuesday; a year later she is re-fetching it every night, and
+ * the cost is invisible because no single decision was ever large enough to
+ * notice. It also inverts the ceiling below: `READS_PER_DAY` bounds readings
+ * STARTED, and a subscription is a reading that starts itself forever, so ten
+ * of them would be a permanent load rather than a day's work.
+ *
+ * If following something over time is wanted, it should be a verb that says so
+ * — asked for once, listed somewhere he can see it, and cancellable. That is a
+ * different feature with a different consent, not a flag on this one.
  */
 const readThis: ToolHandler = async (input, context) => {
   const url = text(input, "url");

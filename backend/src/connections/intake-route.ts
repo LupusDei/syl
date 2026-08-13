@@ -1,4 +1,4 @@
-import { Router, type RequestHandler } from "express";
+import { Router, type Request, type RequestHandler } from "express";
 
 import { ApiFailure, sendOk } from "../routes/envelope.js";
 import { requireString } from "../routes/devices.js";
@@ -95,6 +95,20 @@ export const READ_WINDOW_HOURS = 24;
 /** The ways a link can arrive. */
 const CHANNELS: readonly IntakeChannel[] = ["link", "email", "share"];
 
+/**
+ * Which credential asked for this, as the row records it.
+ *
+ * See {@link SYL_HERSELF} for why this is not `principal.id`. Deliberately keyed
+ * on the SCOPE and not on the channel: the channel is a field in the request
+ * body, so counting over it would let a caller reset its own ceiling by
+ * relabelling its submissions, and it defaults to `link` for a bare POST from
+ * his phone as much as for one of hers.
+ */
+function requesterOf(request: Request): string {
+  if (request.auth?.key.scope === "agent") return SYL_HERSELF;
+  return request.auth?.principal.id ?? "unknown";
+}
+
 /** Read the optional `channel` field, defaulting to a direct submission. */
 function channelOf(body: Record<string, unknown>): IntakeChannel {
   const raw = body["channel"];
@@ -178,6 +192,33 @@ export interface IntakeRouterOptions {
   readonly allowance?: number;
 }
 
+/**
+ * Who a reading Syl started herself is recorded as having come from.
+ *
+ * **Not the principal, and it cannot be.** Every credential in this service
+ * authenticates to the same one: `device`, `admin` and `agent` all resolve to
+ * `THE_COMMANDER`, because there is one person here and the key says which of
+ * his things is calling, not who is calling. So `principal.id` is a constant,
+ * and a count taken over it cannot tell a reading Syl started from a link he
+ * shared from his phone.
+ *
+ * Left that way the ceiling fires at exactly the person it was written not to
+ * touch: an afternoon of him sharing articles spends her allowance, and the
+ * next thing he asks her to read comes back refused with a sentence about her
+ * own runaway.
+ *
+ * Recording the CREDENTIAL rather than the principal is also the more truthful
+ * answer to "who asked" — `intake-email.ts` already stores a sender's address
+ * here, so this column has never been a principal id. Rows written before this
+ * carry the principal, which reads correctly as "not one of hers" and leaves
+ * her ceiling unspent rather than retroactively consumed.
+ *
+ * A fixed string rather than the key's id: a rotated agent key is the same Syl,
+ * and a ceiling that reset itself whenever the credential was re-minted would
+ * be a ceiling with a documented way around it.
+ */
+export const SYL_HERSELF = "syl:agent";
+
 export function createIntakeRouter(options: IntakeRouterOptions): Router {
   const { intake, idempotency, authenticate } = options;
   const clock = options.clock ?? systemClock;
@@ -214,11 +255,11 @@ export function createIntakeRouter(options: IntakeRouterOptions): Router {
     const channel = channelOf(body);
     const retention = retentionOf(body);
 
-    // Who asked, from the verified principal rather than from the body. It is
+    // Who asked, from the verified credential rather than from the body. It is
     // an authorisation fact and never a trust fact: a link the Commander sent
     // himself is exactly as hostile as one Syl found.
-    const requestedBy = request.auth?.principal.id ?? "unknown";
     const scope = request.auth?.key.scope;
+    const requestedBy = requesterOf(request);
 
     const outcome = runIdempotent<IntakeAnswer>(idempotency, request, () => {
       const reads = allowanceFor(requestedBy, scope);
@@ -283,7 +324,7 @@ export function createIntakeRouter(options: IntakeRouterOptions): Router {
     }
     const answer: IntakeAnswer = {
       reading,
-      reads: allowanceFor(request.auth?.principal.id ?? "unknown", request.auth?.key.scope),
+      reads: allowanceFor(requesterOf(request), request.auth?.key.scope),
     };
     sendOk(response, answer);
   });

@@ -214,6 +214,31 @@ describe("the ceiling on how much Syl may read", () => {
     expect(((await third.json()) as { data?: IntakeAnswer }).data?.reads.allowance).toBeNull();
   });
 
+  it("should not spend her allowance on the links he shared himself", async () => {
+    // The other half of "only her", and the half the scope check does not
+    // cover. Refusing to METER him is not the same as not COUNTING him: every
+    // key in this service authenticates to the one principal — `device`,
+    // `admin` and `agent` all resolve to `THE_COMMANDER` — so a count taken
+    // over `requested_by` alone cannot tell a reading she started from a link
+    // he shared from his phone.
+    //
+    // Left that way, an afternoon of him sharing articles silently exhausts
+    // her ceiling, and the first thing he asks her to read is refused with a
+    // sentence about her own runaway. That is the ceiling firing at exactly
+    // the person it was written not to touch.
+    scope = "device";
+    await listen(mount(2));
+
+    expect((await submit("https://example.com/his-one")).status).toBe(201);
+    expect((await submit("https://example.com/his-two")).status).toBe(201);
+
+    scope = "agent";
+    const hers = await submit("https://example.com/she-was-asked-to-read");
+
+    expect(hers.status).toBe(201);
+    expect(((await hers.json()) as { data?: IntakeAnswer }).data?.reads.used).toBe(1);
+  });
+
   it("should ship a ceiling small enough to bound a runaway and large enough for an afternoon", () => {
     // Pinned so the number is a decision rather than a default somebody drifts.
     // Ten rather than four: `SENDINGS_PER_DAY` bounds how often she may

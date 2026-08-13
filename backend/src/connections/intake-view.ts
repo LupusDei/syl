@@ -108,9 +108,14 @@ export interface Reading {
    * How it arrived, and who asked for it.
    *
    * Provenance, and safe for the same reason the two fields above are: both
-   * are decided by Syl. `requestedBy` is the verified principal and never the
-   * request body — an authorisation fact, never a trust fact. A link the
-   * Commander forwarded himself is exactly as hostile as one Syl found.
+   * are decided by Syl. `requestedBy` comes from the verified credential and
+   * never from the request body — an authorisation fact, never a trust fact. A
+   * link the Commander forwarded himself is exactly as hostile as one Syl
+   * found.
+   *
+   * The credential rather than the principal, because every key here resolves
+   * to the same principal and the ceiling has to tell a reading Syl started
+   * from a link he shared. See `SYL_HERSELF` in `intake-route.ts`.
    */
   readonly channel: IntakeChannel;
   readonly requestedBy: string;
