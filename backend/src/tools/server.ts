@@ -1102,6 +1102,38 @@ const remember: ToolHandler = async (input, context) => {
   };
 };
 
+/**
+ * How he has been, in his own numbers.
+ *
+ * The verb that was missing (`syl-t9tj.5.4`). Two months of his health data sat
+ * on disk and she had no way to reach it mid-conversation, so when he asked she
+ * said she could not see it -- correctly, and that was the whole defect.
+ *
+ * Returns DERIVATIONS, never samples. 28,726 heart-rate rows do not fit in a
+ * turn, and an arbitrary slice is worse than none: she would answer confidently
+ * from whichever fortnight happened to fit.
+ *
+ * `silenceIsEvidence` rides on every type, and she must read it before saying a
+ * number is missing. `authorised` and empty means nothing happened -- "you took
+ * no steps this week". Anything else means WE NEVER LOOKED, and the honest
+ * sentence is "I have never been able to see your heart rate variability".
+ * Reporting the second as the first is a claim about his body drawn from a
+ * permission dialog.
+ */
+const howHasHeBeen: ToolHandler = async (input, context) => {
+  const asked = input["types"];
+  const types = (Array.isArray(asked) ? asked : [])
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value !== "");
+
+  const path = types.length === 0 ? "/health/summary" : `/health/summary?types=${encodeURIComponent(types.join(","))}`;
+  const looked = await context.client.get<unknown>(path);
+  if (!looked.ok) return refused("how_has_he_been", looked.failure);
+
+  return { ok: true, action: "how_has_he_been", subject: looked.data, at: null };
+};
+
 /** How much of each list she is shown. Enough to talk about, not a data dump. */
 const OUTSTANDING_LIMIT = 50;
 
@@ -2038,6 +2070,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   ask_agent: askAgent,
   set_goal: setGoal,
   change_goal: changeGoal,
+  how_has_he_been: howHasHeBeen,
   recall,
   render_me: renderMe,
   this_is_me: thisIsMe,

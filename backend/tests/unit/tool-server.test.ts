@@ -2569,3 +2569,69 @@ describe("dating and pinning a to-do", () => {
     expect(api.calls.some((made) => made.method === "PATCH")).toBe(false);
   });
 });
+
+/**
+ * `how_has_he_been` — the verb that was missing (`syl-t9tj.5.4`).
+ *
+ * Two months of his health data sat on disk and she had no way to reach it
+ * mid-conversation, so when he asked she said she could not see it. She was
+ * right, and that was the whole defect: every phase of the epic moved data IN or
+ * drew conclusions FROM it at 03:00. Nobody wrote "she can answer a question
+ * about it".
+ */
+describe("how_has_he_been", () => {
+  const summary = {
+    window: { from: "2026-07-10", to: "2026-08-13", tz: "America/Chicago" },
+    recentDays: 7,
+    baselineDays: 28,
+    anyMeasurement: true,
+    types: [{ type: "sleep", unit: "min", authorisation: "authorised", silenceIsEvidence: true, days: 30 }],
+  };
+
+  it("should look at his body and hand back what it found", async () => {
+    const api = fakeApi({ "/health/summary": () => ok(summary) });
+
+    const { envelope } = await call(contextFor(api), "how_has_he_been", {});
+
+    expect(api.calls.map((made) => made.path)).toContain("/health/summary");
+    expect(envelope).toMatchObject({ ok: true, action: "how_has_he_been" });
+  });
+
+  it("should narrow to the types she asked about, so one question costs one answer", async () => {
+    // "How have I been sleeping" should not cost her a paragraph about his step
+    // count. The filter is his instruction, and it is also what keeps a turn's
+    // context proportional to the question.
+    const api = fakeApi({ "/health/summary": () => ok(summary) });
+
+    await call(contextFor(api), "how_has_he_been", { types: ["sleep", "steps"] });
+
+    expect(api.calls.find((made) => made.path.startsWith("/health/summary"))?.path).toContain(
+      "types=sleep%2Csteps",
+    );
+  });
+
+  it("should ask for everything when she names nothing", async () => {
+    const api = fakeApi({ "/health/summary": () => ok(summary) });
+
+    await call(contextFor(api), "how_has_he_been", {});
+
+    expect(api.calls.find((made) => made.path.startsWith("/health/summary"))?.path).toBe(
+      "/health/summary",
+    );
+  });
+
+  it("should refuse in words she can say when the read fails, never answer emptily", async () => {
+    // The dangerous failure is not an error, it is a confident "you have no
+    // sleep data" produced by a route that was down.
+    const api = fakeApi({ "/health/summary": () => failure(503, "UNAVAILABLE", "not now.") });
+
+    const { envelope } = await call(contextFor(api), "how_has_he_been", {});
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toBeTruthy();
+  });
+
+  it("should be a verb she is actually offered", () => {
+    expect(advertisedToolNames()).toContain("how_has_he_been");
+  });
+});

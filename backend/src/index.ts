@@ -523,7 +523,17 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // His body, as opposed to the service's. Auth is mounted on the three data
   // routes BY NAME inside this router, never on the `/health` prefix, so a
   // bearer check can never land in front of liveness.
-  api.use(createHealthDataRouter({ health, idempotency, authenticate }));
+  api.use(
+    createHealthDataRouter({
+      health,
+      idempotency,
+      authenticate,
+      // The SAME clock every store above was built on. A second one here is two
+      // clocks in one process, which syl-009 already made visible once.
+      clock: deps.clock ?? systemClock,
+      tz: config.quietHours.tz,
+    }),
+  );
   // What she has already given him. Unlike `/renders` this is his surface, so
   // it takes an ordinary `device` token.
   api.use(createSendingRouter({ sendings, composer, idempotency, authenticate }));
