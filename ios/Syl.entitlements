@@ -82,6 +82,18 @@
 	  `fastlane match appstore --force` from a machine that holds the match
 	  password.
 
+	  **VERIFIED NOT NEEDED HERE, 2026-08-13**, by running the build rather than
+	  arguing about it: match installed the stored profile and reported "all
+	  required keys, certificates and provisioning profiles are installed". The
+	  Commander had enabled HealthKit on the App ID when he first created the
+	  profile, anticipating this feature, so the stored profile already carried it.
+
+	  The warning above stays, because it is true in general and the next
+	  capability added will not have been anticipated. But it did not bite here,
+	  and saying so is the point: a warning that turned out to be unnecessary once
+	  should say so, or the next reader pays a one-time cost for a step that was
+	  already done.
+
 	  HealthKit's authorisation is ASYMMETRIC in a way that makes a missing step
 	  silent, and worse than the time-sensitive case. A type he has not granted
 	  does not error and does not report denial — IT READS AS EMPTY. So a build
