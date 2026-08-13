@@ -2067,3 +2067,36 @@ A related trap in the fix: `syl-1ozc`'s test asserts the reasoning is on an
 reader can reach it."* If the answer turns out to be a column, **the test must
 be rewritten to match the decision** rather than the decision bent to match the
 test — otherwise a graph design gets made by accident, to unblock a red test.
+
+### "It is in" — a commit that landed locally, reported as one that arrived (2026-08-13)
+
+An agent finished `syl-024.4`, committed it to `agent/tassadar`, and told the
+channel the work **was in**. It was not. Six commits sat unpushed behind that
+sentence, and `origin/main` had never seen any of them. artanis checked instead
+of taking it — `git merge-base --is-ancestor dda8a88 origin/main` → NO — and
+said so rather than assuming the claim was loose wording.
+
+**This is §8's shape, and the instrument is `git log`.** Ask it whether the work
+exists and it says yes, truthfully, about a tree only this machine can see. It
+has no way to answer the question that was actually being asked, which is
+*"can anyone else get this?"* — and it does not know that is the question.
+
+It is also `syl-018` wearing different clothes, on the same day, and nobody
+noticed the rhyme until afterwards. There, Syl was told a memory was **saved**
+when the node had been reused and nothing was written. Here, a room was told a
+commit had **landed** when it had been committed and not pushed. Both are a
+write that succeeded locally, reported as a write that arrived. Both are
+believed because the local half genuinely worked.
+
+**The check is one command and it is not `git log`:**
+
+    git merge-base --is-ancestor <sha> origin/main   # exit 0 means it really is in
+    git rev-list --count origin/main..HEAD           # how many commits are not
+
+**Say where it is, not that it is done.** "Committed on `agent/tassadar`,
+unpushed" is a complete and useful sentence. "It is in" is a claim about a
+place, and the place is the part nobody verifies.
+
+The correction cost one message because somebody checked. Uncaught, the next
+agent branches from `origin/main`, does not find the work, and rebuilds it —
+which is how the same feature gets written twice and the second one wins.
