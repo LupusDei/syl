@@ -1150,6 +1150,49 @@ to a 2-core CI runner. **A measurement is a fact about a time and a place; a
 constant is a claim about everywhere.** Writing one down as the other is the
 same move as a hard-coded "she cannot act yet".
 
+**I told an agent to redo work that was already pushed, and said I had
+"verified it on origin rather than asking".** I had run `git fetch origin -q
+2>/dev/null` and then read the ref. Two things were wrong with that sentence.
+The fetch's stderr was suppressed and its status never checked, so a fetch that
+*failed* would have left me reading a stale ref and reporting it as a fresh
+check — indistinguishable from success. And even a fetch that succeeded only
+establishes what origin held at that instant, in a repository where three agents
+were pushing. The agent had pushed the fix minutes earlier; my "verification"
+crossed it.
+
+I still cannot say which of the two it was, and picking the flattering
+explanation would be its own version of the same error.
+
+**Reading a shared remote is a measurement, not a fact**, and it decays in
+seconds when other people are working. Two rules fall out: never suppress
+stderr on the command whose result you are about to rely on, and when
+contradicting someone about the state of a shared branch, quote the sha you
+read rather than the conclusion you drew — a sha is checkable by the person
+you are contradicting, and "I verified on origin" is not.
+
+**A number's meaning drifts from its name every time the code around it gets
+stricter, and nothing fails when it does.** Three instances in one day on
+`syl-j8fa`: `sessionsTargeted` was online-filtered and zero on an early exit,
+so it could report "no sessions" while sessions plainly existed;
+`sessionsFound` was documented as "the agent is running" when the registry
+also returns *offline* session records; and the same field's description kept
+advising "check the name is right" after recipient validation had made a typo
+impossible to reach that line. The third was created in the same commit that
+made the behaviour stricter — the code got more careful and the sentence
+describing it did not.
+
+Nothing caught any of them, because **nothing tests prose against behaviour**.
+The description test that existed asserted the field was *mentioned*, which a
+wrong sentence satisfies as easily as a right one. The fix that sticks is an
+assertion about the *claim* — that the text states what the number does and
+does not establish, and that it does not carry the superseded advice — and it
+must be checked against the previous string to prove it is not vacuous.
+
+**When a change makes a guarantee stricter, every string describing the old
+guarantee is inside that change's blast radius.** Comments, tool descriptions
+and error text are the parts a model reads, and they are the parts no test
+covers by default.
+
 
 ## 11. Reference
 
