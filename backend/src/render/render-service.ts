@@ -297,11 +297,26 @@ const IDENTITY =
  *
  * Written as a sequence for that reason. A clause that describes only the first
  * and last frame is a clause the model can satisfy without ever moving.
+ *
+ * **The third sentence used to end *"and it streams away, leaving empty
+ * starfield"*, which the fourth sentence flatly contradicts**: if the ribbon
+ * streams away then the last frame is not the bare ribbon. The model resolved
+ * the contradiction by obeying the earlier sentence, so
+ * `syl-20260813t042030321z-face-turned-away.mp4` opened on the ribbon and closed
+ * on nothing — measured by extracting both frames, not inferred. The clause
+ * asked for a loop and described something that cannot loop.
+ *
+ * It is now sent with the ribbon pinned at **both** keyframes (see `#plan`),
+ * so the loop is true by construction and the
+ * prose agrees with the frames rather than arguing with them. Same rule as
+ * {@link GATHERING_CLAUSE} and {@link UNRAVELLING_CLAUSE}: a clause has to agree
+ * with what its own generation pins.
  */
 const LOOP_CLAUSE =
   "Opens on a lone ribbon of blue light against empty starfield, with no figure present. " +
   "The ribbon gathers and coalesces into her, her whole body made of that same living light. " +
-  "At the end she unravels back into the ribbon and it streams away, leaving empty starfield. " +
+  "At the end she unravels back into the ribbon, and the shot closes on that same lone ribbon " +
+  "of blue light, alone in the starfield with no figure present. " +
   "The first and last frames are identical: the bare ribbon, no figure.";
 
 /**
@@ -976,8 +991,21 @@ export class RenderService {
     const stem = `${IDENTITY} ${input.scene} ${input.framing.clause}`;
 
     if (input.anchor === null) {
+      // BOTH SLOTS GO TO THE OPENING. There is no face in this shot to pin, so
+      // nothing else wants the `last` keyframe — and a keyframe left empty is a
+      // frame the model decides. It decided wrong:
+      // `syl-20260813t042030321z-face-turned-away.mp4` ended on empty starfield
+      // with no ribbon in it, because {@link LOOP_CLAUSE} was *asking* for the
+      // closing ribbon in prose while the anchored path was *pinning* its own.
+      // The same picture at both ends makes the loop true by construction,
+      // which is the rule `docs/VIDEO.md` was written to record.
       return [
-        { prompt: `${stem} ${LOOP_CLAUSE}`, duration: input.seconds, first: input.opening, last: null },
+        {
+          prompt: `${stem} ${LOOP_CLAUSE}`,
+          duration: input.seconds,
+          first: input.opening,
+          last: input.opening,
+        },
       ];
     }
 
@@ -1001,10 +1029,13 @@ export class RenderService {
    * The pictures a generation is given, in the shape Runway takes them.
    *
    * A bare string where only frame one is pinned — exactly what the eight loops
-   * were sent — and the positioned array where both ends are. Not two code
-   * paths for the sake of it: the string form is what `generate.mjs` sends and
-   * what every one of the eight was made with, and there is no reason to
-   * re-shape a request that is already right.
+   * were sent — and the positioned array where both ends are.
+   *
+   * **Nothing `#plan` produces takes the string branch any more**: every
+   * generation now pins both ends, the unanchored one with the same opening
+   * picture twice. The branch stays because a sidecar written before that names
+   * no closing picture, and `resume` has to be able to carry one of those to
+   * the end in the shape it was actually submitted in.
    */
   #promptImage(part: { readonly first: string; readonly last: string | null }): string | readonly PositionedImage[] {
     if (part.last === null) return this.#dataUri(part.first);
