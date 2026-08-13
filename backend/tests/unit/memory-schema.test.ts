@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   edgePartition,
+  ENTITY_NODE_KINDS,
+  isEntityNodeKind,
   isMemoryEdgeId,
   isMemoryEdgeSpecies,
   isMemoryNodeId,
@@ -103,7 +105,31 @@ describe("the partition vocabulary", () => {
       // fact's label, and it had a degree of one because `about` may not point
       // at a `fact`. See `0029_memory_places.sql`.
       "place",
+      // `syl-024.1`. One write-door served three different things, so the only
+      // separation available was ISOLATION — cutting the edges. These two kinds
+      // are what let it be NAMESPACING instead: a read-time filter, with every
+      // edge intact. See `0034_kinds_and_verdict_chain.sql`.
+      "self",
+      "instruction",
     ]);
+  });
+
+  it("should keep the two new kinds out of the entity vocabulary", () => {
+    // A kind is a claim about what a row IS, not about what it is ABOUT
+    // (`syl-016.4`). A finding about herself and a standing order from the
+    // Commander are both CLAIMS — the thing they are about is him, or her, and
+    // that is what an edge is for. Letting `about` point at one would make a
+    // claim about a claim, which is exactly what `extract.ts` refuses.
+    expect(ENTITY_NODE_KINDS as readonly string[]).not.toContain("self");
+    expect(ENTITY_NODE_KINDS as readonly string[]).not.toContain("instruction");
+    expect(isEntityNodeKind("self")).toBe(false);
+    expect(isEntityNodeKind("instruction")).toBe(false);
+  });
+
+  it("should admit the two new kinds as node kinds", () => {
+    expect(isMemoryNodeKind("self")).toBe(true);
+    expect(isMemoryNodeKind("instruction")).toBe(true);
+    expect(nodePartition("hot", "instruction")).toEqual({ tier: "hot", kind: "instruction" });
   });
 
   it("should carry exactly two species of edge", () => {

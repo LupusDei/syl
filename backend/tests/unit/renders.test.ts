@@ -6,6 +6,7 @@ import type { ApiError } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp, type AppDependencies } from "../../src/index.js";
+import { HOUSE_MODEL } from "../../src/render/models.js";
 import { RenderService } from "../../src/render/render-service.js";
 import type { RenderBackend } from "../../src/render/runway.js";
 import { sightingOf } from "../../src/render/pictures.js";
@@ -163,6 +164,33 @@ async function api(
   });
 }
 
+/**
+ * A real PNG header, so a shape can be read off it as it is in her home.
+ *
+ * At module scope with {@link showHerAStill} because adopting a face is a
+ * precondition of more than the wardrobe's own tests now: a verdict records
+ * which face the render was anchored on, and there is no anchor to record
+ * until she has chosen one.
+ */
+function png(width: number, height: number, salt: number): Buffer {
+  const bytes = Buffer.alloc(25);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes, 0);
+  bytes.writeUInt32BE(13, 8);
+  bytes.write("IHDR", 12, "ascii");
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  bytes.writeUInt8(salt, 24);
+  return bytes;
+}
+
+/** Put a still where a look would have left one, and say what she saw. */
+function showHerAStill(render: string, atSeconds: number, bytes: Buffer): string {
+  const dir = studioAt(root).frames(render);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `at-${atSeconds.toFixed(1).replace(".", "-")}s.jpg`), bytes);
+  return sightingOf(bytes);
+}
+
 const ASK = JSON.stringify({
   scene: "she turns once, slowly, and lets the light run down her arm",
   framing: "close_portrait",
@@ -226,8 +254,13 @@ describe("GET /renders", () => {
     expect(response.status).toBe(200);
     expect(body.data?.items.length).toBe(1);
     expect(body.data?.items[0]?.status).toBe("ready");
-    expect(body.data?.spend.credits).toBe(540);
-    expect(body.data?.spend.usd).toBeCloseTo(5.4, 5);
+    // Fifteen seconds at the house model's rate, taken from the registry. It
+    // said 540 — `seedance2` at 36 a second — which was right until the day the
+    // default moved to a model that costs 30, and then it named the wrong
+    // change.
+    const rate = HOUSE_MODEL.creditsPerSecond.sd ?? 0;
+    expect(body.data?.spend.credits).toBe(rate * 15);
+    expect(body.data?.spend.usd).toBeCloseTo(rate * 0.15, 5);
   });
 });
 
@@ -417,26 +450,6 @@ describe("GET /renders/{name}/frames", () => {
  * request in a description.
  */
 describe("/renders/wardrobe", () => {
-  /** A real PNG header, so a shape can be read off it as it is in her home. */
-  function png(width: number, height: number, salt: number): Buffer {
-    const bytes = Buffer.alloc(25);
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes, 0);
-    bytes.writeUInt32BE(13, 8);
-    bytes.write("IHDR", 12, "ascii");
-    bytes.writeUInt32BE(width, 16);
-    bytes.writeUInt32BE(height, 20);
-    bytes.writeUInt8(salt, 24);
-    return bytes;
-  }
-
-  /** Put a still where a look would have left one, and say what she saw. */
-  function showHerAStill(render: string, atSeconds: number, bytes: Buffer): string {
-    const dir = studioAt(root).frames(render);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `at-${atSeconds.toFixed(1).replace(".", "-")}s.jpg`), bytes);
-    return sightingOf(bytes);
-  }
-
   it("should hand back the picture beside the token that names it", async () => {
     const response = await api("/renders/wardrobe?role=face");
     const body = (await response.json()) as Envelope<{ items: readonly Shown[] }>;
@@ -543,6 +556,121 @@ describe("/renders/wardrobe", () => {
     const response = await api("/renders/wardrobe");
 
     expect(response.status).toBe(200);
+  });
+});
+
+/**
+ * The chain that corrects itself, over the socket (`syl-024.4`).
+ *
+ * > "My findings are a chain that corrects itself: the smile is the problem →
+ * > no, solidity is → no, the anchor is → confirmed, it was the anchor. Right
+ * > now those four are orphans of equal weight, so nothing tells a reader that
+ * > the last one killed the first."
+ *
+ * Asserted end to end rather than only against the store, because the halves
+ * that could quietly drop the edge are the route body and the read that hands
+ * it back — a chain the store keeps and nobody can see is the orphan again.
+ */
+describe("a verdict that corrects an earlier one", () => {
+  /** Keep one, and hand back the row the route wrote. */
+  async function judge(
+    render: string,
+    body: Record<string, unknown>,
+  ): Promise<{ id: string; supersedes: string | null; anchorFace: string | null }> {
+    const response = await api(`/renders/${render}/verdicts`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const kept = (await response.json()) as Envelope<{
+      id: string;
+      supersedes: string | null;
+      anchorFace: string | null;
+    }>;
+    expect(response.status).toBe(201);
+    return kept.data as { id: string; supersedes: string | null; anchorFace: string | null };
+  }
+
+  it("should read her four findings as a chain and not as four orphans", async () => {
+    const created = await api("/renders", { method: "POST", body: ASK });
+    const name = ((await created.json()) as Envelope<{ record: { name: string } }>).data?.record
+      .name as string;
+
+    const smile = await judge(name, { verdict: "The smile is the problem." });
+    const solidity = await judge(name, {
+      verdict: "No — the smile is fine. It is the solidity.",
+      supersedes: smile.id,
+    });
+    const anchor = await judge(name, {
+      verdict: "No — it is the anchor.",
+      supersedes: solidity.id,
+    });
+    const confirmed = await judge(name, {
+      verdict: "Confirmed: it was the anchor.",
+      supersedes: anchor.id,
+    });
+
+    const read = await api(`/renders/${name}/verdicts`);
+    const items =
+      ((await read.json()) as Envelope<{
+        items: readonly { id: string; supersedes: string | null; supersededBy: string[] }[];
+      }>).data?.items ?? [];
+
+    // Newest first, all four still there. The wrong ones are not dropped for
+    // having been wrong — that is the record the search is made of.
+    expect(items.map((row) => row.id)).toEqual([confirmed.id, anchor.id, solidity.id, smile.id]);
+    // And the last one is reachable from the first, in both directions.
+    expect(items[3]?.supersededBy).toEqual([solidity.id]);
+    expect(items[0]?.supersedes).toBe(anchor.id);
+  });
+
+  it("should refuse a correction of a verdict that never existed, rather than keep an orphan", async () => {
+    const created = await api("/renders", { method: "POST", body: ASK });
+    const name = ((await created.json()) as Envelope<{ record: { name: string } }>).data?.record
+      .name as string;
+
+    const response = await api(`/renders/${name}/verdicts`, {
+      method: "POST",
+      body: JSON.stringify({ verdict: "No, the anchor.", supersedes: "syl:render_verdict:nope" }),
+    });
+
+    expect(response.status).toBe(400);
+    // Loud, and nothing kept: a verdict stored with its correction silently
+    // dropped is indistinguishable from a first look, which is the exact defect.
+    const read = await api(`/renders/${name}/verdicts`);
+    expect(((await read.json()) as Envelope<{ items: readonly unknown[] }>).data?.items).toEqual([]);
+  });
+
+  it("should record which face the render was anchored on without being told", async () => {
+    // She should not have to remember the anchor to attribute a drift to it. An
+    // edge she has to draw by hand is drawn on the turns she thinks of it, and
+    // then "which face rendered a stranger" is answerable for some verdicts and
+    // not others.
+    const sighting = showHerAStill("syl-earlier", 7.6, png(512, 682, 11));
+    await api("/renders/wardrobe", {
+      method: "POST",
+      body: JSON.stringify({ sighting, as: "face", because: "the mouth is finally mine" }),
+    });
+    const created = await api("/renders", { method: "POST", body: ASK });
+    const record = ((await created.json()) as Envelope<{
+      record: { name: string; anchor: string | null };
+    }>).data?.record;
+
+    const kept = await judge(record?.name as string, { verdict: "Not me at all." });
+
+    expect(kept.anchorFace).toBe(record?.anchor);
+  });
+
+  it("should let her name the face herself when the render cannot say", async () => {
+    const created = await api("/renders", { method: "POST", body: ASK });
+    const name = ((await created.json()) as Envelope<{ record: { name: string } }>).data?.record
+      .name as string;
+
+    const kept = await judge(name, {
+      verdict: "That is somebody else.",
+      anchorFace: "renders/faces/the-one-he-guessed.png",
+    });
+
+    expect(kept.anchorFace).toBe("renders/faces/the-one-he-guessed.png");
   });
 });
 

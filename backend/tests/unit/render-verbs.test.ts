@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { FRAMING_IDS } from "../../src/render/framing.js";
+import { canAnchorLikeness, HOUSE_MODEL, MODELS, MODEL_IDS } from "../../src/render/models.js";
 import { sightingOf } from "../../src/render/pictures.js";
 import { SylApiClient, type FetchLike } from "../../src/tools/client.js";
 import { TOOLS } from "../../src/tools/schemas.js";
@@ -407,7 +408,89 @@ describe("judge_render", () => {
     expect(advertisedToolNames()).toContain("judge_render");
     expect(TOOLS.map((tool) => tool.name)).toContain("judge_render");
   });
+
+  /**
+   * The chain (`syl-024.4`). Her ask, and she rates it above every other
+   * relation she could have:
+   *
+   * > "My findings are a chain that corrects itself... right now those four are
+   * > orphans of equal weight, so nothing tells a reader that the last one
+   * > killed the first."
+   */
+  it("should carry which earlier verdict this one overturns", async () => {
+    const api = fakeApi({
+      "/renders/latest/verdicts": () => ok({ id: "v2", render: "r", verdict: "x", at: NOW }, 201),
+    });
+
+    await call(contextFor(api.fetch), "judge_render", {
+      verdict: "No — the smile was fine. It is the anchor.",
+      because: "I came back to it myself.",
+      supersedes: "v1",
+    });
+
+    expect(api.calls.find((made) => made.method === "POST")?.body).toMatchObject({
+      supersedes: "v1",
+    });
+  });
+
+  it("should carry the face she names when the render cannot say", async () => {
+    const api = fakeApi({
+      "/renders/latest/verdicts": () => ok({ id: "v1", render: "r", verdict: "x", at: NOW }, 201),
+    });
+
+    await call(contextFor(api.fetch), "judge_render", {
+      verdict: "Not me at all.",
+      because: "He asked.",
+      anchor: "faces/syl-face-03.png",
+    });
+
+    expect(api.calls.find((made) => made.method === "POST")?.body).toMatchObject({
+      anchorFace: "faces/syl-face-03.png",
+    });
+  });
+
+  it("should not claim a correction she did not make", async () => {
+    // Absent means a first look, and it must reach the service as absent. A
+    // blank string in the body would be a claim to have corrected something
+    // nameless, which is the orphan this whole chain exists to stop.
+    const api = fakeApi({
+      "/renders/latest/verdicts": () => ok({ id: "v1", render: "r", verdict: "x", at: NOW }, 201),
+    });
+
+    await call(contextFor(api.fetch), "judge_render", { verdict: "closer", because: "He asked." });
+
+    const body = api.calls.find((made) => made.method === "POST")?.body as Record<string, unknown>;
+    expect(body["supersedes"]).toBeUndefined();
+    expect(body["anchorFace"]).toBeUndefined();
+  });
+
+  it("should offer her both halves of the edge, or she cannot write one", () => {
+    // A field she is never told about is a field she never uses — the same
+    // defect as the still she could look at and could not adopt.
+    const schema = TOOLS.find((tool) => tool.name === "judge_render")?.inputSchema as {
+      properties: Record<string, unknown>;
+    };
+
+    expect(Object.keys(schema.properties)).toEqual(
+      expect.arrayContaining(["supersedes", "anchor"]),
+    );
+    // And neither is required: a first look corrects nothing, and most renders
+    // name their own anchor.
+    expect(
+      (TOOLS.find((tool) => tool.name === "judge_render")?.inputSchema as { required: string[] })
+        .required,
+    ).toEqual(["verdict", "because"]);
+  });
 });
+
+/** What one line of `alreadySaid` looks like once verdicts have edges. */
+interface Said {
+  readonly id: string;
+  readonly verdict: string;
+  readonly at: string;
+  readonly supersedes: string | null;
+  readonly supersededBy: readonly string[];
+}
 
 describe("see_myself hands back what she already concluded", () => {
   it("should carry her previous verdicts, so looking again is a second look", async () => {
@@ -417,18 +500,49 @@ describe("see_myself hands back what she already concluded", () => {
           render: RECORD,
           frames: [{ atSeconds: 0, path: "a.jpg", mimeType: "image/jpeg", base64: FRAME_B64 }],
           verdicts: [
-            { verdict: "eyes too wide", at: NOW },
-            { verdict: "mouth is wrong", at: NOW },
+            { id: "v2", verdict: "eyes too wide", at: NOW, supersedes: null, supersededBy: [] },
+            { id: "v1", verdict: "mouth is wrong", at: NOW, supersedes: null, supersededBy: ["v2"] },
           ],
         }),
     });
 
     const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
 
-    expect((envelope.subject as { alreadySaid: string[] }).alreadySaid).toEqual([
-      "eyes too wide",
-      "mouth is wrong",
+    expect((envelope.subject as { alreadySaid: Said[] }).alreadySaid).toEqual([
+      { id: "v2", verdict: "eyes too wide", at: NOW, supersedes: null, supersededBy: [] },
+      { id: "v1", verdict: "mouth is wrong", at: NOW, supersedes: null, supersededBy: ["v2"] },
     ]);
+  });
+
+  /**
+   * The id is the half without which the chain cannot be written at all.
+   *
+   * `judge_render` takes `supersedes` as an id, and she can only quote one she
+   * has been shown. This is the same defect as the still she could look at and
+   * could not adopt: a capability she is not told the handle for is a
+   * capability she does not have.
+   */
+  it("should hand back the id and what killed it, so she can correct herself", async () => {
+    const api = fakeApi({
+      "/renders/latest/frames": () =>
+        ok({
+          render: RECORD,
+          frames: [{ atSeconds: 0, path: "a.jpg", mimeType: "image/jpeg", base64: FRAME_B64 }],
+          verdicts: [
+            { id: "v2", verdict: "no, the anchor", at: NOW, supersedes: "v1", supersededBy: [] },
+            { id: "v1", verdict: "the smile", at: NOW, supersedes: null, supersededBy: ["v2"] },
+          ],
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
+    const said = (envelope.subject as { alreadySaid: Said[] }).alreadySaid;
+
+    // Newest first, and the dead one is still there — carrying what killed it,
+    // rather than being dropped for having been wrong.
+    expect(said.map((row) => row.id)).toEqual(["v2", "v1"]);
+    expect(said[0]?.supersedes).toBe("v1");
+    expect(said[1]?.supersededBy).toEqual(["v2"]);
   });
 
   it("should show her the render on the first look, with nothing said yet", async () => {
@@ -446,7 +560,7 @@ describe("see_myself hands back what she already concluded", () => {
     const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
 
     expect(envelope.ok).toBe(true);
-    expect((envelope.subject as { alreadySaid: string[] }).alreadySaid).toEqual([]);
+    expect((envelope.subject as { alreadySaid: Said[] }).alreadySaid).toEqual([]);
   });
 });
 
@@ -478,16 +592,104 @@ describe("the dials", () => {
     expect(asked?.body).toEqual(expect.objectContaining({ seconds: 8, opening: "the-long-fall" }));
   });
 
-  it("should offer no dial for the shape or the model", () => {
-    // The two that must NOT be dials. `ratio` follows the opening whatever is
-    // asked, so it would be a control that does nothing; a different model
-    // loses her character entirely. A dial that does not work is worse than no
-    // dial, because she would reason about it.
+  it("should offer no dial for the shape, which is the one that would do nothing", () => {
+    // `ratio` follows the opening whatever is asked — the opening is frame one
+    // and every model takes the video's aspect from it — so exposing it would
+    // be a control that does nothing. A dial that does not work is worse than
+    // no dial, because she would reason about it.
+    //
+    // `model` USED TO BE HERE, on a different argument: "a different model
+    // loses her character entirely". That was correct and untested, which is
+    // the `syl-63v` shape; it was tested on 2026-08-13 and survived as
+    // arithmetic over keyframe slots rather than as a fear, and the Commander
+    // opened the dial. The next test is what replaced this half.
     const render = TOOLS.find((tool) => tool.name === "render_me");
     const properties = (render?.inputSchema as { properties?: Record<string, unknown> }).properties ?? {};
 
     expect(Object.keys(properties)).not.toContain("ratio");
-    expect(Object.keys(properties)).not.toContain("model");
+  });
+
+  it("should offer the model as a dial, built from the roster rather than beside it", () => {
+    // The Commander, 2026-08-13: "Raise the tool ceiling and let her experiment
+    // with the models... Give her the options."
+    const render = TOOLS.find((tool) => tool.name === "render_me");
+    const model = (
+      render?.inputSchema as {
+        properties?: Record<string, { enum?: readonly string[]; description?: string }>;
+      }
+    ).properties?.["model"];
+
+    // Every model on the roster and nothing else — derived, so a model added to
+    // `models.ts` reaches her without anybody remembering this file exists.
+    expect(model?.enum).toEqual([...MODEL_IDS]);
+    // And it carries the consequence, which is the whole reason the dial is
+    // safe to open: a model with one keyframe hands her a stranger.
+    expect(model?.description ?? "").toContain(HOUSE_MODEL.id);
+    for (const one of MODELS.filter((each) => !canAnchorLikeness(each))) {
+      expect(model?.description ?? "", one.id).toContain(one.id);
+    }
+  });
+
+  it("should let her read the models back, because a dial she cannot see is one she cannot learn from", () => {
+    const look = TOOLS.find((tool) => tool.name === "see_myself");
+    const of = (look?.inputSchema as { properties?: Record<string, { enum?: readonly string[] }> })
+      .properties?.["of"];
+
+    expect(of?.enum).toContain("models");
+  });
+});
+
+describe("see_myself of: models", () => {
+  /** No routes at all: the roster is a compiled-in constant, not a fetch. */
+  const noBackend = (): ToolContext =>
+    contextFor(() => Promise.reject(new Error("the roster must not reach the network")));
+
+  it("should answer every model on the roster without asking the service", async () => {
+    // The read-back is served from `models.ts` in this process. A round trip
+    // would add a hop and a failure mode to reach the same constant — there is
+    // nothing per-machine about which keyframe slots a model has — and this
+    // fetch throws, so a regression to an HTTP call fails here rather than at
+    // three in the morning on a machine with no service running.
+    const { envelope, isError } = await call(noBackend(), "see_myself", { of: "models" });
+    expect(isError).toBe(false);
+
+    const subject = envelope["subject"] as {
+      house?: string;
+      items?: readonly { id: string; holdsYou: boolean; keyframes: readonly string[] }[];
+    };
+    expect(subject.items?.map((one) => one.id)).toEqual([...MODEL_IDS]);
+    expect(subject.house).toBe(HOUSE_MODEL.id);
+  });
+
+  it("should derive whether a model holds her face from its keyframe slots", async () => {
+    // Never a stored flag — `syl-63v` is what a stored one cost. Checked over
+    // the whole roster rather than over one name, so a model added later is
+    // covered by the property rather than by somebody remembering.
+    const { envelope } = await call(noBackend(), "see_myself", { of: "models" });
+    const items =
+      (envelope["subject"] as { items?: readonly { id: string; holdsYou: boolean }[] }).items ?? [];
+
+    for (const row of items) {
+      const registry = MODELS.find((model) => model.id === row.id);
+      expect(row.holdsYou, row.id).toBe(canAnchorLikeness(registry ?? null));
+    }
+  });
+
+  it("should say what a model costs, and say nothing rather than zero when nobody has measured", async () => {
+    // A rate of `null` reads as unpriced; a rate of `0` reads as free. One of
+    // those is true of `seedance2_mini` and the other would land in her ledger
+    // as a render that cost nothing.
+    const { envelope } = await call(noBackend(), "see_myself", { of: "models" });
+    const items =
+      (envelope["subject"] as { items?: readonly { id: string; creditsPerSecond: number | null }[] })
+        .items ?? [];
+
+    for (const row of items) {
+      const rates = Object.values(
+        MODELS.find((model) => model.id === row.id)?.creditsPerSecond ?? {},
+      );
+      expect(row.creditsPerSecond, row.id).toBe(rates.length === 0 ? null : Math.min(...rates));
+    }
   });
 
   it("should tell her that the opening decides the shape, rather than letting it surprise her", () => {

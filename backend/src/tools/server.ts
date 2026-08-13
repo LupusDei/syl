@@ -7,6 +7,7 @@ import { AdjutantClient } from "../agents/adjutant-client.js";
 import { mayReach, notOnTheRoster } from "../agents/roster.js";
 
 import { verifyUrgency } from "../harness/urgency.js";
+import { canAnchorLikeness, HOUSE_MODEL, MODELS, type ModelNote } from "../render/models.js";
 import { sightingOf } from "../render/pictures.js";
 
 import { SylApiClient, type ToolFailure, type ToolResult } from "./client.js";
@@ -1226,17 +1227,25 @@ const renderMe: ToolHandler = async (input, context) => {
     return missing("render_me", "because", "Every render says why it exists, the same as everything else I make.");
   }
 
-  // The two dials, passed through only when she set them. Omitting them is
-  // what keeps a render she said nothing about identical to every render made
-  // before she could choose — fifteen seconds, opening on the ribbon.
+  // The dials, passed through only when she set them. Omitting one is what
+  // keeps a render she said nothing about the house render: fifteen seconds,
+  // opening on the ribbon, made on the house model.
+  //
+  // A model she got WRONG is passed straight through rather than checked here,
+  // deliberately. The service refuses it with a sentence about what that model
+  // cannot do, and a second validation on this side would be a second place for
+  // the roster to be written down — which is the drift the registry exists to
+  // end.
   const seconds = input["seconds"];
   const opening = text(input, "opening");
+  const model = text(input, "model");
   const created = await context.client.post<{ record: { id?: string; name: string } }>("/renders", {
     scene,
     framing,
     because: text(input, "because"),
     ...(typeof seconds === "number" ? { seconds } : {}),
     ...(opening === null ? {} : { opening }),
+    ...(model === null ? {} : { model }),
   });
   if (!created.ok) return refused("render_me", created.failure);
 
@@ -1322,6 +1331,7 @@ const seeMyself: ToolHandler = async (input, context) => {
   const of = text(input, "of");
   if (of === "faces" || of === "openings") return lookAtWardrobe(of, context);
   if (of === "renders") return readTheLog(context);
+  if (of === "models") return readTheRoster();
 
   // No required field. Absent means the most recent, and the route resolves it
   // — she should not have to remember a machine-generated name to look at the
@@ -1333,7 +1343,13 @@ const seeMyself: ToolHandler = async (input, context) => {
   const looked = await context.client.get<{
     render: RenderRow;
     frames: readonly FrameRow[];
-    verdicts?: readonly { verdict: string; at: string }[];
+    verdicts?: readonly {
+      id: string;
+      verdict: string;
+      at: string;
+      supersedes: string | null;
+      supersededBy: readonly string[];
+    }[];
   }>(
     `/renders/${encodeURIComponent(which)}/frames`,
     second === undefined ? {} : { at: second },
@@ -1346,7 +1362,23 @@ const seeMyself: ToolHandler = async (input, context) => {
   // second call. This is the half that makes `judge_render` a loop rather than
   // a diary — "a hundred renders with no record of what I made of them isn't a
   // hundred attempts, it's one attempt made a hundred times".
-  const alreadySaid = (verdicts ?? []).map((row) => row.verdict);
+  //
+  // Rows rather than bare sentences since `syl-024.4`, and the ID IS WHY: a
+  // verdict corrects an earlier one BY ID, so a chain she is never shown the
+  // handles for is a chain she cannot write. Same defect as the still she could
+  // look at and could not adopt.
+  //
+  // Newest first, with the superseded ones still in the list carrying what
+  // killed them. A read that dropped them would be the thing she asked against
+  // — being wrong in a recorded, ordered way is how the search works, and a
+  // chain with the wrong answers removed is one answer written once.
+  const alreadySaid = (verdicts ?? []).map((row) => ({
+    id: row.id,
+    verdict: row.verdict,
+    at: row.at,
+    supersedes: row.supersedes,
+    supersededBy: row.supersededBy,
+  }));
 
   // Every still, named by its own bytes. A picture she is shown and cannot
   // adopt is the defect this closes: the frame she wanted was nine seconds into
@@ -1466,6 +1498,9 @@ async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
       readonly anchor: string | null;
       readonly because: string;
       readonly credits: number | null;
+      readonly model: string;
+      /** `null` on every sidecar written before models could be chosen. */
+      readonly keyframes: number | null;
     })[];
     unreadable?: readonly { name: string; why: string }[];
     verdicts?: readonly { render: string; verdict: string; at: string }[];
@@ -1490,6 +1525,13 @@ async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
         // likeness are all here rather than only in the file on disk.
         duration: record.duration,
         shape: record.ratio,
+        // WHICH MODEL MADE IT, and how many keyframes it had at the time. The
+        // back catalogue is a mixture now, so a log without this cannot answer
+        // "which of these can hold my face" — and the arity is the durable half
+        // of that answer: one slot cannot pin a likeness, which stays true of a
+        // model nobody has heard of yet.
+        model: record.model,
+        keyframes: record.keyframes,
         opening: record.reference,
         face: record.anchor,
         holdsLikeness: record.holdsLikeness,
@@ -1500,6 +1542,55 @@ async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
     },
     at: null,
     spent: looked.data.spend,
+  };
+}
+
+/**
+ * What she can render on, and what each one will and will not do.
+ *
+ * **The read-back half of the model dial** (`syl-023`). Anything she can set she
+ * must be able to see, and a dial she cannot read back is one she cannot learn
+ * from — which is the whole of this line of work, because what she is learning
+ * is what she looks like.
+ *
+ * No round trip. The roster is a static module measured by probe and compiled
+ * into this process, exactly as `framingGuidance` is, so asking the service for
+ * it would add a hop and a failure mode to reach the same constant. There is
+ * nothing per-machine about which keyframe slots `grok_imagine_1_5` has.
+ *
+ * `holdsYou` is **derived from the slots and never stored**, the same rule
+ * `framing.ts` and the sidecar both follow, and for the same reason: a flag is a
+ * second assertion about a fact and the two drift apart in silence. `syl-63v`.
+ */
+function readTheRoster(): ToolEnvelope {
+  const rates = (model: ModelNote): number[] => Object.values(model.creditsPerSecond);
+
+  return {
+    ok: true,
+    action: "see_myself",
+    subject: {
+      of: "models",
+      house: HOUSE_MODEL.id,
+      items: MODELS.map((model) => ({
+        id: model.id,
+        seconds: `${String(model.duration.min)}-${String(model.duration.max)}`,
+        // Null rather than zero for a model nobody has measured. A render on it
+        // lands in the ledger as unpriced, and she should know that before she
+        // picks it rather than after.
+        creditsPerSecond: rates(model).length === 0 ? null : Math.min(...rates(model)),
+        keyframes: [...model.positions],
+        // THE ONE THAT DECIDES A SHOT OF HER FACE. Two slots means her likeness
+        // can be pinned at the join; one means the model invents a face and
+        // hands her a stranger, which was rendered on 2026-08-13 rather than
+        // reasoned about.
+        holdsYou: canAnchorLikeness(model),
+        measuredOn: model.measuredOn,
+        // The evidence travels with the choice instead of standing in front of
+        // it — the `because` rule, applied to a table she reads.
+        note: model.evidence,
+      })),
+    },
+    at: null,
   };
 }
 
@@ -1567,9 +1658,26 @@ const judgeRender: ToolHandler = async (input, context) => {
   // to judge the thing she is looking at without knowing its generated name.
   const which = text(input, "render") ?? "latest";
 
+  // THE CHAIN, and the face (`syl-024.4`). Both spread rather than sent as
+  // `null`: absent means she is not claiming anything, and a key present with
+  // an empty value is a claim to have corrected something nameless. `text()`
+  // has already turned a blank one into `null`, so a field she left as
+  // whitespace never reaches the body at all.
+  //
+  // The anchor is usually filled in by the service from the render's own
+  // record, which names the picture it was built on. This carries hers when she
+  // states one — a verdict on an attempt whose record is gone still needs to
+  // say which face produced the stranger.
+  const supersedes = text(input, "supersedes");
+  const anchorFace = text(input, "anchor");
+
   const kept = await context.client.post<{ readonly at: string }>(
     `/renders/${encodeURIComponent(which)}/verdicts`,
-    { verdict },
+    {
+      verdict,
+      ...(supersedes === null ? {} : { supersedes }),
+      ...(anchorFace === null ? {} : { anchorFace }),
+    },
   );
   if (!kept.ok) return refused("judge_render", kept.failure);
 

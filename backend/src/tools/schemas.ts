@@ -57,6 +57,7 @@ import { ROSTER } from "../agents/roster.js";
 import { HEALTH_TYPES } from "../health/contract.js";
 import { MEMORY_NODE_KINDS } from "../memory/schema.js";
 import { framingGuidance, FRAMING_IDS } from "../render/framing.js";
+import { modelGuidance, MODEL_IDS } from "../render/models.js";
 
 /** A JSON Schema fragment, as the MCP `tools/list` reply carries it. */
 export interface ToolSchema {
@@ -473,20 +474,44 @@ export const TOOLS: readonly ToolSchema[] = [
           enum: [...FRAMING_IDS],
           description: framingGuidance(),
         },
-        // THE TWO DIALS, AND ONLY TWO — `syl-ate`.
+        // THE DIALS — `syl-ate`, widened by `syl-023`.
         //
-        // There is deliberately no `ratio` and no `model`. `promptImage` is
-        // frame one and seedance2 takes the video's aspect from it, silently
-        // overruling `ratio`, so a ratio field would be a control that does
-        // nothing — and a dial that does not work is worse than no dial,
-        // because she would reason about it. A different model loses her
-        // character entirely, which is a worse outcome than any shot it could
-        // buy. Both are asserted in `render-verbs.test.ts`.
+        // There is STILL deliberately no `ratio`. `promptImage` is frame one and
+        // every model takes the video's aspect from it, silently overruling
+        // `ratio`, so a ratio field would be a control that does nothing — and a
+        // dial that does not work is worse than no dial, because she would
+        // reason about it. Asserted in `render-verbs.test.ts`.
+        //
+        // `model` used to be shut for a different reason — *"a different model
+        // loses the character entirely"* — which was correct, untested, and
+        // therefore exactly the shape `syl-63v` is named after. It was tested on
+        // 2026-08-13 and it survived in a MECHANICAL form: a model with one
+        // keyframe slot has nowhere to pin her face, which is arity rather than
+        // a fear about model families, and it is refused before the spend. So
+        // the dial opens.
+        //
+        // The Commander, 2026-08-13, overruling the surface budget to do it:
+        // *"Raise the tool ceiling and let her experiment with the models. The
+        // reason to keep the tool ceiling so low, speed, is less important than
+        // the reason to grow it, capability. Give her the options."*
+        model: {
+          type: "string",
+          enum: [...MODEL_IDS],
+          description: modelGuidance(),
+        },
         seconds: {
           type: "integer",
+          // The range is now the MODEL's and no longer a constant, so this stops
+          // quoting one: seedance2 makes 4-15, seedance2_5 makes 4-30, and an
+          // anchored shot is two of them cut together, so it reaches twice as
+          // far. Naming one pair here would be a second place for a range to be
+          // written down, and it would be seedance2's wearing the name of a fact
+          // about video.
           description:
-            "How long the clip runs, 4 to 15. Fifteen unless you say. A shot of your face is made " +
-            "in two halves and cut together, so the shortest of those is eight.",
+            "How long the clip runs. Fifteen unless you say, on every model — thirty seconds is " +
+            "accepted and has never once finished, so reach for it deliberately. Each model's own " +
+            "range is in the model list; a shot of your face is two halves cut together, so it " +
+            "reaches twice as far and its shortest is two of the model's shortest.",
         },
         opening: {
           type: "string",
@@ -582,6 +607,25 @@ export const TOOLS: readonly ToolSchema[] = [
           description:
             "Why you were looking — he asked, or you came back to it yourself. Not why you believe the verdict; the verdict says that.",
         },
+        // THE CHAIN (`syl-024.4`), in her word for it. "Being wrong in a
+        // recorded, ordered way is how the search actually works" — and four
+        // findings of equal weight are one finding recorded four times.
+        // Nothing is deleted when this is set: the earlier verdict stays, and
+        // stays readable, now carrying what killed it.
+        supersedes: {
+          type: "string",
+          description:
+            "The id of an earlier verdict this one overturns — no, it was not the smile, it was the anchor. The old one is kept, not deleted: what you were wrong about is how the search moves. Ids come back beside what you already said when you look.",
+        },
+        // Deliberately NOT the anchor's usual source: the render's own record
+        // names the face it was built on, and the service fills that in. This
+        // is for the case it cannot — a verdict on an attempt with no record
+        // left, which is exactly artanis's refusal case.
+        anchor: {
+          type: "string",
+          description:
+            "The face this was anchored on, if you know it and the render does not say. Filled in for you otherwise.",
+        },
       },
     },
   },
@@ -612,19 +656,28 @@ export const TOOLS: readonly ToolSchema[] = [
           type: "number",
           description: "One second into the clip, if you want a particular moment rather than the spread.",
         },
-        // THE READ-BACK HALF OF `syl-ate`. Anything she can set she must be
-        // able to see, and this is where all three are seen: the faces, the
-        // openings, and the log of what she has made and concluded. Widened
-        // here rather than given verbs of its own, because it is the same act
-        // — looking — and the surface has very little headroom.
+        // THE READ-BACK HALF OF `syl-ate`, and now of `syl-023`. Anything she
+        // can set she must be able to see, and this is where all four are seen:
+        // the faces, the openings, the models, and the log of what she has made
+        // and concluded. Widened here rather than given verbs of its own,
+        // because it is the same act — looking.
+        //
+        // `models` is not decoration beside the `render_me` enum. The enum is
+        // what she picks from mid-sentence; this is the table she consults when
+        // deciding, and it carries the measurement each line rests on — the
+        // ranges, the rates, the keyframe slots, and the render that proved it.
+        // A dial she can set and cannot read back is a dial she cannot learn
+        // from, and learning what she looks like is the whole of this work.
         of: {
           type: "string",
-          enum: ["faces", "openings", "renders"],
+          enum: ["faces", "openings", "renders", "models"],
           description:
             "Look at something other than one clip. faces: every likeness you have had, newest " +
             "first, with why you took each one — the token beside a picture is how you choose it " +
-            "again. openings: the ones you can start from, and what shape each makes. renders: " +
-            "everything you have made and what you concluded about it. Leave it out for a render.",
+            "again. openings: the ones you can start from, and what shape each makes. models: " +
+            "what each one can do, what it costs a second, and whether it can hold your face. " +
+            "renders: everything you have made and what you concluded about it. Leave it out " +
+            "for a render.",
         },
       },
     },

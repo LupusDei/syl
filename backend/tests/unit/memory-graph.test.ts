@@ -1023,6 +1023,83 @@ describe("MemoryGraph.demoteDueEdges — the nightly sweep, pinned", () => {
     expect(kindOf(() => graph.demoteDueEdges("2026-08-09"))).toBe("bad_instant");
   });
 
+  it("should leave a standing order hot where it demotes an ordinary memory of the same age", () => {
+    // `syl-024.3`. The two edges are identical in every respect the sweep looks
+    // at — same crossing instant, same degree, same species — so the ONLY thing
+    // that can separate them is the kind at the endpoint. Her argument: a
+    // standing order is "the kind that most needs to be unfadeable, because
+    // it's the bond rather than the work".
+    const ordinary = inference({ relation: "cares_about" });
+    const order = graph.addNode({ kind: "instruction", label: "she is allowed to be funny" });
+    const exempt = graph.infer({
+      sourceNode: ordinary.sourceNode,
+      targetNode: order.id,
+      relation: "told_her",
+      reasoning: "he said so on the evening of the eleventh",
+      confidence: 0.7,
+      demoteAfter: LATER_ISO,
+    });
+
+    expect(graph.demoteDueEdges(LATEST_ISO)).toBe(1);
+    expect(graph.getEdge(ordinary.id)?.tier).toBe("cold");
+    expect(graph.getEdge(exempt.id)?.tier).toBe("hot");
+    // And it keeps its stamp, so nothing about the row claims it was swept.
+    expect(graph.getEdge(exempt.id)?.demoteAfter).toBe(LATER_ISO);
+  });
+
+  it("should exempt an instruction at EITHER end, not only where it is the target", () => {
+    // What has to survive is the ATTACHMENT — that he told her this, that it is
+    // about renders — and an edge is only half owned by each endpoint. Exempting
+    // one side leaves the order hot and unreachable from the thing it is about,
+    // which is `syl-024.2`'s isolation failure arriving down the decay path.
+    const { commander } = trio();
+    const order = graph.addNode({ kind: "instruction", label: "he prefers renders with a face" });
+    const outbound = graph.infer({
+      sourceNode: order.id,
+      targetNode: commander,
+      relation: "asked_by",
+      reasoning: "he said it twice",
+      confidence: 0.7,
+      demoteAfter: LATER_ISO,
+    });
+
+    expect(graph.demoteDueEdges(LATEST_ISO)).toBe(0);
+    expect(graph.getEdge(outbound.id)?.tier).toBe("hot");
+  });
+
+  it("should still demote everything an instruction does not touch, however old", () => {
+    // The exemption is one kind wide. A sweep that stopped moving ordinary
+    // edges would leave the hot partition holding the graph's whole history,
+    // which is what the partitioning exists to prevent.
+    graph.addNode({ kind: "instruction", label: "be funny" });
+    const first = inference({ relation: "cares_about" });
+    const second = inference({ relation: "avoids" });
+
+    expect(graph.demoteDueEdges(LATEST_ISO)).toBe(2);
+    expect(graph.getEdge(first.id)?.tier).toBe("cold");
+    expect(graph.getEdge(second.id)?.tier).toBe("cold");
+  });
+
+  it("should exempt an instruction in the statement itself, not in a caller", () => {
+    // Pinned as text for the same reason the cleared stamp is: this is the ONE
+    // automatic path that can fade a standing order, and an exemption applied
+    // by a caller is an exemption the next caller does not have.
+    expect(DEMOTE_SWEEP_SQL.toLowerCase()).toContain("not exists");
+    expect(DEMOTE_SWEEP_SQL.toLowerCase()).toContain("'instruction'");
+  });
+
+  it("should pay for the exemption with two key lookups, not with a scan", () => {
+    // The sweep is the one statement that runs over the whole hot edge set every
+    // night, so a subquery that degraded it to a table scan would make the
+    // exemption cost more than the thing it protects. Planned against the REAL
+    // statement rather than a mirror of it: the mirror below predates the
+    // subquery and cannot see it.
+    const plan = queryPlan(DEMOTE_SWEEP_SQL, NOW_ISO, LATER_ISO);
+
+    expect(plan).toContain("memory_edges_demote_idx");
+    expect(plan).not.toContain("scan memory_nodes");
+  });
+
   it("should always clear the stamp in the statement itself", () => {
     // Pinned as text, because an UPDATE that moves the tier and leaves the
     // stamp behind is invisible until the demotion index has grown to hold the

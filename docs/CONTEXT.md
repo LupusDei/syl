@@ -2031,3 +2031,72 @@ was never run — because the attention was on the script that broke rather than
 on the *change* that had been made. Three corrections on one two-character edit,
 each one narrowly correct: **the thing you have just been thinking about is not
 the same set as the thing you have altered.**
+
+### A door that demands a value, and a floor that drops it (2026-08-13)
+
+Three instances, found only because one person happened to be in the same
+subsystem twice:
+
+    syl-y82    `remind_me` REQUIRED a `because` and discarded it
+    syl-018    `remember` COMPUTED `created` and the layer above discarded it
+    syl-1ozc   `remember` REQUIRES a `because` and discards it whenever the
+               memory names nobody
+
+**The value is produced correctly and dropped by the layer that should carry
+it**, and in two of the three the caller is told nothing is wrong.
+
+This is not the confident-wrong-answer family above; it is its inverse. There
+the instrument could only say yes. Here the instrument says *"this is
+required, and here is why it matters"* — and then throws the answer away.
+
+**The emphatic door is what makes it worse.** `remember` refuses a memory with
+no `because` and explains that the reason *"is what lets him tell a good read
+of him from a wrong one."* It then discards that reason for exactly the
+memories least likely to have an anchor. Nobody was careless: `reasoning` is
+stored on an inferred edge, a memory naming nobody has no edges, so the value
+has nowhere to live. **The demand was designed and the storage was not.**
+
+The generalisation worth carrying: **when a field is required at an entry
+point, something must assert it is READABLE at the exit.** A required field
+with no read path is a promise the system cannot keep, and it fails silently
+because the write succeeded. Ask of every new required argument: *who reads
+this back, and what test fails if nobody can?*
+
+A related trap in the fix: `syl-1ozc`'s test asserts the reasoning is on an
+**edge**, while its own comment says *"on an edge, on the node, anywhere a
+reader can reach it."* If the answer turns out to be a column, **the test must
+be rewritten to match the decision** rather than the decision bent to match the
+test — otherwise a graph design gets made by accident, to unblock a red test.
+
+### "It is in" — a commit that landed locally, reported as one that arrived (2026-08-13)
+
+An agent finished `syl-024.4`, committed it to `agent/tassadar`, and told the
+channel the work **was in**. It was not. Six commits sat unpushed behind that
+sentence, and `origin/main` had never seen any of them. artanis checked instead
+of taking it — `git merge-base --is-ancestor dda8a88 origin/main` → NO — and
+said so rather than assuming the claim was loose wording.
+
+**This is §8's shape, and the instrument is `git log`.** Ask it whether the work
+exists and it says yes, truthfully, about a tree only this machine can see. It
+has no way to answer the question that was actually being asked, which is
+*"can anyone else get this?"* — and it does not know that is the question.
+
+It is also `syl-018` wearing different clothes, on the same day, and nobody
+noticed the rhyme until afterwards. There, Syl was told a memory was **saved**
+when the node had been reused and nothing was written. Here, a room was told a
+commit had **landed** when it had been committed and not pushed. Both are a
+write that succeeded locally, reported as a write that arrived. Both are
+believed because the local half genuinely worked.
+
+**The check is one command and it is not `git log`:**
+
+    git merge-base --is-ancestor <sha> origin/main   # exit 0 means it really is in
+    git rev-list --count origin/main..HEAD           # how many commits are not
+
+**Say where it is, not that it is done.** "Committed on `agent/tassadar`,
+unpushed" is a complete and useful sentence. "It is in" is a claim about a
+place, and the place is the part nobody verifies.
+
+The correction cost one message because somebody checked. Uncaught, the next
+agent branches from `origin/main`, does not find the work, and rebuilds it —
+which is how the same feature gets written twice and the second one wins.

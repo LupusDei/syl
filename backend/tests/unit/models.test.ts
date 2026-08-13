@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  HOUSE_MODEL,
   MODEL_IDS,
   MODELS,
   canAnchorLikeness,
@@ -124,6 +125,31 @@ describe("modelGuidance", () => {
     // The constraint this epic turns on: choosing a model that cannot hold her
     // likeness must be a first-class, stated outcome rather than a surprise
     // she discovers after paying.
-    expect(modelGuidance()).toMatch(/grok_imagine_1_5[^;]*not hold your likeness/u);
+    //
+    // Checked over EVERY un-anchorable model rather than over `grok_imagine_1_5`
+    // by name. A test naming one model is a test a second one added next month
+    // walks straight past — and the whole design of this file is that the
+    // answer comes from arity rather than from a list of names.
+    for (const model of MODELS.filter((one) => !canAnchorLikeness(one))) {
+      expect(modelGuidance(), model.id).toMatch(
+        new RegExp(`${model.id}[^;]*NOT hold you`, "u"),
+      );
+    }
+  });
+
+  it("should say what each model costs a second, so a choice is priced before it is made", () => {
+    // `see_myself(of: models)` is the table; this is the line she reads
+    // mid-sentence. 30 credits a second against 36 is 90 credits on one
+    // ordinary render, which is a difference worth putting in front of her.
+    for (const model of MODELS) {
+      const rates = Object.values(model.creditsPerSecond);
+      expect(modelGuidance(), model.id).toContain(
+        rates.length === 0 ? "rate unmeasured" : `${String(Math.min(...rates))} cr/s`,
+      );
+    }
+  });
+
+  it("should name the house model as what renders a shot she says nothing about", () => {
+    expect(modelGuidance()).toContain(HOUSE_MODEL.id);
   });
 });
