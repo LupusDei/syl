@@ -53,6 +53,7 @@ import { createIntakeRouter } from "./connections/intake-route.js";
 import { ADMIN_BASE_PATH, createAdminRouter } from "./routes/admin.js";
 import { describeAdmin, inspectAdminBundle } from "./ops/admin-bundle.js";
 import { readBuildInfo, selfBuildStampPath } from "./ops/build-info.js";
+import { MemoryGraft } from "./connections/graft.js";
 import { ArticleIntake } from "./connections/intake.js";
 import { IntakeStore } from "./connections/intake-store.js";
 import { anyAuthenticatedDevice, requireBearerToken } from "./middleware/auth.js";
@@ -1580,7 +1581,17 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
 
   const intakeQueue = new IntakeQueue();
   const intakeStore = new IntakeStore({ db: database.handle, clock });
-  const intake = new ArticleIntake({ store: intakeStore, clock, scheduler: intakeQueue });
+  // **The graft sink, supplied at last (`syl-022`).** Without it `ArticleIntake` ran
+  // the whole ladder — fetch, read, extract — then marked the source `done` and left the
+  // extracts in their own table, so every article she ingested was work she could not
+  // afterwards recall. The interface had existed all along with a comment explaining the
+  // gap: "the memory graph is child A's and does not exist yet". It does now.
+  const intake = new ArticleIntake({
+    store: intakeStore,
+    clock,
+    scheduler: intakeQueue,
+    graft: new MemoryGraft({ graph: memoryGraph }),
+  });
   // Everything mid-ladder when the process died is due again now. Every step
   // is idempotent, so re-running one is safe; skipping one is not.
   intakeQueue.recover(intake, clock());
