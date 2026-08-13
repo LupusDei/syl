@@ -306,9 +306,9 @@ const IDENTITY =
  * on nothing — measured by extracting both frames, not inferred. The clause
  * asked for a loop and described something that cannot loop.
  *
- * It is now sent with the ribbon pinned at **both** keyframes (see `#plan`),
- * so the loop is true by construction and the
- * prose agrees with the frames rather than arguing with them. Same rule as
+ * It is now sent with the ribbon pinned at **both** keyframes (see `#plan`), so
+ * the loop is true by construction and the prose agrees with the frames rather
+ * than arguing with them. Same rule as
  * {@link GATHERING_CLAUSE} and {@link UNRAVELLING_CLAUSE}: a clause has to agree
  * with what its own generation pins.
  */
