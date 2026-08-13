@@ -218,6 +218,12 @@ export const WORKING_MEMORY_SECTIONS: readonly {
   readonly kind: MemoryNodeKind;
   readonly heading: string;
 }[] = [
+  // What he told her to be, first. `syl-024.1` gave standing orders a kind of
+  // their own; they lead because they are the one section she is meant to obey
+  // rather than merely know. Whether they SURVIVE to be rendered is `syl-024.3`
+  // (nothing automatic may fade one), and where `self` is filtered out is
+  // `syl-024.2` — this list is section order and nothing else.
+  { kind: "instruction", heading: "## Standing orders" },
   { kind: "person", heading: "## People" },
   { kind: "place", heading: "## Places" },
   { kind: "goal", heading: "## Goals" },
@@ -225,6 +231,9 @@ export const WORKING_MEMORY_SECTIONS: readonly {
   { kind: "fact", heading: "## Facts" },
   { kind: "event", heading: "## Recently" },
   { kind: "memory", heading: "## Memories" },
+  // A finding about what she is, and it has a section for the same reason every
+  // kind does: a hot node with nowhere to render is chosen and then invisible.
+  { kind: "self", heading: "## Myself" },
   { kind: "source", heading: "## Sources" },
 ];
 
@@ -240,6 +249,8 @@ const SECTION_RANK = new Map<MemoryNodeKind, number>(
  * schema leaking into the one document she reads on every turn.
  */
 const KIND_NOUNS: Readonly<Record<MemoryNodeKind, readonly [one: string, many: string]>> = {
+  instruction: ["standing order", "standing orders"],
+  self: ["note about myself", "notes about myself"],
   person: ["person", "people"],
   place: ["place", "places"],
   goal: ["goal", "goals"],
