@@ -104,10 +104,34 @@
 	  it read, and why the server refuses to interpret silence it cannot
 	  attribute. The entitlement is not the guarantee; the report is.
 
-	  Read-only, deliberately: `NSHealthShareUsageDescription` and no
-	  `NSHealthUpdateUsageDescription`. Syl reads his body and never writes to it.
-	  A capability we do not rely on is one we should not ask for — the same rule
-	  that kept `UIBackgroundModes` out of this file.
+	  BOTH usage strings are present, and the second one is NOT a capability we
+	  asked for. This is the one place the "do not ask for what you do not rely
+	  on" rule does not get to win, and the correction is worth recording because
+	  the reasoning that produced it was good and the answer was still wrong.
+
+	  I shipped `NSHealthShareUsageDescription` alone, deliberately, on the
+	  grounds that she reads and never writes. App Store validation rejected the
+	  upload:
+
+	    "Missing purpose string in Info.plist ... The Info.plist file for the
+	     Syl.app bundle should contain a NSHealthUpdateUsageDescription key ...
+	     **While your app might not use these APIs, a purpose string is still
+	     required.**" (90683)
+
+	  The ENTITLEMENT is what triggers the requirement, not the code. An app that
+	  can reach Health at all must declare both purposes, and Apple checks the
+	  binary rather than the intent.
+
+	  **So read-only is enforced where it always actually was, and it is not this
+	  file.** `HealthReader` calls `requestAuthorization(toShare: [], read:)` — an
+	  EMPTY share set — so iOS never offers him a write toggle and never grants
+	  one. The presence of this string does not widen that by a single type. A
+	  reader who sees `NSHealthUpdateUsageDescription` and concludes that she
+	  writes to Health is reading the wrong file: the guarantee is that empty
+	  array, and the test that pins it lives beside it.
+
+	  The string itself says so in his words, because it is the sentence he will
+	  actually be shown if iOS ever surfaces it.
 	-->
 	<key>com.apple.developer.healthkit</key>
 	<true/>

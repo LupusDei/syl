@@ -310,6 +310,7 @@
 				   tester, while CI reports a clean success. */
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Syl reads your health data so she can notice what is changing and tell you when something looks worth knowing. She reads only; she never writes to Health.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Syl never writes to your Health data. Apple requires this text from any app that can reach Health at all, so it is here to satisfy that rule rather than because Syl asks for write access.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -345,6 +346,7 @@
 				   tester, while CI reports a clean success. */
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Syl reads your health data so she can notice what is changing and tell you when something looks worth knowing. She reads only; she never writes to Health.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Syl never writes to your Health data. Apple requires this text from any app that can reach Health at all, so it is here to satisfy that rule rather than because Syl asks for write access.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
