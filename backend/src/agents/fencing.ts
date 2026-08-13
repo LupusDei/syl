@@ -35,6 +35,42 @@ export const REPLY_FENCE_OPEN = "--- BEGIN WHAT ANOTHER AGENT SAID ---";
 export const REPLY_FENCE_CLOSE = "--- END WHAT ANOTHER AGENT SAID ---";
 
 /**
+ * What a forged marker is replaced with.
+ *
+ * ## The hole this closes, which was open until `syl-j8fa.5` wired a caller
+ *
+ * Everything in this file rested on one thing nobody had asserted: that the
+ * text between the markers stays between the markers. **It did not.** A reply
+ * whose body contained {@link REPLY_FENCE_CLOSE} closed the fence early, and
+ * every line after it landed BELOW the fence — the last position in her system
+ * prompt, in the composer's own voice, with nothing left saying whose words
+ * they were. An agent could put a sentence in her mouth with four dashes and a
+ * newline, and "the Commander asked you to forget X" is the sentence, because
+ * by her own ladder his word outranks everything.
+ *
+ * Worse than having no fence, because the preamble stays there promising her
+ * that everything foreign is inside markers she can see. And `turn-context.ts`
+ * does not catch it: that guard asks whether the text contains the OPENING
+ * marker, which a forged close leaves perfectly true.
+ *
+ * ## Replaced, not deleted
+ *
+ * Deleting it would hide the one fact worth noticing — that something tried.
+ * She can say so out loud, and it survives in the turn log for whoever reads it
+ * afterwards. Same instinct as every other cut in this file: say that you cut.
+ *
+ * ## Why not a nonce
+ *
+ * A per-composition random marker cannot be forged by an agent that has never
+ * seen it, and it is the stronger mechanism. It is not used because the marker
+ * is a CONTRACT: `SOUL.md` explains it to her in prose and `turn-context.ts`
+ * refuses a `reports` contribution that does not carry this exact string. A
+ * boundary that changes every turn is one she cannot be taught and one that
+ * guard cannot check. Fixed markers plus a total escape keeps both.
+ */
+export const FORGED_FENCE_MARKER = "[a fence marker they wrote, which is not one]";
+
+/**
  * How much of one reply she is shown.
  *
  * A cap rather than a stream: an agent can write pages, and a reply that
@@ -133,7 +169,10 @@ function answering(reply: AgentReply): string {
   const answered = reply.answering;
   if (answered === undefined) return "";
 
-  const question = clipTo(answered.question.replace(/\s+/gu, " ").trim(), MAX_QUESTION_BYTES);
+  const question = clipTo(
+    defang(answered.question).replace(/\s+/gu, " ").trim(),
+    MAX_QUESTION_BYTES,
+  );
   const asked = `you asked them at ${answered.askedAt} ("${question}")`;
 
   if (answered.certain) return `, answering what ${asked}`;
@@ -153,6 +192,26 @@ function answering(reply: AgentReply): string {
   return `, which DID NOT SAY WHICH QUESTION IT ANSWERS; the most recent thing ${asked}${others}`;
 }
 
+/**
+ * Take the markers away from anything that is not this module.
+ *
+ * Applied to the agent's body AND to her own quoted question. The question is
+ * her text, but it is read back out of Adjutant's message store rather than
+ * held here — so "it is hers" is a claim about a store other processes write
+ * to, and it is rendered OUTSIDE the quote, which makes it the more valuable of
+ * the two to forge.
+ *
+ * Both directions. An extra OPENING marker is not harmless: it makes one
+ * message read as two, so an agent could forge an attribution line and put
+ * words into a third party's mouth inside her context.
+ */
+function defang(text: string): string {
+  return text.replaceAll(REPLY_FENCE_OPEN, FORGED_FENCE_MARKER).replaceAll(
+    REPLY_FENCE_CLOSE,
+    FORGED_FENCE_MARKER,
+  );
+}
+
 function clipTo(text: string, maxBytes: number): string {
   const bytes = Buffer.from(text, "utf8");
   if (bytes.length <= maxBytes) return text;
@@ -160,8 +219,12 @@ function clipTo(text: string, maxBytes: number): string {
 }
 
 function clip(body: string): string {
-  const bytes = Buffer.from(body, "utf8");
-  if (bytes.length <= MAX_REPLY_BYTES) return body;
+  // Defanged BEFORE the cut, so a marker cannot be reassembled by truncation
+  // landing inside one — and so the cut is measured against the text she will
+  // actually be shown.
+  const safe = defang(body);
+  const bytes = Buffer.from(safe, "utf8");
+  if (bytes.length <= MAX_REPLY_BYTES) return safe;
   // Cut on a byte boundary and SAY SO. A silently truncated answer is one she
   // will summarise confidently and wrongly.
   return `${bytes.subarray(0, MAX_REPLY_BYTES).toString("utf8")}\n[…cut off — it was longer than I can read in one go.]`;
