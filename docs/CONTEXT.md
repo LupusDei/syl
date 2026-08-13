@@ -2031,3 +2031,39 @@ was never run — because the attention was on the script that broke rather than
 on the *change* that had been made. Three corrections on one two-character edit,
 each one narrowly correct: **the thing you have just been thinking about is not
 the same set as the thing you have altered.**
+
+### A door that demands a value, and a floor that drops it (2026-08-13)
+
+Three instances, found only because one person happened to be in the same
+subsystem twice:
+
+    syl-y82    `remind_me` REQUIRED a `because` and discarded it
+    syl-018    `remember` COMPUTED `created` and the layer above discarded it
+    syl-1ozc   `remember` REQUIRES a `because` and discards it whenever the
+               memory names nobody
+
+**The value is produced correctly and dropped by the layer that should carry
+it**, and in two of the three the caller is told nothing is wrong.
+
+This is not the confident-wrong-answer family above; it is its inverse. There
+the instrument could only say yes. Here the instrument says *"this is
+required, and here is why it matters"* — and then throws the answer away.
+
+**The emphatic door is what makes it worse.** `remember` refuses a memory with
+no `because` and explains that the reason *"is what lets him tell a good read
+of him from a wrong one."* It then discards that reason for exactly the
+memories least likely to have an anchor. Nobody was careless: `reasoning` is
+stored on an inferred edge, a memory naming nobody has no edges, so the value
+has nowhere to live. **The demand was designed and the storage was not.**
+
+The generalisation worth carrying: **when a field is required at an entry
+point, something must assert it is READABLE at the exit.** A required field
+with no read path is a promise the system cannot keep, and it fails silently
+because the write succeeded. Ask of every new required argument: *who reads
+this back, and what test fails if nobody can?*
+
+A related trap in the fix: `syl-1ozc`'s test asserts the reasoning is on an
+**edge**, while its own comment says *"on an edge, on the node, anywhere a
+reader can reach it."* If the answer turns out to be a column, **the test must
+be rewritten to match the decision** rather than the decision bent to match the
+test — otherwise a graph design gets made by accident, to unblock a red test.
