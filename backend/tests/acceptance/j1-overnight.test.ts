@@ -1,6 +1,8 @@
 import type { Delivery, Device, Reminder } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { DEFAULT_QUIET_HOURS } from "../../src/config.js";
+import { nextDailyOccurrence } from "../../src/harness/schedule.js";
 import { fixedClock } from "../../src/services/clock.js";
 import type { JobRunner } from "../../src/services/job-runner.js";
 import { startFakeApns, type FakeApns } from "../helpers/fake-apns.js";
@@ -19,7 +21,7 @@ import { expectData, startLiveService, type LiveService } from "../helpers/live-
  *    fired at the right wall-clock instant, pushed, acknowledged, shown as
  *    delivered on the admin surface.
  * 2. A bad night — four reminders come due between 23:00 and 06:00, in
- *    different passes. **One** notification at 08:00 naming all four.
+ *    different passes. **One** notification when the window lifts, naming all four.
  * 3. A phone that was off — Apple accepts and it never arrives. What actually
  *    happens now, honestly, including `syl-dlz`: the server does not re-arm.
  */
@@ -30,12 +32,23 @@ const APNS_TOKEN = "7ab34c19".repeat(8);
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
-/** 15:00 Chicago on the day he asks. Outside the 22:00–08:00 quiet window. */
+/** 15:00 Chicago on the day he asks. Well clear of the quiet window. */
 const ASKED_AT = Date.parse("2026-08-09T20:00:00.000Z");
 /** 15:00 Chicago the next day. */
 const DENTIST_AT = "2026-08-10T20:00:00.000Z";
-/** 08:00 Chicago on the 11th — where a night of quiet hours releases to. */
-const MORNING_RELEASE = "2026-08-11T13:00:00.000Z";
+/**
+ * Where a night of quiet hours releases to: the minute the window lifts on the
+ * morning of the 11th, asked of the window rather than written down. A literal
+ * here would go on driving the night to an hour the window no longer ends at,
+ * and the night would push early — which is how this file failed when the
+ * window moved.
+ */
+const MORNING_RELEASE = nextDailyOccurrence(
+  DEFAULT_QUIET_HOURS.quiet.end,
+  // 01:00 Chicago on the 11th: inside the night, so the next end is that morning.
+  new Date(Date.parse("2026-08-11T06:00:00.000Z")),
+  CHICAGO,
+).toISOString();
 
 describe("the Commander's night", () => {
   let syl: LiveService;
@@ -164,11 +177,11 @@ describe("the Commander's night", () => {
   });
 
   describe("journey 2 — a bad night", () => {
-    it("should turn four reminders that came due in four different passes into one notification at 08:00", async () => {
+    it("should turn four reminders that came due in four different passes into one notification when the window lifts", async () => {
       await registerDevice();
 
       // 23:00, 01:00, 04:00 and 06:00 Chicago — all inside the quiet window,
-      // all releasing at the same 08:00.
+      // all releasing together the minute the window lifts.
       const overnight = [
         await setReminder({ text: "Ship the release notes.", wallTime: "23:00", date: "2026-08-10" }),
         await setReminder({ text: "Rotate the backup key.", wallTime: "01:00", date: "2026-08-11" }),
@@ -189,7 +202,7 @@ describe("the Commander's night", () => {
         const held = await deliveries();
         expect(held, "a night of reminders must be held as ONE row, not four").toHaveLength(1);
 
-        // 08:00. One notification, naming all four.
+        // The window lifts. One notification, naming all four.
         now = Date.parse(MORNING_RELEASE);
         await runner.tick();
 

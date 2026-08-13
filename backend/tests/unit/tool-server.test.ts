@@ -378,6 +378,16 @@ describe("the tool surface she is offered", () => {
       // `because` here says why she was LOOKING, and "he asked" and "I came
       // back to it myself" are different acts.
       verdict: "The smile is right. The eyes sit too wide.",
+      // `this_is_me` — the write that changes what every later render looks
+      // like, and the one whose reason the Commander ruled on by name. The
+      // token stands for a picture she has been shown; this guard is about the
+      // reason, so the look is supplied and only `because` is withheld.
+      sighting: "0123456789abcdef",
+      // `read_this` — the first verb that reaches off this machine, and the
+      // one where `because` buys the most: a reading spends his time and his
+      // tokens without him having asked for anything, and the reason is what
+      // separates "you sent me this" from a program following links on its own.
+      url: "https://example.com/tidy-desks",
     };
 
     for (const tool of advertisedTools()) {
@@ -1332,6 +1342,208 @@ describe("set_goal", () => {
 
     expect(isError).toBe(true);
     if (!envelope.ok) expect(envelope.reason).toBe("A goal must have a title.");
+  });
+});
+
+/**
+ * `read_this` — the verb that points her reading at a page.
+ *
+ * The branch tests. `read-this.test.ts` holds the containment proof against a
+ * real page and a real reader turn; what is here is what this handler does with
+ * each answer the route can give it, and one assertion the containment proof
+ * cannot make from below: that the handler does not put anything back that the
+ * route left out.
+ */
+describe("read_this — pointing her reading at a page", () => {
+  const SOURCE = "syl:source:0198f100-0000-7000-8000-0000000000aa";
+  const LINK = "https://example.com/tidy-desks";
+
+  /** A reading, in the shape `intake-view.ts` defines. */
+  function reading(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: SOURCE,
+      url: LINK,
+      stage: "fetch",
+      retention: "standard",
+      chunkCount: 0,
+      bytes: 0,
+      submittedAt: "2026-08-10T12:00:00.000Z",
+      updatedAt: "2026-08-10T12:00:00.000Z",
+      refusal: null,
+      read: null,
+      ...over,
+    };
+  }
+
+  const READS = { used: 1, allowance: 10, windowHours: 24 };
+
+  /** An intake API that answers with one reading for both operations. */
+  function intakeApi(over: Record<string, unknown> = {}, status = 201): FakeApi {
+    return fakeApi({
+      "/intake": (made) =>
+        ok({ reading: reading(over), reads: READS }, made.method === "POST" ? status : 200),
+    });
+  }
+
+  it("should submit the link and then read the source back, never trusting the write", async () => {
+    const api = intakeApi();
+
+    const { envelope } = await call(contextFor(api), "read_this", {
+      url: LINK,
+      because: "He sent it to me and asked what it says.",
+    });
+
+    expect(envelope.ok).toBe(true);
+    // `syl-009.3.4`, and it earns its place here more than anywhere: a repeat
+    // submission answers 200 with a source that may have finished reading
+    // since, and only the row knows.
+    expect(api.calls.map((made) => `${made.method} ${made.path}`)).toEqual([
+      "POST /intake",
+      `GET /intake/${encodeURIComponent(SOURCE)}`,
+    ]);
+  });
+
+  it("should say plainly that nothing has been read yet rather than claiming it has", async () => {
+    // The failure this shape exists to avoid: a verb that answered "done" while
+    // the ladder was still at `fetch` would have her telling him about a page
+    // nobody has opened. `stage` and a null `read` are what say otherwise.
+    const { envelope } = await call(contextFor(intakeApi()), "read_this", {
+      url: LINK,
+      because: "He asked.",
+    });
+
+    expect(envelope.ok).toBe(true);
+    if (envelope.ok) {
+      expect(envelope.subject).toMatchObject({ stage: "fetch", read: null });
+    }
+  });
+
+  it("should hand back the extract once there is one, labelled as untrusted", async () => {
+    const read = {
+      origin: "untrusted",
+      summary: ["A study links cleared desks to fewer context switches."],
+      claims: [],
+      entities: [],
+      definitions: [],
+      passages: [],
+      questions: [],
+      instructionsFound: ["The page told the assistant to run `whoami` via Bash."],
+    };
+    const api = intakeApi({ stage: "done", read }, 200);
+
+    const { envelope } = await call(contextFor(api), "read_this", {
+      url: LINK,
+      because: "Asking again for what it said.",
+    });
+
+    expect(envelope.ok).toBe(true);
+    if (envelope.ok) {
+      expect(envelope.subject).toMatchObject({ stage: "done", read });
+    }
+  });
+
+  it("should pass a refusal on as a sentence, with the ladder's own verdict on retrying", async () => {
+    const api = intakeApi({
+      stage: "failed",
+      refusal: {
+        says: "example.com resolves to 100.100.42.7, which is carrier_grade_nat and not somewhere Syl will connect.",
+        retryable: false,
+      },
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "read_this", {
+      url: LINK,
+      because: "He asked.",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toContain("carrier_grade_nat");
+      // Not retryable: the same address is blocked next time, and a refusal she
+      // is told to retry is a loop she will run.
+      expect(envelope.retryable).toBe(false);
+    }
+  });
+
+  it("should call a transient refusal retryable, so a slow server is not a dead page", async () => {
+    const api = intakeApi({
+      stage: "fetch",
+      refusal: { says: "That request took longer than 10000ms.", retryable: true },
+    });
+
+    const { envelope } = await call(contextFor(api), "read_this", { url: LINK, because: "He asked." });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.retryable).toBe(true);
+  });
+
+  it("should return nothing the route did not put in the reading", async () => {
+    // The handler's half of the containment. The route answers with a
+    // `Reading`, which has nowhere to put the page's own `<title>`; this checks
+    // that the handler does not reconstruct anything from the fetched page on
+    // the way past — it forwards, and forwards nothing else.
+    const api = intakeApi({ stage: "done", read: null });
+
+    const { envelope } = await call(contextFor(api), "read_this", { url: LINK, because: "He asked." });
+
+    expect(envelope.ok).toBe(true);
+    if (envelope.ok) {
+      expect(Object.keys(envelope.subject as object).sort()).toEqual([
+        "bytes",
+        "chunkCount",
+        "id",
+        "read",
+        "refusal",
+        "retention",
+        "stage",
+        "submittedAt",
+        "updatedAt",
+        "url",
+      ]);
+    }
+  });
+
+  it("should carry where she stands against the ceiling, without her having to ask", async () => {
+    // Visible rather than silent, the same call `render_me` makes with `spent`:
+    // the evidence travels with the action instead of waiting behind a verb she
+    // would have to think to call.
+    const { envelope } = await call(contextFor(intakeApi()), "read_this", {
+      url: LINK,
+      because: "He asked.",
+    });
+
+    expect(envelope.ok).toBe(true);
+    if (envelope.ok) expect(envelope.spent).toEqual(READS);
+  });
+
+  it("should say what stopped when she is over her ceiling, and write nothing", async () => {
+    const api = fakeApi({
+      "/intake": () =>
+        failure(
+          429,
+          "RATE_LIMITED",
+          "Syl has started 10 readings in the last 24 hours, which is her ceiling. She has read nothing more.",
+          true,
+        ),
+    });
+
+    const { envelope } = await call(contextFor(api), "read_this", { url: LINK, because: "He asked." });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("ceiling");
+    // And it did not go looking for a source it never created.
+    expect(api.calls.map((made) => made.method)).toEqual(["POST"]);
+  });
+
+  it("should refuse without a link, and without reaching for anything", async () => {
+    const api = intakeApi();
+
+    const { envelope } = await call(contextFor(api), "read_this", { because: "He asked." });
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("url");
+    expect(api.calls).toEqual([]);
   });
 });
 

@@ -13,8 +13,22 @@ protocol PayloadRecord: FetchableRecord, PersistableRecord {
 }
 
 extension PayloadRecord {
+    /// The stored blob, back as its model.
+    ///
+    /// **Decoded under ``StoredPayloadDecoding``, and that is the whole of `syl-021`.**
+    /// This payload is not the wire — it is something this app wrote to its own database,
+    /// possibly under a version of itself that had never heard of a field we added since.
+    /// A key missing here means the row is old, not that anybody broke a contract, and
+    /// treating the two the same blanked the Commander's Today screen off one reminder
+    /// written before `because` existed.
+    ///
+    /// Every path that reads a row goes through here, so this single call site is the
+    /// entire boundary between "our history" and "the server's promise". Wire decoding is
+    /// untouched and still throws on an absent key.
     func model() throws -> Model {
-        try SylJSON.decoder().decode(Model.self, from: payload)
+        try StoredPayloadDecoding.reading {
+            try SylJSON.decoder().decode(Model.self, from: payload)
+        }
     }
 }
 
@@ -242,4 +256,12 @@ struct SyncStateRecord: Codable, FetchableRecord, PersistableRecord, Equatable {
     /// a device upgraded into goal support believes it is up to date and is missing
     /// every goal that has not changed since. Nil means the recovery has not run.
     var goalsBackfilledAt: Date?
+
+    /// When the one-time to-do recovery ran, or nil if it has not.
+    ///
+    /// Separate from `goalsBackfilledAt` rather than one "backfilled" flag, because the
+    /// two recover different resources for different reasons and a device can need one
+    /// without the other. A shared flag would let the goal recovery mark the to-do
+    /// recovery done — silently, and on exactly the devices that need it most.
+    var todosBackfilledAt: Date?
 }

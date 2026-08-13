@@ -1979,3 +1979,55 @@ The procedure that survives, by hand:
 
 **Automate it when someone can watch it fail first.** Both of us would have
 committed a decoration on the strength of a true negative.
+
+## You cannot check a claim with an instrument that can only say yes
+
+This is the heading the entries above hang under. Every one of them is a
+member, and naming the property rather than the symptom is what makes it
+usable in advance instead of only in hindsight.
+
+An instrument that can only say yes:
+
+    grep returning nothing            proves your vocabulary, not the system
+    `cmd | tail -3; echo $?`          reports tail's status, never cmd's
+    `echo "pushed: $(git log -1)"`    prints local HEAD, which is always there
+    `cp` hitting an interactive prompt exits 0 meaning "I asked"
+    a checker reading a fixed path    grades whatever file is on disk
+    a detector only ever seen quiet   has demonstrated nothing
+    a count matched against a count   agrees while the sets differ
+
+**Care does not protect against this, and that is the whole difficulty.** A
+careful person reaching for a verification step reaches for one that reads
+clearly — and reading clearly is a different property from being able to say no.
+Every instance in this file was produced by someone being deliberate.
+
+The direction of failure is incidental. The same stale-tree `grep` that would
+have reported a false all-clear nearly produced a false *alarm* an hour later:
+it cannot say "your tree is behind", only "not found". A one-way instrument is
+equally wrong in both directions; it simply cannot be wrong *out loud*.
+
+**The remedy is always the same shape: ask the question from the side that would
+know, and confirm the instrument can fail before believing it is quiet.** For a
+push, `git merge-base --is-ancestor HEAD origin/<branch>`. For a copy, read the
+destination. For a guard, break it on purpose and watch it go red. For a
+negative about behaviour, find where the behaviour IS and see whether this path
+reaches it.
+
+### Two corollaries earned the same night
+
+**Removing a fence is a change whose blast radius is invisible in the diff.**
+A semicolon was replaced with `&&` in the test gate. The diff was two characters
+and read as a tightening; it was reviewed and endorsed on exactly that basis.
+The semicolon was load-bearing — this gate is `failures == declared`, so vitest
+exits non-zero on *every healthy run*, and `&&` short-circuited the checker that
+turns a non-zero exit into a pass. **The diff shows what the fence looked like,
+never what walked past it.** The reason was written down, in the file the
+reviewer had quoted to four agents that day.
+
+**Fix the change, not the occurrence.** The same edit had touched two scripts.
+The first correction repaired only the one under discussion, and CI stayed red
+one line lower. A `grep` for the pattern would have found both in a second and
+was never run — because the attention was on the script that broke rather than
+on the *change* that had been made. Three corrections on one two-character edit,
+each one narrowly correct: **the thing you have just been thinking about is not
+the same set as the thing you have altered.**

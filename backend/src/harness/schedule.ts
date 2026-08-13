@@ -34,6 +34,28 @@ function parseWallTime(spec: string, label = "time"): WallTime {
   return { hour: Number(match[1]), minute: Number(match[2]) };
 }
 
+/**
+ * A wall time moved by whole minutes, wrapping at midnight.
+ *
+ * For conventions that are defined *relative to* the quiet window — "an hour
+ * before it begins" — so they are computed from it rather than written down
+ * beside it. A second number with a comment saying it agrees with the first is
+ * the arrangement that puts them an hour apart the moment either one moves.
+ *
+ * Wrapped rather than clamped: clamping collapses two different times onto
+ * 00:00, which is the same silent divergence in a different shape.
+ *
+ * @throws {Error} if `spec` is not 24-hour `HH:MM`.
+ */
+export function shiftWallTime(spec: string, minutes: number): string {
+  const time = parseWallTime(spec);
+  const dayMinutes = 24 * 60;
+  const shifted = (((time.hour * 60 + time.minute + minutes) % dayMinutes) + dayMinutes) %
+    dayMinutes;
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${pad(Math.floor(shifted / 60))}:${pad(shifted % 60)}`;
+}
+
 /** Wall-clock fields for an instant, as seen in a given zone. */
 interface ZonedParts {
   year: number;

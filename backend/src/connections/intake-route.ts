@@ -1,12 +1,14 @@
-import { Router, type RequestHandler } from "express";
+import { Router, type Request, type RequestHandler } from "express";
 
 import { ApiFailure, sendOk } from "../routes/envelope.js";
 import { requireString } from "../routes/devices.js";
 import { runIdempotent, sendIdempotent } from "../routes/idempotency.js";
+import { instant, systemClock, type Clock } from "../services/clock.js";
 import type { IdempotencyStore } from "../services/idempotency.js";
 import { idType, isId } from "../services/id.js";
 import type { ArticleIntake } from "./intake.js";
-import { IntakeStoreError, type IntakeChannel, type IntakeSource } from "./intake-store.js";
+import { IntakeStoreError, type IntakeChannel } from "./intake-store.js";
+import type { IntakeAnswer, ReadAllowance } from "./intake-view.js";
 import { RETENTION_CLASSES, type RetentionClass } from "./retention.js";
 
 /**
@@ -32,20 +34,80 @@ import { RETENTION_CLASSES, type RetentionClass } from "./retention.js";
  * that fetched inline would hold an HTTP connection open for however long a
  * hostile server felt like taking.
  *
+ * ## What it answers with is a {@link Reading}, never the row
+ *
+ * `syl-r1t`. Both operations used to serve `IntakeSource` straight out of the
+ * store, which was fine while the only callers were the Share Extension and a
+ * test. `read_this` changed the audience: the answer now lands in a turn that
+ * holds Adjutant's MCP tools and Syl's own credential, and the row carries the
+ * page's own `<title>` — raw response bytes, lifted out of the document with no
+ * model and no gate in between.
+ *
+ * So the projection in `intake-view.ts` stands between the store and every
+ * caller of these two routes rather than only in front of her. One shape for
+ * everyone: two shapes for two audiences is how the safe one stops being the
+ * one that gets maintained.
+ *
  * ## The response is not a contract type
  *
- * `shared/openapi.yaml` has no intake operation yet — the contract is another
- * lane's this wave — so this serves the store's own shape inside the standard
- * envelope. Adding the operation to the spec is the follow-up; the envelope
- * means a client that meets this route before the spec catches up still gets
- * something it can parse.
+ * `shared/openapi.yaml` has no intake operation, and both routes are named in
+ * `UNDECLARED` in `contract-conformance.test.ts` so the omission is visible
+ * rather than silent. This serves {@link IntakeAnswer} inside the standard
+ * envelope, so a client that meets these routes before the spec catches up
+ * still gets something it can parse.
  */
 
 /** How long a submitted URL may be. Longer than any real article link. */
 const MAX_URL_LENGTH = 2048;
 
+/**
+ * How many readings Syl may START in a day, on her own credential.
+ *
+ * **A ceiling rather than a quota**, the same shape as `SENDINGS_PER_DAY`: it
+ * is not a budget she should spend down, it is the number at which something
+ * has gone wrong. Reading is the first thing she can do that costs the
+ * Commander real time and real tokens without him having asked for anything —
+ * a heartbeat turn that decides to follow links, or a page that persuades her
+ * to follow more of them, spends his money in a loop nobody is watching.
+ *
+ * Ten rather than four. `SENDINGS_PER_DAY` bounds how often she may INTERRUPT
+ * him and four is generous for that; a reading interrupts nobody, so the
+ * number only has to be small enough to bound a runaway and large enough for a
+ * real afternoon's research.
+ *
+ * **Visible, not silent.** Every answer carries {@link ReadAllowance}, so she
+ * knows where she stands before she hits it rather than discovering the wall.
+ * That is the `because` rule applied to spending, and the same call
+ * `render_me` makes with `spent`.
+ */
+export const READS_PER_DAY = 10;
+
+/**
+ * The window the ceiling is counted over.
+ *
+ * Rolling, and deliberately not a local day. A local midnight would let twenty
+ * readings start in two minutes and still be two lawful days, which is exactly
+ * the runaway the number exists to bound. `SENDINGS_PER_DAY` uses his local day
+ * because *he* experiences the day; spending has no midnight.
+ */
+export const READ_WINDOW_HOURS = 24;
+
 /** The ways a link can arrive. */
 const CHANNELS: readonly IntakeChannel[] = ["link", "email", "share"];
+
+/**
+ * Which credential asked for this, as the row records it.
+ *
+ * See {@link SYL_HERSELF} for why this is not `principal.id`. Deliberately keyed
+ * on the SCOPE and not on the channel: the channel is a field in the request
+ * body, so counting over it would let a caller reset its own ceiling by
+ * relabelling its submissions, and it defaults to `link` for a bare POST from
+ * his phone as much as for one of hers.
+ */
+function requesterOf(request: Request): string {
+  if (request.auth?.key.scope === "agent") return SYL_HERSELF;
+  return request.auth?.principal.id ?? "unknown";
+}
 
 /** Read the optional `channel` field, defaulting to a direct submission. */
 function channelOf(body: Record<string, unknown>): IntakeChannel {
@@ -125,11 +187,64 @@ export interface IntakeRouterOptions {
   readonly intake: ArticleIntake;
   readonly idempotency: IdempotencyStore;
   readonly authenticate: RequestHandler;
+  readonly clock?: Clock;
+  /** Readings one agent credential may start per window. See {@link READS_PER_DAY}. */
+  readonly allowance?: number;
 }
+
+/**
+ * Who a reading Syl started herself is recorded as having come from.
+ *
+ * **Not the principal, and it cannot be.** Every credential in this service
+ * authenticates to the same one: `device`, `admin` and `agent` all resolve to
+ * `THE_COMMANDER`, because there is one person here and the key says which of
+ * his things is calling, not who is calling. So `principal.id` is a constant,
+ * and a count taken over it cannot tell a reading Syl started from a link he
+ * shared from his phone.
+ *
+ * Left that way the ceiling fires at exactly the person it was written not to
+ * touch: an afternoon of him sharing articles spends her allowance, and the
+ * next thing he asks her to read comes back refused with a sentence about her
+ * own runaway.
+ *
+ * Recording the CREDENTIAL rather than the principal is also the more truthful
+ * answer to "who asked" — `intake-email.ts` already stores a sender's address
+ * here, so this column has never been a principal id. Rows written before this
+ * carry the principal, which reads correctly as "not one of hers" and leaves
+ * her ceiling unspent rather than retroactively consumed.
+ *
+ * A fixed string rather than the key's id: a rotated agent key is the same Syl,
+ * and a ceiling that reset itself whenever the credential was re-minted would
+ * be a ceiling with a documented way around it.
+ */
+export const SYL_HERSELF = "syl:agent";
 
 export function createIntakeRouter(options: IntakeRouterOptions): Router {
   const { intake, idempotency, authenticate } = options;
+  const clock = options.clock ?? systemClock;
+  const ceiling = options.allowance ?? READS_PER_DAY;
   const router = Router();
+
+  /**
+   * Where a caller stands against the ceiling.
+   *
+   * **Only her.** The ceiling exists because a program can start reading in a
+   * loop; the Commander sharing a link from his phone is a person doing one
+   * thing at a time, and metering him would be the service second-guessing its
+   * owner. So a `device` or `admin` key gets `allowance: null`, which says
+   * plainly that there is no ceiling rather than pretending to a large one.
+   */
+  function allowanceFor(requestedBy: string, scope: string | undefined): ReadAllowance {
+    if (scope !== "agent") {
+      return { used: 0, allowance: null, windowHours: READ_WINDOW_HOURS };
+    }
+    const since = instant(clock() - READ_WINDOW_HOURS * 60 * 60_000);
+    return {
+      used: intake.readsSince(requestedBy, since),
+      allowance: ceiling,
+      windowHours: READ_WINDOW_HOURS,
+    };
+  }
 
   router.use("/intake", authenticate);
 
@@ -140,12 +255,28 @@ export function createIntakeRouter(options: IntakeRouterOptions): Router {
     const channel = channelOf(body);
     const retention = retentionOf(body);
 
-    // Who asked, from the verified principal rather than from the body. It is
+    // Who asked, from the verified credential rather than from the body. It is
     // an authorisation fact and never a trust fact: a link the Commander sent
     // himself is exactly as hostile as one Syl found.
-    const requestedBy = request.auth?.principal.id ?? "unknown";
+    const scope = request.auth?.key.scope;
+    const requestedBy = requesterOf(request);
 
-    const outcome = runIdempotent<IntakeSource>(idempotency, request, () => {
+    const outcome = runIdempotent<IntakeAnswer>(idempotency, request, () => {
+      const reads = allowanceFor(requestedBy, scope);
+      if (reads.allowance !== null && reads.used >= reads.allowance) {
+        // Refused BEFORE the row is created, so a run against the ceiling
+        // cannot walk it up one submission at a time. The sentence is written
+        // to be repeated to him: she has to be able to say what stopped, and
+        // "I have read ten things today already" is an answer he can overrule.
+        throw new ApiFailure(
+          "RATE_LIMITED",
+          `Syl has started ${String(reads.used)} readings in the last ${String(reads.windowHours)} ` +
+            `hours, which is her ceiling. She has read nothing more. Send the link yourself if it ` +
+            `cannot wait.`,
+          { details: { used: reads.used, allowance: reads.allowance } },
+        );
+      }
+
       let result;
       try {
         result = intake.submit({
@@ -163,21 +294,39 @@ export function createIntakeRouter(options: IntakeRouterOptions): Router {
         throw error;
       }
 
+      const reading = intake.reading(result.source.id);
+      if (reading === null) {
+        throw new ApiFailure("INTERNAL", "Syl recorded that link and could not read it back.");
+      }
+
       // 200 rather than 201 when the link was already known. Submitting the
       // same article from the Share Extension and again from a forwarded email
-      // is one source, and the status is how the caller learns which happened.
-      return { status: result.created ? 201 : 200, data: result.source };
+      // is one source, and the status is how the caller learns which happened
+      // — which is also how `read_this` tells "I have started" from "here is
+      // what it says", since asking twice is how she waits.
+      //
+      // A repeat costs nothing against the ceiling, and that is deliberate: it
+      // is the same reading, and charging for looking at it again would make
+      // asking whether it had finished the expensive part.
+      return {
+        status: result.created ? 201 : 200,
+        data: { reading, reads: allowanceFor(requestedBy, scope) },
+      };
     });
 
     sendIdempotent(response, outcome);
   });
 
   router.get("/intake/:sourceId", (request, response) => {
-    const source = intake.get(sourceIdOf(request.params["sourceId"]));
-    if (source === null) {
+    const reading = intake.reading(sourceIdOf(request.params["sourceId"]));
+    if (reading === null) {
       throw new ApiFailure("NOT_FOUND", "Syl has no intake source with that id.");
     }
-    sendOk(response, source);
+    const answer: IntakeAnswer = {
+      reading,
+      reads: allowanceFor(requesterOf(request), request.auth?.key.scope),
+    };
+    sendOk(response, answer);
   });
 
   return router;

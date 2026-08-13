@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { Job } from "@syl/shared";
 
+import { DEFAULT_QUIET_HOURS } from "../../src/config.js";
 import type { QuietHours } from "../../src/harness/schedule.js";
 import type { TurnResult } from "../../src/harness/session.js";
 import {
@@ -41,7 +42,15 @@ import { testDatabase } from "../helpers/service.js";
  */
 
 const TZ = "America/Chicago";
-const QUIET: QuietHours = { start: "22:00", end: "08:00" };
+
+/**
+ * His window, not a copy of it.
+ *
+ * The brief is composed inside his sleep and announced the minute it lifts, so
+ * these tests only mean anything against the window he actually keeps. A
+ * literal here would keep passing against yesterday's sleep after he moved it.
+ */
+const QUIET: QuietHours = DEFAULT_QUIET_HOURS.quiet;
 
 /** 06:45 CDT on Tuesday 11 August 2026 — the slot itself. */
 const AT_THE_SLOT = Date.UTC(2026, 7, 11, 11, 45);
@@ -302,8 +311,9 @@ describe("the prompt she is woken with", () => {
   });
 
   it("should say he is asleep, and when he will actually see it", () => {
-    // 06:45 is inside a 22:00-08:00 window. She should not be surprised that
-    // nothing arrives on his phone for another hour and a quarter.
+    // The slot is inside his window by construction — the brief is composed a
+    // lead ahead of the announcement, and the announcement is when the window
+    // lifts. She should not be surprised that nothing reaches his phone yet.
     const prompt = agendaPrompt(moment);
 
     expect(prompt.toLowerCase()).toMatch(/asleep|sleep/);

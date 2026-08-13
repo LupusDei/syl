@@ -72,6 +72,7 @@ struct HomeScreen: View {
         NavigationStack(path: $path) {
             HomeView(
                 snapshot: model.snapshot,
+                loadFailure: model.loadFailure,
                 presence: model.presence,
                 presenceIntensity: model.intensity,
                 now: model.now,

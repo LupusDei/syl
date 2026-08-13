@@ -26,6 +26,7 @@ import { SendingService } from "../../src/services/sending-service.js";
 import { SendingStore } from "../../src/services/sending-store.js";
 import { HealthSamples } from "../../src/health/samples.js";
 import { RenderVerdicts } from "../../src/render/verdicts.js";
+import { Wardrobe } from "../../src/render/wardrobe.js";
 import { RenderWatchStore } from "../../src/services/render-watch-store.js";
 import { SyncService } from "../../src/services/sync-service.js";
 import { TodoService } from "../../src/services/todo-service.js";
@@ -40,6 +41,7 @@ import {
   testKeys,
   testMemory,
   testRenders,
+  testStudio,
 } from "../helpers/service.js";
 
 /**
@@ -142,7 +144,8 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
     const todos = new TodoService({ db: db.handle, clock });
     const goals = new GoalService({ db: db.handle, clock });
     const sendings = new SendingStore({ db: db.handle, clock, attachments });
-    const renders = testRenders(clock);
+    const studio = testStudio();
+    const renders = testRenders(clock, studio);
     const chat = testChat(messages);
 
     running = await startTestApp(
@@ -158,7 +161,7 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         sync: new SyncService({
           db: db.handle,
           clock,
-          resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings }),
+          resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, sendings }),
         }),
         jobs,
         idempotency: new IdempotencyStore({ db: db.handle, clock }),
@@ -167,6 +170,8 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         attachments,
         // Cannot render, cannot reach Runway, spends nothing. See `testRenders`.
         renders,
+        // Over the same studio, exactly as `bootstrap` builds them.
+        wardrobe: new Wardrobe({ studio, clock }),
         sendings,
         composer: new SendingService({
           sendings,

@@ -361,6 +361,35 @@ export const AGENT_SURFACES: readonly AgentSurface[] = [
   { path: "/memory/remember", says: "her own memory, to add what she works out" },
   { path: "/renders", says: "her own renders" },
   { path: "/sendings", says: "the things she has sent him" },
+  // THE FIRST SURFACE THAT REACHES OFF THIS MACHINE — `syl-r1t`, and the entry
+  // on this list whose argument is least like the others'.
+  //
+  // Every entry above it touches rows in Syl's own database. This one causes a
+  // request to the open internet, chosen from a URL she was handed, which is
+  // the textbook definition of an SSRF sink — and she sits on a tailnet where
+  // his Mac, Adjutant's backend and her own API are all reachable with no
+  // public exposure.
+  //
+  // It is on the list anyway, and three things are why:
+  //
+  // - **The destination is vetted by `connections/address-guard.ts`, not by
+  //   this allowlist.** `safeFetch` refuses every non-public address, refuses
+  //   a redirect that changes host, and binds the address it validated to the
+  //   address it connects to so DNS cannot answer differently the second time.
+  //   Widening her reach here does not widen what a fetch can touch.
+  // - **What comes back never reaches a turn that can act.** The page is read
+  //   by `runReaderTurn` — no tools, no MCP, no memory, never resumed — and
+  //   what crosses back to her is a schema-validated extract. The row's own
+  //   `title` is raw response bytes and `intake-view.ts` has nowhere to put it.
+  // - **She cannot do it without saying why, and not without limit.** The verb
+  //   requires `because`, and `READS_PER_DAY` bounds what one credential may
+  //   set running in a day.
+  //
+  // What it does NOT open: this is the intake router and nothing else, matched
+  // on segment boundaries. It writes no row of his, has no path to `/auth`,
+  // and reaches him through no channel at all — a reading arrives only when he
+  // is already talking to her.
+  { path: "/intake", says: "pages he asks her to read" },
 ];
 
 export const AGENT_SURFACE: readonly string[] = AGENT_SURFACES.map((surface) => surface.path);

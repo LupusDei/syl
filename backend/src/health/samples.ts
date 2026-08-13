@@ -15,7 +15,7 @@ import {
  *
  * `syl-t9tj.2.2`. This is the bottom layer of the three the feature is built on
  * — observations, derivations, conclusions — and the only one that accumulates.
- * Read `0031_health_observations.sql` first: it carries the argument for why
+ * Read `0032_health_observations.sql` first: it carries the argument for why
  * nothing here can reach `memory_nodes`, and why constraint 6 does not bind
  * these rows.
  *
@@ -335,7 +335,7 @@ export class HealthSamples {
       `INSERT INTO health_samples (${SAMPLE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT (type, started_at, ended_at, source) DO NOTHING`,
     );
-    // Never backwards. See `0031_health_observations.sql`.
+    // Never backwards. See `0032_health_observations.sql`.
     const advance = this.#db.prepare(
       `INSERT INTO health_watermarks (type, through, updated_at) VALUES (?, ?, ?)
          ON CONFLICT (type) DO UPDATE SET through = excluded.through, updated_at = excluded.updated_at

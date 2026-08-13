@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ArticleIntake, RETRY_DELAY_MS, type IntakeScheduler } from "../../src/connections/intake.js";
+import {
+  ArticleIntake,
+  RETRY_DELAY_MS,
+  safeReason,
+  type IntakeScheduler,
+} from "../../src/connections/intake.js";
 import { FetchRefused, type FetchResult } from "../../src/connections/fetch.js";
 import type { IntakeStore } from "../../src/connections/intake-store.js";
 import { fixedClock } from "../../src/services/clock.js";
@@ -98,11 +103,23 @@ function refusing(error: unknown) {
   };
 }
 
+/**
+ * Detail that was too dangerous to store, in the order it was quarantined.
+ *
+ * `syl-r1t`. A failure's message is read back by anything that asks about the
+ * source, and since `read_this` that includes a turn holding MCP tools — so
+ * `safeReason` decides what the row may keep and the rest comes here instead.
+ * Reset per `intake()`.
+ */
+let quarantined: string[] = [];
+
 function intake(options: Partial<ConstructorParameters<typeof ArticleIntake>[0]> = {}): ArticleIntake {
+  quarantined = [];
   return new ArticleIntake({
     store,
     clock: fixedClock(TEST_NOW),
     fetch: serving(HOSTILE_ARTICLE),
+    onQuarantined: (detail) => quarantined.push(detail),
     ...options,
   });
 }
@@ -163,8 +180,18 @@ describe("the boundary", () => {
     const finished = await pipeline.drain(source.id);
 
     expect(finished.stage).toBe("failed");
-    expect(finished.failure).toMatch(/tools available|incapable of acting/i);
     expect(store.extracts(source.id)).toEqual([]);
+    // The REASON is quarantined rather than stored — `syl-r1t`. It used to be
+    // matched here as `/tools available|incapable of acting/`, and that is the
+    // right thing to check; it is simply no longer on the row. Every reader
+    // error is now recorded as one sentence, because the two others that reach
+    // this catch quote text an attacker wrote: `ReaderOutputError` carries the
+    // reply's first 120 characters and the schema gate names the keys it did
+    // not expect. Telling a capability failure apart from those, on the row, is
+    // exactly the distinction that would let a page choose which sentence Syl
+    // reads back to herself.
+    expect(finished.failure).toBe(safeReason(new Error("anything at all")));
+    expect(quarantined.join("\n")).toMatch(/tools available|incapable of acting/i);
   });
 
   it("should discard a reply that does not match the schema", async () => {
@@ -393,8 +420,15 @@ describe("failures", () => {
     const { source } = pipeline.submit(LINK);
     const finished = await pipeline.drain(source.id);
 
+    // The property is that the source STAYS at the step it failed, so the same
+    // graft runs again once the graph is back rather than the source dying.
     expect(finished.stage).toBe("graft");
-    expect(finished.failure).toMatch(/not accepting writes/);
+    // The sink's own message is quarantined too, and that is a judgement rather
+    // than an oversight: `GraftSink` is an interface somebody else implements,
+    // and the natural way to write its errors is to name what it could not
+    // graft — which is extract text, written under a document's influence. The
+    // detail still reaches the operator.
+    expect(quarantined.join("\n")).toMatch(/not accepting writes/);
   });
 
   it("should stop rather than loop when drain runs out of steps", async () => {

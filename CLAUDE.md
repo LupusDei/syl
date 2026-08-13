@@ -100,7 +100,10 @@ frontend/                         web admin — Vite + React (npm workspace)
 shared/                           THE CONTRACT — OpenAPI, generated types, fixtures (npm workspace)
 ios/                              SylKit (SPM) + the app target — Swift, not a workspace
 tsconfig.base.json                strict + noUncheckedIndexedAccess; every workspace extends it
-vitest.shared.ts                  base vitest config; every workspace merges it
+vitest.shared.ts                  base vitest config, the heavy-file set, and the two timeout budgets
+vitest.config.ts                  the LIGHT pass — every test EXCEPT the ones that spawn
+vitest.heavy.config.ts            the HEAVY pass — acceptance + integration, serial, alone
+scripts/run-tests.mjs             both passes, one command; there is no way to run one
 SOUL.md                           Syl's standing orders, appended to the system prompt
 docs/CONTEXT.md                   exploration record and decision log
 ```
@@ -182,13 +185,28 @@ keeping them testable without spawning a process is worth the seam.
 All of these run from the repo root and cover every workspace.
 
 ```sh
-npm test          # every workspace's unit tests, one pass
+npm test          # every workspace's tests, in TWO passes — see below
 npm run typecheck # root tooling + tsc --noEmit per workspace
 npm run verify    # typecheck + test — run this before pushing
-npm test -w backend             # one workspace, focused
+npm test -w backend             # one workspace, focused (one pass, everything)
 npm run ping -- "your prompt"   # live end-to-end check
 npm run deploy -- --dry-run     # what a deploy would do, touching nothing
 ```
+
+**The suite runs in two passes, and both of them are the gate.**
+`scripts/run-tests.mjs` runs the cheap majority first, then everything under
+`tests/acceptance/` and `tests/integration/` alone in a second vitest process.
+Vitest dispatches its pools with `Promise.all`, so the old `poolMatchGlobs`
+split stopped those files starving *each other* and did nothing about the three
+worker threads and five thousand unit tests beside them: six files were timing
+out at 20 000ms under fleet load, and the test that stops an unattended turn
+waking the Commander at 3am passed with **282ms of headroom**.
+
+There is no way to run one pass. `npm run verify` — and therefore
+`npm run deploy` — runs both, and `check-expected-failures.mjs` enumerates the
+test files on disk and fails if any of them was run by neither. If you run a
+heavy file by path, pass `--config vitest.heavy.config.ts`; the root config
+excludes them, so a bare `vitest run <path>` matches nothing.
 
 **Adding a workspace**: create `<name>/package.json` and a `<name>/tsconfig.json`
 extending `tsconfig.base.json`, then add `<name>` to `workspaces` in the root
@@ -339,10 +357,24 @@ to add is about *additional* surfaces and blocks nothing.
     `SylAgent.busy()` and stands aside rather than queueing behind him or ahead
     of the morning brief (`OUTRANKS_THE_HOUR`).
 - **Quiet hours bound what may REACH him, never what may run.** The dream at
-  03:00 and the brief at 06:45 both run inside his default 22:00–08:00 window on
+  03:00 and the brief at 06:45 both run inside his 23:00–07:00 window on
   purpose, and he asked to keep the overnight hours: *"I think she should be
   able to file things over night."* Anything that starts reading the window as
   "do not run" silently takes those with it.
+- **There is ONE quiet window and it lives in `backend/src/config.ts`.** The
+  value, the zone, and the `SYL_QUIET_*` fallbacks are all that one constant;
+  `presence.ts`, `harness/cli/when.ts` and `tools/time.ts` import it. It ends at
+  **07:00**, and `isWithinQuietHours` is start-inclusive and **end-exclusive**,
+  which is what lets the 07:00 announcement of the 06:45 brief go out at 07:00
+  instead of waiting a cycle — an 08:00 end held his brief for seventy-five
+  minutes on 2026-08-12. Anything defined *relative to* the window is computed
+  from it (`PART_OF_DAY.morning` is its end; `night` is an hour before its
+  start), never written down beside it: there were three windows in the tree,
+  two under the same exported name with different values, plus a constant
+  restating the end with a comment asserting they agreed.
+  `tests/unit/quiet-window.test.ts` scans `backend/src` and fails if a second
+  window literal appears anywhere. A module may *use* the window; a module that
+  writes one down is declaring a second one.
 - **An unattended turn must never be recordable as words the Commander said.**
   `harness/urgency.ts` grants the quiet-hours bypass only for a phrase he
   actually wrote, checked against a file `index.ts` writes from a turn's prompt

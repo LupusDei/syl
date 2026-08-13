@@ -34,6 +34,12 @@ import SylKit
 /// dashboard failure mode, and it makes a quiet day look like an empty one.
 struct HomeView: View {
     var snapshot: HomeSnapshot
+    /// Why the day could not be read, if it could not. `nil` is the only state in which
+    /// an empty spine may be called a clear day — see ``couldNotRead(_:)`` and `syl-019`.
+    ///
+    /// Defaulted so every existing caller keeps compiling into the succeeded case, which
+    /// is what they all meant; only ``HomeScreen`` has a failure to pass.
+    var loadFailure: String?
     var presence: PresenceState
     var presenceIntensity: Double
     var now: Date
@@ -340,7 +346,13 @@ struct HomeView: View {
                 NoteCard(note: note)
             }
 
-            if snapshot.moments.isEmpty {
+            if let failure = loadFailure {
+                // BEFORE ANY READING OF THE SPINE. An empty spine means "nothing is due"
+                // only when the read that produced it succeeded; if it failed, the spine
+                // is not empty, it is UNKNOWN, and those must never render the same
+                // (`syl-019`).
+                couldNotRead(failure)
+            } else if snapshot.moments.isEmpty {
                 clearDay
             } else {
                 DaySpine(
@@ -366,6 +378,36 @@ struct HomeView: View {
         .padding(.horizontal, SylTheme.Metric.gutter)
         .padding(.top, SylTheme.Metric.gutter)
         .padding(.bottom, SylTheme.Metric.chapter)
+    }
+
+    /// The day could not be read — which is NOT the same as the day being clear.
+    ///
+    /// She says she does not know, rather than that there is nothing, because those are
+    /// different facts and only one of them is safe to be wrong about. Being told his
+    /// day is clear when it is not is how he misses something; being told she cannot see
+    /// it costs him one glance at the list.
+    ///
+    /// The error text is shown, deliberately and unprettified. This screen is currently
+    /// the only place the failure is observable at all, so hiding the detail behind a
+    /// friendly sentence would remove the only evidence anyone has.
+    private func couldNotRead(_ failure: String) -> some View {
+        VStack(alignment: .leading, spacing: SylTheme.Metric.snug) {
+            Text("I cannot see your day")
+                .font(SylTheme.Typeface.title)
+                .foregroundStyle(SylTheme.Colour.ink)
+
+            Text("Something went wrong reading it, so I will not tell you it is clear — I do not know that. Your list below is intact.")
+                .font(SylTheme.Typeface.detail)
+                .foregroundStyle(SylTheme.Colour.inkSoft)
+
+            Text(failure)
+                .font(SylTheme.Typeface.detail.monospaced())
+                .foregroundStyle(SylTheme.Colour.inkSoft)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+        .accessibilityElement(children: .combine)
     }
 
     /// Nothing left. Still the best state the screen has — she simply has the screen

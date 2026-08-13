@@ -218,6 +218,36 @@ public enum JSONValue: Codable, Hashable, Sendable {
 
 // MARK: - Coding helpers
 
+/// Whether the decode now running is reading **this device's own stored history**
+/// rather than the wire.
+///
+/// **`syl-021`, and it cost the Commander his entire Today screen.** One `Reminder` type
+/// decodes two different things and only one of them is a contract. From the server a
+/// missing key is a real violation, and `decodeRequiredNullable` throwing is how we
+/// catch the service quietly dropping a field. From our own SQLite blob it is not a
+/// violation at all: the row was written before the field existed, which is a fact about
+/// *when it was written*, not a defect. Enforcing the wire's rule against stored history
+/// asks the past to have known about the future, and nothing can comply.
+///
+/// What happened: `because` was added to reminders; every reminder already on his phone
+/// lacked the key; `upcomingReminders` decodes its rows together, so one throw took the
+/// whole day with it — and the screen told him the day was clear. **`because` was not
+/// special. Every field ever added to a stored type does this again**, which is why the
+/// remedy is a scope rather than a patch to one field.
+///
+/// A task-local rather than a parameter because there are 59 `decodeRequiredNullable`
+/// call sites across the models, and threading a flag through every one of them is 59
+/// chances to miss the one that matters. `withValue` is scoped to the synchronous decode
+/// inside it, so nothing outside can observe the relaxed rule.
+public enum StoredPayloadDecoding {
+    @TaskLocal public static var isActive = false
+
+    /// Runs `body` with the stored-history rule in force.
+    public static func reading<T>(_ body: () throws -> T) rethrows -> T {
+        try $isActive.withValue(true) { try body() }
+    }
+}
+
 extension KeyedDecodingContainer {
     /// Decodes a field the contract marks **required and nullable**.
     ///
@@ -226,8 +256,15 @@ extension KeyedDecodingContainer {
     /// stopped sending a field would decode cleanly into `nil` and the app would
     /// quietly render as though the field were null. The key must be there; `null`
     /// is a legitimate value and an omission is a contract violation.
+    ///
+    /// **Except when reading a payload this device wrote itself** — see
+    /// ``StoredPayloadDecoding``. There an absent key means the row predates the field,
+    /// which is history rather than a broken promise. The value decodes to nil and is
+    /// written back with an explicit null next time the row is stored, so the gap closes
+    /// itself as rows refresh.
     func decodeRequiredNullable<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> T? {
         guard contains(key) else {
+            if StoredPayloadDecoding.isActive { return nil }
             throw DecodingError.keyNotFound(
                 key,
                 DecodingError.Context(

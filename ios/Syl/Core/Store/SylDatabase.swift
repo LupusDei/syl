@@ -352,6 +352,22 @@ struct SylDatabase: Sendable {
             )
         }
 
+        // `syl-020`. The same recovery goals needed, for the same reason, arrived at by
+        // a different road — see ``SyncEngine/backfillTodos(into:)``.
+        //
+        // Goals were skipped because `.goal` sat in an ignore list. To-dos were never
+        // ignored; they were STARVED. The change feed is 97.9% `job` and `run` rows the
+        // device discards, growing by thousands an hour against a phone that pages 500
+        // changes a run — so the cursor crawls through telemetry and his 23 to-dos sit
+        // behind tens of thousands of rows it never reaches. Filtering the feed fixes
+        // that from now on and, exactly as with goals, cannot recover what the cursor
+        // has already passed.
+        migrator.registerMigration("v7-the-todos-the-cursor-never-reached") { db in
+            try db.alter(table: "syncState") { table in
+                table.add(column: "todosBackfilledAt", .datetime)
+            }
+        }
+
         return migrator
     }
 

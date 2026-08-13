@@ -1,4 +1,4 @@
--- 0031_health_observations.sql — the observation store, and the column that is
+-- 0032_health_observations.sql — the observation store, and the column that is
 -- deliberately not here.
 --
 -- `syl-t9tj.2.1`. Three tables: the measurements themselves, where each type's

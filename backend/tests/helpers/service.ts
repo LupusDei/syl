@@ -20,7 +20,8 @@ import { WorkingMemory } from "../../src/memory/working.js";
 import { HealthSamples } from "../../src/health/samples.js";
 import { RenderVerdicts } from "../../src/render/verdicts.js";
 import { RenderService, type RenderRecord } from "../../src/render/render-service.js";
-import { studioAt } from "../../src/render/studio.js";
+import { studioAt, type Studio } from "../../src/render/studio.js";
+import { Wardrobe } from "../../src/render/wardrobe.js";
 import type { MemoryViews } from "../../src/routes/memory.js";
 import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api-key-service.js";
 import { AttachmentStore } from "../../src/services/attachment-store.js";
@@ -314,12 +315,24 @@ export function testMemory(
  * uses one: a unit test must never write into the directory the running
  * service keeps the Commander's own media in.
  */
-export function testRenders(clock: Clock = fixedClock(TEST_NOW)): RenderService {
-  return new RenderService({
-    studio: studioAt(mkdtempSync(join(tmpdir(), "syl-test-studio-"))),
-    backend: null,
-    clock,
-  });
+export function testRenders(
+  clock: Clock = fixedClock(TEST_NOW),
+  studio: Studio = testStudio(),
+): RenderService {
+  return new RenderService({ studio, backend: null, clock });
+}
+
+/**
+ * A studio nothing else shares, so a caller can hand the same one to the
+ * render service and the wardrobe.
+ *
+ * They have to agree about which directory her pictures are in — the wardrobe
+ * decides which face a render is anchored on, and a second studio would be a
+ * second answer. Exported so a test that needs both can build them over one
+ * directory rather than discovering the split when an adoption does not show up.
+ */
+export function testStudio(): Studio {
+  return studioAt(mkdtempSync(join(tmpdir(), "syl-test-studio-")));
 }
 
 /**
@@ -338,8 +351,10 @@ export function testReadyRenders(): RenderSource {
   const record = (name: string): RenderRecord => ({
     name: name === "latest" ? "syl-20260811t090000z-close" : name,
     status: "ready",
-    // Unanchored: these fixtures predate the closing-frame anchor.
-    anchor: null,
+    // A close portrait, so her likeness is pinned and the record says which
+    // picture pins it. The flag is derived from exactly that pair, so a fixture
+    // that claimed one without the other would be the shape of `syl-63v`.
+    anchor: "renders/reference.png",
     renderedAt: "2026-08-11T09:02:00.000Z",
     taskId: "task-test",
     model: "seedance2",
@@ -348,6 +363,26 @@ export function testReadyRenders(): RenderSource {
     reference: "reference.png",
     framing: "close_portrait",
     prompt: "…",
+    parts: [
+      {
+        taskId: "task-test",
+        prompt: "…",
+        duration: 8,
+        first: "renders/opening-ribbon.png",
+        last: "renders/reference.png",
+        video: "/studio/videos/parts/syl-20260811t090000z-close-1.mp4",
+        credits: 60,
+      },
+      {
+        taskId: "task-test-2",
+        prompt: "…",
+        duration: 7,
+        first: "renders/parts/syl-20260811t090000z-close-1-last.png",
+        last: "renders/opening-ribbon.png",
+        video: "/studio/videos/parts/syl-20260811t090000z-close-2.mp4",
+        credits: 60,
+      },
+    ],
     scene: "…",
     holdsLikeness: true,
     because: "A render the suite can send from.",
@@ -379,6 +414,7 @@ export function testDeps(db: SylDatabase): {
   readonly renders: RenderService;
   readonly renderVerdicts: RenderVerdicts;
   readonly health: HealthSamples;
+  readonly wardrobe: Wardrobe;
   readonly sendings: SendingStore;
   readonly composer: SendingService;
   readonly renderWatches: RenderWatchStore;
@@ -402,7 +438,8 @@ export function testDeps(db: SylDatabase): {
   const goals = new GoalService({ db: db.handle, clock });
   const jobs = new JobStore({ db: db.handle, clock });
   const memory = testMemory(db, clock);
-  const renders = testRenders(clock);
+  const studio = testStudio();
+  const renders = testRenders(clock, studio);
   // Hoisted rather than inlined below: the composer publishes her words
   // through this same object, exactly as production does.
   const chat = testChat(messages);
@@ -422,7 +459,7 @@ export function testDeps(db: SylDatabase): {
     sync: new SyncService({
       db: db.handle,
       clock,
-      resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings }),
+      resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, sendings }),
     }),
     jobs,
     idempotency: new IdempotencyStore({ db: db.handle, clock }),
@@ -444,6 +481,10 @@ export function testDeps(db: SylDatabase): {
     renderVerdicts: new RenderVerdicts({ db: db.handle, clock }),
     // Real, against the same database. A plain table with no backend to reach.
     health: new HealthSamples({ db: db.handle, clock }),
+    // Over the SAME studio as `renders`, exactly as `bootstrap` builds them.
+    // Two studios would mean the face a render anchors on and the face the
+    // wardrobe route calls current are answered from two directories.
+    wardrobe: new Wardrobe({ studio, clock }),
     sendings,
     // Composes for real, against the same stores — but its compressor refuses
     // rather than shelling out, so no test needs ffmpeg and none decodes a file

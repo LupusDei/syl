@@ -877,13 +877,13 @@ struct LocalStore: Sendable {
         case .reminder: return "reminder"
         case .todo: return "todo"
         case .goal: return "goal"
-        // **`.sending` is nil on purpose, and it is not the same "nil" as the four
+        // **`.sending` is nil on purpose, and it is not the same "nil" as the two
         // below.** Those are resources the phone does not keep. A sending it does keep —
         // this is the delete path, and a sending is never deleted, by the service or by
         // anything here. Naming the table would make acceptance item 6 true only for as
         // long as no `op: "delete"` ever arrived for one.
         case .sending: return nil
-        case .device, .delivery, .job, .run: return nil
+        case .device, .delivery: return nil
         }
     }
 
@@ -921,6 +921,22 @@ struct LocalStore: Sendable {
             try SyncStateRecord().insert(db, onConflict: .ignore)
             try db.execute(
                 sql: "UPDATE syncState SET goalsBackfilledAt = ? WHERE id = ?",
+                arguments: [instant, SyncStateRecord.singletonID]
+            )
+        }
+    }
+
+    /// Records that the one-time to-do recovery has run. `syl-020`.
+    ///
+    /// Targeted UPDATE for the reason `setCursor` states — this row has several writers
+    /// and a whole-row write would roll one of them back. Writing the whole record here
+    /// would be worse than usual: the column next to it is the sync cursor, and rolling
+    /// THAT back would re-page thousands of rows.
+    func markTodosBackfilled(at instant: Date) throws {
+        try database.queue.write { db in
+            try SyncStateRecord().insert(db, onConflict: .ignore)
+            try db.execute(
+                sql: "UPDATE syncState SET todosBackfilledAt = ? WHERE id = ?",
                 arguments: [instant, SyncStateRecord.singletonID]
             )
         }

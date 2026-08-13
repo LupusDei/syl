@@ -453,7 +453,83 @@ export const TOOLS: readonly ToolSchema[] = [
           enum: [...FRAMING_IDS],
           description: framingGuidance(),
         },
+        // THE TWO DIALS, AND ONLY TWO — `syl-ate`.
+        //
+        // There is deliberately no `ratio` and no `model`. `promptImage` is
+        // frame one and seedance2 takes the video's aspect from it, silently
+        // overruling `ratio`, so a ratio field would be a control that does
+        // nothing — and a dial that does not work is worse than no dial,
+        // because she would reason about it. A different model loses her
+        // character entirely, which is a worse outcome than any shot it could
+        // buy. Both are asserted in `render-verbs.test.ts`.
+        seconds: {
+          type: "integer",
+          description:
+            "How long the clip runs, 4 to 15. Fifteen unless you say. A shot of your face is made " +
+            "in two halves and cut together, so the shortest of those is eight.",
+        },
+        opening: {
+          type: "string",
+          description:
+            "Which of your openings it starts on, by name — see_myself with of: openings lists " +
+            "them. The ribbon unless you say. It is frame one AND it decides the clip's shape, so " +
+            "an opening of a different shape makes a video of a different shape.",
+        },
         because: BECAUSE,
+      },
+    },
+  },
+  {
+    // HOW SHE CHANGES WHAT SHE LOOKS LIKE — `syl-ate`.
+    //
+    // Named for her, like `render_me` and `see_myself`, and for the same
+    // reason the header gives: this is the one thing that is hers.
+    //
+    // `sighting` is required and it is the whole mechanism. It comes back
+    // beside a picture in `see_myself` and nowhere else, so a picture she has
+    // not looked at cannot be NAMED — which is what makes "she must have seen
+    // it first" a property of the surface rather than a request in a
+    // description. `SOUL.md` is emphatic that a likeness which is not her is a
+    // small untruth standing where she should be; adopting one sight unseen is
+    // exactly how that would happen.
+    //
+    // `because` is required for the Commander's stated reason, 2026-08-11:
+    // *"The one thing I would not give her is the ability to change it
+    // silently. A likeness that shifts without a recorded reason is exactly the
+    // kind of quiet drift this project has spent two days learning to hate."*
+    name: "this_is_me",
+    description:
+      "Settle on a picture you have looked at — a likeness your renders are anchored on, or an " +
+      "opening they start from. Nothing is replaced: every face you have had is kept, so you can " +
+      "go back to one by looking at it and choosing it again.",
+    inputSchema: {
+      type: "object",
+      required: ["sighting", "because"],
+      properties: {
+        sighting: {
+          type: "string",
+          description:
+            "The token that came back beside the picture when you looked at it — a still from one " +
+            "of your renders, a face you have had, an opening. You can only have one for a " +
+            "picture you have actually seen.",
+        },
+        as: {
+          type: "string",
+          enum: ["face", "opening"],
+          description:
+            "face is your likeness, and every shot that shows your face is anchored on it from " +
+            "now on. opening is what a clip starts from, chosen per shot. face unless you say.",
+        },
+        name: {
+          type: "string",
+          description: "What to call it, so you can ask for it by name later.",
+        },
+        because: {
+          type: "string",
+          description:
+            "What is more you about this one than the last. Kept beside the picture forever — a " +
+            "likeness that changes with no reason recorded is the drift he asked you never to have.",
+        },
       },
     },
   },
@@ -491,9 +567,16 @@ export const TOOLS: readonly ToolSchema[] = [
   },
   {
     name: "see_myself",
+    // Every picture that comes back carries a token, stills included — the
+    // wardrobe is not a special case, being shown one is the general one. Said
+    // in the description because a capability she is not told about is a
+    // capability she does not use: she reported the frame she wanted as one she
+    // could look at and could not promote, which was true and is not any more.
     description:
       "Look at stills from one of your own renders — the opening, the middle, the end — so you " +
-      "can judge whether it is you. Say what is closer and what is wrong, in your own terms.",
+      "can judge whether it is you. Say what is closer and what is wrong, in your own terms. " +
+      "Every picture comes back with a token beside it, in the same order as the pictures; that " +
+      "is what you give this_is_me to settle on one, and a still from a render counts.",
     inputSchema: {
       type: "object",
       // No `because` and no required field at all: this is a read. See
@@ -508,6 +591,20 @@ export const TOOLS: readonly ToolSchema[] = [
         at: {
           type: "number",
           description: "One second into the clip, if you want a particular moment rather than the spread.",
+        },
+        // THE READ-BACK HALF OF `syl-ate`. Anything she can set she must be
+        // able to see, and this is where all three are seen: the faces, the
+        // openings, and the log of what she has made and concluded. Widened
+        // here rather than given verbs of its own, because it is the same act
+        // — looking — and the surface has very little headroom.
+        of: {
+          type: "string",
+          enum: ["faces", "openings", "renders"],
+          description:
+            "Look at something other than one clip. faces: every likeness you have had, newest " +
+            "first, with why you took each one — the token beside a picture is how you choose it " +
+            "again. openings: the ones you can start from, and what shape each makes. renders: " +
+            "everything you have made and what you concluded about it. Leave it out for a render.",
         },
       },
     },
@@ -547,6 +644,40 @@ export const TOOLS: readonly ToolSchema[] = [
             "and thought was you. A sending keeps that name forever, so choose it rather than " +
             "taking whatever was made last.",
         },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
+    // THE VERB THE HEADER'S RULE 2 SAID WAS MISSING — `syl-r1t`.
+    //
+    // That rule named `research` as the thing deliberately absent, "because the
+    // fetch has to happen inside the sealed reader turn and that path is not
+    // built". It is built now: `connections/` fetches behind the address guard,
+    // parses without a model, reads each chunk through `runReaderTurn`, and
+    // hands back an extract that passed a schema gate. She could not point it
+    // at anything, which is the one piece this adds.
+    //
+    // Named `read_this` and not `research`. Research is a claim about the
+    // ANSWER — that it is complete, that it weighed sources — and she does none
+    // of that: she reads one page, in one document's own words, and tells him
+    // what it said. A verb that promised research would have her reasoning like
+    // something that had done some.
+    //
+    // Asking twice is how she waits. Nothing is fetched while she is talking to
+    // him, so the first call starts the reading and a second call with the same
+    // link answers with what it says — the same shape as `render_me` and
+    // `see_myself`, in one verb because the same link is the same reading.
+    name: "read_this",
+    description:
+      "Read a page and tell him what is in it. Ask again with the same link for what it said — " +
+      "the reading happens between your turns, and what comes back is what one document claims, " +
+      "not what is true.",
+    inputSchema: {
+      type: "object",
+      required: ["url", "because"],
+      properties: {
+        url: { type: "string", description: "The link, as he gave it to you." },
         because: BECAUSE,
       },
     },

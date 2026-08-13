@@ -5,10 +5,22 @@ import {
   isWithinQuietHours,
   localDate,
   nextDailyOccurrence,
+  shiftWallTime,
   type QuietHours,
 } from "../../src/harness/schedule.js";
 
 const TZ = "America/Chicago";
+
+/**
+ * An arbitrary window, and deliberately not the Commander's.
+ *
+ * Everything in this file tests the ALGEBRA — the wrap past midnight, the two
+ * daylight-saving edges, the exclusive end — against hand-computed instants.
+ * Deriving it from `DEFAULT_QUIET_HOURS` would make every expectation below
+ * move whenever he changes his sleep, and would test the setting rather than
+ * the function. His actual window, and the boundary his morning depends on,
+ * are asserted in `quiet-window.test.ts`.
+ */
 const QUIET: QuietHours = { start: "23:00", end: "08:00" };
 
 /**
@@ -168,5 +180,27 @@ describe("localDate", () => {
 
   it("should zero-pad, so the strings sort and compare as dates do", () => {
     expect(localDate(utc("2026-01-05T18:00:00Z"), TZ)).toBe("2026-01-05");
+  });
+});
+
+describe("shiftWallTime", () => {
+  it("should move a wall time by whole minutes in either direction", () => {
+    // The caller that matters: "an hour before quiet hours begin", so a
+    // convention derives from the window instead of restating a number.
+    expect(shiftWallTime("23:00", -60)).toBe("22:00");
+    expect(shiftWallTime("07:00", 90)).toBe("08:30");
+  });
+
+  it("should wrap past midnight in both directions rather than clamping", () => {
+    // Clamping to 00:00 would collapse two different times onto one, which is
+    // how a derived convention quietly stops tracking what it derives from.
+    expect(shiftWallTime("00:30", -60)).toBe("23:30");
+    expect(shiftWallTime("23:30", 60)).toBe("00:30");
+    expect(shiftWallTime("00:00", -24 * 60)).toBe("00:00");
+  });
+
+  it("should reject a malformed wall time instead of returning something plausible", () => {
+    expect(() => shiftWallTime("7am", -60)).toThrow(/HH:MM/u);
+    expect(() => shiftWallTime("25:00", -60)).toThrow(/HH:MM/u);
   });
 });

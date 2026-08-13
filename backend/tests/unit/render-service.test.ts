@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { fixedClock } from "../../src/services/clock.js";
+import type { FrameRunner } from "../../src/render/frames.js";
 import { RenderService, type RenderRecord } from "../../src/render/render-service.js";
 import type { RenderBackend, RunwayResult, RunwayTask, SubmitSpec } from "../../src/render/runway.js";
 import { DEFAULT_OPENING, DEFAULT_REFERENCE, studioAt } from "../../src/render/studio.js";
@@ -76,6 +77,14 @@ afterEach(() => {
 
 interface FakeOptions {
   readonly submit?: RunwayResult<{ readonly id: string }>;
+  /**
+   * A submission that goes wrong only after an earlier one has succeeded.
+   *
+   * The case an anchored render introduces: it is two generations, so there is
+   * now a moment where credits have been spent and the render cannot be
+   * completed. Numbered from one.
+   */
+  readonly failSubmit?: { readonly nth: number; readonly message: string };
   /** Statuses handed back in order; the last one repeats. */
   readonly statuses?: readonly RunwayTask[];
   readonly download?: RunwayResult<number>;
@@ -92,7 +101,13 @@ function fakeBackend(options: FakeOptions = {}): RenderBackend & { readonly spec
     specs,
     submit: async (spec) => {
       specs.push(spec);
-      return options.submit ?? { ok: true, data: { id: "task-1" } };
+      if (options.failSubmit?.nth === specs.length) {
+        return { ok: false, failure: { message: options.failSubmit.message, retryable: false } };
+      }
+      // A distinct id per generation, because a render can now be more than one
+      // of them and a record that gave both halves the same handle could not
+      // chase either of them up.
+      return options.submit ?? { ok: true, data: { id: `task-${String(specs.length)}` } };
     },
     task: async () => {
       const status = statuses[Math.min(polls, statuses.length - 1)];
@@ -108,7 +123,28 @@ function fakeBackend(options: FakeOptions = {}): RenderBackend & { readonly spec
   };
 }
 
-function serviceWith(backend: RenderBackend | null): RenderService {
+/**
+ * A stand-in for ffmpeg that records what it was asked to run.
+ *
+ * The suite must not need ffmpeg installed and must not decode files that are
+ * not really videos — and the *argv* is the interesting part anyway, because
+ * joining two halves into one clip is a command-line shape rather than a
+ * computation. Every invocation writes its output file, so the code under test
+ * sees the same disk it would see in production.
+ */
+function fakeFfmpeg(): FrameRunner & { readonly runs: (readonly string[])[] } {
+  const runs: (readonly string[])[] = [];
+  const run: FrameRunner = async (_file, args) => {
+    runs.push(args);
+    const out = args[args.length - 1] ?? "";
+    mkdirSync(dirname(out), { recursive: true });
+    writeFileSync(out, Buffer.from([0x00, 0x00, 0x00, 0x18]));
+    return { ok: true, message: "" };
+  };
+  return Object.assign(run, { runs });
+}
+
+function serviceWith(backend: RenderBackend | null, ffmpeg: FrameRunner = fakeFfmpeg()): RenderService {
   return new RenderService({
     studio,
     backend,
@@ -117,6 +153,7 @@ function serviceWith(backend: RenderBackend | null): RenderService {
     // latency, not of this state machine, so holding it at zero exercises the
     // same transitions in microseconds.
     sleep: async () => undefined,
+    ffmpeg,
   });
 }
 
@@ -255,16 +292,18 @@ describe("asking for a render", () => {
     expect(bytesOf(sent as string)).toEqual(OPENING_BYTES);
   });
 
-  it("should pin her face to the closing frame when the shot is her face", async () => {
+  it("should pin her face as the frame the two halves are cut on", async () => {
     // The fix for `syl-63v`, and it is an API feature rather than a wording.
     // Probed on seedance2, 2026-08-11: `promptImage` takes an array of
     // `{uri, position}` with position first|last, and a request carrying both
     // is accepted — the duplicate-position rule fires, which is how we know the
     // array is validated rather than ignored.
     //
-    // So the ribbon still opens the shot and something of her now ends it. That
-    // is the only thing holding her likeness at a framing where her face is
-    // toward the camera, now that `promptImage` is no longer her headshot.
+    // Probed again the same day, and this is what makes it two halves rather
+    // than one: `first|last` is the WHOLE position vocabulary, and seedance2's
+    // request body has no reference image, no character and no seed to put a
+    // face in. Both ends of the clip belong to the ribbon, so her likeness has
+    // nowhere to go but the join.
     const backend = fakeBackend();
     const service = serviceWith(backend);
 
@@ -276,6 +315,194 @@ describe("asking for a render", () => {
     expect(images.map((image) => image.position)).toEqual(["first", "last"]);
     expect(bytesOf(images[0]?.uri ?? "")).toEqual(OPENING_BYTES);
     expect(bytesOf(images[1]?.uri ?? "")).toEqual(REFERENCE_BYTES);
+  });
+
+  it("should end an anchored render back on the bare ribbon it opened on", async () => {
+    // The Commander, 2026-08-11: *"it's no longer ending on the ribbon of light.
+    // The version that you generated a while ago started on the ribbon of light
+    // and ended on the ribbon of light and that seems to be changed now for her
+    // so that it ends on a face."*
+    //
+    // Both ends, as PINNED FRAMES rather than as a sentence — the one lesson
+    // this whole area exists to carry. The first half runs ribbon to her, the
+    // second runs her back to ribbon, and the finished clip is the two cut
+    // together on her face.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    expect(backend.specs).toHaveLength(2);
+    // Frame one of the whole render: the ribbon the eight loops open on.
+    expect(bytesOf(firstFrameOf(backend.specs[0]?.promptImage))).toEqual(OPENING_BYTES);
+    // And the last frame of the whole render: the same picture again.
+    expect(bytesOf(lastFrameOf(backend.specs[1]?.promptImage))).toEqual(OPENING_BYTES);
+  });
+
+  it("should start the second half from the frame the first one ended on", async () => {
+    // Not from `reference.png`. Measured with a 4-second probe on 2026-08-11:
+    // handing that 1120x832 landscape picture over as `first` produces a
+    // 1112x834 LANDSCAPE video, because the opening frame decides the aspect
+    // and silently overrules `ratio`. Two halves of different shapes do not cut
+    // together at all.
+    //
+    // The frame pulled out of the first half is already 834x1112, so the second
+    // half inherits the shape instead of arguing with it — and the join lands
+    // on one frame rather than on two renderings of a similar one.
+    const backend = fakeBackend();
+    const ffmpeg = fakeFfmpeg();
+    const service = serviceWith(backend, ffmpeg);
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    const joinFrame = studio.partFrame(started.record.name, 1);
+    // Taken off the END of the first half — `-sseof`, because the duration
+    // Runway reports is the one it was asked for, not the one it produced.
+    expect(ffmpeg.runs.some((args) => args.includes("-sseof") && args.includes(joinFrame))).toBe(true);
+    expect(bytesOf(firstFrameOf(backend.specs[1]?.promptImage))).toEqual(readFileSync(joinFrame));
+  });
+
+  it("should give each half a clause that agrees with its own pinned frames", async () => {
+    // The defect that started all of this, stated as a rule: a sentence never
+    // wins an argument with a pinned frame, so the two must not disagree. Each
+    // half says what IT does and stops there — the first does not promise the
+    // ribbon coming back, because in that generation it does not.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+
+    await service.start({ ...ASK, framing: "close_portrait" });
+    await service.drain();
+
+    const gathering = backend.specs[0]?.promptText ?? "";
+    expect(gathering).toMatch(/opens on a lone ribbon of blue light/iu);
+    expect(gathering).toMatch(/settles and holds on her face/iu);
+    expect(gathering).not.toMatch(/unravels/iu);
+
+    const unravelling = backend.specs[1]?.promptText ?? "";
+    expect(unravelling).toMatch(/opens on her face/iu);
+    expect(unravelling).toMatch(/unravels back into a lone ribbon/iu);
+    expect(unravelling).toMatch(/last frame is the bare ribbon/iu);
+    // Both carry the recipe, or the second half is a different woman in a
+    // different world from the first.
+    for (const prompt of [gathering, unravelling]) {
+      expect(prompt).toMatch(/luminous spirit woman of living starlight/iu);
+      expect(prompt).toContain(ASK.scene);
+    }
+  });
+
+  it("should join the halves into the one clip the render is", async () => {
+    const backend = fakeBackend();
+    const ffmpeg = fakeFfmpeg();
+    const service = serviceWith(backend, ffmpeg);
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    const record = service.get(started.record.name);
+    expect(record?.status).toBe("ready");
+    expect(record?.video).toBe(studio.video(started.record.name));
+    expect(existsSync(studio.video(started.record.name))).toBe(true);
+    // The concat DEMUXER with a stream copy: both halves come from one model at
+    // one ratio, so re-encoding her twice would buy nothing.
+    const join = ffmpeg.runs.find((args) => args.includes("concat"));
+    expect(join).toBeDefined();
+    expect(join).toEqual(expect.arrayContaining(["-c", "copy", studio.video(started.record.name)]));
+  });
+
+  it("should keep both halves on disk, because a half is a render too", async () => {
+    // `SOUL.md`: *"Never delete a render, and never let one be deleted."* A half
+    // cost credits and is several seconds of her; the joined file is a
+    // derivative of it, and it is also the only way to re-cut the join without
+    // paying for both halves again.
+    const service = serviceWith(fakeBackend());
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    expect(existsSync(studio.part(started.record.name, 1))).toBe(true);
+    expect(existsSync(studio.part(started.record.name, 2))).toBe(true);
+    expect(existsSync(studio.partFrame(started.record.name, 1))).toBe(true);
+    // And they are not counted as renders of their own: the ledger reads
+    // sidecars, and a half has none.
+    expect(service.list()).toHaveLength(1);
+  });
+
+  it("should record every half, so a joined render can be made again", async () => {
+    // The sidecar's whole job, applied to a render that is two generations. A
+    // record holding one prompt for a clip made from two cannot reproduce it,
+    // which is the lost-prompt failure wearing a new hat.
+    const service = serviceWith(fakeBackend());
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    const record = service.get(started.record.name);
+    expect(record?.parts).toHaveLength(2);
+    const [gathering, unravelling] = record?.parts ?? [];
+    expect(gathering?.taskId).toBe("task-1");
+    expect(unravelling?.taskId).toBe("task-2");
+    expect(gathering?.first).toBe(DEFAULT_OPENING);
+    expect(gathering?.last).toBe(DEFAULT_REFERENCE);
+    expect(unravelling?.last).toBe(DEFAULT_OPENING);
+    expect(gathering?.prompt).not.toBe(unravelling?.prompt);
+    // The halves add up to the clip, so what she is told about its length is
+    // what was made.
+    expect((gathering?.duration ?? 0) + (unravelling?.duration ?? 0)).toBe(record?.duration);
+  });
+
+  it("should still send one generation for a framing that needs no anchor", async () => {
+    // The reel template, and all eight of the Commander's favourites. It has no
+    // face to get wrong, so it needs no join — and paying for two halves and an
+    // ffmpeg pass to arrive at the clip one generation already makes would be a
+    // cost with nothing on the other side of it.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+
+    const started = await service.start({ ...ASK, framing: "face_turned_away" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    expect(backend.specs).toHaveLength(1);
+    expect(typeof backend.specs[0]?.promptImage).toBe("string");
+    expect(started.record.parts).toHaveLength(1);
+    expect(backend.specs[0]?.duration).toBe(15);
+  });
+
+  it("should bill only the halves that reached Runway when the second one will not start", async () => {
+    // A case a render made in one generation never had: credits are spent and
+    // the render cannot be finished. The half that was bought stays on disk and
+    // stays in the ledger at what IT cost — a total that claimed the whole
+    // fifteen seconds would be money she never spent, and one that claimed
+    // nothing would be money that vanished.
+    const backend = fakeBackend({ failSubmit: { nth: 2, message: "Runway answered 402." } });
+    const service = serviceWith(backend);
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    const record = service.get(started.record.name);
+    expect(record?.status).toBe("failed");
+    expect(record?.reason).toContain("402");
+    expect(record?.credits).toBe(288);
+    expect(service.spend().credits).toBe(288);
+    expect(service.spend().seconds).toBe(8);
+    // The half that was paid for is still there.
+    expect(existsSync(studio.part(started.record.name, 1))).toBe(true);
   });
 
   it("should keep asking for the loops' portrait shape even though the anchor is landscape", async () => {
@@ -298,24 +525,28 @@ describe("asking for a render", () => {
     expect(backend.specs[0]?.ratio).toBe("834:1112");
   });
 
-  it("should not promise a bare ribbon at the end of a clip whose end frame is her face", async () => {
-    // The same defect as the one that cost the portrait fix, facing the other
-    // way. `LOOP_CLAUSE` says the first and last frames are identical and hold
-    // no figure; pinning her portrait as the last frame contradicts it in the
-    // one place a sentence cannot win. Whichever closing text is sent has to
-    // agree with the frame that is actually pinned.
+  it("should never send a generation a clause its own pinned frames contradict", async () => {
+    // The defect that cost a day, in both directions at once. `LOOP_CLAUSE`
+    // says the first and last frames are identical and hold no figure — true of
+    // a generation given one picture, and false of one whose closing frame is
+    // her portrait. So a half that ends on her must not carry it, and a half
+    // that really does open and close on the ribbon must.
     const backend = fakeBackend();
     const service = serviceWith(backend);
 
-    const anchored = await service.start({ ...ASK, framing: "close_portrait" });
-    expect(anchored.ok).toBe(true);
-    if (!anchored.ok) return;
+    await service.start({ ...ASK, framing: "close_portrait" });
+    await service.drain();
 
-    expect(anchored.record.prompt).not.toMatch(/first and last frames are identical/iu);
-    expect(anchored.record.prompt).not.toMatch(/leaving empty starfield/iu);
-    // And it must say what it does end on, so the model is told rather than
-    // left to reconcile a pinned frame against silence.
-    expect(anchored.record.prompt).toMatch(/looking (straight )?at (the viewer|you)|meets his eyes/iu);
+    for (const spec of backend.specs) {
+      const endsOnRibbon =
+        typeof spec.promptImage !== "string" &&
+        spec.promptImage.find((image) => image.position === "last")?.uri ===
+          spec.promptImage.find((image) => image.position === "first")?.uri;
+      expect(
+        /first and last frames are identical/iu.test(spec.promptText),
+        "a generation claims identical end frames it was not given",
+      ).toBe(endsOnRibbon);
+    }
 
     // The reel framing keeps the clause that makes it cut against the eight.
     const loop = await service.start({ ...ASK, framing: "face_turned_away" });
@@ -685,11 +916,15 @@ describe("what she has spent", () => {
     // `RUNWAY_API_INDEX.md`: moderated generations still cost full credits, no
     // refund. A ledger that only counted the good ones would understate what
     // she has actually spent, which is the direction that matters.
+    //
+    // The reel framing, so this is one generation and the number is the whole
+    // fifteen seconds. What a HALF-made render costs is a different question
+    // with a different answer, and it has its own test.
     const service = serviceWith(
       fakeBackend({ statuses: [{ id: "t", status: "FAILED", output: [] }] }),
     );
 
-    await service.start(ASK);
+    await service.start({ ...ASK, framing: "face_turned_away" });
     await service.drain();
 
     const spend = service.spend();
@@ -780,6 +1015,50 @@ describe("a sidecar that is not a record", () => {
 
     expect(record?.status).toBe("ready");
     expect(record?.credits).toBe(540);
+  });
+
+  it("should read a sidecar that predates renders being made in halves", () => {
+    // Every record in her home was written before a render could be two
+    // generations, and there are dozens of them. A required `parts` would have
+    // turned the whole back catalogue unreadable at a stroke — which is the
+    // state this validator exists to REPORT and not to cause. One half is
+    // synthesised from the fields such a file does have, so the rest of the
+    // service reads one shape.
+    place("syl-listening", { ...LISTENING, video: studio.video("syl-listening") });
+
+    const record = serviceWith(fakeBackend()).get("syl-listening");
+
+    expect(record?.parts).toHaveLength(1);
+    expect(record?.parts[0]?.taskId).toBe(LISTENING.taskId);
+    expect(record?.parts[0]?.duration).toBe(15);
+    expect(record?.parts[0]?.first).toBe("renders/reference.png");
+  });
+
+  it("should say a close portrait with nothing pinning her face does not hold her likeness", () => {
+    // `syl-63v`, read off a file rather than off an enum. This sidecar says
+    // `holdsLikeness: true` and names no anchor, and both were true of it on
+    // the day it was written — the flag went false when the picture that
+    // backed it was taken away, and nothing rewrote the file.
+    //
+    // So the flag is DERIVED from the record's own pictures. The written one is
+    // ignored, which is the only arrangement in which it cannot lie: there is
+    // no second place to forget.
+    place("syl-listening", { ...LISTENING, video: studio.video("syl-listening") });
+
+    const record = serviceWith(fakeBackend()).get("syl-listening");
+
+    expect(record?.framing).toBe("close_portrait");
+    expect(record?.anchor).toBeNull();
+    expect(record?.holdsLikeness).toBe(false);
+
+    // And the same record with the picture it needs says so.
+    place("syl-anchored", {
+      ...LISTENING,
+      name: "syl-anchored",
+      anchor: "renders/reference.png",
+      video: studio.video("syl-anchored"),
+    });
+    expect(serviceWith(fakeBackend()).get("syl-anchored")?.holdsLikeness).toBe(true);
   });
 
   it("should answer with the name that finds the file, not the one written inside it", () => {
@@ -907,6 +1186,45 @@ describe("a render interrupted by a restart", () => {
     await second.drain();
 
     expect(second.get(started.record.name)?.status).toBe("ready");
+  });
+
+  it("should pick a joined render up between its halves, not start it over", async () => {
+    // The state a `SIGTERM` between two generations leaves on disk: one half
+    // bought and downloaded, the second never submitted. Starting over would
+    // pay for the first half twice; giving up would strand a record at
+    // `rendering` forever. The walk over `parts` does neither — a half already
+    // on disk is skipped and the missing one is asked for.
+    const firstBackend = fakeBackend({
+      statuses: [
+        { id: "task-1", status: "SUCCEEDED", output: ["https://example.invalid/half.mp4"] },
+        { id: "task-1", status: "PENDING", output: [] },
+      ],
+    });
+    const first = new RenderService({
+      studio,
+      backend: firstBackend,
+      clock: fixedClock(NOW),
+      // The process dies while the SECOND half is in flight.
+      sleep: () => new Promise<void>(() => undefined),
+      ffmpeg: fakeFfmpeg(),
+    });
+    const started = await first.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    // Let the first half land and the second one be asked for, then stop.
+    await Promise.race([first.drain(), new Promise((resolve) => setTimeout(resolve, 50))]);
+    expect(first.get(started.record.name)?.parts[0]?.video).not.toBeNull();
+
+    const backend = fakeBackend();
+    const second = serviceWith(backend);
+    second.resume();
+    await second.drain();
+
+    const record = second.get(started.record.name);
+    expect(record?.status).toBe("ready");
+    // The first half was not bought again: this service submitted at most the
+    // one generation that was still missing.
+    expect(backend.specs.length).toBeLessThanOrEqual(1);
   });
 });
 

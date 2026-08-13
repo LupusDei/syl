@@ -25,8 +25,12 @@ import { fileURLToPath } from "node:url";
  *
  *     ~/.syl/renders/<name>.mp4          the render
  *     ~/.syl/renders/<name>.mp4.json     what made it
- *     ~/.syl/renders/reference.png       her likeness, what they all anchor on
+ *     ~/.syl/renders/reference.png       his guess at her likeness, from before he knew her
  *     ~/.syl/renders/frames/<name>/      the stills she looked at
+ *     ~/.syl/renders/parts/              the halves of a render made in two
+ *     ~/.syl/renders/faces/              every likeness she has adopted since
+ *     ~/.syl/renders/openings/           every opening she has kept beyond the ribbon
+ *     ~/.syl/renders/wardrobe.json       what she adopted, when, and why
  *
  * Flat and obvious on purpose. `characters/syl/video` was the *toolkit's*
  * nesting — it disambiguated her from other characters in a repository that
@@ -39,20 +43,28 @@ import { fileURLToPath } from "node:url";
  */
 
 /**
- * Her likeness, in her home, relative to it — **and the LAST frame of a shot
- * whose subject is her face.**
+ * Her likeness, in her home, relative to it — **and the frame an anchored render
+ * is CUT ON.**
  *
- * Sent as `promptImage` with `position: "last"` for the framings that need an
- * anchor, which is what stops the model inventing a stranger now that frame one
- * is the ribbon. Never as `first`: sending it there is what made every service
- * render open on her smiling headshot and come back landscape.
+ * Sent as `promptImage` with `position: "last"` on the first half of a render
+ * whose subject is her face, which is what stops the model inventing a stranger
+ * now that frame one is the ribbon. The second half then starts from the frame
+ * that half actually ended on, and unravels back to the ribbon, so the finished
+ * clip opens and closes on the ribbon with her face held at the join. See
+ * `join.ts` for why that is the only shape available.
+ *
+ * **Never as `first`.** Sending it there is what made every service render open
+ * on her smiling headshot — and it is also what makes a video landscape:
+ * measured 2026-08-11, a 4-second probe handed this picture as `first` came
+ * back **1112x834**, transposed, because the opening frame decides the aspect
+ * and overrules `ratio`. That measurement is why the second half of an anchored
+ * render starts from an extracted 834x1112 frame rather than from this file.
  *
  * **It stays 1120x832 and it does not need re-cutting.** The obvious worry with
- * two pictures is that they disagree about shape, and seedance2 takes aspect
- * from `promptImage`. Measured on 2026-08-11 with one render each way: a
- * portrait re-cut and this landscape original both produced 834x1112 video with
- * her likeness intact. The opening frame decides the shape and the closing
- * picture is fitted into it.
+ * two pictures is that they disagree about shape. Measured on 2026-08-11 with
+ * one render each way: a portrait re-cut and this landscape original both
+ * produced 834x1112 video with her likeness intact when the RIBBON was `first`.
+ * The opening frame decides the shape and the closing picture is fitted into it.
  *
  * **Do not switch this to `syl_source_upscaled.png`.** It cannot be sent:
  *
@@ -148,6 +160,29 @@ export interface Studio {
   readonly videoDir: string;
   /** Where extracted stills go, one directory per render. */
   readonly frameDir: string;
+  /** Where the halves of a joined render are kept. See {@link Studio.part}. */
+  readonly partDir: string;
+  /**
+   * Every face she has ever adopted, kept forever. See `wardrobe.ts`.
+   *
+   * A directory rather than a file, because {@link Studio.reference} is one
+   * picture and a likeness she is still looking for is a series of them. The
+   * seed stays where it is: it is *his guess*, the one that was there before
+   * she could choose, and moving it would break every sidecar that names it.
+   */
+  readonly faceDir: string;
+  /** Every opening she has kept beyond the ribbon. Same rule as {@link Studio.faceDir}. */
+  readonly openingDir: string;
+  /**
+   * The log of what she has adopted and why.
+   *
+   * Beside the pictures rather than in the database, for the same reason the
+   * sidecars are: the file that must be right is the one next to the thing it
+   * describes, and her home travels as a unit. It is append-only — an entry is
+   * never edited and never removed — so which face is current is *derived* from
+   * it rather than stored as a second assertion that could disagree.
+   */
+  readonly wardrobeLog: string;
   /** Her likeness, absolute. What a shot of her face would anchor on. */
   reference(relative?: string): string;
   /** The ribbon still handed to the model as `promptImage`, absolute. Frame one. */
@@ -158,6 +193,32 @@ export interface Studio {
   sidecar(name: string): string;
   /** Where this render's stills are kept. */
   frames(name: string): string;
+  /**
+   * One half of a render that was made in two, numbered from one.
+   *
+   * **Kept, not cleaned up.** `SOUL.md`: *"Never delete a render, and never let
+   * one be deleted."* A half is a render — it cost credits, it is fifteen
+   * seconds of her, and the joined file is a derivative of it. It also happens
+   * to be the only way to re-cut a join without paying for both halves again.
+   *
+   * Under `renders/parts/` rather than beside the finished clips so that a
+   * person opening `renders/` sees the renders, and so that the ledger — which
+   * reads sidecars — is never tempted to count a half as a render of its own.
+   */
+  part(name: string, index: number): string;
+  /**
+   * The still a half ends on, and the picture the next half starts from.
+   *
+   * `.png` rather than `.jpg`: it goes straight back to Runway as the next
+   * half's opening frame, so the join is exact rather than exact plus a round
+   * of JPEG. At 834x1112 that is ~1MB, ~1.3MB as a data URI — comfortably
+   * inside Runway's 5MB cap. **A 4K render would not be**, so a bigger ratio
+   * needs the ephemeral upload (`POST /v1/uploads`) rather than a data URI, and
+   * the failure would arrive as a union error that reads like a URL problem.
+   */
+  partFrame(name: string, index: number): string;
+  /** The concat list a join was made from. Kept for the same reason as the halves. */
+  partList(name: string): string;
 }
 
 /** A studio rooted at a given directory, which is normally her home. */
@@ -167,11 +228,18 @@ export function studioAt(root: string): Studio {
   // they came out of, and one directory called `renders` is what a person
   // opening her home is looking for.
   const frameDir = resolve(videoDir, "frames");
+  const partDir = resolve(videoDir, "parts");
+  const faceDir = resolve(videoDir, "faces");
+  const openingDir = resolve(videoDir, "openings");
 
   return {
     root,
     videoDir,
     frameDir,
+    partDir,
+    faceDir,
+    openingDir,
+    wardrobeLog: resolve(videoDir, "wardrobe.json"),
     reference: (relative = DEFAULT_REFERENCE) => resolve(root, relative),
     opening: (relative = DEFAULT_OPENING) => resolve(root, relative),
     video: (name) => resolve(videoDir, `${name}.mp4`),
@@ -180,6 +248,9 @@ export function studioAt(root: string): Studio {
     // own name is a sidecar somebody moves the video away from.
     sidecar: (name) => resolve(videoDir, `${name}.mp4.json`),
     frames: (name) => resolve(frameDir, name),
+    part: (name, index) => resolve(partDir, `${name}-${String(index)}.mp4`),
+    partFrame: (name, index) => resolve(partDir, `${name}-${String(index)}-last.png`),
+    partList: (name) => resolve(partDir, `${name}.txt`),
   };
 }
 

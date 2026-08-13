@@ -62,18 +62,30 @@ const UNIMPLEMENTED: readonly string[] = [];
  * of that debt, because a second client would have to guess at the body.
  */
 const UNDECLARED: readonly string[] = [
+  // `syl-r1t` changed what this debt costs, without changing its size. Intake
+  // used to be reachable only by the Share Extension and a job somebody had
+  // configured; `read_this` made SYL a caller, over her own credential, through
+  // `tools/server.ts`. So these two join `/memory/recall` and `/renders` below
+  // as routes with an in-repo consumer typed against them — nothing is built
+  // against a guess today, and the shapes are pinned by `read-this.test.ts` and
+  // `intake-ceiling.test.ts` rather than by a fixture.
+  //
+  // What the spec would add is a SECOND client being able to reach them, and
+  // the response shape it would publish is `IntakeAnswer` from
+  // `connections/intake-view.ts` — deliberately not `IntakeSource`. Publishing
+  // the row would put the page's own `<title>` in the contract.
   "GET /intake/{sourceId}",
   "POST /intake",
   "GET /memory/graph",
   "GET /memory/metrics",
   "POST /memory/edges/{edgeId}/feedback",
-  // `syl-016.1`, and it joins the debt above rather than escaping it. Worth
-  // one distinction though: this is the only undeclared route SYL HERSELF
-  // calls, over her own credential, through `tools/server.ts`. That consumer
-  // is in this repository and is typed against the route, so nothing is being
-  // built against a guess today — but it is also the route most likely to
-  // acquire a second caller, and `shared/openapi.yaml` is where that caller
-  // would look first.
+  // `syl-016.1`, and it joins the debt above rather than escaping it. It was
+  // once the only undeclared route SYL HERSELF called; `/renders` and, since
+  // `syl-r1t`, `/intake` call over the same credential through the same tool
+  // server. That consumer is in this repository and is typed against the route,
+  // so nothing is being built against a guess today — but these are the routes
+  // most likely to acquire a second caller, and `shared/openapi.yaml` is where
+  // that caller would look first.
   "GET /memory/recall",
   // `syl-016.7` — and the one that most needs the spec to catch up, for the
   // same reason the feedback write does: it is a WRITE, so a second client
@@ -120,6 +132,24 @@ const UNDECLARED: readonly string[] = [
   "POST /health/samples",
   "GET /health/watermarks",
   "GET /health/series",
+  // `syl-ate` — every face she has adopted and every opening she can choose.
+  // Joins the render debt above rather than escaping it, and for the same
+  // reason: her tool server is the only client, it lives in this repository,
+  // and both shapes are pinned by `tests/unit/render-verbs.test.ts` and
+  // `tests/unit/renders.test.ts` against the same fakes.
+  //
+  // They are listed here rather than published because publishing them alone
+  // would put a child in the contract whose parent surface is not in it — a
+  // phone able to read her faces and unable to list the renders they came out
+  // of. When `/renders` is published these go with it, in one pass.
+  //
+  // **The POST is the one to publish first, ahead of every other write on this
+  // surface.** It is the only one that changes what she LOOKS LIKE, its
+  // `sighting` field is meaningless to a client that has not been handed the
+  // matching picture, and `because` is required on the Commander's ruling. A
+  // second client guessing at that body would be guessing at her likeness.
+  "GET /renders/wardrobe",
+  "POST /renders/wardrobe",
 ];
 
 /** Path parameters that are syntactically valid but name nothing. */

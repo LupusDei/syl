@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { queryLog } from "../../src/ops/log-query.js";
+import { HELPER_DEADLINE_MS } from "../helpers/budget.js";
+import { buildBackendOnce } from "../helpers/built-backend.js";
 
 /**
  * `scripts/syl-service.sh` — what launchd actually runs.
@@ -52,8 +54,13 @@ beforeAll(() => {
   // That is the same conditional-build hazard already fixed in
   // `service-lifecycle.test.ts`. This file is the other place that runs the
   // built output, and it kept the stale copy alive for both.
-  execFileSync("npm", ["run", "build", "-w", "backend"], { cwd: repoRoot, stdio: "inherit" });
-}, 300_000);
+  //
+  // Which is also why the two now share one helper: it still builds on every
+  // RUN, and skips only the identical second build inside one — the heavy pass
+  // runs both files in the same process. The hook's budget is set for the whole
+  // class in `vitest.heavy.config.ts`.
+  buildBackendOnce();
+});
 
 interface Started {
   readonly child: ChildProcess;
@@ -128,7 +135,7 @@ async function start(env: Readonly<Record<string, string>> = {}): Promise<Starte
   const started: Started = { child, port, directory, logDirectory, exited, output: () => output };
   running.push(started);
 
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + HELPER_DEADLINE_MS;
   for (;;) {
     if (child.exitCode !== null) throw new Error(`the script exited ${String(child.exitCode)}:\n${output}`);
     try {
@@ -163,7 +170,7 @@ async function start(env: Readonly<Record<string, string>> = {}): Promise<Starte
 async function awaitLog(
   logDirectory: string,
   filter: Parameters<typeof queryLog>[1],
-  timeoutMs = 10_000,
+  timeoutMs = HELPER_DEADLINE_MS,
 ): Promise<ReturnType<typeof queryLog>> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -201,7 +208,7 @@ describe.skipIf(!onMacOS)("scripts/syl-service.sh", () => {
     expect(started.output()).toContain("starting");
     started.child.kill("SIGTERM");
     await started.exited;
-  }, 90_000);
+  });
 
   it("should exec, so launchd's SIGTERM reaches node rather than bash", async () => {
     // The whole of the graceful shutdown depends on this one keyword. Without
@@ -219,7 +226,7 @@ describe.skipIf(!onMacOS)("scripts/syl-service.sh", () => {
     // — but polled anyway, for the same reason as `awaitLog` itself: nothing in
     // this file should assert on a log it merely hopes has been written.
     expect(await awaitLog(started.logDirectory, { event: "shutdown.complete" })).toHaveLength(1);
-  }, 90_000);
+  });
 
   it("should strip a credential variable it was handed", async () => {
     // Non-negotiable constraint 3, at the outermost layer. A set key silently
@@ -236,7 +243,7 @@ describe.skipIf(!onMacOS)("scripts/syl-service.sh", () => {
 
     started.child.kill("SIGTERM");
     await started.exited;
-  }, 90_000);
+  });
 
   it("should write plists only its owner can read", () => {
     // The core job's EnvironmentVariables carries SYL_APNS_PRIVATE_KEY — the
@@ -276,7 +283,7 @@ describe.skipIf(!onMacOS)("scripts/syl-service.sh", () => {
     chmodSync(core, 0o644);
     install();
     expect(statSync(core).mode & 0o777).toBe(0o600);
-  }, 120_000);
+  });
 
   it("should refuse with EX_CONFIG when the service has not been built", async () => {
     // The script deliberately runs built output rather than tsx, so an
@@ -302,5 +309,5 @@ describe.skipIf(!onMacOS)("scripts/syl-service.sh", () => {
 
     expect(status).toBe(78);
     expect(output).toContain("npm run build");
-  }, 60_000);
+  });
 });

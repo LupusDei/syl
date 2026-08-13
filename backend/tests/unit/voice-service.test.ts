@@ -43,6 +43,28 @@ const sourceRecord = (over: Partial<RenderRecord> = {}): RenderRecord => ({
   anchor: "renders/reference.png",
   framing: "close_portrait",
   prompt: "A luminous spirit woman of living starlight…",
+  // The two generations a close portrait is made of, and the join between
+  // them. A voiced copy carries them over, so the fixture has to have them.
+  parts: [
+    {
+      taskId: "task-1",
+      prompt: "A luminous spirit woman of living starlight…",
+      duration: 8,
+      first: "renders/opening-ribbon.png",
+      last: "renders/reference.png",
+      video: "/studio/renders/parts/syl-source-1.mp4",
+      credits: 300,
+    },
+    {
+      taskId: "task-2",
+      prompt: "A luminous spirit woman of living starlight…",
+      duration: 7,
+      first: "renders/parts/syl-source-1-last.png",
+      last: "renders/opening-ribbon.png",
+      video: "/studio/renders/parts/syl-source-2.mp4",
+      credits: 300,
+    },
+  ],
   scene: "turning towards him",
   holdsLikeness: true,
   because: "I wanted to see whether the reference holds at this distance.",

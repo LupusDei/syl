@@ -330,6 +330,30 @@ export class IntakeStore {
     return row === undefined ? null : toSource(row as unknown as SourceRow);
   }
 
+  /**
+   * How many sources one requester has submitted since an instant.
+   *
+   * Counted from `created_at` over a rolling window rather than from a local
+   * day. A day is the right unit for something the Commander experiences — the
+   * sendings allowance is a day because he notices being interrupted — and the
+   * wrong one for something that only spends: a local midnight lets twenty
+   * readings happen in two minutes and still be two lawful days.
+   *
+   * Every channel counts, not only the one the caller is using: the channel is
+   * a field in the request body, so a caller that could reset its own ceiling
+   * by relabelling its submissions would have no ceiling. What separates one
+   * requester from another is the CREDENTIAL that submitted, which the route
+   * writes into `requested_by` — not the principal, since every key in this
+   * service resolves to the same one. See `SYL_HERSELF` in `intake-route.ts`.
+   */
+  countSince(requestedBy: string, since: string): number {
+    const row = this.#db
+      .prepare("SELECT count(*) AS n FROM intake_sources WHERE requested_by = ? AND created_at >= ?")
+      .get(requestedBy, since);
+    // Safe assertion: `count(*)` is always an integer.
+    return (row as unknown as { n: number }).n;
+  }
+
   /** Sources that still have a step to run, oldest first. */
   pending(): readonly IntakeSource[] {
     const rows = this.#db

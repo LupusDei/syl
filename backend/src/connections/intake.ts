@@ -1,6 +1,6 @@
 import { readStructured, type ReaderTurnOptions } from "../harness/reader.js";
 import { systemClock, type Clock } from "../services/clock.js";
-import { chunkDocument, parseDocument, DEFAULT_CHUNK_CHARS } from "./document.js";
+import { UnreadableDocument, chunkDocument, parseDocument, DEFAULT_CHUNK_CHARS } from "./document.js";
 import { EXTRACT_INSTRUCTION, asChunkExtract, type ChunkExtract } from "./extract.js";
 import { FetchRefused, safeFetch, type FetchResult } from "./fetch.js";
 import {
@@ -10,6 +10,7 @@ import {
   type IntakeStore,
   type StoredExtract,
 } from "./intake-store.js";
+import { readingOf, type Reading } from "./intake-view.js";
 import { classifyRetention, type RetentionClass } from "./retention.js";
 
 /**
@@ -47,6 +48,22 @@ import { classifyRetention, type RetentionClass } from "./retention.js";
  * same answer and costs another turn. A timeout or a transport error is not.
  * A retryable failure leaves the stage where it was, with the reason recorded,
  * so the same step runs again later instead of the source silently dying.
+ *
+ * ## And a failure is a sentence Syl wrote, never one the page did
+ *
+ * `syl-r1t`. The reason a step stopped is stored on the source and read back
+ * by anything that asks about it — including, since `read_this`, a turn that
+ * holds MCP tools. Two of the throwers on this ladder quote text an attacker
+ * controls: `ReaderOutputError` carries the first 120 characters of the reply,
+ * and the schema gate refuses an unexpected key **by naming it**. Both are
+ * written by whoever wrote the document, and a refusal is precisely where
+ * nobody looks for a payload.
+ *
+ * So {@link safeReason} decides what may be stored, from the error's class
+ * rather than from its message, and everything else becomes a fixed sentence.
+ * The full detail is not lost — it goes to `onQuarantined`, which reaches the
+ * operator's log. `AGENT_SURFACE` keeps `/logs` out of Syl's reach, so that is
+ * a channel the payload cannot arrive back through.
  */
 
 /**
@@ -111,6 +128,16 @@ export interface ArticleIntakeOptions {
   readonly chunkChars?: number;
   /** Refuse a document that would need more turns than this. */
   readonly maxChunks?: number;
+  /**
+   * Where the detail of a failure goes when the stored sentence cannot carry
+   * it. Defaults to `console.warn`.
+   *
+   * This is the operator's channel, and it is the reason {@link safeReason} is
+   * a quarantine rather than a deletion: whatever was thrown is still readable
+   * by the person debugging it, and unreachable from the one surface where it
+   * would be an instruction.
+   */
+  readonly onQuarantined?: (detail: string, sourceId: string) => void;
 }
 
 /** A link to ingest. */
@@ -158,6 +185,7 @@ export class ArticleIntake {
   readonly #graft: GraftSink | null;
   readonly #chunkChars: number;
   readonly #maxChunks: number;
+  readonly #onQuarantined: (detail: string, sourceId: string) => void;
 
   constructor(options: ArticleIntakeOptions) {
     this.#store = options.store;
@@ -168,6 +196,11 @@ export class ArticleIntake {
     this.#graft = options.graft ?? null;
     this.#chunkChars = options.chunkChars ?? DEFAULT_CHUNK_CHARS;
     this.#maxChunks = options.maxChunks ?? DEFAULT_MAX_CHUNKS;
+    this.#onQuarantined =
+      options.onQuarantined ??
+      ((detail, sourceId): void => {
+        console.warn(`[syl] intake ${sourceId} stopped: ${detail}`);
+      });
   }
 
   /**
@@ -201,6 +234,31 @@ export class ArticleIntake {
    */
   get(sourceId: string): IntakeSource | null {
     return this.#store.get(sourceId);
+  }
+
+  /**
+   * One source and everything it has read, in the shape a turn may hold.
+   *
+   * **This is what `read_this` answers with, and the difference from
+   * {@link get} is a security boundary rather than a convenience.** The row
+   * carries the page's own `<title>`, which is raw response bytes; a
+   * {@link Reading} has nowhere to put it. See `intake-view.ts`.
+   */
+  reading(sourceId: string): Reading | null {
+    const source = this.#store.get(sourceId);
+    return source === null ? null : readingOf(source, this.#store.extracts(sourceId));
+  }
+
+  /**
+   * How many sources one principal has submitted since an instant.
+   *
+   * The count behind the ceiling on ad-hoc reading. Here rather than in the
+   * route for the same reason {@link get} is: a caller with a source id should
+   * not need its own handle on the store, and must not be able to reach the
+   * writes to get one.
+   */
+  readsSince(requestedBy: string, since: string): number {
+    return this.#store.countSince(requestedBy, since);
   }
 
   /** Sources that still have a step to run, oldest first. */
@@ -262,7 +320,7 @@ export class ArticleIntake {
     } catch (error) {
       const refusal = error instanceof FetchRefused ? error : null;
       const retryable = refusal === null || !PERMANENT_FETCH_REASONS.has(refusal.reason);
-      return this.#fail(source, message(error), retryable);
+      return this.#failFrom(source, error, retryable);
     }
 
     if (fetched.status < 200 || fetched.status >= 300) {
@@ -281,7 +339,7 @@ export class ArticleIntake {
     } catch (error) {
       // An unreadable document reads the same way every time, and so does a
       // parse that threw for any other reason. Nothing here is worth a retry.
-      return this.#fail(source, message(error), false);
+      return this.#failFrom(source, error, false);
     }
 
     if (chunks.length === 0) {
@@ -339,7 +397,12 @@ export class ArticleIntake {
       // Every reader failure is permanent for this source: a capability error
       // means the boundary itself is not holding and must not be retried in a
       // loop, and a schema failure means the reply was discarded on purpose.
-      return this.#fail(source, message(error), false);
+      //
+      // THE ONE CATCH ON THIS LADDER THAT HOLDS ATTACKER-WRITTEN TEXT. What
+      // was thrown here quotes the reply, and the reply was composed under the
+      // influence of the document. `#failFrom` stores a sentence chosen from
+      // the error's class and sends the rest to the operator.
+      return this.#failFrom(source, error, false);
     }
 
     this.#store.putExtract({
@@ -368,7 +431,7 @@ export class ArticleIntake {
         await this.#graft.graft({ source, extracts });
       } catch (error) {
         // The graph being unavailable is not the source's fault.
-        return this.#fail(source, message(error), true);
+        return this.#failFrom(source, error, true);
       }
     }
 
@@ -380,6 +443,21 @@ export class ArticleIntake {
   }
 
   // ------------------------------------------------------------- internals ---
+
+  /**
+   * Record a failure from whatever was thrown, quarantining the detail.
+   *
+   * The stored sentence comes from {@link safeReason}, which reads the error's
+   * CLASS and not its message. The message itself goes to the operator, so
+   * nothing is lost and nothing an attacker wrote is kept where Syl can read
+   * it back.
+   */
+  #failFrom(source: IntakeSource, error: unknown, retryable: boolean): AdvanceResult {
+    const detail = message(error);
+    const stored = safeReason(error);
+    if (detail !== stored) this.#onQuarantined(detail, source.id);
+    return this.#fail(source, stored, retryable);
+  }
 
   /** Record a failure, and decide whether the same step runs again. */
   #fail(source: IntakeSource, reason: string, retryable: boolean): AdvanceResult {
@@ -402,4 +480,39 @@ export class ArticleIntake {
 /** Whatever was thrown, as a sentence. */
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The one sentence a failure is allowed to leave on the source.
+ *
+ * **An allowlist by error class, and it has to be.** The alternative — scanning
+ * a message for anything that looks like page text — is a filter, and a filter
+ * has to be right about every input while an allowlist only has to be right
+ * about the classes it names. Anything unrecognised gets the fixed sentence,
+ * so a new thrower added next month is quarantined by default rather than
+ * trusted by default.
+ *
+ * What is allowed through, and why each is safe:
+ *
+ * - **{@link FetchRefused}** is assembled from the submitted URL, the host, the
+ *   address class and numeric limits. On every reason but `transport` no body
+ *   has been read at all, and `transport` carries Node's own socket error.
+ *   None of it is under the document's control, and it is the most useful
+ *   refusal she can be given: "that address is on your tailnet" is an answer.
+ * - **{@link UnreadableDocument}** has two messages, both literals in
+ *   `document.ts`, and no model runs before it is thrown.
+ *
+ * What is deliberately NOT allowed through is everything from the reader:
+ * `ReaderOutputError` quotes the reply's first 120 characters, and the schema
+ * gate refuses an unexpected key by naming it. Both are chosen by whoever wrote
+ * the page.
+ */
+export function safeReason(error: unknown): string {
+  if (error instanceof FetchRefused) return error.message;
+  if (error instanceof UnreadableDocument) return error.message;
+  // Everything else, including every way a reader turn can fail. Said in her
+  // own words rather than as a code, because she has to repeat it to him — and
+  // said the same way whether the reply was malformed, oversized or hostile,
+  // because telling those apart is the operator's job and the log's.
+  return "Syl read that page and what came back was not something she could keep, so it was discarded.";
 }

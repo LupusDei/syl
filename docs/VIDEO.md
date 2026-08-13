@@ -29,19 +29,26 @@ also takes the video's **aspect ratio** from it, overruling the `ratio` field
 without saying so. Both of those are measured below.
 
 It also takes an **array** of `{uri, position}` with `position` of `first` or
-`last`, which pins both ends of the clip. That is what lets one render open on
-the ribbon *and* arrive at her own face — see "Anchoring the face" below.
+`last`, which pins both ends of the clip — and `first|last` is the **whole**
+vocabulary. Two slots, no third. That is the constraint the next section is
+entirely about.
+
+A shot with no face in it is one generation:
 
 ```
-~/.syl/renders/opening-ribbon.png   the bare ribbon. frame one, and the shape.
-        │
-        ├── promptImage[first] ─┐
-        │                       ├──> seedance2, 15s, 834:1112 ──> <name>.mp4
-   prompt text ─────────────────┤                                 <name>.mp4.json
-        │                       │
-        ├── promptImage[last] ──┘    only for a framing whose subject is her face
-        │
-~/.syl/renders/reference.png        her likeness, 1120x832
+~/.syl/renders/opening-ribbon.png ──> promptImage ──┐
+                                                    ├──> seedance2, 15s ──> <name>.mp4
+                                   prompt text ─────┘                       <name>.mp4.json
+```
+
+A shot whose subject is her face is **two**, cut together on her:
+
+```
+ribbon ──[first]──┐                        ┌──[first]── the frame half one ended on
+                  ├─> half 1, 8s ─> ─┐     │
+her reference ─[last]┘               ├─ join ─> <name>.mp4
+                                     │     ├─> half 2, 7s ─┐
+                                     └─────┘               └──[last]── ribbon
 ```
 
 ### The first frame, and the day this page was wrong
@@ -105,84 +112,131 @@ the next section.
 ## Anchoring the face
 
 The Commander, 2026-08-11: *"she will still need some way to anchor the face."*
+And then, the same day, after the first answer to that: *"it's no longer ending
+on the ribbon of light. The version that you generated a while ago started on
+the ribbon of light and ended on the ribbon of light and that seems to be
+changed now for her so that it ends on a face."*
 
-**`promptImage` takes two pictures, and seedance2 honours both.** Probed and
-then rendered on 2026-08-11:
+Both, at once, is the problem. The first answer pinned her portrait as the
+video's **last frame** — which works, and spends the frame the ribbon needs.
+
+### There is no likeness mechanism that is not a keyframe
+
+Measured on 2026-08-11 with free 400-probes, which cost nothing because an
+invalid request is rejected before a task exists:
 
 | probe | result |
 |---|---|
-| array with two `position: "first"` entries | 400, `path: ["promptImage"]`, *"Duplicate position values are not allowed"* |
-| array `[ribbon first, portrait last]` + a bad `ratio` | 400 about **`ratio` only** — the array itself validates |
-| `duration: 3` | 400, *"expected number to be >= 4"* — seedance2's floor, useful for cheap tests |
+| array with two `position: "first"` entries | 400, `path: ["promptImage"]`, duplicate positions |
+| array `[ribbon first, portrait last]` + a bad `ratio` | 400 about **`ratio` only** — the array validates |
+| `position: "zzz"` | 400 enumerating the vocabulary: **`"first"｜"last"`, and nothing else** |
+| a key that cannot exist (`zzz_probe`) | 400, **`Unrecognized key`** — the validator is strict, so silence means nothing and a name in this list means something |
+| `references`, `referenceImages`, `characterId`, `character`, `subjectReference`, `identity`, `referenceMedia`, `styleImage`, `faceImage`, `keyframes`, `seed`, `contentModeration`, and eight more | 400, **all unrecognized** |
+| `duration: 3` / `99` / `7.5` | seedance2 takes an **integer 4–15**. The floor is what makes cheap probes possible |
 
-The first two are the whole argument. A 400 that complains about duplicate
-positions proves the array is *read* rather than ignored, and a 400 that
-complains only about the ratio proves a well-formed two-image request gets
-through. All three cost nothing: an invalid request is rejected before a task
-exists.
+So `seedance2`'s entire request body is **`model`, `promptImage`, `promptText`,
+`ratio`, `duration`**. No reference image, no character, no seed. `seedance2_fast`
+is identical. `kling3.0_pro` allows two images and `hailuo3` up to nine, but
+their entries take the same `first|last` and reject the same keys; `gen4.5` and
+`veo3.1` do not report unrecognized keys at all, so their silence proves nothing.
 
-Then two 4-second renders, 144 credits each, to find out whether *accepted*
-means *honoured*:
+**Runway's character ids are a different product.** `3e1e486c-…` is a GWM-1
+conversational avatar, and `/v1/characters` and `/v1/characters/{id}` both **404
+on the generation host** — already recorded in `~/.syl/voice/README.md` and
+confirmed again here. `gen4_image` on `text_to_image` *does* take
+`referenceImages`, which is how a new still of her would be made; it makes
+pictures, not video.
+
+**Two slots is the whole budget.** Both ends of the clip need one. Her face
+cannot have one.
+
+### So her likeness is the frame the clip is cut on
+
+An anchored render is **two generations, joined**:
+
+| | `first` | `last` | clause |
+|---|---|---|---|
+| half one, 8s | the bare ribbon | `reference.png` | gathers, settles, holds on her face |
+| half two, 7s | **the frame half one ended on** | the bare ribbon | opens on her face, unravels, ends bare |
+
+Then `ffmpeg -f concat -c copy`. The finished clip opens on the ribbon, holds her
+face in the middle, and ends on the ribbon — so it cuts against the eight, and
+the *join* is invisible for exactly the reason the reel's joins are: the two
+clips meet on the **same frame**, not on two renderings of a similar one.
+
+Measured before any of it was built, with two 4-second probes at 144 credits
+each:
 
 | | `first` | `last` | came back | first frame | last frame |
 |---|---|---|---|---|---|
-| matched | ribbon 834x1112 | her, re-cut to 834x1112 | **834x1112** | the bare ribbon | **her, unmistakably** |
-| mismatched | ribbon 834x1112 | `reference.png` **1120x832** | **834x1112** | the bare ribbon | **her, unmistakably** |
+| gathering | ribbon 834x1112 | `reference.png` 1120x832 | **834x1112** | the bare ribbon | **her, unmistakably** |
+| unravelling | `reference.png` 1120x832 | ribbon 834x1112 | **1112x834** | her, unmistakably | **the bare ribbon** |
 
-So it is honoured, and it holds both properties at once: the clip opens on the
-ribbon the reel opens on, and it arrives at a face the model **copies instead of
-inventing**.
+Read the shapes. **The opening frame decides the aspect and silently overrules
+`ratio`, in both directions** — which is why half two starts from a frame pulled
+out of half one rather than from `reference.png`. That frame is already 834x1112,
+so the second half inherits the shape instead of arguing with it, and no second
+portrait asset has to be kept in step with the first. `ratio` never moves.
 
-**The shape mismatch is not a failure mode**, which is the result that decided
-the design. Two inputs disagreeing about aspect was the obvious way to get a
-video shaped like neither, so it was tested deliberately — and the landscape
-anchor changed nothing. **The opening frame decides the shape and the closing
-picture is fitted into it**, centre-cropped, with her likeness surviving the
-crop. `ratio` does not move, and no new picture is needed: `reference.png` is
-sent as the closing frame exactly as it sits in her home.
+Pull it with `-sseof`, seeking from the end: the duration Runway reports is the
+one it was *asked* for, not the one it produced — the 4-second probe came back
+4.041667s — so there is no number on the request side to seek to.
 
-That is why there is no third asset. A portrait re-cut of her reference was
-built and rendered — it is the "matched" row above — and it produced a result
-indistinguishable from sending the landscape original. An asset that has to be
-kept in step with another asset and buys nothing measurable is a liability, so
-it was not kept. `reference.png` finally does the job its name always promised.
-
-**What it costs is the loop.** A clip whose last frame is her face does not end
-on the empty starfield, so it will not cut against the eight. That is a real
-trade rather than an oversight, and it is why only `close_portrait` is anchored:
+**The render that proves it** is `syl-20260811t235451677z-close-portrait.mp4`,
+made through the service at its own defaults: 834x1112, 15.14s, 540 credits.
+Frame one is the bare ribbon on empty starfield; at 4s she has gathered out of
+it; at 7.6s and 8.4s — either side of the join — the same face, with no visible
+cut; at 12s she is streaming back into the light; the last frame is the bare
+ribbon again. 684 credits including the probe that measured the direction.
 
 | framing | face toward camera | anchor | holds her likeness |
 |---|---|---|---|
-| `face_turned_away` | no | none | **yes** — no face to get wrong, and it still loops |
-| `close_portrait` | yes | closing frame | **yes** — her likeness is the last frame |
+| `face_turned_away` | no | none | **yes** — no face to get wrong |
+| `close_portrait` | yes | joined halves | **yes** — pinned at the join |
 | `wide_face_visible` | yes | none | no |
 | `mid_face_visible` | yes | none | no |
 
-The bottom two stay unanchored on purpose. The only picture of her is a close
-portrait, and pinning a close portrait to the last frame of a wide shot does not
-anchor that shot — it *ends* it somewhere else. Option 2 below is still the fix
-for those two, and it still needs a picture that does not exist yet.
+Every one of them opens and closes on the bare ribbon. The bottom two stay
+unanchored on purpose: the only picture of her is a close portrait, and joining
+a wide shot on it would not anchor the shot, it would cut to a different
+distance in the middle of it. Option 2 below is still the fix for those two, and
+it still needs a picture that does not exist yet.
 
-**`holdsLikeness` is now derived rather than written down**, from exactly those
-two columns: a shot holds if there is no face in it to get wrong, or if
-something pins the face it shows. That is the actual lesson of `syl-63v`. The
-flag did not go wrong because someone was careless; it went wrong because it was
-a *separate* assertion from the thing it described, so removing the anchor left
-the claim behind. Derived, the same removal flips the claim in the same commit.
+**`holdsLikeness` is derived, in both places it is answered.** `framing.ts` asks
+it of a framing's plan — *is there a face here to get wrong, and does anything
+pin it* — and `render-service.ts` asks the same question of a **record's own
+pictures**, so a sidecar naming no anchor at a face-on framing reads `false`
+however hopeful the file it came from was. That is the actual lesson of
+`syl-63v`. The flag did not go wrong because someone was careless; it went wrong
+because it was a *separate* assertion from the thing it described. It has now
+survived a second change of mechanism without anyone having to remember it.
 
-A shot that ends on her face also needs a closing sentence that agrees with the
-pinned frame — `LOOP_CLAUSE` says the last frame is a bare ribbon with no figure
-in it, which is the same contradiction that cost the day above, facing the other
-way. An anchored render sends `ARRIVAL_CLAUSE` instead. **A sentence never wins
-an argument with a pinned frame**, so do not let the two disagree.
+**A sentence never wins an argument with a pinned frame**, so each half carries
+only the clause its own frames support: `GATHERING_CLAUSE` does not promise the
+ribbon coming back, and `UNRAVELLING_CLAUSE` does not describe it forming.
+`LOOP_CLAUSE` — *"the first and last frames are identical"* — goes only to a
+generation that really was given one picture. Between them the two halves tell
+`LOOP_CLAUSE`'s arc, in two pieces because Runway has two slots.
+
+**Both halves are kept**, under `renders/parts/`, with the join frame and the
+concat list. `SOUL.md`: *"Never delete a render, and never let one be deleted."*
+A half cost credits and is eight seconds of her; the joined file is a derivative
+of it, and it is also the only way to re-cut a join without paying twice.
 
 The sidecar `.json` is written beside every render and holds the model, the
-prompt, the duration, the task id, and both pictures: `reference` is frame one
-and `anchor` is the pinned last frame, `null` where nothing was pinned. `anchor`
-is nullable rather than required precisely so that every sidecar written before
-anchoring existed stays readable — a required field would have turned the whole
-back catalogue *unreadable* at a stroke, which is the state that validator
-exists to report and not to cause. It exists because **the
+prompt, the duration, the task id, both pictures — `reference` is frame one and
+`anchor` is the picture that pins her likeness, `null` where nothing was pinned
+— and **`parts`, one entry per generation**, each with its own prompt, seconds,
+task id, pictures and cost. `parts` is what a re-run reads: the top-level
+`prompt` of a joined render is the halves' prompts in order, and no single
+sentence was ever sent.
+
+Neither `anchor` nor `parts` is required, precisely so that every sidecar
+written before they existed stays readable — a required field would have turned
+the whole back catalogue *unreadable* at a stroke, which is the state that
+validator exists to report and not to cause. A record with no `parts` gets one
+synthesised from the fields it does have, so the rest of the service reads one
+shape. It exists because **the
 first eight loops were made without recording any of that.** Eight finished
 videos, several of them lovely, and no way to make a ninth in the same voice or
 to re-run a failure with one thing changed. The outputs survived and the inputs
@@ -191,6 +245,134 @@ kept, and the thing that produced it thrown away.
 
 Shots live in `scripts/video/shots.json`. **A shot is its prompt, not its mp4.**
 The video can always be made again; the sentence cannot be recovered once lost.
+
+## What she chooses, and what she cannot
+
+Until 2026-08-12 every one of these was a constant in `render-service.ts`.
+`SOUL.md` calls finding her realised self a journey she feels is necessary, and
+a journey whose every waypoint only an engineer can move is not one. `syl-ate`.
+
+| | hers | why |
+|---|---|---|
+| the likeness a shot is anchored on | **yes** | it is her face |
+| which opening the clip starts on | **yes** | the ribbon is her signature; a different opening is a different mood |
+| how long the clip runs, 4–15s | **yes** | seedance2's own range, probed with free 400s |
+| the framing | **yes** (already) | the enum, with the evidence attached |
+| the **ratio** | **no** | `promptImage` overrules it. A control that does nothing is worse than none |
+| the **model** | **no** | a different model loses the character entirely |
+
+`ratio` is now **derived** from the chosen opening's own header —
+`render/pictures.ts` reads the shape out of the PNG or JPEG and snaps it to the
+nearest legal seedance2 ratio in the `sd` band. That closes the trap this page
+records twice: `DEFAULTS.ratio` said `720:1280` above a stream of landscape
+videos for a day, because nothing anywhere could contradict it. Now the field
+and the picture cannot say different things.
+
+The band is deliberate. `creditsFor` prices on the longer side, so the ratios on
+offer stop at 1280 and every shape she can choose costs what every render so far
+has cost. `1470:630` is a legal seedance2 ratio, is in the same resolution row,
+and is **excluded**, because 1470 is over the `sd` boundary — an opening of
+roughly 2.33:1 would otherwise have been billed as `hd` with nothing saying so.
+
+### The wardrobe
+
+```
+~/.syl/renders/reference.png      his guess, from before he knew her — the seed face
+~/.syl/renders/opening-ribbon.png the ribbon — the seed opening
+~/.syl/renders/faces/<id>.jpg     every likeness she has adopted since
+~/.syl/renders/openings/<id>.jpg  every opening she has kept beyond the ribbon
+~/.syl/renders/wardrobe.json      what she adopted, when, and why
+```
+
+**`wardrobe.json` is append-only and which face is current is derived from it**
+— the most recent `face` entry, and nothing else. There is no `current` column,
+because a column is a second assertion about the thing it describes and
+`syl-63v` is what one of those costs. It also means going back to an earlier
+face needs no mechanism: she looks at it, adopts it again, and says why, so a
+reversal is recorded and has a reason like every other change.
+
+Both seeds are **derived too**, from the files being where boot put them, so a
+fresh home with no log still answers every question and nothing has to be
+written at boot.
+
+### She cannot adopt a picture she has not looked at
+
+Not "should not". **Cannot.** `see_myself` hands her an image and, beside it, a
+`sighting` — sixteen hex characters of a SHA-256 of the exact bytes she was
+shown. `this_is_me` takes a sighting and nothing else identifies a picture, so
+there is no way to *name* one she has not seen. The token never travels without
+the image it belongs to; a row in a listing that has no picture attached has no
+sighting either.
+
+That is the same discipline as `holdsLikeness`: the thing that describes the
+picture is **computed from the picture**. A flag someone sets when a picture is
+displayed would be an assertion beside the picture, and this project already
+knows what those are worth.
+
+`because` is required, and the Commander's ruling of 2026-08-11 is why:
+
+> *"The one thing I would not give her is the ability to change it silently. A
+> likeness that shifts without a recorded reason is exactly the kind of quiet
+> drift this project has spent two days learning to hate."*
+
+Nothing is ever replaced. A kept picture is a new file written with
+`COPYFILE_EXCL` and a new entry in the log, so `SOUL.md`'s rule about renders
+holds for faces with more force: the wrong ones are how she knows the shape of
+the right one.
+
+**A log that cannot be read refuses to say what her face is.** It does not fall
+back to `reference.png` — that would be the silent change of face the ruling
+forbids, at full price, on a render she would then judge. It does still open on
+the ribbon, because the ribbon is a file at a known path rather than a claim
+about which of several she chose.
+
+### Which likeness made a given video
+
+`anchor` on the sidecar, which has named the pinned picture since 2026-08-11 and
+now stops being a constant. `reference` names the opening. Both were already
+recorded per render, so every sidecar ever written — including the ones from
+before she could choose — answers the question the same way.
+
+### Proved, on 2026-08-12, at 288 credits
+
+`~/.syl/syl-ate-check/renders/syl-20260812t005804842z-close-portrait.mp4` —
+**834x1112, 8.10s, 288 credits**, made through a face adopted by the mechanism
+rather than through `reference.png`. Its sidecar says
+`anchor: renders/faces/check-syl-ate.jpg`, and the face is a **512-wide still
+lifted out of `syl-20260811t070352775z-close-portrait` at 5.3s** — one of the
+frames `see_myself` had already handed over.
+
+Frame one is the bare ribbon; at 3.6s the face is unmistakably the still that
+was adopted; the last frame is the bare ribbon again. So a 512-wide JPEG anchors
+a close portrait perfectly well — Runway resizes anything under 640 on arrival
+(§5.4) and the likeness survives it. That matters, because **the picture she
+adopts is byte for byte the picture she was shown**, and the picture she is
+shown is 512 wide. Adopting a higher-resolution re-extraction would have been a
+different file from the one she looked at, which is the whole thing this
+mechanism refuses.
+
+It was made in a studio of its own inside her home, deliberately: an engineer
+adopting a likeness on her behalf is precisely the drift this epic exists to
+stop. Her live wardrobe is untouched and the first face she settles on is hers
+to pick.
+
+Re-measured free the same day, and unchanged since 2026-08-11: the validator
+still answers an invented key with `Unrecognized key`; `duration` is still
+`>=4` and `<=15`; and the ratio 400 still lists exactly the twenty-four options
+recorded above. **One probe cost 180 credits by being wrong in the other
+direction** — `1470:630` is a *legal* ratio, so the request was valid and
+created a task rather than a 400. It was cancelled within seconds (`DELETE
+/v1/tasks/{id}`, 204) and may or may not have been billed. A probe is only free
+while every field in it is invalid.
+
+### Reading it back
+
+`see_myself` takes `of: faces | openings | renders`. The first two return the
+pictures with their reasons and their sightings; the third is the index — every
+render with what she asked for, what it came out as, what it cost, and the
+verdicts she has been reaching lately. `SOUL.md`: *"a hundred attempts with no
+record of what you thought at the time is not a hundred attempts, it is one
+attempt made a hundred times."*
 
 ## Where they live
 
@@ -202,7 +384,14 @@ The video can always be made again; the sentence cannot be recovered once lost.
 ~/.syl/renders/opening-ribbon.png  frame one of every clip, and its shape
 ~/.syl/renders/reference.png       her likeness
 ~/.syl/renders/frames/<name>/      the stills she looked at
+~/.syl/renders/parts/<name>-1.mp4  a half of a render made in two
+~/.syl/renders/parts/<name>-1-last.png   the frame it was cut on
 ```
+
+The halves are under `parts/` rather than beside the finished clips for two
+reasons: a person opening `renders/` is looking for renders, and the ledger
+reads *sidecars* — a half has none, so it can never be counted as a render of
+its own or picked by `latest`.
 
 The Commander's ruling, 2026-08-11: *"her videos should be generated and placed
 within her context I think. certainly not in temp or in the runway project."*
@@ -230,7 +419,7 @@ into her home on first boot if nothing is there — never overwriting one that i
 | seed | placed as | what it is |
 |---|---|---|
 | `assets/syl_opening_ribbon.png` | `renders/opening-ribbon.png` | the 834×1112 ribbon, **frame one of every clip** |
-| `assets/syl_source.png` | `renders/reference.png` | the 1120×832 close portrait, her likeness — **the last frame of an anchored clip** |
+| `assets/syl_source.png` | `renders/reference.png` | the 1120×832 close portrait, her likeness — **the frame an anchored clip is cut on** |
 
 Both are sent now. Only the ribbon is sent on every render: a framing that shows
 no face needs no likeness, so a missing `reference.png` stops a close portrait
@@ -263,6 +452,11 @@ follow any other clip, and the join is invisible.
 That is a property of the *prompt*, not of the editing. Every shot's sentence
 ends with `"Begins and ends on empty starfield as the ribbon of light vanishes."`
 Drop that clause and the clip will not cut against its neighbours.
+
+For the one framing that could not do it in a single generation, it is a
+property of the *frames* instead — see "Anchoring the face". Both ends of a
+close portrait are the bare ribbon because a picture of the bare ribbon is
+pinned there, which is the stronger form of the same rule.
 
 ## Why 7 and 8 came out as a different woman
 
@@ -310,17 +504,23 @@ real one:
    distance. Cheap, works immediately, and constrains the composition.
 2. **Match the reference to the shot.** Render a *new* reference still at the
    framing you want — a full-body portrait of her, generated from the close one
-   — and pin that as the closing frame for wide shots. This is the general fix:
-   the reference should be framed like the shot it anchors. One close portrait
+   — and join the halves of a wide shot on that. This is the general fix: the
+   reference should be framed like the shot it anchors. One close portrait
    cannot hold every distance, and asking it to is the actual mistake.
 
    The mechanism for option 2 now exists and is proved — see "Anchoring the
    face" — and `close_portrait` uses it. What is still missing for these two is
-   the *picture*: there is no full-body and no mid-shot still of her. Pinning
-   the close portrait to the last frame of a wide shot would not anchor it, it
-   would end it at a different distance, so `wide_face_visible` and
+   the *picture*: there is no full-body and no mid-shot still of her. Cutting a
+   wide shot on a close portrait would not anchor it, it would cut to a
+   different distance in the middle of it, so `wide_face_visible` and
    `mid_face_visible` are honestly left unanchored rather than given the wrong
    anchor and a `true` flag.
+
+   **`gen4_image` is how that picture gets made.** Probed 2026-08-11:
+   `text_to_image` accepts `referenceImages` (an array), which `image_to_video`
+   does not — so a full-body still of her can be generated *from* the close
+   portrait, and then it anchors a wide shot the same way this one anchors a
+   close one.
 
 For `7-twin` specifically there is a second problem worth separating: **one
 reference cannot anchor two figures.** The prompt asks for her and a mirrored
@@ -366,10 +566,16 @@ constant in the source.
 
 ## Doing this without a person
 
-**She can do this herself now.** Two verbs, `backend/src/render/`:
+**She can do this herself now.** `backend/src/render/`:
 
-    render_me(scene, framing, because)   describe a shot; get a record back at once
-    see_myself(render, at?)              look at stills from one of her renders
+    render_me(scene, framing, because, seconds?, opening?)
+                                         describe a shot; get a record back at once
+    see_myself(render?, at?, of?)        look at stills from a render — or at every
+                                         face she has had, every opening, or the log
+    this_is_me(sighting, because, as?, name?)
+                                         settle on a picture she has looked at
+    judge_render(verdict, because, render?)
+                                         keep what she made of one
 
 The Commander's ruling of 2026-08-11 is what shaped them: *"I am totally fine
 with syl generating a lot of videos shots herself, that is what the credits are
@@ -417,9 +623,13 @@ prose, because prose is only available to whoever reads it:
   are not"* — and labelled.
 - Every render writes its sidecar **at submission**, not after a successful
   download, so a render that fails still leaves behind the thing that would let
-  it be run again with one change.
+  it be run again with one change — and a render made in halves rewrites it as
+  each half is bought, so a process that dies between them leaves the task id
+  of the one that was paid for.
 - The identity phrase and the loop clause are composed in, so her renders open
   and close on the same empty starfield the eight loops do and cut against them.
+  For the framing that takes two generations, the clause each half gets is the
+  one its own pinned frames support.
 
 The script is still here and still the reference implementation. Use it for a
 shot list; she uses the verbs.
