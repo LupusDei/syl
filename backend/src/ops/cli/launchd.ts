@@ -34,8 +34,18 @@ const home = homedir();
 // The four APNs values and the zone are forwarded from the current shell if it
 // has them, because the alternative is a plist that boots a service which
 // cannot push and says nothing about why.
-const forwarded: Record<string, string> = {};
-for (const name of [
+//
+// The list is the whole mechanism, and a variable missing from it is not a
+// variable that defaults — it is one that vanishes. `SYL_ADJUTANT_URL` was
+// absent, so `config.adjutant` was null on the installed service however the
+// shell was configured, `ToolContext.fleet` was undefined, and every
+// `ask_agent` answered "I have no way to reach the others right now." The
+// verb, the roster and the client were all built and correct. Nothing said so,
+// because a name that is not forwarded produces silence rather than an error.
+//
+// Editing the generated plist by hand does NOT fix this: the next install
+// regenerates it from exactly this list and the change disappears.
+export const FORWARDED_ENV: readonly string[] = [
   "SYL_APNS_KEY_ID",
   "SYL_APNS_TEAM_ID",
   "SYL_APNS_BUNDLE_ID",
@@ -44,7 +54,13 @@ for (const name of [
   "SYL_TZ",
   "SYL_QUIET_START",
   "SYL_QUIET_END",
-]) {
+  "SYL_ADJUTANT_URL",
+  "SYL_ADJUTANT_AGENT_ID",
+  "SYL_ADJUTANT_PROJECT_ROOT",
+];
+
+const forwarded: Record<string, string> = {};
+for (const name of FORWARDED_ENV) {
   const value = process.env[name];
   if (value !== undefined && value.trim() !== "") forwarded[name] = value;
 }
