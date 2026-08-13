@@ -2067,7 +2067,7 @@ describe("ask_agent — putting a question to someone who knows more", () => {
 
   const sent = {
     ok: true as const,
-    data: { messageId: "msg-1", at: new Date(NOW).toISOString() },
+    data: { messageId: "msg-1", at: new Date(NOW).toISOString(), deliveredToSessions: 1 },
   };
 
   it("should ask, and report having ASKED rather than having an answer", async () => {
@@ -2153,6 +2153,195 @@ describe("ask_agent — putting a question to someone who knows more", () => {
 
     expect(envelope.ok).toBe(false);
     if (!envelope.ok) expect(envelope.reason).toContain("no way to reach");
+  });
+});
+
+/**
+ * `syl-j8fa.4` — the verb stops saying sent when it means stored.
+ *
+ * `ask_agent`'s answer is what she repeats to him. Before this, an undelivered
+ * message came back as `ok: true` with a message id in it, and she said it was
+ * sent — twice, to ids nobody ever received (`syl-5kdv`).
+ *
+ * The assertions here are deliberately on the **TEXT**, not on a boolean. A
+ * boolean that flips while the sentence still says "sent to treasurer" leaves
+ * the lie exactly where it was; asserting only on the flag is how this class of
+ * defect survives a fix.
+ */
+describe("ask_agent — the difference between reaching someone and filing a message", () => {
+  const fleet = (
+    result: Awaited<ReturnType<AdjutantClient["ask"]>>,
+  ): AdjutantClient =>
+    ({ ask: async () => result }) as unknown as AdjutantClient;
+
+  const askTreasurer = async (client: AdjutantClient | null): Promise<ToolEnvelope> =>
+    (
+      await call({ ...contextFor(fakeApi({})), fleet: client }, "ask_agent", {
+        who: "treasurer",
+        question: "What is he paying for health insurance?",
+        because: "He asked me to find out.",
+      })
+    ).envelope;
+
+  it("should say it reached a running session, and how many, when it did", async () => {
+    const envelope = await askTreasurer(
+      fleet({ ok: true, data: { messageId: "msg-1", at: new Date(NOW).toISOString(), deliveredToSessions: 1 } }),
+    );
+
+    expect(envelope.ok).toBe(true);
+    if (envelope.ok) {
+      const subject = envelope.subject as Record<string, unknown>;
+      expect(subject["deliveredToSessions"]).toBe(1);
+      const outcome = String(subject["outcome"] ?? "");
+      expect(outcome).toContain("treasurer");
+      expect(outcome).toMatch(/running session/iu);
+    }
+  });
+
+  it("should refuse to report an undelivered message as anything but a failure", async () => {
+    // The regression test for the whole bug, one layer above the client. A
+    // message that reached nobody is an ERROR RESULT to her.
+    const envelope = await askTreasurer(
+      fleet({
+        ok: false,
+        failure: {
+          kind: "undelivered",
+          operation: "ask treasurer",
+          message:
+            "Adjutant recorded the message for treasurer, but no session of theirs is running, so nobody has read it.",
+          retryable: false,
+        },
+      }),
+    );
+
+    expect(envelope.ok).toBe(false);
+  });
+
+  it("should never use the word sent for something that did not arrive", async () => {
+    // The sentence is the deliverable. She reads this and turns it into a line
+    // to him, and "sent" is the word that made two undelivered messages into
+    // two confirmations.
+    const envelope = await askTreasurer(
+      fleet({
+        ok: false,
+        failure: {
+          kind: "undelivered",
+          operation: "ask treasurer",
+          message:
+            "Adjutant recorded the message for treasurer, but no session of theirs is running, so nobody has read it.",
+          retryable: false,
+        },
+      }),
+    );
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).not.toMatch(/\bsent\b/iu);
+      expect(envelope.reason).not.toMatch(/\bdelivered\b/iu);
+    }
+  });
+
+  it("should give her a sentence about it that is true, and that names the agent", async () => {
+    // What she can repeat to him verbatim: recorded, not running, nobody read
+    // it. Each clause is a fact and none of them is "I asked treasurer".
+    const envelope = await askTreasurer(
+      fleet({
+        ok: false,
+        failure: {
+          kind: "undelivered",
+          operation: "ask treasurer",
+          message:
+            "Adjutant recorded the message for treasurer, but no session of theirs is running, so nobody has read it.",
+          retryable: false,
+        },
+      }),
+    );
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toContain("treasurer");
+      expect(envelope.reason).toMatch(/recorded/iu);
+      expect(envelope.reason).toMatch(/not running|no session/iu);
+      expect(envelope.reason).toMatch(/nobody has read it/iu);
+    }
+  });
+
+  it("should not hand her a message id to wave as proof of an arrival", async () => {
+    // The original defect in one line: a real id for a message nobody received.
+    // The id is evidence of a row and she must not be given it to point at.
+    const envelope = await askTreasurer(
+      fleet({
+        ok: false,
+        failure: {
+          kind: "undelivered",
+          operation: "ask treasurer",
+          message:
+            "Adjutant recorded the message for treasurer, but no session of theirs is running, so nobody has read it. " +
+            "Its id is 77e6f10a-63a2-465f-8e69-71e9b92fa2ac.",
+          retryable: false,
+        },
+      }),
+    );
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/iu);
+      expect(envelope.reason).not.toMatch(/\bid\b/iu);
+    }
+  });
+
+  it("should not tell her to try again at something that will fail the same way", async () => {
+    // `retryable` reaches the model as an instruction. Nothing about calling
+    // the same verb again starts the agent up, so saying "retry" would have her
+    // hammering a dead session and reporting each attempt.
+    const envelope = await askTreasurer(
+      fleet({
+        ok: false,
+        failure: {
+          kind: "undelivered",
+          operation: "ask treasurer",
+          message:
+            "Adjutant recorded the message for treasurer, but no session of theirs is running, so nobody has read it.",
+          retryable: false,
+        },
+      }),
+    );
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.retryable).toBe(false);
+  });
+
+  it("should keep a transport failure saying it did not ask at all", async () => {
+    // Unchanged, and the pair is the point: "Adjutant is down" and "treasurer
+    // is not running" must not arrive as the same sentence.
+    const envelope = await askTreasurer(
+      fleet({
+        ok: false,
+        failure: {
+          kind: "unreachable",
+          operation: "ask treasurer",
+          message: "Adjutant is not answering on 127.0.0.1:4201, so ask treasurer did not happen.",
+          retryable: true,
+        },
+      }),
+    );
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toContain("I have not asked treasurer");
+      expect(envelope.retryable).toBe(true);
+    }
+  });
+
+  it("should warn her in the tool's own description that delivery is not guaranteed", async () => {
+    // She reads the description at session start, and it is the only thing that
+    // shapes what she says BEFORE the answer comes back. A verb whose failure
+    // mode is undocumented gets narrated as success.
+    const schema = TOOLS.find((entry) => entry.name === "ask_agent");
+
+    expect(schema).toBeDefined();
+    expect(schema?.description).toMatch(/not guaranteed/iu);
+    expect(schema?.description).toMatch(/told which/iu);
   });
 });
 

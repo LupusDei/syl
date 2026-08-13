@@ -65,7 +65,7 @@ function initializeAnswer(sessionId = "session-1"): Canned {
 /** The 202 with an empty body that `notifications/initialized` produces. */
 const acceptedAnswer: Canned = { status: 202, text: "" };
 
-/** A `tools/call` answer wrapping whatever `send_message` returned. */
+/** A `tools/call` answer wrapping whatever the messaging tool returned. */
 function toolAnswer(payload: unknown, id = 2): Canned {
   return {
     headers: { "content-type": "text/event-stream" },
@@ -77,11 +77,41 @@ function toolAnswer(payload: unknown, id = 2): Canned {
   };
 }
 
-/** What a successful `send_message` returns. Captured from 4201. */
-const sentAnswer = toolAnswer({
+/**
+ * What a `direct_message` that ARRIVED returns.
+ *
+ * `messageId`/`timestamp` are captured from 4201's `send_message`, which is the
+ * same envelope. `deliveredToSessions` and `conversationId` are the two extra
+ * fields, read off Adjutant's own `DirectMessageResult`
+ * (`backend/src/services/direct-message-delivery.ts`) rather than invented here.
+ *
+ * The count is the whole point of the new tool: `send_message`'s DM branch
+ * stored and broadcast and never injected, so every send Syl ever made came
+ * back looking exactly like this one with nothing having arrived anywhere.
+ */
+const deliveredAnswer = toolAnswer({
+  messageId: "dad93396-118f-4791-be99-46220f7fe9b5",
+  timestamp: "2026-08-11 01:50:15",
+  conversationId: "dm:syl:treasurer",
+  deliveredToSessions: 1,
+});
+
+/** The same envelope when nobody was running to receive it. */
+const undeliveredAnswer = toolAnswer({
+  messageId: "dad93396-118f-4791-be99-46220f7fe9b5",
+  timestamp: "2026-08-11 01:50:15",
+  conversationId: "dm:syl:treasurer",
+  deliveredToSessions: 0,
+});
+
+/** An Adjutant too old to have `direct_message`'s count in its answer. */
+const countlessAnswer = toolAnswer({
   messageId: "dad93396-118f-4791-be99-46220f7fe9b5",
   timestamp: "2026-08-11 01:50:15",
 });
+
+/** Kept under its old name so the tests that only need "it worked" still read. */
+const sentAnswer = deliveredAnswer;
 
 /** The contract envelope `GET /api/messages` answers in. */
 function messagesAnswer(items: readonly unknown[]): Canned {
@@ -219,9 +249,144 @@ describe("who the message says it is from", () => {
     await client.ask("treasurer", "What does his insurance cost?");
 
     const call = calls[2]?.body as { params?: { name?: string; arguments?: Record<string, unknown> } };
-    expect(call.params?.name).toBe("send_message");
+    expect(call.params?.name).toBe("direct_message");
     expect(Object.keys(call.params?.arguments ?? {}).sort()).toEqual(["body", "to"]);
     expect(call.params?.arguments?.["to"]).toBe("treasurer");
+  });
+});
+
+/**
+ * `syl-j8fa.3` — the bug the Commander reported, at its root.
+ *
+ * `ask_agent` accepted a message, returned an id, and nothing arrived. Two ids
+ * she reported as successful (`77e6f10a…`, `149f1b91…`) exist on her side and
+ * on nobody else's. The cause, measured in Adjutant's source: `send_message`'s
+ * DM branch persists, broadcasts, emits a timeline event — and never injects
+ * into the recipient's live session. It cannot fail, so it always succeeded.
+ *
+ * The severity was never the outage. It is that from her side the failure was
+ * INVISIBLE, so she told him a thing was delivered when a row had been written.
+ * A verb that cannot fail is the defect this project has catalogued repeatedly.
+ *
+ * So the load-bearing test in this section is not "the count comes back". It is
+ * **a count of zero is not a success**. If that can pass while `ask` returns
+ * `ok: true`, nothing has been fixed.
+ */
+describe("whether anybody actually received it", () => {
+  it("should call the tool that DELIVERS, not the one that only stores", async () => {
+    // `send_message` is left exactly as it is, so no other agent's behaviour
+    // changes; `direct_message` is the new tool that injects and awaits.
+    const { client, calls } = clientWith([initializeAnswer(), acceptedAnswer, deliveredAnswer]);
+
+    await client.ask("treasurer", "What does his insurance cost?");
+
+    const call = calls[2]?.body as { params?: { name?: string } };
+    expect(call.params?.name).toBe("direct_message");
+    expect(call.params?.name).not.toBe("send_message");
+  });
+
+  it("should carry how many live sessions it reached, so she can say so", async () => {
+    const { client } = clientWith([initializeAnswer(), acceptedAnswer, deliveredAnswer]);
+
+    const result = await client.ask("treasurer", "What does his insurance cost?");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.deliveredToSessions).toBe(1);
+      expect(result.data.messageId).toBe("dad93396-118f-4791-be99-46220f7fe9b5");
+    }
+  });
+
+  it("should NOT call a message that reached nobody a success", async () => {
+    // THE regression test for `syl-5kdv`. A stubbed transport that returns
+    // `deliveredToSessions: 0` must not produce `ok: true` — with or without a
+    // message id in the payload, which is exactly what she was shown before.
+    const { client } = clientWith([initializeAnswer(), acceptedAnswer, undeliveredAnswer]);
+
+    const result = await client.ask("treasurer", "What does his insurance cost?");
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("should tell nobody-was-listening apart from the-fleet-is-unreachable", async () => {
+    // Two different facts, and she says a different sentence for each: one is
+    // "Adjutant is down", the other is "that agent is not running". Collapsing
+    // them would have her telling him to check the wrong thing.
+    const { client } = clientWith([initializeAnswer(), acceptedAnswer, undeliveredAnswer]);
+    const { client: down } = clientWith([new TypeError("fetch failed")]);
+
+    const quiet = await client.ask("treasurer", "What does his insurance cost?");
+    const unreachable = await down.ask("treasurer", "What does his insurance cost?");
+
+    expect(quiet.ok).toBe(false);
+    expect(unreachable.ok).toBe(false);
+    if (!quiet.ok && !unreachable.ok) {
+      expect(quiet.failure.kind).toBe("undelivered");
+      expect(unreachable.failure.kind).toBe("unreachable");
+      expect(quiet.failure.kind).not.toBe(unreachable.failure.kind);
+    }
+  });
+
+  it("should say the message was recorded, since that much is true", async () => {
+    // The honest half. It IS persisted — a reply has somewhere to land — and
+    // saying so is what stops "it failed" from being its own overclaim.
+    const { client } = clientWith([initializeAnswer(), acceptedAnswer, undeliveredAnswer]);
+
+    const result = await client.ask("treasurer", "What does his insurance cost?");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.message).toMatch(/recorded/iu);
+      expect(result.failure.message).toContain("treasurer");
+      // Never the word she must not use for something that did not arrive.
+      expect(result.failure.message).not.toMatch(/\bsent\b/iu);
+    }
+  });
+
+  it("should treat a MISSING count as an error, never as a zero and never as a success", async () => {
+    // An Adjutant too old to have the tool must surface loudly. Reading the
+    // absent field as `0` would be a lie in the safe direction and reading it
+    // as success would restore the original bug in full.
+    const { client } = clientWith([initializeAnswer(), acceptedAnswer, countlessAnswer]);
+
+    const result = await client.ask("treasurer", "What does his insurance cost?");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.kind).toBe("malformed");
+      expect(result.failure.kind).not.toBe("undelivered");
+    }
+  });
+
+  it("should refuse a count that is not a whole number of sessions", async () => {
+    // A string "1", a null, a boolean, a fraction, a negative. `> 0` cannot be
+    // asked of a value that is not a number, and `Number("1") > 0` is the
+    // coercion that would quietly let a wrong shape through.
+    for (const bad of ["1", null, true, 1.5, -1]) {
+      const { client } = clientWith([
+        initializeAnswer(),
+        acceptedAnswer,
+        toolAnswer({ messageId: "m-1", timestamp: "2026-08-11 01:50:15", deliveredToSessions: bad }),
+      ]);
+
+      const result = await client.ask("treasurer", "Anything.");
+
+      expect(result.ok, `deliveredToSessions ${JSON.stringify(bad)} was accepted`).toBe(false);
+      if (!result.ok) expect(result.failure.kind).toBe("malformed");
+    }
+  });
+
+  it("should not let a message id alone stand for delivery", async () => {
+    // The exact shape of the original defect: a real id, a real timestamp, and
+    // nothing having arrived. The id proves a row, not a reader.
+    const { client } = clientWith([initializeAnswer(), acceptedAnswer, undeliveredAnswer]);
+
+    const result = await client.ask("treasurer", "What does his insurance cost?");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.message).not.toContain("dad93396-118f-4791-be99-46220f7fe9b5");
+    }
   });
 });
 
@@ -268,7 +433,10 @@ describe("the handshake", () => {
       { status: 400, headers: { "content-type": "application/json" }, text: JSON.stringify({ error: "Missing Mcp-Session-Id header" }) },
       initializeAnswer("fresh"),
       acceptedAnswer,
-      toolAnswer({ messageId: "after-restart", timestamp: "2026-08-11 01:52:00" }, 4),
+      toolAnswer(
+        { messageId: "after-restart", timestamp: "2026-08-11 01:52:00", deliveredToSessions: 1 },
+        4,
+      ),
     ]);
 
     const result = await client.ask("treasurer", "What does his insurance cost?");

@@ -325,8 +325,14 @@ export const TOOLS: readonly ToolSchema[] = [
   },
   {
     name: "ask_agent",
+    // The failure mode is IN the description, because she reads this at session
+    // start and it is the only thing shaping what she says before an answer
+    // comes back. `syl-5kdv`: she told him two messages had gone when all that
+    // had happened was two rows being written, and nothing in the verb's own
+    // words had ever suggested that was possible. A verb whose failure mode is
+    // undocumented gets narrated as success.
     description:
-      "Put a question to the one whose subject it is, on his behalf. Tell him you have ASKED — never that you have an answer.",
+      "Put a question to the one whose subject it is, on his behalf. Tell him you have ASKED — never that you have an answer. Delivery is NOT guaranteed: agents are offline most of the time, and a message to one that is not running is only filed. You will be told which happened, so say which — never that it went through unless the answer says it reached them.",
     inputSchema: {
       type: "object",
       required: ["who", "question", "because"],

@@ -765,6 +765,15 @@ const dropTodo: ToolHandler = async (input, context) => {
  *    project keeps catching is a system claiming more than it did.
  * 3. **It never reaches someone off the roster**, and the refusal names who she
  *    can reach, because she has to turn it into a sentence for him.
+ * 4. **It never says a message went anywhere on the strength of a message id.**
+ *    `syl-5kdv`: the Commander held two ids she had reported as successful for
+ *    messages nobody ever received, because the tool underneath stored without
+ *    delivering and therefore could not fail. `AdjutantClient.ask` now decides
+ *    on `deliveredToSessions`, and a message that reached nobody arrives here
+ *    as a failure — recorded, not read, and said in those words.
+ *
+ * The fourth is the one this project keeps having to learn. A verb that cannot
+ * fail does not report success; it reports nothing, in the shape of success.
  */
 const askAgent: ToolHandler = async (input, context) => {
   const who = text(input, "who");
@@ -799,6 +808,29 @@ const askAgent: ToolHandler = async (input, context) => {
 
   const sent = await context.fleet.ask(who, question);
   if (!sent.ok) {
+    // RECORDED BUT NOT READ is its own outcome, and this handler writes its own
+    // sentence for it rather than passing the client's through (`syl-j8fa.4`).
+    //
+    // Two reasons, and the second is the load-bearing one. The wording she
+    // repeats to him is the deliverable of this verb, so it belongs to the verb
+    // rather than to whatever the transport happened to say. And a message id
+    // must not appear in it: `syl-5kdv` is the Commander holding two ids she
+    // had offered as proof of arrival for messages nobody received. An id is
+    // evidence that a row exists. Handing her one here is handing her something
+    // to point at, and she will point at it.
+    if (sent.failure.kind === "undelivered") {
+      return {
+        ok: false,
+        action: "ask_agent",
+        reason:
+          `Adjutant recorded the message for ${who}, but no session of theirs is running, so ` +
+          `nobody has read it. I have not reached ${who}, and there is no answer to wait for ` +
+          "until they are started again.",
+        // Nothing about calling this verb again starts an agent up.
+        retryable: false,
+      };
+    }
+
     return {
       ok: false,
       action: "ask_agent",
@@ -809,13 +841,27 @@ const askAgent: ToolHandler = async (input, context) => {
     };
   }
 
+  const reached = sent.data.deliveredToSessions;
   return {
     ok: true,
     action: "ask_agent",
     // Deliberately not `subject: the answer`. Nothing has been answered — most
     // agents are offline most of the time, and a verb that implied otherwise
     // would have her telling him the treasurer said something.
-    subject: { who, question, messageId: sent.data.messageId },
+    //
+    // `outcome` is the sentence, and it says what is now known to be true: the
+    // text arrived in a session somebody is sitting in front of. That claim is
+    // only ever made from a count, never from an id.
+    subject: {
+      who,
+      question,
+      messageId: sent.data.messageId,
+      deliveredToSessions: reached,
+      outcome:
+        reached === 1
+          ? `It arrived in ${who}'s running session.`
+          : `It arrived in ${String(reached)} of ${who}'s running sessions.`,
+    },
     at: sent.data.at,
   };
 };

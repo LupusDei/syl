@@ -105,13 +105,27 @@ export interface AdjutantClientOptions {
 /**
  * How a call went wrong, at the grain that decides what she says about it.
  *
- * The same four kinds `tools/client.ts` uses, and for the same reason: the
- * split is by **what she should say and do**, not by where in the stack it
+ * The first four are the kinds `tools/client.ts` uses, and for the same reason:
+ * the split is by **what she should say and do**, not by where in the stack it
  * happened. `timed_out` is separate from `unreachable` because an abandoned
  * send may nonetheless have reached the treasurer, and "I do not know whether I
  * asked" is a different sentence from "I did not ask".
+ *
+ * `undelivered` is the fifth, added by `syl-j8fa.3`, and it is the only one
+ * that is not a fault. Adjutant answered, accepted the message and wrote it
+ * down — and **nobody was running to read it**. It has to be its own kind
+ * because the sentence she says is different in the way that matters to him:
+ * `unreachable` means the fleet is down and everything is affected;
+ * `undelivered` means one agent is not started and everything else is fine.
+ * Folding it into `unreachable` would send him to check the wrong machine, and
+ * folding it into success is the defect `syl-5kdv` reported.
  */
-export type AdjutantFailureKind = "refused" | "unreachable" | "timed_out" | "malformed";
+export type AdjutantFailureKind =
+  | "refused"
+  | "unreachable"
+  | "timed_out"
+  | "malformed"
+  | "undelivered";
 
 export interface AdjutantFailure {
   readonly kind: AdjutantFailureKind;
@@ -139,6 +153,16 @@ export interface SentMessage {
   readonly messageId: string;
   /** Adjutant's own stamp, normalised to an instant. */
   readonly at: string;
+  /**
+   * How many of the recipient's live sessions the text actually reached.
+   *
+   * Always `>= 1` here: a `SentMessage` is only ever built for a message that
+   * arrived somewhere, and zero is an {@link AdjutantFailure} of kind
+   * `undelivered` instead. The field exists so she can say *how many*, not so
+   * a caller can decide whether it worked — that decision has already been
+   * made by the time this type exists.
+   */
+  readonly deliveredToSessions: number;
 }
 
 /**
@@ -318,6 +342,20 @@ export class AdjutantClient {
    * The roster decides who she may reach, and it decides it **before** any
    * connection is opened — a refusal that still made a request would mean the
    * list was advisory.
+   *
+   * ## Why this calls `direct_message` and not `send_message`
+   *
+   * `syl-5kdv`, reported by the Commander with two ids she had told him were
+   * successful and which nobody ever received. Measured in Adjutant's source:
+   * `send_message`'s DM branch persists, broadcasts, emits a timeline event,
+   * pushes APNS when the recipient is him — and **never injects into the
+   * recipient's live session**. There is no failure path in it, so every send
+   * she ever made came back successful whether or not a soul was listening.
+   *
+   * `direct_message` (`syl-j8fa.2`) wraps `deliverDirectMessage`, which does
+   * both halves, and answers with `deliveredToSessions`. **That count, not the
+   * message id, is what decides whether this worked.** An id proves a row was
+   * written. It has never proved a reader.
    */
   async ask(who: string, body: string): Promise<AdjutantResult<SentMessage>> {
     const operation = `ask ${who}`;
@@ -328,7 +366,7 @@ export class AdjutantClient {
     // No `from`, no `role`, no sender of any kind: there is nothing here to be
     // wrong about. Adjutant reads the sender off the session established by
     // `#handshake`, and that session carries `X-Agent-Id: syl`.
-    const called = await this.#callTool("send_message", { to: who, body }, operation);
+    const called = await this.#callTool("direct_message", { to: who, body }, operation);
     if (!called.ok) return called;
 
     const payload = called.data;
@@ -343,12 +381,51 @@ export class AdjutantClient {
       );
     }
 
+    // Read AFTER the id, so that by the time anything below says "recorded"
+    // there is an id proving a row exists to be recorded.
+    //
+    // Absent is NOT zero. An Adjutant too old to have the tool, or one whose
+    // answer shape has drifted, must arrive as something visibly wrong rather
+    // than as a confident "nobody was listening" — and certainly not as the
+    // silent success this whole bead exists to remove. `Number.isInteger`
+    // rather than `typeof === "number"` because a fraction of a session is as
+    // unreadable as a string, and it rejects `NaN` for free.
+    const reached = payload["deliveredToSessions"];
+    if (!Number.isInteger(reached) || (reached as number) < 0) {
+      return failure(
+        "malformed",
+        operation,
+        `Adjutant took the message for ${who} but did not say whether it reached anyone, so ` +
+          "there is no way to tell it apart from one that vanished. Treat it as unsent, and " +
+          "check that Adjutant is new enough to deliver rather than only file.",
+        false,
+      );
+    }
+
+    const deliveredToSessions = reached as number;
+    if (deliveredToSessions === 0) {
+      // Not a fault, and not a success. The message is on disk — a reply has
+      // somewhere to land if they are ever started — and no running session
+      // read it. Both halves are true and she needs both.
+      //
+      // Not retryable: calling again does not start an agent up, and a
+      // retryable failure is an instruction to try again.
+      return failure(
+        "undelivered",
+        operation,
+        `Adjutant recorded the message for ${who}, but no session of theirs is running, so ` +
+          "nobody has read it.",
+        false,
+      );
+    }
+
     const stamp = payload["timestamp"];
     return {
       ok: true,
       data: {
         messageId,
         at: typeof stamp === "string" ? adjutantTimeToIso(stamp) : new Date(this.#clock()).toISOString(),
+        deliveredToSessions,
       },
     };
   }
