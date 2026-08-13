@@ -877,13 +877,13 @@ struct LocalStore: Sendable {
         case .reminder: return "reminder"
         case .todo: return "todo"
         case .goal: return "goal"
-        // **`.sending` is nil on purpose, and it is not the same "nil" as the four
+        // **`.sending` is nil on purpose, and it is not the same "nil" as the two
         // below.** Those are resources the phone does not keep. A sending it does keep —
         // this is the delete path, and a sending is never deleted, by the service or by
         // anything here. Naming the table would make acceptance item 6 true only for as
         // long as no `op: "delete"` ever arrived for one.
         case .sending: return nil
-        case .device, .delivery, .job, .run: return nil
+        case .device, .delivery: return nil
         }
     }
 

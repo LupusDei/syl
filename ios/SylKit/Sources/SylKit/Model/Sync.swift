@@ -9,7 +9,13 @@ import Foundation
 /// stops. `sending` was added to the contract with the sendings backend and is here for
 /// that reason, whether or not the client stores one.
 public enum SyncResourceType: String, Codable, Equatable, Sendable, CaseIterable {
-    case conversation, message, reminder, todo, goal, device, delivery, job, run, sending
+    // `job` and `run` were here until `syl-020`. They were 98% of the change log and
+    // no client stored one — the admin reads `/jobs` and `/runs` directly and the phone
+    // discarded them on arrival — so they are no longer synced resources at all. Listing
+    // a type that is never logged would rebuild the trap the sync service warns about:
+    // an endpoint answering 200 with an empty page, forever, for a resource that
+    // silently never arrives.
+    case conversation, message, reminder, todo, goal, device, delivery, sending
 }
 
 public enum SyncChangeOp: String, Codable, Equatable, Sendable, CaseIterable {

@@ -53,6 +53,7 @@ import { createIntakeRouter } from "./connections/intake-route.js";
 import { ADMIN_BASE_PATH, createAdminRouter } from "./routes/admin.js";
 import { describeAdmin, inspectAdminBundle } from "./ops/admin-bundle.js";
 import { readBuildInfo, selfBuildStampPath } from "./ops/build-info.js";
+import { MemoryGraft } from "./connections/graft.js";
 import { ArticleIntake } from "./connections/intake.js";
 import { IntakeStore } from "./connections/intake-store.js";
 import { anyAuthenticatedDevice, requireBearerToken } from "./middleware/auth.js";
@@ -1004,7 +1005,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // than mapping rows a second time. A second mapping is a second place for
   // the wire shape to drift, and drift between the contract and the service is
   // the bug this whole endpoint was blocked behind (`syl-c1m`).
-  const sync = new SyncService({ db: database.handle, clock, resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings }) });
+  const sync = new SyncService({ db: database.handle, clock, resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, sendings }) });
   // One zone for the whole service, and the one `loadConfig` has already
   // checked is a place rather than an offset. The quiet *window* stays
   // presence's own: `absent` is about whether Syl shows a character, which
@@ -1590,7 +1591,17 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
 
   const intakeQueue = new IntakeQueue();
   const intakeStore = new IntakeStore({ db: database.handle, clock });
-  const intake = new ArticleIntake({ store: intakeStore, clock, scheduler: intakeQueue });
+  // **The graft sink, supplied at last (`syl-022`).** Without it `ArticleIntake` ran
+  // the whole ladder — fetch, read, extract — then marked the source `done` and left the
+  // extracts in their own table, so every article she ingested was work she could not
+  // afterwards recall. The interface had existed all along with a comment explaining the
+  // gap: "the memory graph is child A's and does not exist yet". It does now.
+  const intake = new ArticleIntake({
+    store: intakeStore,
+    clock,
+    scheduler: intakeQueue,
+    graft: new MemoryGraft({ graph: memoryGraph }),
+  });
   // Everything mid-ladder when the process died is due again now. Every step
   // is idempotent, so re-running one is safe; skipping one is not.
   intakeQueue.recover(intake, clock());
@@ -1644,7 +1655,6 @@ export interface SyncSources {
   readonly goals: GoalService;
   readonly devices: DeviceTokenService;
   readonly outbox: Outbox;
-  readonly jobs: JobStore;
 }
 
 /**
@@ -1659,7 +1669,7 @@ export interface SyncSources {
  * what `op: "delete"` is derived from.
  */
 export function syncResolvers(sources: SyncSources): SyncResolvers {
-  const { messages, reminders, todos, goals, devices, outbox, jobs, sendings } = sources;
+  const { messages, reminders, todos, goals, devices, outbox, sendings } = sources;
   // Safe assertion: each store returns the contract type for that resource,
   // and `SyncChange.resource` is that same object seen as an open record.
   const as = <T>(value: T | null): Record<string, unknown> | null =>
@@ -1673,8 +1683,11 @@ export function syncResolvers(sources: SyncSources): SyncResolvers {
     goal: (id) => as(goals.get(id)),
     device: (id) => as(devices.get(id)),
     delivery: (id) => as(outbox.get(id)),
-    job: (id) => as(jobs.get(id)),
-    run: (id) => as(jobs.run(id)),
+    // `job` and `run` were here and are gone (`syl-020`, migration `0031`).
+    // They were 98% of the change log and no client ever stored one: the admin
+    // reads `/jobs` and `/runs` directly, which is the operator's live view,
+    // and the phone discarded them on arrival. A producer with no consumer,
+    // pushing his to-dos behind a cursor that pages 500 changes at a time.
     // On the feed because a sending CHANGES after its message is written: the
     // video lands minutes later and nothing about the message moves when it
     // does. Without this a device that had already synced the words would

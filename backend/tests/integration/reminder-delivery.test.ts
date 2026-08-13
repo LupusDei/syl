@@ -160,7 +160,7 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         sync: new SyncService({
           db: db.handle,
           clock,
-          resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings }),
+          resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, sendings }),
         }),
         jobs,
         idempotency: new IdempotencyStore({ db: db.handle, clock }),

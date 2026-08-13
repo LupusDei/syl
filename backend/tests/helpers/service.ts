@@ -457,7 +457,7 @@ export function testDeps(db: SylDatabase): {
     sync: new SyncService({
       db: db.handle,
       clock,
-      resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings }),
+      resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, sendings }),
     }),
     jobs,
     idempotency: new IdempotencyStore({ db: db.handle, clock }),

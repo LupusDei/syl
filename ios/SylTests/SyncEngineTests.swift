@@ -367,11 +367,11 @@ final class SyncEngineTests: XCTestCase {
             changes: [
                 upsertChange(type: .todo, id: "syl:todo:0198f2c2-0001-7000-8000-00000000c001"),
                 SyncChange(
-                    type: .job,
+                    type: .device,
                     op: .upsert,
-                    id: "syl:job:0198f2c4-0001-7000-8000-00000000e001",
+                    id: "syl:device:0198f2c4-0001-7000-8000-00000000e001",
                     at: instant("2026-08-09T07:00:00.000Z"),
-                    resource: .object(["id": .string("syl:job:x")])
+                    resource: .object(["id": .string("syl:device:x")])
                 ),
             ],
             serverTime: instant("2026-08-09T07:00:05.000Z")
@@ -475,7 +475,7 @@ final class SyncEngineTests: XCTestCase {
     func testShouldStillSkipTheResourcesThePhoneGenuinelyHasNoUseFor() async throws {
         // Goals moved out of the skipped list; deliveries, devices, jobs and runs stay
         // in it for the original reason.
-        for type in [SyncResourceType.device, .delivery, .job, .run] {
+        for type in [SyncResourceType.device, .delivery] {
             XCTAssertNil(LocalStore.tableName(for: type), "\(type.rawValue) is not stored")
         }
         XCTAssertEqual(LocalStore.tableName(for: .goal), "goal")
@@ -934,7 +934,7 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertFalse(types.isEmpty, "the phone asked for everything, which is syl-020")
         XCTAssertTrue(types.contains(.todo))
         // The four it downloads and throws away. `job` and `run` alone were 97.9%.
-        for ignored in [SyncResourceType.job, .run, .device, .delivery] {
+        for ignored in [SyncResourceType.device, .delivery] {
             XCTAssertFalse(
                 types.contains(ignored),
                 "asked for \(ignored.rawValue), which this device discards on arrival"

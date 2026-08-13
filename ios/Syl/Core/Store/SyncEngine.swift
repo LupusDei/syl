@@ -39,11 +39,21 @@ struct SyncGateway: Sendable {
 /// **`syl-020`. Sending this list is the difference between a working to-do screen and a
 /// dead one.** `GET /sync` has always accepted `?types=`; the phone never sent it, so it
 /// downloaded every row in the log and discarded most of them. Measured on the
-/// Commander's own database: 26,268 rows, of which 25,705 — **97.9%** — were `job` and
-/// `run` telemetry no device stores. The phone pages 500 changes a run and the discarded
-/// types were being written at 6,352 an hour. It was not slowly catching up; it was
-/// falling behind for good, and his 23 to-do rows sat behind tens of thousands of rows
-/// it would never reach.
+/// Commander's own database: 28,786 rows, of which 28,198 — **98.0%** — were types no
+/// device stores, `job` and `run` almost all of it, against 23 `todo` rows. The phone
+/// pages 500 changes a run, so his to-dos sat behind a backlog it had not reached.
+///
+/// **A correction, because the first version of this note was wrong and load-bearing.**
+/// It claimed the discarded types arrived at 6,352 an hour and that the phone could
+/// therefore never catch up. The true rate is ~425/hour: the query behind that figure
+/// compared `2026-08-12T20:45:24.124Z` against SQLite's `2026-08-12 19:45:24`, and `T`
+/// sorts after a space, so "the last hour" silently matched the whole table. At 425/hour
+/// against 500-per-run the device does converge — slowly, over dozens of runs. The waste
+/// and this fix are unchanged; the reasoning about *why* was inflated 15x.
+///
+/// Since `0031` the server no longer logs `job` or `run` at all, so this list is now the
+/// belt to that migration's braces: the feed is clean at the source, and the phone still
+/// asks only for what it stores.
 ///
 /// **This list must stay identical to what `SyncEngine.upsert` stores.** A type stored
 /// but not requested is a resource that silently never arrives — the failure this
@@ -432,7 +442,7 @@ actor SyncEngine {
             // and nothing anywhere assumes it did.
             guard let value = try change.decodeResource(as: Sending.self) else { return false }
             try store.replaceSendings(SendingPage(items: [value], nextCursor: nil, hasMore: false))
-        case .device, .delivery, .job, .run:
+        case .device, .delivery:
             // Not stored on the device. The admin surface reads these live and the
             // phone has no use for them; skipping is correct, not a gap.
             //
