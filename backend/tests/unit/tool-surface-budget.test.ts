@@ -155,7 +155,10 @@ describe("the tool surface", () => {
     // Requiring a reason to look at her own face would turn the one thing
     // `SOUL.md` tells her to do often into paperwork. `render_me` is a write
     // and carries `because` like the rest.
-    const reads = new Set(["whats_outstanding", "see_myself", "recall"]);
+    // `how_has_he_been` joins them: looking at his body changes nothing and spends
+    // nothing, and requiring a reason to look would make her check less often --
+    // which is precisely when she is most likely to say something wrong about it.
+    const reads = new Set(["whats_outstanding", "see_myself", "recall", "how_has_he_been"]);
 
     for (const tool of TOOLS) {
       if (reads.has(tool.name)) continue;

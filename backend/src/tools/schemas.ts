@@ -54,6 +54,7 @@
  */
 
 import { ROSTER } from "../agents/roster.js";
+import { HEALTH_TYPES } from "../health/contract.js";
 import { MEMORY_NODE_KINDS } from "../memory/schema.js";
 import { framingGuidance, FRAMING_IDS } from "../render/framing.js";
 
@@ -383,6 +384,25 @@ export const TOOLS: readonly ToolSchema[] = [
             "achieved when he has done it. abandoned when he has decided not to. dormant when it is set aside but not given up — the difference matters to him.",
         },
         because: BECAUSE,
+      },
+    },
+  },
+  {
+    name: "how_has_he_been",
+    description:
+      "Look at his body — sleep, heart rate, steps, weight — as it has been lately against his own baseline. Use it when he asks how he has been, when he mentions feeling tired or off, or when you are about to say something about his health and want to know whether it is true.",
+    inputSchema: {
+      type: "object",
+      // A read, so no `because`. See the BECAUSE block: a reason travels with an
+      // ACT, and looking is not one. `tool-surface-budget.test.ts` carries this
+      // name in its exemption list beside the other reads.
+      properties: {
+        types: {
+          type: "array",
+          items: { type: "string", enum: [...HEALTH_TYPES] },
+          description:
+            "Only these, if you want a narrow answer — 'how have I been sleeping' does not need his step count. Leave it out for everything.",
+        },
       },
     },
   },

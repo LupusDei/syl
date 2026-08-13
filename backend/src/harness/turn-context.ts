@@ -349,7 +349,7 @@ export const MEMORY_FENCE_END = "--- END OF WHAT YOU REMEMBER ---";
  * prints it on failure — take the number from the test rather than deriving it
  * by hand, because a subtraction done by hand is stale by the time it is done.
  */
-export const DEFAULT_CONTEXT_BUDGET_BYTES = 72_000;
+export const DEFAULT_CONTEXT_BUDGET_BYTES = 80_000;
 
 /**
  * POSTSCRIPT, and it arrived while the paragraph above was being written.

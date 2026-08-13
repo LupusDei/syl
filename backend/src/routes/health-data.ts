@@ -16,6 +16,8 @@ import {
   type AuthorisationRecord,
   type HealthSamples,
 } from "../health/samples.js";
+import { summariseHealth } from "../health/summarise.js";
+import type { Clock } from "../services/clock.js";
 import type { IdempotencyStore } from "../services/idempotency.js";
 import { ApiFailure, sendOk } from "./envelope.js";
 import { runIdempotent, sendIdempotent } from "./idempotency.js";
@@ -219,10 +221,14 @@ export interface HealthDataRouterOptions {
   readonly health: HealthSamples;
   readonly idempotency: IdempotencyStore;
   readonly authenticate: RequestHandler;
+  /** The service's clock. Never a second one — see `AppDependencies.clock`. */
+  readonly clock: Clock;
+  /** His zone. IANA, never a fixed offset (constraint 5). Days are HIS days. */
+  readonly tz: string;
 }
 
 export function createHealthDataRouter(options: HealthDataRouterOptions): Router {
-  const { health, idempotency, authenticate } = options;
+  const { health, idempotency, authenticate, clock, tz } = options;
   const router = Router();
 
   // BY NAME, never `/health`. See the note at the top of this file: mounting on
@@ -295,6 +301,39 @@ export function createHealthDataRouter(options: HealthDataRouterOptions): Router
    * `syl-kqc` put the notification path in — a layer reporting success over a
    * capability it never had.
    */
+  /**
+   * His health, derived, small enough for a turn (`syl-t9tj.5.4`).
+   *
+   * `?types=` narrows it — "how have I been sleeping" should not cost her a
+   * paragraph about his step count. Absent means all of them.
+   *
+   * Returns derivations and never samples. 28,726 heart-rate rows do not fit in
+   * a turn, and an arbitrary slice of them is worse than none: she would answer
+   * confidently from whichever fortnight happened to fit.
+   */
+  router.get("/health/summary", (request, response) => {
+    const raw = request.query["types"];
+    const asked = typeof raw === "string" && raw.trim() !== "" ? raw.split(",").map((t) => t.trim()) : [];
+    const unknown = asked.filter((t) => !isHealthType(t));
+    if (unknown.length > 0) {
+      throw new ApiFailure(
+        "VALIDATION_FAILED",
+        `unknown type(s) ${unknown.join(", ")}. Known types are ${HEALTH_TYPES.join(", ")}.`,
+        { details: { field: "types", reason: "unknown type" } },
+      );
+    }
+
+    sendOk(
+      response,
+      summariseHealth({
+        samples: health,
+        now: clock(),
+        tz,
+        types: asked.filter(isHealthType),
+      }),
+    );
+  });
+
   router.get("/health/series", (request, response) => {
     const type = typeOf(request);
     const from = optionalInstant(request, "from");
