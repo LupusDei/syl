@@ -2201,6 +2201,18 @@ describe("ask_agent — the difference between reaching someone and filing a mes
     },
   };
 
+  /** No session record at all under that name. Says nothing about the agent. */
+  const noRecord = {
+    ok: false as const,
+    failure: { ...undelivered.failure, sessionsFound: 0 },
+  };
+
+  /** Sessions on record, nothing delivered: nothing accepted the message. */
+  const nothingAccepted = {
+    ok: false as const,
+    failure: { ...undelivered.failure, sessionsFound: 2, retryable: true },
+  };
+
   it("should say it reached a running session, and how many, when it did", async () => {
     const envelope = await askTreasurer(
       fleet({ ok: true, data: { messageId: "msg-1", at: new Date(NOW).toISOString(), deliveredToSessions: 1 } }),
@@ -2247,7 +2259,7 @@ describe("ask_agent — the difference between reaching someone and filing a mes
     if (!envelope.ok) {
       expect(envelope.reason).toContain("treasurer");
       expect(envelope.reason).toMatch(/recorded/iu);
-      expect(envelope.reason).toMatch(/no running session/iu);
+      expect(envelope.reason).toMatch(/nothing accepted it/iu);
       expect(envelope.reason).toMatch(/nobody has read it/iu);
     }
   });
@@ -2263,9 +2275,106 @@ describe("ask_agent — the difference between reaching someone and filing a mes
 
     expect(envelope.ok).toBe(false);
     if (!envelope.ok) {
-      expect(envelope.reason).toMatch(/not (started|running)/iu);
-      expect(envelope.reason).toMatch(/no agent by that name|knows no agent|does not know/iu);
+      // Reports the gap rather than listing candidate diagnoses: a list reads
+      // as a diagnosis and silently excludes whatever is not on it.
+      expect(envelope.reason).toMatch(/does not report/iu);
       expect(envelope.reason).toMatch(/cannot tell|can't tell|no way to tell/iu);
+      // And it does not pretend to know whether another attempt is worth it.
+      expect(envelope.retryable).toBe(false);
+    }
+  });
+
+  it("should say retrying will not help when nothing is on record to receive it", async () => {
+    // `sessionsFound: 0` is the registry holding no record under that name. It
+    // is NOT "the agent is down" — an agent managed outside the session bridge
+    // is up and has no record — so the sentence is about the record and about
+    // the next action, not about a diagnosis.
+    const envelope = await askTreasurer(fleet(noRecord));
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toContain("treasurer");
+      expect(envelope.reason).toMatch(/recorded/iu);
+      expect(envelope.reason).toMatch(/no session on record|holds no session/iu);
+      expect(envelope.reason).toMatch(/will not help|has to change/iu);
+      expect(envelope.retryable).toBe(false);
+    }
+  });
+
+  it("should say retrying may work when something IS on record", async () => {
+    // The distinction that survives once neither sentence may diagnose the
+    // agent: what he can DO. Something is on record to receive it, so another
+    // attempt is not futile — which is the opposite of the case above, and the
+    // reason these are still two branches rather than one hedge.
+    const envelope = await askTreasurer(fleet(nothingAccepted));
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toMatch(/recorded/iu);
+      expect(envelope.reason).toMatch(/on record/iu);
+      expect(envelope.reason).toMatch(/again|retry/iu);
+      expect(envelope.retryable).toBe(true);
+    }
+  });
+
+  it("should never tell him an agent is up or down on the strength of this number", async () => {
+    // Symmetric, and over every branch. `sessionsFound` counts SESSION
+    // RECORDS and entails nothing about the agent in either direction:
+    // `findByName` returns offline records, and an agent outside the bridge
+    // has no record while being perfectly up.
+    //
+    // Telling him to start an agent that is running, and telling him one is
+    // running when it has stopped, are the same defect pointing opposite ways
+    // — and both are invisible to him, which is this whole epic. So the test
+    // bans both claims and requires the sentence to REFUSE the inference in
+    // words, because merely avoiding a word is how the next one gets made.
+    for (const outcome of [noRecord, nothingAccepted, undelivered]) {
+      const envelope = await askTreasurer(fleet(outcome));
+
+      expect(envelope.ok).toBe(false);
+      if (!envelope.ok) {
+        expect(envelope.reason, "must not claim the agent is stopped").not.toMatch(
+          /not running|not started|stopped|is away|offline|is down/iu,
+        );
+        expect(envelope.reason, "must not claim the agent is running").not.toMatch(
+          /\brunning\b|\bis up\b|\bare up\b|\blive\b|\bawake\b/iu,
+        );
+        expect(envelope.reason, "must refuse the inference out loud").toMatch(
+          /says nothing about|cannot tell|can't tell|no way to tell/iu,
+        );
+      }
+    }
+  });
+
+  it("should give the three cases three different sentences", async () => {
+    // THE assertion of this bead. Each sentence containing the right phrase
+    // proves nothing if they are the same sentence: he would get identical
+    // words for "start it", "it is up and something broke", and "I cannot
+    // tell". Asserting distinctness is what makes the per-phrase checks mean
+    // anything — the same lesson as asserting on text rather than a boolean.
+    const said = [
+      await askTreasurer(fleet(noRecord)),
+      await askTreasurer(fleet(nothingAccepted)),
+      await askTreasurer(fleet(undelivered)),
+    ].map((envelope) => (envelope.ok ? "" : envelope.reason));
+
+    expect(said.every((reason) => reason !== "")).toBe(true);
+    expect(new Set(said).size, `three cases, ${String(new Set(said).size)} distinct sentences`).toBe(3);
+  });
+
+  it("should keep all three sentences free of an id and of the word sent", async () => {
+    for (const outcome of [noRecord, nothingAccepted, undelivered]) {
+      const envelope = await askTreasurer(fleet(outcome));
+
+      expect(envelope.ok).toBe(false);
+      if (!envelope.ok) {
+        expect(envelope.reason).not.toMatch(/\bsent\b/iu);
+        expect(envelope.reason).not.toMatch(/\bdelivered\b/iu);
+        expect(envelope.reason).not.toMatch(/\bid\b/iu);
+        expect(envelope.reason).not.toMatch(
+          /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/iu,
+        );
+      }
     }
   });
 

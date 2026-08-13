@@ -96,12 +96,50 @@ const deliveredAnswer = toolAnswer({
   deliveredToSessions: 1,
 });
 
-/** The same envelope when nobody was running to receive it. */
+/**
+ * The same envelope from an Adjutant that does not report `sessionsFound`.
+ *
+ * The zero is all there is here, and a zero on its own cannot say WHICH kind
+ * of nothing happened. Kept as its own fixture because that older shape is a
+ * case the client still has to answer for, not a historical curiosity.
+ */
 const undeliveredAnswer = toolAnswer({
   messageId: "dad93396-118f-4791-be99-46220f7fe9b5",
   timestamp: "2026-08-11 01:50:15",
   conversationId: "dm:syl:treasurer",
   deliveredToSessions: 0,
+});
+
+/**
+ * Nothing delivered, and Adjutant holds no session record under that name.
+ *
+ * `sessionsFound` is the raw registry lookup, taken before any injection is
+ * attempted. It counts SESSION RECORDS, and that is all it counts — an agent
+ * managed outside the session bridge is up and has no record here, so a zero
+ * does not mean the agent is down.
+ */
+const noRecordAnswer = toolAnswer({
+  messageId: "dad93396-118f-4791-be99-46220f7fe9b5",
+  timestamp: "2026-08-11 01:50:15",
+  conversationId: "dm:syl:treasurer",
+  deliveredToSessions: 0,
+  sessionsFound: 0,
+});
+
+/**
+ * Nothing delivered, and sessions WERE on record — nothing accepted it.
+ *
+ * A rejected `sendInput`, a dead pane, a bridge that went away between the
+ * lookup and the write. And `registry.findByName` returns OFFLINE records
+ * too, so this equally covers an agent that stopped without its record being
+ * reaped. Neither reading may be asserted.
+ */
+const nothingAcceptedAnswer = toolAnswer({
+  messageId: "dad93396-118f-4791-be99-46220f7fe9b5",
+  timestamp: "2026-08-11 01:50:15",
+  conversationId: "dm:syl:treasurer",
+  deliveredToSessions: 0,
+  sessionsFound: 2,
 });
 
 /** An Adjutant too old to have `direct_message`'s count in its answer. */
@@ -363,12 +401,14 @@ describe("whether anybody actually received it", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       const said = result.failure.message;
-      // Both readings present.
-      expect(said).toMatch(/not (started|running)/iu);
-      expect(said).toMatch(/no agent by that name|knows no agent|does not know/iu);
-      // And it says outright that it cannot tell them apart, rather than
-      // leaving her to notice the ambiguity in a list.
+      // Without the count there is nothing to say beyond what happened to the
+      // message. Naming candidate explanations here — "either not started, or
+      // no such agent" — reads as a diagnosis and rules out the cases it did
+      // not think of, which is the same over-claim in a more helpful-looking
+      // costume. So it reports the gap itself.
+      expect(said).toMatch(/does not report/iu);
       expect(said).toMatch(/cannot tell|can't tell|no way to tell/iu);
+      expect(said).toMatch(/nobody has read it/iu);
     }
   });
 
@@ -402,6 +442,196 @@ describe("whether anybody actually received it", () => {
 
       expect(result.ok, `deliveredToSessions ${JSON.stringify(bad)} was accepted`).toBe(false);
       if (!result.ok) expect(result.failure.kind).toBe("malformed");
+    }
+  });
+
+  it("should carry which kind of nothing it was, when Adjutant says", async () => {
+    // `sessionsFound` is the registry lookup before any injection, and it
+    // counts SESSION RECORDS. The number rides on the failure so the verb
+    // above can pick its sentence without asking again.
+    const { client: away } = clientWith([initializeAnswer(), acceptedAnswer, noRecordAnswer]);
+    const { client: broken } = clientWith([initializeAnswer(), acceptedAnswer, nothingAcceptedAnswer]);
+
+    const stopped = await away.ask("treasurer", "What does his insurance cost?");
+    const failed = await broken.ask("treasurer", "What does his insurance cost?");
+
+    expect(stopped.ok).toBe(false);
+    expect(failed.ok).toBe(false);
+    if (!stopped.ok && !failed.ok) {
+      expect(stopped.failure.kind).toBe("undelivered");
+      expect(failed.failure.kind).toBe("undelivered");
+      expect(stopped.failure.sessionsFound).toBe(0);
+      expect(failed.failure.sessionsFound).toBe(2);
+    }
+  });
+
+  it("should say what Adjutant HOLDS when it holds no session record", async () => {
+    // A zero here does not mean the agent is down either. An agent managed
+    // outside the session bridge — a plain tmux agent on the roster — is up
+    // and has no record. So this sentence is about the record and about what
+    // became of the message, and says nothing about the agent.
+    const { client } = clientWith([initializeAnswer(), acceptedAnswer, noRecordAnswer]);
+
+    const result = await client.ask("treasurer", "What does his insurance cost?");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.message).toContain("treasurer");
+      expect(result.failure.message).toMatch(/recorded/iu);
+      expect(result.failure.message).toMatch(/no session on record|holds no session/iu);
+      // Retrying now cannot help: nothing has anywhere to arrive.
+      expect(result.failure.message).toMatch(/will not help|has to change/iu);
+      expect(result.failure.retryable).toBe(false);
+    }
+  });
+
+  it("should say what Adjutant HOLDS when nothing accepted the message", async () => {
+    const { client } = clientWith([initializeAnswer(), acceptedAnswer, nothingAcceptedAnswer]);
+
+    const result = await client.ask("treasurer", "What does his insurance cost?");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.message).toMatch(/recorded/iu);
+      expect(result.failure.message).toMatch(/on record/iu);
+      // Retrying later is reasonable: something to receive it is on record.
+      expect(result.failure.message).toMatch(/again|retry/iu);
+      expect(result.failure.retryable).toBe(true);
+    }
+  });
+
+  it("should never tell him an agent is up or down on the strength of this number", async () => {
+    // `sessionsFound` describes SESSION RECORDS. It entails nothing about the
+    // agent, in EITHER direction, and both gaps are real:
+    //
+    //   above 0 — `registry.findByName` returns offline records too (Adjutant's
+    //             own image path filters `status !== "offline"` off the same
+    //             call, which is the evidence). So this is equally "up and its
+    //             session refused it" and "stopped, record not yet reaped".
+    //   zero    — an agent managed outside the session bridge, a plain tmux
+    //             agent on the roster, is up and has no record at all.
+    //
+    // So the assertion is symmetric and applies to every branch. Checking only
+    // that a sentence avoids "stopped" would pass one that is equally wrong
+    // the other way, which is how this inference keeps being made: three times
+    // in one day a count has been read as meaning slightly more than it knows.
+    // The sentence must REFUSE the inference explicitly, not merely dodge the
+    // word — hence the last assertion.
+    for (const answer of [noRecordAnswer, nothingAcceptedAnswer, undeliveredAnswer]) {
+      const { client } = clientWith([initializeAnswer(), acceptedAnswer, answer]);
+
+      const result = await client.ask("treasurer", "Anything.");
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        const said = result.failure.message;
+        expect(said, "must not claim the agent is stopped").not.toMatch(
+          /not running|not started|stopped|is away|offline|is down/iu,
+        );
+        expect(said, "must not claim the agent is running").not.toMatch(
+          /\brunning\b|\bis up\b|\bare up\b|\blive\b|\bawake\b/iu,
+        );
+        expect(said, "must refuse the inference out loud").toMatch(
+          /says nothing about|cannot tell|can't tell|no way to tell/iu,
+        );
+      }
+    }
+  });
+
+  it("should say two DIFFERENT things about the two kinds of nothing", async () => {
+    // The assertion that carries the weight, and it matters MORE after all the
+    // stripping-out above: once neither sentence may diagnose the agent, the
+    // risk is that they collapse into the same hedge and stop being worth two
+    // branches. What still separates them is the NEXT ACTION — retrying later
+    // is reasonable when something is on record to receive it, and futile when
+    // nothing is, because something has to change first.
+    //
+    // Two sentences that each contain the right words and are identical to
+    // each other would pass every per-phrase check while telling him nothing:
+    // the same shape of hole as asserting on a boolean instead of on the text.
+    const { client: away } = clientWith([initializeAnswer(), acceptedAnswer, noRecordAnswer]);
+    const { client: broken } = clientWith([initializeAnswer(), acceptedAnswer, nothingAcceptedAnswer]);
+    const { client: older } = clientWith([initializeAnswer(), acceptedAnswer, undeliveredAnswer]);
+
+    const stopped = await away.ask("treasurer", "Anything.");
+    const failed = await broken.ask("treasurer", "Anything.");
+    const unknown = await older.ask("treasurer", "Anything.");
+
+    expect(stopped.ok).toBe(false);
+    expect(failed.ok).toBe(false);
+    expect(unknown.ok).toBe(false);
+    if (!stopped.ok && !failed.ok && !unknown.ok) {
+      const said = [stopped.failure.message, failed.failure.message, unknown.failure.message];
+      expect(new Set(said).size, `three cases, ${String(new Set(said).size)} distinct sentences`).toBe(3);
+      // And retryability follows what he can DO, not a diagnosis: only the
+      // case with something on record to receive it is worth another attempt.
+      expect(stopped.failure.retryable).toBe(false);
+      expect(failed.failure.retryable).toBe(true);
+      expect(unknown.failure.retryable).toBe(false);
+    }
+  });
+
+  it("should fall back rather than guess when sessionsFound is absent", async () => {
+    // An older Adjutant. Degrading to the sentence that names both readings is
+    // correct here — unlike a missing DELIVERY count, a missing
+    // `sessionsFound` costs only precision in a failure already being
+    // reported, not the difference between arrived and vanished.
+    const { client } = clientWith([initializeAnswer(), acceptedAnswer, undeliveredAnswer]);
+
+    const result = await client.ask("treasurer", "What does his insurance cost?");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.kind).toBe("undelivered");
+      expect(result.failure.sessionsFound).toBeUndefined();
+      expect(result.failure.message).toMatch(/cannot tell|can't tell|no way to tell/iu);
+    }
+  });
+
+  it("should not fail the whole report over an unreadable sessionsFound", async () => {
+    // THE ASYMMETRY, deliberately kept. A missing or unreadable
+    // `deliveredToSessions` is `malformed`, because acting on its absence
+    // means guessing whether anybody received it. An unreadable
+    // `sessionsFound` only blunts a sentence that is already reporting a
+    // failure, so it degrades instead of escalating. They must not behave the
+    // same way.
+    for (const bad of ["2", null, true, 1.5, -1]) {
+      const { client } = clientWith([
+        initializeAnswer(),
+        acceptedAnswer,
+        toolAnswer({
+          messageId: "m-1",
+          timestamp: "2026-08-11 01:50:15",
+          deliveredToSessions: 0,
+          sessionsFound: bad,
+        }),
+      ]);
+
+      const result = await client.ask("treasurer", "Anything.");
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.failure.kind, `sessionsFound ${JSON.stringify(bad)} escalated`).toBe("undelivered");
+        expect(result.failure.sessionsFound).toBeUndefined();
+        expect(result.failure.message).toMatch(/cannot tell|can't tell|no way to tell/iu);
+      }
+    }
+  });
+
+  it("should keep every undelivered sentence free of an id and of the word sent", async () => {
+    // Across all three cases at once, so a new branch cannot quietly reopen
+    // either hole. `syl-5kdv` is the Commander holding two ids offered as
+    // proof of arrival.
+    for (const answer of [noRecordAnswer, nothingAcceptedAnswer, undeliveredAnswer]) {
+      const { client } = clientWith([initializeAnswer(), acceptedAnswer, answer]);
+
+      const result = await client.ask("treasurer", "Anything.");
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.failure.message).not.toMatch(/\bsent\b/iu);
+        expect(result.failure.message).not.toContain("dad93396-118f-4791-be99-46220f7fe9b5");
+      }
     }
   });
 

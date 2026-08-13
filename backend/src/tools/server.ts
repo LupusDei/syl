@@ -819,24 +819,64 @@ const askAgent: ToolHandler = async (input, context) => {
     // evidence that a row exists. Handing her one here is handing her something
     // to point at, and she will point at it.
     //
-    // It names BOTH ways a message reaches nobody and picks neither, because
-    // Adjutant answers `deliveredToSessions: 0` for an agent that is not
-    // started and for a name it does not know, and nothing yet separates them
-    // (`sessionsFound` is asked for, not built). One of those is a fact he
-    // might act on and the other is a typo she should fix, so guessing is a
-    // coin-flip she would state as fact — this bug again, moved from delivery
-    // to identity. When the field lands, split this on a new failure kind and
-    // give each reading its own sentence.
+    // THREE sentences, because there are three things he could do. `syl-j8fa.8`:
+    // `sessionsFound` splits a zero delivery into an agent that is not running
+    // and an agent that is running whose hand-off failed. One sentence for both
+    // would tell him to go and start an agent that is already up — confidently,
+    // and with nothing to reveal she was wrong. That is this bug again, moved
+    // one layer along, which is the direction it keeps travelling.
     if (sent.failure.kind === "undelivered") {
+      const found = sent.failure.sessionsFound;
+
+      // Something is on record for them and would not take the message.
+      //
+      // Says NOTHING about whether the agent is up, and that restraint is the
+      // point: `registry.findByName` returns offline records too, so this is
+      // equally "up, and its session refused it" and "stopped, record not yet
+      // reaped". What it gives him instead is the next action — something is
+      // there to receive it, so another attempt is not futile.
+      if (found !== undefined && found > 0) {
+        return {
+          ok: false,
+          action: "ask_agent",
+          reason:
+            `Adjutant recorded the message for ${who} and holds ` +
+            `${found === 1 ? "one session" : `${String(found)} sessions`} on record for them, ` +
+            "but could not put it into any of them, so nobody has read it. A session on record " +
+            `does not mean anybody is at it, so that says nothing about whether ${who} is ` +
+            "there. Trying again may work.",
+          retryable: true,
+        };
+      }
+
+      // Nothing on record under that name — which is NOT the same as the agent
+      // being down: one managed outside Adjutant's session bridge is up and has
+      // no record. So this too reports the record and the next action, and the
+      // next action is what differs: retrying now cannot help.
+      if (found === 0) {
+        return {
+          ok: false,
+          action: "ask_agent",
+          reason:
+            `Adjutant recorded the message for ${who} but holds no session on record for ` +
+            "them, so there was nowhere to put it and nobody has read it. That says nothing " +
+            `about whether ${who} is there — an agent Adjutant does not track would look the ` +
+            "same. Trying again now will not help; something has to change first.",
+          retryable: false,
+        };
+      }
+
+      // An older Adjutant that does not report what it holds. Listing candidate
+      // explanations here would read as a diagnosis and silently exclude
+      // whatever was not on the list, so it reports the gap itself.
       return {
         ok: false,
         action: "ask_agent",
         reason:
-          `Adjutant recorded the message for ${who}, but it reached no running session, so ` +
-          `nobody has read it. Either ${who} is not started, or Adjutant knows no agent by ` +
-          `that name — it cannot tell those apart yet. Either way I have not reached ${who}, ` +
-          "and there is no answer to wait for.",
-        // Nothing about calling this verb again starts an agent up.
+          `Adjutant recorded the message for ${who}, but nothing accepted it, and this ` +
+          `Adjutant does not report what it holds for ${who}, so I cannot tell whether ` +
+          `anything was there to receive it. Nobody has read it, I have not reached ${who}, ` +
+          "and I cannot say whether another attempt would help.",
         retryable: false,
       };
     }

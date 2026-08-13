@@ -123,16 +123,18 @@ export interface AdjutantClientOptions {
  * ## The distinction `undelivered` cannot yet make, and where it will go
  *
  * `deliveredToSessions: 0` is Adjutant's answer both for *an agent that exists
- * and is not started* and for *a name it has never heard of*. Those want
- * different sentences — the first is a fact the Commander might act on, the
- * second is a typo she should correct — and nothing on the wire separates
- * them today. A `sessionsFound` field has been asked for.
+ * and is not started* and for *the message not surviving the hand-off to an
+ * agent that is perfectly well*. Adjutant now separates them with
+ * {@link AdjutantFailure.sessionsFound}, and the two want different sentences
+ * because they want different things FROM HIM: start it, versus it is up and
+ * this is worth another try.
  *
- * When it arrives, **add a sixth kind rather than widening this one**. Callers
- * switch on `kind`, so a new member is additive and an overloaded one is not:
- * `ask_agent` would keep printing the ambiguous sentence for a case that had
- * stopped being ambiguous. Until then the message names both readings and
- * asserts neither.
+ * Carried as a number on the failure rather than as a sixth kind, which is
+ * where an earlier note here pointed. The reason is that `kind` answers "what
+ * should she say and do" and both of these answer it the same way — *the
+ * message is filed and nobody read it* — while differing only in the detail
+ * that picks the sentence. A kind per detail is how a four-member union
+ * becomes a twelve-member one nobody switches on exhaustively.
  */
 export type AdjutantFailureKind =
   | "refused"
@@ -148,6 +150,24 @@ export interface AdjutantFailure {
   /** A complete sentence she can say out loud. Never empty. */
   readonly message: string;
   readonly retryable: boolean;
+  /**
+   * How many of the recipient's sessions Adjutant FOUND, before it tried.
+   *
+   * Only ever present on `undelivered`, and only when Adjutant reported it.
+   * Zero means the recipient is not running. Above zero, with nothing
+   * delivered, means the recipient is running and the message did not survive
+   * the hand-off — a rejected `sendInput`, a dead pane, a bridge that went
+   * away between the lookup and the write.
+   *
+   * **Absent is a real state and must stay one.** An older Adjutant does not
+   * send the field, and the honest answer there is the sentence that names
+   * both possibilities. Note the asymmetry with `deliveredToSessions`, which
+   * is a hard failure when missing: acting on THAT absence means guessing
+   * whether anybody received the message, whereas this one only costs
+   * precision in a failure already being reported. They are different
+   * because the cost of being wrong about them is different.
+   */
+  readonly sessionsFound?: number;
 }
 
 /**
@@ -286,6 +306,115 @@ function failure(
   retryable: boolean,
 ): { readonly ok: false; readonly failure: AdjutantFailure } {
   return { ok: false, failure: { kind, operation, message, retryable } };
+}
+
+/**
+ * `n sessions on record`, or `one session on record`.
+ *
+ * Deliberately not "live sessions". `registry.findByName` returns OFFLINE
+ * session records too — Adjutant's own image path filters `status !== "offline"`
+ * off the same call, which is the evidence — so a record is not a listener.
+ */
+function sessionsOnRecord(count: number): string {
+  return count === 1 ? "one session on record" : `${String(count)} sessions on record`;
+}
+
+/**
+ * Nothing arrived, said in whichever of three ways is true.
+ *
+ * The three differ in **what he could do about it**, which is the only reason
+ * to distinguish them at all. A failure he cannot act on differently from
+ * another failure does not need its own sentence.
+ *
+ * ## `sessionsFound` counts SESSION RECORDS, and nothing else
+ *
+ * It entails nothing about whether the agent is running, **in either
+ * direction**, and both gaps are real:
+ *
+ * - Above zero, `registry.findByName` returns OFFLINE records too — Adjutant's
+ *   own image path filters `status !== "offline"` off the same call, which is
+ *   the evidence. So it reads equally as "up, and its session refused the
+ *   message" and as "stopped, and its record has not been reaped".
+ * - At zero, an agent managed outside the session bridge — a plain tmux agent
+ *   on the roster — is up and has no record at all.
+ *
+ * So none of these sentences says whether the agent is there. Saying "they are
+ * not running" would send him to start something that may be up; saying "their
+ * session is up but unreachable" would tell him something is up that may have
+ * stopped. Those are the SAME defect pointing opposite ways, both invisible to
+ * him, and **the fix for a sentence that guesses is not a better guess.**
+ *
+ * They still divide into three, because they differ in WHAT HE CAN DO — which
+ * is the only thing worth spending a branch on:
+ *
+ * - `sessionsFound === 0` — nothing is on record to receive it, so retrying
+ *   now cannot help; something has to change first.
+ * - `sessionsFound > 0` — something is on record and did not take it, so
+ *   another attempt later is reasonable.
+ * - absent — an older Adjutant. It cannot even say that much, and it says so.
+ *
+ * Each also refuses the inference **out loud** rather than merely avoiding the
+ * word. Three times in one day a count here has been read as meaning slightly
+ * more than it knows, twice by the person who had just caught the previous
+ * one. The inference is natural enough that dodging it silently is not
+ * protection.
+ */
+function undelivered(
+  operation: string,
+  who: string,
+  sessionsFound: number | undefined,
+): { readonly ok: false; readonly failure: AdjutantFailure } {
+  const recorded = `Adjutant recorded the message for ${who}, but`;
+
+  if (sessionsFound === 0) {
+    return {
+      ok: false,
+      failure: {
+        kind: "undelivered",
+        operation,
+        message:
+          `Adjutant recorded the message for ${who} but holds no session on record for them, ` +
+          "so there was nowhere to put it and nobody has read it. That says nothing about " +
+          `whether ${who} is there. Trying again now will not help; something has to change ` +
+          "first.",
+        retryable: false,
+        sessionsFound,
+      },
+    };
+  }
+
+  if (sessionsFound !== undefined) {
+    return {
+      ok: false,
+      failure: {
+        kind: "undelivered",
+        operation,
+        message:
+          `Adjutant recorded the message for ${who} and holds ` +
+          `${sessionsOnRecord(sessionsFound)} for them, but could not put it into any of them, ` +
+          "so nobody has read it. A session on record does not mean anybody is at it, so that " +
+          `says nothing about whether ${who} is there. Trying again may work.`,
+        // The one undelivered case where another attempt is not futile.
+        retryable: true,
+        sessionsFound,
+      },
+    };
+  }
+
+  return {
+    ok: false,
+    failure: {
+      kind: "undelivered",
+      operation,
+      // No count at all. Listing candidate explanations here would read as a
+      // diagnosis and would silently exclude whatever was not on the list, so
+      // it reports the gap itself instead.
+      message:
+        `${recorded} nothing accepted it, and this Adjutant does not report what it holds for ` +
+        `${who}, so I cannot tell whether anything was there to receive it. Nobody has read it.`,
+      retryable: false,
+    },
+  };
 }
 
 export class AdjutantClient {
@@ -430,25 +559,23 @@ export class AdjutantClient {
       // dead pane, or a session bridge that was never initialised — and no
       // running session read it. Both halves are true and she needs both.
       //
-      // WHAT THIS SENTENCE MUST NOT DO is say which kind of nothing it was.
-      // A zero is returned both for an agent that exists and is not started
-      // and for a name Adjutant has never heard of, and today there is no way
-      // to tell them apart (`sessionsFound` is asked for and not yet built).
-      // Those are different sentences to the Commander — one is a typo she
-      // should correct, the other is a fact he might act on — so this names
-      // both readings and commits to neither. Guessing would be this very bug
-      // moved from delivery to identity: a coin-flip stated as fact.
+      // WHICH KIND of nothing it was comes from `sessionsFound`, the registry
+      // lookup taken before any injection is attempted.
       //
-      // Not retryable: calling again does not start an agent up, and a
-      // retryable failure is an instruction to try again.
-      return failure(
-        "undelivered",
-        operation,
-        `Adjutant recorded the message for ${who}, but it reached no running session. Either ` +
-          `${who} is not started, or Adjutant knows no agent by that name — it cannot tell ` +
-          "those apart yet. Nobody has read it.",
-        false,
-      );
+      // Read leniently, and DELIBERATELY unlike `deliveredToSessions` above.
+      // That one is a hard failure when missing because acting on its absence
+      // means guessing whether anybody received the message. This one only
+      // sharpens a sentence that is already reporting a failure, so an older
+      // Adjutant that omits it, or a value that cannot be read, degrades to
+      // the sentence that names both readings rather than escalating. Making
+      // the two behave alike in either direction would be wrong: strict here
+      // turns a cosmetic gap into an outage, lenient there restores the
+      // original bug.
+      const found = payload["sessionsFound"];
+      const sessionsFound =
+        Number.isInteger(found) && (found as number) >= 0 ? (found as number) : undefined;
+
+      return undelivered(operation, who, sessionsFound);
     }
 
     const stamp = payload["timestamp"];
