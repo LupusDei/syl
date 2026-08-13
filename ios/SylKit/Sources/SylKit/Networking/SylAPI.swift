@@ -22,6 +22,27 @@ public enum SylAPI {
         .get("/health", requiresAuthentication: false)
     }
 
+    /// Upload a batch of HealthKit samples, with the authorisation report that says what
+    /// the phone was allowed to look at.
+    ///
+    /// The idempotency key is freshly minted per attempt here, which is the opposite of
+    /// the outbox's rule — and it is safe for one reason: **this write is idempotent by
+    /// sample identity, not by request.** `(type, startedAt, endedAt, source)` is what
+    /// deduplicates, so a retry under a new key is a no-op that answers
+    /// `duplicates: n, written: 0`. A per-request key would guard one HTTP call, and the
+    /// failure to guard against is the same measurement arriving in two different calls —
+    /// from a retry, a second device, or an app that lost its watermark.
+    ///
+    /// A batch with **no samples is a legitimate upload**, not a no-op to be skipped: it
+    /// is how a type he has denied reaches the server at all. Silence with no report
+    /// attached is precisely what this whole feature exists to abolish.
+    public static func uploadHealthSamples(
+        _ body: HealthUpload,
+        idempotencyKey: String
+    ) throws -> Endpoint<HealthUploadResult> {
+        try .write(.post, "/health/samples", body: body, idempotencyKey: idempotencyKey)
+    }
+
     // MARK: - Auth
 
     public static func pair(

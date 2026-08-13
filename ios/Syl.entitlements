@@ -53,5 +53,87 @@
 	<string>$(APS_ENVIRONMENT)</string>
 	<key>com.apple.developer.usernotifications.time-sensitive</key>
 	<true/>
+
+	<!--
+	  HealthKit. `syl-t9tj.1.1`.
+
+	  Same three-part shape as time-sensitive above, and it is worth stating that
+	  the lesson transferred rather than being learned twice:
+
+	    1. this key, here                              — done
+	    2. HealthKit on the App ID                     — done, by the Commander, 2026-08-12
+	    3. the provisioning profile REGENERATED, so it
+	       actually carries the new capability          — see below
+	    4. his per-type grant, at runtime, on the phone — asked for on first read
+
+	  STEP 3 IS SEPARATE FROM STEP 2 AND IS THE ONE THAT WILL BITE. An earlier
+	  version of this comment folded them together — "HealthKit on the App ID, so
+	  the provisioning profile carries it" — and that "so" is false. Enabling a
+	  capability on the App ID does nothing to a profile that has already been
+	  issued and stored. `Matchfile` is `readonly` whenever `CI` is set, on purpose
+	  (a runner must never mint a certificate), so **CI cannot regenerate it**: it
+	  will download the profile that was stored before HealthKit existed and sign
+	  against that.
+
+	  This one fails LOUDLY, which is the only good news in the paragraph — the
+	  build stops at signing with "provisioning profile does not include the
+	  com.apple.developer.healthkit entitlement" rather than shipping an app whose
+	  Health reads silently return nothing. Regenerating is a one-time
+	  `fastlane match appstore --force` from a machine that holds the match
+	  password.
+
+	  **VERIFIED NOT NEEDED HERE, 2026-08-13**, by running the build rather than
+	  arguing about it: match installed the stored profile and reported "all
+	  required keys, certificates and provisioning profiles are installed". The
+	  Commander had enabled HealthKit on the App ID when he first created the
+	  profile, anticipating this feature, so the stored profile already carried it.
+
+	  The warning above stays, because it is true in general and the next
+	  capability added will not have been anticipated. But it did not bite here,
+	  and saying so is the point: a warning that turned out to be unnecessary once
+	  should say so, or the next reader pays a one-time cost for a step that was
+	  already done.
+
+	  HealthKit's authorisation is ASYMMETRIC in a way that makes a missing step
+	  silent, and worse than the time-sensitive case. A type he has not granted
+	  does not error and does not report denial — IT READS AS EMPTY. So a build
+	  that was never authorised and a Commander who genuinely took no steps are
+	  the same answer from here down, forever, with every layer reporting success.
+
+	  That is why `HealthReader` reports what it was AUTHORISED FOR alongside what
+	  it read, and why the server refuses to interpret silence it cannot
+	  attribute. The entitlement is not the guarantee; the report is.
+
+	  BOTH usage strings are present, and the second one is NOT a capability we
+	  asked for. This is the one place the "do not ask for what you do not rely
+	  on" rule does not get to win, and the correction is worth recording because
+	  the reasoning that produced it was good and the answer was still wrong.
+
+	  I shipped `NSHealthShareUsageDescription` alone, deliberately, on the
+	  grounds that she reads and never writes. App Store validation rejected the
+	  upload:
+
+	    "Missing purpose string in Info.plist ... The Info.plist file for the
+	     Syl.app bundle should contain a NSHealthUpdateUsageDescription key ...
+	     **While your app might not use these APIs, a purpose string is still
+	     required.**" (90683)
+
+	  The ENTITLEMENT is what triggers the requirement, not the code. An app that
+	  can reach Health at all must declare both purposes, and Apple checks the
+	  binary rather than the intent.
+
+	  **So read-only is enforced where it always actually was, and it is not this
+	  file.** `HealthReader` calls `requestAuthorization(toShare: [], read:)` — an
+	  EMPTY share set — so iOS never offers him a write toggle and never grants
+	  one. The presence of this string does not widen that by a single type. A
+	  reader who sees `NSHealthUpdateUsageDescription` and concludes that she
+	  writes to Health is reading the wrong file: the guarantee is that empty
+	  array, and the test that pins it lives beside it.
+
+	  The string itself says so in his words, because it is the sentence he will
+	  actually be shown if iOS ever surfaces it.
+	-->
+	<key>com.apple.developer.healthkit</key>
+	<true/>
 </dict>
 </plist>

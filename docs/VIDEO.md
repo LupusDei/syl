@@ -214,9 +214,30 @@ survived a second change of mechanism without anyone having to remember it.
 **A sentence never wins an argument with a pinned frame**, so each half carries
 only the clause its own frames support: `GATHERING_CLAUSE` does not promise the
 ribbon coming back, and `UNRAVELLING_CLAUSE` does not describe it forming.
-`LOOP_CLAUSE` — *"the first and last frames are identical"* — goes only to a
-generation that really was given one picture. Between them the two halves tell
-`LOOP_CLAUSE`'s arc, in two pieces because Runway has two slots.
+`LOOP_CLAUSE` — *"the first and last frames are identical"* — goes to a
+generation that really does open and close on the ribbon. Between them the two
+halves tell `LOOP_CLAUSE`'s arc, in two pieces because Runway has two slots.
+
+**And the unanchored path did not follow that rule, which cost the closing
+ribbon on every loop the service made** (`syl-gi5m`, 2026-08-13). The paragraph
+above used to end *"goes only to a generation that really was given one
+picture"*, and that was the mistake in one line: an unanchored shot was sent
+`promptImage` as a bare string, one keyframe, and asked for the closing ribbon
+in prose. `LOOP_CLAUSE` then asserted two things that cannot both be true — *"she
+unravels back into the ribbon and **it streams away, leaving empty starfield**"*
+and *"the first and last frames are identical: the bare ribbon"*. If the ribbon
+streams away, the last frame is not the ribbon. The model obeyed the earlier
+sentence. Measured by extracting both frames of
+`syl-20260813t042030321z-face-turned-away.mp4`, made by the deployed build: first
+frame the bare ribbon, last frame empty starfield with nothing in it.
+
+The fix is the one this whole document is about, applied to the other end of the
+clip. **An unanchored framing has no face to pin, so the `last` slot is free** —
+it now gets the same opening picture as `first`, and the loop is true by
+construction rather than by wording. The closing sentence was rewritten to agree
+with it. Note which half of that fix mattered: the clause had already been
+rewritten once, for the *opening* frame, and had not moved a frame then either.
+The picture moved it. **Ask the frame, not the prose.**
 
 **Both halves are kept**, under `renders/parts/`, with the join frame and the
 concat list. `SOUL.md`: *"Never delete a render, and never let one be deleted."*
@@ -259,7 +280,7 @@ a journey whose every waypoint only an engineer can move is not one. `syl-ate`.
 | how long the clip runs, 4–15s | **yes** | seedance2's own range, probed with free 400s |
 | the framing | **yes** (already) | the enum, with the evidence attached |
 | the **ratio** | **no** | `promptImage` overrules it. A control that does nothing is worse than none |
-| the **model** | **no** | a different model loses the character entirely |
+| the **model** | **no**, for now | a different model loses the character entirely. That reason survived measurement — see "Grok Imagine 1.5 cannot hold her face" — but it is now *mechanical* rather than feared, so `syl-023` opens the dial with the consequence attached rather than leaving it shut |
 
 `ratio` is now **derived** from the chosen opening's own header —
 `render/pictures.ts` reads the shape out of the PNG or JPEG and snaps it to the
@@ -531,19 +552,147 @@ one generation.
 
 ## Models
 
-`seedance2` is what these were made with — the flagship, up to 4K. Others
-available via the same endpoint:
+`seedance2` is what these were made with. Others are available via the same
+endpoint, and **the roster is free to read** — see below.
 
-| model | note |
+### Ask the account, not the documentation
+
+`GET /v1/organization` returns **this account's own model list**, with per-model
+quotas and — the useful part — **`creditBalance`**. It is better evidence than
+any 400 enumeration because it is scoped to the key we actually hold, and it
+costs nothing. Probed 2026-08-13; it is how `seedance2_5` and
+`grok_imagine_1_5` were found.
+
+`POST /v1/image_to_video` with an invalid `model` enumerates the set verbatim:
+
+```
+gen4_turbo  gen4  gen4.5  kling2.5_turbo_pro  kling3.0_pro  kling3.0_4k
+kling3.0_standard  klingO3_pro  klingO3_standard  klingO3_4k  veo3.1
+veo3.1_fast  robotics_v1  seedance2  seedance2_fast  seedance2_mini
+seedance2_5  hailuo3  happyhorse_1_0  grok_imagine_1_5  gemini_omni_flash
+```
+
+`POST /v1/text_to_image`:
+
+```
+gen4_image  gen4_image_turbo  gemini_2.5_flash  gemini_image3.1_flash
+gemini_image3_pro  gpt_image_2  grok_imagine_image_2  seedream5_lite
+seedream5_pro
+```
+
+### The whole body, per model, measured 2026-08-13
+
+The technique: **the validator reports every issue at once rather than
+short-circuiting**, so one request carrying a deliberately invented key tells
+the truth about every other key in the same request. A candidate key absent
+from the `unrecognized_keys` list is a key the model accepts.
+
+| | `seedance2` | `seedance2_5` | `grok_imagine_1_5` |
+|---|---|---|---|
+| `ratio` | 24 options | **12 options** | **not a key** |
+| `resolution` | — | — | `480p｜720p｜1080p` |
+| `duration` | int **4–15** | int **4–30** | int **1–15** |
+| `audio` | boolean | boolean | — |
+| keyframes | `first`+`last` | `first`+`last` | **`first` only, max 1** |
+| credits/sec | 36 (sd) | **30** (sd) | **11** (480p), ~16.25 (720p) |
+| 4K | yes | **no** | no |
+
+Everything else is rejected — `references`, `referenceImages`, `characterId`,
+`seed`, `keyframes`, `negativePrompt` and twenty more.
+
+`seedance2_5`'s ratios, verbatim. Note the `3840:*` rows are **gone**, so it has
+no `uhd` tier at all — and that `834:1112`, the shape of every loop, is present:
+
+```
+992:432  854:480  752:560  640:640  560:752  480:854
+1470:630  1280:720  1112:834  960:960  834:1112  720:1280
+```
+
+**`seedance2_5` beats `seedance2` on every measured axis except resolution** —
+longer (30s against 15s), cheaper (30 against 36 credits/second), and it holds
+her likeness. It loses 4K. The default is deliberately **not** changed on that
+evidence alone; a silent change to the thing that makes her face is the drift
+this page exists to prevent.
+
+### Grok Imagine 1.5 cannot hold her face, and this was rendered
+
+`grok_imagine_1_5` takes **one** image whose position must be `first`. With no
+`last` slot it cannot pin an end frame — so it cannot render *either half* of an
+anchored join, and cannot close on the ribbon.
+
+Confirmed by rendering, not inferred. Same ribbon, same prompt, same 4 seconds:
+
+| model | first frame | last frame | credits |
+|---|---|---|---|
+| `seedance2_5` | the bare ribbon | **her, unmistakably** | 120 |
+| `grok_imagine_1_5` | the bare ribbon | **a different woman** | 65 |
+
+That is the `7-twin`/`8-descent` failure arriving *necessarily*, from arity
+rather than from luck. It is also what makes exposing `model` safe:
+**`holdsLikeness` can be derived from whether the model has a slot to pin her
+with**, so a model that cannot anchor her says so before a credit is spent.
+`specs/013-she-chooses-her-model`, bead `syl-023`.
+
+Grok is still useful. At **11 credits/second at 480p** it is the cheapest video
+on the account — under `seedance2_fast`'s 29 — and a prompt test is about
+whether the *motion* reads. Rehearse on Grok, render on seedance.
+
+### Two things this page got wrong
+
+- **`hailuo3` does not take nine images.** On `image_to_video` it takes `first`
+  and `last` like everything else, and answers the same *"Duplicate position
+  values are not allowed"*. Re-probed 2026-08-13.
+- **The strict validator is per-endpoint, not universal.** `gen4_image` on
+  `text_to_image` **silently accepts unrecognized keys**. Four probes believed
+  free became four real tasks and cost **32 credits**. This page already says a
+  probe is only free while every field in it is invalid; the correction is that
+  on some endpoints *an invented key does not make a field invalid at all*. A
+  probe needs a second guarantee — an invalid enum value on a field the model
+  demonstrably validates.
+
+### How to price a render honestly
+
+Two instruments, and prefer the second:
+
+1. **`creditBalance` before and after.** Exact, and it proved that **cancelling
+   a task does not refund it**. But it is *account-wide*: a render started by
+   another agent or by Syl herself lands in the same delta, and one did during
+   this measurement. Only trust it when nothing else is in flight.
+2. **`estimatedCost.credits` on the task object**, which Runway returns while a
+   task is `RUNNING`. Per-task, immune to concurrency, and authoritative at
+   submission. It reported exactly `900` for a 30-second `seedance2_5` render,
+   confirming 30 credits/second. It is **absent once the task succeeds**, so
+   read it while the task is still running or not at all.
+
+Instrument 1 was caught out during this very measurement: the balance fell by
+785 credits while the itemised probes accounted for 245, and the missing 540 is
+exactly one 15s `seedance2` render — another agent's, landing in the same delta.
+
+**And the two statuses are billed differently, measured both ways on the same
+day:**
+
+| outcome | billed? |
 |---|---|
-| `seedance2` | flagship, up to 4K. **What the loops use.** |
-| `seedance2_fast` | cheaper, 480p/720p — good for testing a prompt before spending on the real one |
-| `gen4.5` | strong general image-to-video |
-| `gen4_turbo` | cheapest, 5 credits/second |
-| `veo3.1` | Google Veo, audio optional |
+| `SUCCEEDED` | yes |
+| `CANCELED` (you cancelled it) | **yes — no refund** |
+| `FAILED` (Runway could not finish it) | **no — refunded in full** |
 
-**Test prompts on `seedance2_fast` first.** A 15s flagship render is not cheap
-and a prompt that puts her face in the bad band will waste the whole thing.
+Cancelling a task you no longer want costs you the render. Letting it fail does
+not. This is why the four accidental `gen4_image` tasks cost 32 credits despite
+being cancelled within seconds.
+
+**30 seconds is accepted but not yet proven.** `seedance2_5` validates
+`duration: 30` and quotes 900 credits for it, but the one attempt made climbed
+to 98%, sat there twenty minutes and came back `FAILED` (refunded). One sample.
+It may be capacity rather than a ceiling — `syl-023.4.3` is the retry, and until
+one exists, nothing should claim a 30-second render works.
+
+Artefacts for all of the above: `~/.syl/model-discovery/renders/`, written to a
+studio of its own. Nothing under `~/.syl/renders/` was touched.
+
+**Test prompts on the cheapest model that shows the motion.** A 15s flagship
+render is not cheap and a prompt that puts her face in the bad band will waste
+the whole thing.
 
 Constraints measured on 2026-08-10: `seedance2` tops out at **15 seconds**, and
 high resolution together with 15s fails — pick one.
