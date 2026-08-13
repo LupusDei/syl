@@ -2,7 +2,7 @@ import type { Job } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createContentIngestionHandler, ensureContentIngestionJob } from "../../src/connections/intake-job.js";
-import type { IntakeSource } from "../../src/connections/intake-store.js";
+import type { IntakeAnswer, Reading } from "../../src/connections/intake-view.js";
 import { fixedClock } from "../../src/services/clock.js";
 import { JobRunner, type Timers } from "../../src/services/job-runner.js";
 import { expectData, startLiveService, type LiveService } from "../helpers/live-service.js";
@@ -61,8 +61,20 @@ describe("Journey 5 — he sends her an article", () => {
     });
   }
 
-  async function submit(url: string): Promise<IntakeSource> {
-    return expectData<IntakeSource>(
+  /**
+   * The reading out of an intake response.
+   *
+   * Both operations answer with `{ reading, reads }` rather than the store's
+   * row — `syl-r1t`. The row carries the page's own `<title>`, which is raw
+   * response bytes, and `read_this` puts this answer inside a turn holding MCP
+   * tools. See `connections/intake-view.ts`.
+   */
+  async function readingIn(response: Response): Promise<Reading> {
+    return (await expectData<IntakeAnswer>(response)).reading;
+  }
+
+  async function submit(url: string): Promise<Reading> {
+    return readingIn(
       await syl.api("/intake", { method: "POST", body: JSON.stringify({ url, channel: "share" }) }),
     );
   }
@@ -72,7 +84,9 @@ describe("Journey 5 — he sends her an article", () => {
       const source = await submit("https://example.com/tidy-desks");
 
       // Provenance: who asked, how it arrived, and how long it may be kept.
-      // `requestedBy` comes from the verified principal, never from the body.
+      // `requestedBy` comes from the verified credential, never from the body —
+      // which credential is what lets the reading ceiling tell a link he shared
+      // from one Syl started. See `SYL_HERSELF` in `intake-route.ts`.
       expect(source.url).toBe("https://example.com/tidy-desks");
       expect(source.channel).toBe("share");
       expect(source.requestedBy).not.toBe("unknown");
@@ -80,7 +94,7 @@ describe("Journey 5 — he sends her an article", () => {
       expect(source.retentionReason).toBeTruthy();
       expect(source.stage).toBe("fetch");
 
-      const reloaded = await expectData<IntakeSource>(
+      const reloaded = await readingIn(
         await syl.api(`/intake/${encodeURIComponent(source.id)}`),
       );
       expect(reloaded.id).toBe(source.id);
@@ -91,7 +105,7 @@ describe("Journey 5 — he sends her an article", () => {
         body: JSON.stringify({ url: "https://example.com/tidy-desks", channel: "email" }),
       });
       expect(again.status).toBe(200);
-      expect((await again.json() as { data: IntakeSource }).data.id).toBe(source.id);
+      expect((await again.json() as { data: IntakeAnswer }).data.reading.id).toBe(source.id);
     });
 
     it("should refuse a scheme that is not a fetch, at the door", async () => {
@@ -116,7 +130,7 @@ describe("Journey 5 — he sends her an article", () => {
       try {
         await runner.start();
 
-        const advanced = await expectData<IntakeSource>(
+        const advanced = await readingIn(
           await syl.api(`/intake/${encodeURIComponent(source.id)}`),
         );
 
@@ -125,13 +139,18 @@ describe("Journey 5 — he sends her an article", () => {
         // not become public on the next pass, and retrying is a loop that
         // probes the Commander's own network.
         expect(advanced.stage, "the ladder carried a tailnet link forward").toBe("failed");
-        expect(advanced.failure).toContain("100.100.42.7");
+        // The refusal reaches her as a sentence with a verdict on retrying, not
+        // as free text — `syl-r1t`. It names the address, and that is safe to
+        // repeat precisely because no response was read: there is nothing of
+        // one to quote.
+        expect(advanced.refusal?.retryable).toBe(false);
+        expect(advanced.refusal?.says).toContain("100.100.42.7");
         // `carrier_grade_nat` is the address CLASS, and only `parseUrl` names
         // it. A refusal that had opened a socket first would have come back
         // through `asRefusal` as a bare transport message with no class in it —
         // so this word is the evidence that nothing left the machine.
         expect(
-          advanced.failure,
+          advanced.refusal?.says,
           "the refusal did not come from the address guard",
         ).toContain("carrier_grade_nat");
 
@@ -149,12 +168,12 @@ describe("Journey 5 — he sends her an article", () => {
       const runner = intakeRunner();
       try {
         await runner.start();
-        const after = await expectData<IntakeSource>(
+        const after = await readingIn(
           await syl.api(`/intake/${encodeURIComponent(source.id)}`),
         );
         expect(after.id).toBe(source.id);
         expect(after.url).toBe(TAILNET_URL);
-        expect(after.failure).not.toBeNull();
+        expect(after.refusal).not.toBeNull();
       } finally {
         runner.stop();
       }
@@ -191,7 +210,7 @@ describe("Journey 5 — he sends her an article", () => {
       // assembled here, no runner assembled here.
       await syl.runtime.runner.tick();
 
-      const after = await expectData<IntakeSource>(
+      const after = await readingIn(
         await syl.api(`/intake/${encodeURIComponent(source.id)}`),
       );
       // The real `safeFetch` refuses to resolve example.com in this sandbox, so

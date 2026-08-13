@@ -6,7 +6,7 @@ import {
   createContentIngestionHandler,
   ensureContentIngestionJob,
 } from "../../src/connections/intake-job.js";
-import type { IntakeSource } from "../../src/connections/intake-store.js";
+import type { IntakeAnswer, Reading } from "../../src/connections/intake-view.js";
 import { fixedClock } from "../../src/services/clock.js";
 import { JobRunner, type Timers } from "../../src/services/job-runner.js";
 import { expectData, startLiveService, type LiveService } from "../helpers/live-service.js";
@@ -41,6 +41,19 @@ const FROZEN = Date.UTC(2026, 7, 10, 17, 0, 0, 0);
 /** Timers the runner never actually arms, so a test drives every tick. */
 const inertTimers: Timers = { set: () => null, clear: () => undefined };
 
+/**
+ * The reading out of an intake response.
+ *
+ * Both operations answer with `{ reading, reads }` rather than the store's row
+ * — `syl-r1t`. The row carries the page's own `<title>`, which is raw response
+ * bytes, and `read_this` puts this answer inside a turn that holds MCP tools.
+ * See `connections/intake-view.ts` for why that is a type rather than a
+ * `delete` in the handler.
+ */
+async function readingIn(response: Response): Promise<Reading> {
+  return (await expectData<IntakeAnswer>(response)).reading;
+}
+
 describe("article intake against a live, migrated service", () => {
   let syl: LiveService;
   /** Store directories a restart test kept alive past its service's close. */
@@ -64,7 +77,7 @@ describe("article intake against a live, migrated service", () => {
         method: "POST",
         body: JSON.stringify({ url: "https://example.com/tidy-desks?utm_source=newsletter" }),
       });
-      const source = await expectData<IntakeSource>(response);
+      const source = await readingIn(response);
 
       expect(response.status).toBe(201);
       expect(source.id).toMatch(/^syl:source:/u);
@@ -85,7 +98,7 @@ describe("article intake against a live, migrated service", () => {
 
     it("should hand back the same source when the same link arrives twice", async () => {
       const body = JSON.stringify({ url: "https://example.com/tidy-desks" });
-      const first = await expectData<IntakeSource>(
+      const first = await readingIn(
         await syl.api("/intake", { method: "POST", body }),
       );
 
@@ -95,7 +108,7 @@ describe("article intake against a live, migrated service", () => {
       const repeat = await syl.api("/intake", { method: "POST", body });
 
       expect(repeat.status).toBe(200);
-      expect((await expectData<IntakeSource>(repeat)).id).toBe(first.id);
+      expect((await readingIn(repeat)).id).toBe(first.id);
     });
 
     it("should replay a retried submission under the same idempotency key", async () => {
@@ -107,7 +120,7 @@ describe("article intake against a live, migrated service", () => {
     });
 
     it("should honour an explicit retention class over the classifier", async () => {
-      const source = await expectData<IntakeSource>(
+      const source = await readingIn(
         await syl.api("/intake", {
           method: "POST",
           body: JSON.stringify({ url: "https://example.com/notes", retention: "sensitive" }),
@@ -119,7 +132,7 @@ describe("article intake against a live, migrated service", () => {
     });
 
     it("should classify a bank link as sensitive without being asked", async () => {
-      const source = await expectData<IntakeSource>(
+      const source = await readingIn(
         await syl.api("/intake", {
           method: "POST",
           body: JSON.stringify({ url: "https://secure.chase.com/statements" }),
@@ -197,14 +210,14 @@ describe("article intake against a live, migrated service", () => {
     });
 
     it("should read a source back by id, and 404 an id that names nothing", async () => {
-      const source = await expectData<IntakeSource>(
+      const source = await readingIn(
         await syl.api("/intake", {
           method: "POST",
           body: JSON.stringify({ url: "https://example.com/readback" }),
         }),
       );
 
-      const fetched = await expectData<IntakeSource>(
+      const fetched = await readingIn(
         await syl.api(`/intake/${encodeURIComponent(source.id)}`),
       );
       expect(fetched.id).toBe(source.id);
@@ -248,7 +261,7 @@ describe("article intake against a live, migrated service", () => {
     }
 
     it("should advance a submitted source when the runner ticks", async () => {
-      const source = await expectData<IntakeSource>(
+      const source = await readingIn(
         await syl.api("/intake", {
           method: "POST",
           // The guard must refuse this. `bootstrap` uses `safeFetch` and this
@@ -267,11 +280,15 @@ describe("article intake against a live, migrated service", () => {
 
       // The fetch step ran, the SSRF guard refused it, and the reason is on the
       // row in the migrated database.
-      const advanced = await expectData<IntakeSource>(
+      const advanced = await readingIn(
         await syl.api(`/intake/${encodeURIComponent(source.id)}`),
       );
       expect(advanced.stage).toBe("failed");
-      expect(advanced.failure).toMatch(/169\.254\.169\.254|not public|refus/iu);
+      // The refusal, in the shape she can act on: a sentence and a verdict on
+      // trying again. `FetchRefused` names the address, and that is safe to
+      // repeat because no response was read — there is nothing of one to quote.
+      expect(advanced.refusal?.says).toMatch(/169\.254\.169\.254|not public|refus/iu);
+      expect(advanced.refusal?.retryable).toBe(false);
     });
 
     it("should not fail the job when a source is refused", async () => {
@@ -310,7 +327,7 @@ describe("article intake against a live, migrated service", () => {
 
   describe("across a restart", () => {
     it("should pick a half-ingested source back up", async () => {
-      const source = await expectData<IntakeSource>(
+      const source = await readingIn(
         await syl.api("/intake", {
           method: "POST",
           body: JSON.stringify({ url: "https://example.com/half-read" }),

@@ -92,12 +92,13 @@ export type ToolEnvelope =
       readonly subject: unknown;
       readonly at: string | null;
       /**
-       * What she has spent on renders, when the verb is one that spends.
+       * What this verb has spent of what it is allowed to spend.
        *
-       * Optional and additive: every existing verb omits it and every existing
-       * reader ignores it. It rides on the answer rather than waiting behind a
-       * verb she would have to think to call, because the Commander removed the
-       * gate and visibility is what is left — same rule as `because`, evidence
+       * Renders, in credits, and readings against `READS_PER_DAY`. Optional and
+       * additive: every other verb omits it and every existing reader ignores
+       * it. It rides on the answer rather than waiting behind a verb she would
+       * have to think to call, because the Commander removed the gate and
+       * visibility is what is left — same rule as `because`, evidence
        * travelling with the action instead of standing in front of it.
        */
       readonly spent?: unknown;
@@ -1629,6 +1630,155 @@ const showHim: ToolHandler = async (input, context) => {
   );
 };
 
+/**
+ * A reading, as the intake route hands it over.
+ *
+ * Declared here rather than imported from `connections/intake-view.ts`, like
+ * `RenderRow` and `WardrobeRow` above it — and on this one the convention is
+ * load-bearing rather than tidy. `reader-containment.test.ts` asserts that
+ * **nothing under `src/` outside `connections/` imports that module**, which is
+ * how "exactly one door out of the quarantine" stays a property a grep can
+ * check. A type-only import would still be an import, and would spend that
+ * assertion's meaning on a convenience.
+ *
+ * The same file asserts that nothing under `tools/` imports `intake-store.ts`
+ * either. This handler runs holding MCP tools, and the store's row is where
+ * `title` and the raw `failure` live.
+ *
+ * It carries no `title` and no `failure`, and that is the whole shape of the
+ * route's answer rather than a subset this file chose. See `intake-view.ts`.
+ */
+interface ReadingRow {
+  readonly id: string;
+  readonly url: string;
+  readonly stage: string;
+  readonly updatedAt: string;
+  readonly refusal: { readonly says: string; readonly retryable: boolean } | null;
+  readonly read: unknown;
+}
+
+/** What both intake operations answer with. */
+interface IntakeAnswer {
+  readonly reading: ReadingRow;
+  readonly reads: unknown;
+}
+
+/**
+ * Point her reading at a page, and hand back what crossed the gate.
+ *
+ * `syl-r1t`. Everything underneath this was already built and connected to
+ * nothing she could reach: the address guard, the parser, the sealed reader
+ * turn, the schema gate, the store. The gap was that her surface was seven
+ * paths and `/intake` was not among them, so she read what somebody else had
+ * configured and could not say *"read this page"*.
+ *
+ * ## Nothing raw reaches this turn, and that is the whole design
+ *
+ * > The model that reads the untrusted text has no tools and no memory. The
+ * > model that has tools and memory never reads the untrusted text.
+ *
+ * This handler runs in the second one. It has her credential and Adjutant's
+ * MCP tools, so what it returns is what an attacker gets to put in front of a
+ * model that can act. Three things keep that safe and none of them is care:
+ *
+ * - The route answers with a `Reading`, which has no field the page's `<title>`
+ *   could be assigned to. See `connections/intake-view.ts`.
+ * - A refusal is a sentence `ArticleIntake` wrote, never one the reply did. See
+ *   `safeReason` in `connections/intake.ts`.
+ * - `tools/client.ts` never interpolates a response body into a failure
+ *   message, so the transport cannot carry one back either.
+ *
+ * ## Asking twice is how she waits
+ *
+ * Submission is cheap and synchronous; the fetching and the reading happen in
+ * the `content_ingestion` job between her turns. So this does not wait, for the
+ * reason `render_me` does not: a turn does not complete until stdin reaches
+ * EOF, and waiting means the Commander watching a cursor while a hostile server
+ * takes its time. She calls it again with the same link, the submission is
+ * idempotent on the canonical URL, and the second answer carries the extract.
+ *
+ * ## A reading is one act, and it does NOT become a subscription
+ *
+ * Deliberate, and worth stating because the code invites the opposite reading:
+ * the row is called an `IntakeSource`, the mail poller a few files over polls
+ * on a cadence, and "source" is exactly the word a feed would use. It is not
+ * one. The ladder is `fetch -> read -> graft -> done`, it is terminal, and
+ * nothing re-arms it.
+ *
+ * Making an ad-hoc read recur would be an accumulation nobody chose. He sends
+ * her a link on a Tuesday; a year later she is re-fetching it every night, and
+ * the cost is invisible because no single decision was ever large enough to
+ * notice. It also inverts the ceiling below: `READS_PER_DAY` bounds readings
+ * STARTED, and a subscription is a reading that starts itself forever, so ten
+ * of them would be a permanent load rather than a day's work.
+ *
+ * If following something over time is wanted, it should be a verb that says so
+ * — asked for once, listed somewhere he can see it, and cancellable. That is a
+ * different feature with a different consent, not a flag on this one.
+ */
+const readThis: ToolHandler = async (input, context) => {
+  const url = text(input, "url");
+  if (url === null) {
+    return missing("read_this", "url", "I did not catch which page to read.");
+  }
+  if (text(input, "because") === null) {
+    return missing(
+      "read_this",
+      "because",
+      "Reading something on his behalf spends his time and his tokens, so it has to say why.",
+    );
+  }
+
+  const submitted = await context.client.post<IntakeAnswer>("/intake", { url, channel: "link" });
+  if (!submitted.ok) return refused("read_this", submitted.failure);
+
+  // Read back from the store rather than reporting what the write said, exactly
+  // as every other verb does (`syl-009.3.4`). It matters more here than most:
+  // a repeat submission answers with a source that may have finished reading
+  // since, and the row is the only thing that knows.
+  const stored = await context.client.get<IntakeAnswer>(
+    `/intake/${encodeURIComponent(submitted.data.reading.id)}`,
+  );
+  if (!stored.ok) {
+    return {
+      ok: false,
+      action: "read_this",
+      reason: `${stored.failure.message} The reading may well have started — ask again with the same link rather than sending it twice.`,
+      retryable: stored.failure.retryable,
+    };
+  }
+
+  const { reading, reads } = stored.data;
+
+  if (reading.refusal !== null) {
+    return {
+      ok: false,
+      action: "read_this",
+      // The refusal verbatim, because it was built to be said out loud and it
+      // quotes nothing. `retryable` is the ladder's own answer: a blocked
+      // address will be blocked again, and a slow server may not be.
+      reason: reading.refusal.says,
+      retryable: reading.refusal.retryable,
+    };
+  }
+
+  return {
+    ok: true,
+    action: "read_this",
+    // The reading whole, including `stage` and a `read` that is null until a
+    // chunk has been through the reader. Nothing is summarised on the way past
+    // and nothing is claimed on her behalf: a verb that answered "done" while
+    // `read` was null would have her telling him about a page nobody has
+    // opened yet.
+    subject: reading,
+    at: reading.updatedAt,
+    // Where she stands against the ceiling, riding on the answer rather than
+    // waiting behind a verb she would have to think to call. Same rule as
+    // `render_me`'s bill: the evidence travels with the action.
+    spent: reads,
+  };
+};
+
 export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   // Order matches `TOOLS`, and a test asserts it. Not cosmetic: `tools/list` is
   // built from the schemas and this is what she is told she has, so a mismatch
@@ -1650,6 +1800,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   judge_render: judgeRender,
   see_myself: seeMyself,
   show_him: showHim,
+  read_this: readThis,
   whats_outstanding: whatsOutstanding,
 };
 

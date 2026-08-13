@@ -201,3 +201,60 @@ describe("the reader turn cannot be handed an MCP config", () => {
     expect(setters).toEqual([]);
   });
 });
+
+/**
+ * `syl-r1t` — the OTHER half of the thesis, and the half that only became
+ * reachable when Syl was given `read_this`.
+ *
+ * Everything above is about what goes INTO the sealed turn. This is about what
+ * comes back out of it and lands in the turn that has hands.
+ * `connections/intake-view.ts` is the projection that decides: a `Reading` names
+ * what may cross, so the page's own `<title>` — raw response bytes, lifted out
+ * of the document with no model and no gate in between — has nowhere to be
+ * assigned to, and a column added to the row next month is absent by default
+ * rather than present by default.
+ *
+ * A projection is only worth that if it is the ONLY way through, which is a
+ * property about which modules import which and therefore the kind nobody
+ * notices breaking.
+ */
+describe("the projection back out of the quarantine has one door", () => {
+  it("should be imported by nothing outside connections/, so the row cannot leak past it", () => {
+    // Scoped to `src/`: the tests deliberately import `Reading` and
+    // `IntakeAnswer` to assert against them, and a guard that forbade that
+    // would be forbidding the thing that proves the property.
+    //
+    // `tools/server.ts` is the module this is really about. Its `read_this`
+    // handler runs holding Adjutant's MCP tools and Syl's own credential, and
+    // it forwards the route's answer onward as `subject`. It declares its own
+    // structural `ReadingRow` rather than importing `Reading` — the same
+    // convention `RenderRow` and `WardrobeRow` follow above it — so what that
+    // handler passes on is pinned by an explicit key list in
+    // `tool-server.test.ts` rather than tracking whatever the projection grows
+    // next.
+    const importers = sourceFiles(BACKEND_SRC)
+      .filter((file) => /\bfrom\s+"[^"]*intake-view\.js"/u.test(codeOf(file)))
+      .map((file) => file.slice(BACKEND_SRC.length))
+      .filter((file) => !file.startsWith("connections/"));
+
+    expect(importers).toEqual([]);
+  });
+
+  it("should keep the store's own row out of every module that can act", () => {
+    // The failure this is named for. Serving `IntakeSource` back is what both
+    // intake routes used to do, and it was harmless while the only callers were
+    // the Share Extension and a test. `read_this` changed the audience, and the
+    // row carries both fields that must not cross: `title`, which is page text,
+    // and `failure`, which was assembled from whatever was thrown — including
+    // the two throwers that quote the reader's reply.
+    //
+    // So `tools/` may not name the row type at all. It has no business holding
+    // one, and an import of it there is the shape the leak would take.
+    const offenders = sourceFiles(BACKEND_SRC)
+      .filter((file) => file.slice(BACKEND_SRC.length).startsWith("tools/"))
+      .filter((file) => /\bfrom\s+"[^"]*intake-store\.js"/u.test(codeOf(file)))
+      .map((file) => file.slice(BACKEND_SRC.length));
+
+    expect(offenders).toEqual([]);
+  });
+});

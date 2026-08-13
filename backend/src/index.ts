@@ -539,7 +539,17 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
       authorize: anyAuthenticatedDevice,
     }),
   );
-  api.use(createIntakeRouter({ intake, idempotency, authenticate }));
+  // The service's clock, not the router's default. The reading ceiling is
+  // counted over a rolling window, so a test that holds time still has to be
+  // able to hold this still too.
+  api.use(
+    createIntakeRouter({
+      intake,
+      idempotency,
+      authenticate,
+      ...(clock === undefined ? {} : { clock }),
+    }),
+  );
 
   app.use(API_BASE_PATH, api);
 

@@ -62,18 +62,30 @@ const UNIMPLEMENTED: readonly string[] = [];
  * of that debt, because a second client would have to guess at the body.
  */
 const UNDECLARED: readonly string[] = [
+  // `syl-r1t` changed what this debt costs, without changing its size. Intake
+  // used to be reachable only by the Share Extension and a job somebody had
+  // configured; `read_this` made SYL a caller, over her own credential, through
+  // `tools/server.ts`. So these two join `/memory/recall` and `/renders` below
+  // as routes with an in-repo consumer typed against them — nothing is built
+  // against a guess today, and the shapes are pinned by `read-this.test.ts` and
+  // `intake-ceiling.test.ts` rather than by a fixture.
+  //
+  // What the spec would add is a SECOND client being able to reach them, and
+  // the response shape it would publish is `IntakeAnswer` from
+  // `connections/intake-view.ts` — deliberately not `IntakeSource`. Publishing
+  // the row would put the page's own `<title>` in the contract.
   "GET /intake/{sourceId}",
   "POST /intake",
   "GET /memory/graph",
   "GET /memory/metrics",
   "POST /memory/edges/{edgeId}/feedback",
-  // `syl-016.1`, and it joins the debt above rather than escaping it. Worth
-  // one distinction though: this is the only undeclared route SYL HERSELF
-  // calls, over her own credential, through `tools/server.ts`. That consumer
-  // is in this repository and is typed against the route, so nothing is being
-  // built against a guess today — but it is also the route most likely to
-  // acquire a second caller, and `shared/openapi.yaml` is where that caller
-  // would look first.
+  // `syl-016.1`, and it joins the debt above rather than escaping it. It was
+  // once the only undeclared route SYL HERSELF called; `/renders` and, since
+  // `syl-r1t`, `/intake` call over the same credential through the same tool
+  // server. That consumer is in this repository and is typed against the route,
+  // so nothing is being built against a guess today — but these are the routes
+  // most likely to acquire a second caller, and `shared/openapi.yaml` is where
+  // that caller would look first.
   "GET /memory/recall",
   // `syl-016.7` — and the one that most needs the spec to catch up, for the
   // same reason the feedback write does: it is a WRITE, so a second client
