@@ -116,9 +116,23 @@ export interface AdjutantClientOptions {
  * down — and **nobody was running to read it**. It has to be its own kind
  * because the sentence she says is different in the way that matters to him:
  * `unreachable` means the fleet is down and everything is affected;
- * `undelivered` means one agent is not started and everything else is fine.
- * Folding it into `unreachable` would send him to check the wrong machine, and
- * folding it into success is the defect `syl-5kdv` reported.
+ * `undelivered` means one recipient did not receive it and everything else is
+ * fine. Folding it into `unreachable` would send him to check the wrong
+ * machine, and folding it into success is the defect `syl-5kdv` reported.
+ *
+ * ## The distinction `undelivered` cannot yet make, and where it will go
+ *
+ * `deliveredToSessions: 0` is Adjutant's answer both for *an agent that exists
+ * and is not started* and for *a name it has never heard of*. Those want
+ * different sentences — the first is a fact the Commander might act on, the
+ * second is a typo she should correct — and nothing on the wire separates
+ * them today. A `sessionsFound` field has been asked for.
+ *
+ * When it arrives, **add a sixth kind rather than widening this one**. Callers
+ * switch on `kind`, so a new member is additive and an overloaded one is not:
+ * `ask_agent` would keep printing the ambiguous sentence for a case that had
+ * stopped being ambiguous. Until then the message names both readings and
+ * asserts neither.
  */
 export type AdjutantFailureKind =
   | "refused"
@@ -356,6 +370,13 @@ export class AdjutantClient {
    * both halves, and answers with `deliveredToSessions`. **That count, not the
    * message id, is what decides whether this worked.** An id proves a row was
    * written. It has never proved a reader.
+   *
+   * The count is genuine arrival rather than a headcount: the tool awaits the
+   * real `sendInput` calls and counts only the ones that resolved true, so a
+   * rejected send and a dead pane both come back as zero. The `body` is
+   * injected with a `[DM from syl] ` prefix, which is what gives the recipient
+   * a name to reply to — the reply path (`syl-j8fa.5`) depends on it, this
+   * method does not.
    */
   async ask(who: string, body: string): Promise<AdjutantResult<SentMessage>> {
     const operation = `ask ${who}`;
@@ -404,17 +425,28 @@ export class AdjutantClient {
 
     const deliveredToSessions = reached as number;
     if (deliveredToSessions === 0) {
-      // Not a fault, and not a success. The message is on disk — a reply has
-      // somewhere to land if they are ever started — and no running session
-      // read it. Both halves are true and she needs both.
+      // Not a fault, and not a success. The message is on disk — Adjutant
+      // persists before it injects, so this holds even for a rejected send, a
+      // dead pane, or a session bridge that was never initialised — and no
+      // running session read it. Both halves are true and she needs both.
+      //
+      // WHAT THIS SENTENCE MUST NOT DO is say which kind of nothing it was.
+      // A zero is returned both for an agent that exists and is not started
+      // and for a name Adjutant has never heard of, and today there is no way
+      // to tell them apart (`sessionsFound` is asked for and not yet built).
+      // Those are different sentences to the Commander — one is a typo she
+      // should correct, the other is a fact he might act on — so this names
+      // both readings and commits to neither. Guessing would be this very bug
+      // moved from delivery to identity: a coin-flip stated as fact.
       //
       // Not retryable: calling again does not start an agent up, and a
       // retryable failure is an instruction to try again.
       return failure(
         "undelivered",
         operation,
-        `Adjutant recorded the message for ${who}, but no session of theirs is running, so ` +
-          "nobody has read it.",
+        `Adjutant recorded the message for ${who}, but it reached no running session. Either ` +
+          `${who} is not started, or Adjutant knows no agent by that name — it cannot tell ` +
+          "those apart yet. Nobody has read it.",
         false,
       );
     }

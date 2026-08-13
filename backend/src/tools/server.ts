@@ -818,14 +818,24 @@ const askAgent: ToolHandler = async (input, context) => {
     // had offered as proof of arrival for messages nobody received. An id is
     // evidence that a row exists. Handing her one here is handing her something
     // to point at, and she will point at it.
+    //
+    // It names BOTH ways a message reaches nobody and picks neither, because
+    // Adjutant answers `deliveredToSessions: 0` for an agent that is not
+    // started and for a name it does not know, and nothing yet separates them
+    // (`sessionsFound` is asked for, not built). One of those is a fact he
+    // might act on and the other is a typo she should fix, so guessing is a
+    // coin-flip she would state as fact — this bug again, moved from delivery
+    // to identity. When the field lands, split this on a new failure kind and
+    // give each reading its own sentence.
     if (sent.failure.kind === "undelivered") {
       return {
         ok: false,
         action: "ask_agent",
         reason:
-          `Adjutant recorded the message for ${who}, but no session of theirs is running, so ` +
-          `nobody has read it. I have not reached ${who}, and there is no answer to wait for ` +
-          "until they are started again.",
+          `Adjutant recorded the message for ${who}, but it reached no running session, so ` +
+          `nobody has read it. Either ${who} is not started, or Adjutant knows no agent by ` +
+          `that name — it cannot tell those apart yet. Either way I have not reached ${who}, ` +
+          "and there is no answer to wait for.",
         // Nothing about calling this verb again starts an agent up.
         retryable: false,
       };

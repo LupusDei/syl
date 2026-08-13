@@ -330,6 +330,8 @@ describe("whether anybody actually received it", () => {
   it("should say the message was recorded, since that much is true", async () => {
     // The honest half. It IS persisted — a reply has somewhere to land — and
     // saying so is what stops "it failed" from being its own overclaim.
+    // Adjutant persists before it injects, so this holds even when the send
+    // rejects, the pane is dead, or the session bridge was never initialised.
     const { client } = clientWith([initializeAnswer(), acceptedAnswer, undeliveredAnswer]);
 
     const result = await client.ask("treasurer", "What does his insurance cost?");
@@ -340,6 +342,33 @@ describe("whether anybody actually received it", () => {
       expect(result.failure.message).toContain("treasurer");
       // Never the word she must not use for something that did not arrive.
       expect(result.failure.message).not.toMatch(/\bsent\b/iu);
+    }
+  });
+
+  it("should not claim the agent exists, nor that it does not", async () => {
+    // A zero cannot yet tell "that agent is not started" from "there is no
+    // agent by that name" — Adjutant returns the same 0 for both, and
+    // `sessionsFound` to separate them has been asked for and not yet built.
+    //
+    // Those are different sentences to the Commander: one is a typo she should
+    // correct, the other is a fact he might act on. So until the field exists
+    // the sentence must be true under BOTH readings, which means naming both
+    // and committing to neither. Asserting either one is a coin-flip she would
+    // state as fact — the same failure as the bug this bead is fixing, moved
+    // from delivery to identity.
+    const { client } = clientWith([initializeAnswer(), acceptedAnswer, undeliveredAnswer]);
+
+    const result = await client.ask("treasurer", "What does his insurance cost?");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const said = result.failure.message;
+      // Both readings present.
+      expect(said).toMatch(/not (started|running)/iu);
+      expect(said).toMatch(/no agent by that name|knows no agent|does not know/iu);
+      // And it says outright that it cannot tell them apart, rather than
+      // leaving her to notice the ambiguity in a list.
+      expect(said).toMatch(/cannot tell|can't tell|no way to tell/iu);
     }
   });
 

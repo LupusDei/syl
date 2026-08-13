@@ -2183,6 +2183,24 @@ describe("ask_agent — the difference between reaching someone and filing a mes
       })
     ).envelope;
 
+  /**
+   * What the client hands up when nobody was listening.
+   *
+   * Its `message` is deliberately NOT what the handler is expected to repeat.
+   * The handler writes its own sentence for this kind, so leaving the client's
+   * wording distinguishable is what proves it — and the one that carries a
+   * message id (below) proves it cannot leak through.
+   */
+  const undelivered = {
+    ok: false as const,
+    failure: {
+      kind: "undelivered" as const,
+      operation: "ask treasurer",
+      message: "Adjutant recorded it and nobody read it.",
+      retryable: false,
+    },
+  };
+
   it("should say it reached a running session, and how many, when it did", async () => {
     const envelope = await askTreasurer(
       fleet({ ok: true, data: { messageId: "msg-1", at: new Date(NOW).toISOString(), deliveredToSessions: 1 } }),
@@ -2201,18 +2219,7 @@ describe("ask_agent — the difference between reaching someone and filing a mes
   it("should refuse to report an undelivered message as anything but a failure", async () => {
     // The regression test for the whole bug, one layer above the client. A
     // message that reached nobody is an ERROR RESULT to her.
-    const envelope = await askTreasurer(
-      fleet({
-        ok: false,
-        failure: {
-          kind: "undelivered",
-          operation: "ask treasurer",
-          message:
-            "Adjutant recorded the message for treasurer, but no session of theirs is running, so nobody has read it.",
-          retryable: false,
-        },
-      }),
-    );
+    const envelope = await askTreasurer(fleet(undelivered));
 
     expect(envelope.ok).toBe(false);
   });
@@ -2221,18 +2228,7 @@ describe("ask_agent — the difference between reaching someone and filing a mes
     // The sentence is the deliverable. She reads this and turns it into a line
     // to him, and "sent" is the word that made two undelivered messages into
     // two confirmations.
-    const envelope = await askTreasurer(
-      fleet({
-        ok: false,
-        failure: {
-          kind: "undelivered",
-          operation: "ask treasurer",
-          message:
-            "Adjutant recorded the message for treasurer, but no session of theirs is running, so nobody has read it.",
-          retryable: false,
-        },
-      }),
-    );
+    const envelope = await askTreasurer(fleet(undelivered));
 
     expect(envelope.ok).toBe(false);
     if (!envelope.ok) {
@@ -2242,27 +2238,34 @@ describe("ask_agent — the difference between reaching someone and filing a mes
   });
 
   it("should give her a sentence about it that is true, and that names the agent", async () => {
-    // What she can repeat to him verbatim: recorded, not running, nobody read
-    // it. Each clause is a fact and none of them is "I asked treasurer".
-    const envelope = await askTreasurer(
-      fleet({
-        ok: false,
-        failure: {
-          kind: "undelivered",
-          operation: "ask treasurer",
-          message:
-            "Adjutant recorded the message for treasurer, but no session of theirs is running, so nobody has read it.",
-          retryable: false,
-        },
-      }),
-    );
+    // What she can repeat to him verbatim: recorded, reached no running
+    // session, nobody read it. Each clause is a fact and none of them is
+    // "I asked treasurer".
+    const envelope = await askTreasurer(fleet(undelivered));
 
     expect(envelope.ok).toBe(false);
     if (!envelope.ok) {
       expect(envelope.reason).toContain("treasurer");
       expect(envelope.reason).toMatch(/recorded/iu);
-      expect(envelope.reason).toMatch(/not running|no session/iu);
+      expect(envelope.reason).toMatch(/no running session/iu);
       expect(envelope.reason).toMatch(/nobody has read it/iu);
+    }
+  });
+
+  it("should leave open whether the agent exists, because a zero cannot say", async () => {
+    // Adjutant answers 0 both for an agent that is not started and for a name
+    // it has never heard of; `sessionsFound` to separate them is asked for and
+    // not yet built. Those are different sentences to the Commander — a typo
+    // she should fix versus a fact he might act on — so the one she has must
+    // be true under both readings. Committing to either would be the same
+    // defect as this bead, moved from delivery to identity.
+    const envelope = await askTreasurer(fleet(undelivered));
+
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) {
+      expect(envelope.reason).toMatch(/not (started|running)/iu);
+      expect(envelope.reason).toMatch(/no agent by that name|knows no agent|does not know/iu);
+      expect(envelope.reason).toMatch(/cannot tell|can't tell|no way to tell/iu);
     }
   });
 
@@ -2294,18 +2297,7 @@ describe("ask_agent — the difference between reaching someone and filing a mes
     // `retryable` reaches the model as an instruction. Nothing about calling
     // the same verb again starts the agent up, so saying "retry" would have her
     // hammering a dead session and reporting each attempt.
-    const envelope = await askTreasurer(
-      fleet({
-        ok: false,
-        failure: {
-          kind: "undelivered",
-          operation: "ask treasurer",
-          message:
-            "Adjutant recorded the message for treasurer, but no session of theirs is running, so nobody has read it.",
-          retryable: false,
-        },
-      }),
-    );
+    const envelope = await askTreasurer(fleet(undelivered));
 
     expect(envelope.ok).toBe(false);
     if (!envelope.ok) expect(envelope.retryable).toBe(false);
