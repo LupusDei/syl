@@ -76,8 +76,8 @@ export interface PositionedImage {
  */
 export type PromptImage = string | readonly PositionedImage[];
 
-/** What Runway is asked for. Mirrors `POST /image_to_video`. */
-export interface SubmitSpec {
+/** Everything every model on the roster takes. Mirrors `POST /image_to_video`. */
+interface SubmitCommon {
   readonly model: string;
   /**
    * The frames Runway is given, as data URIs.
@@ -86,12 +86,38 @@ export interface SubmitSpec {
    * seedance2 takes the video's aspect from it — measured 2026-08-11, and it
    * silently overrules `ratio`. When a `last` picture is sent too it is fitted
    * into that same shape rather than changing it.
+   *
+   * **Only the positions the model declares.** `grok_imagine_1_5` answers
+   * *"Too big: expected array to have <=1 items"* to the two-slot form, so the
+   * array is built from `ModelNote.positions` rather than from a habit.
    */
   readonly promptImage: PromptImage;
   readonly promptText: string;
-  readonly ratio: string;
   readonly duration: number;
 }
+
+/** A model whose geometry is a ratio. Every seedance. */
+export interface SubmitByRatio extends SubmitCommon {
+  readonly ratio: string;
+  readonly resolution?: never;
+}
+
+/** A model whose geometry is a resolution band. `grok_imagine_1_5`. */
+export interface SubmitByResolution extends SubmitCommon {
+  readonly resolution: string;
+  readonly ratio?: never;
+}
+
+/**
+ * What Runway is asked for, shaped the way the chosen model is shaped.
+ *
+ * **A union rather than two optional fields, because the two keys are mutually
+ * exclusive at the API and the validator is strict about it**: `ratio` on
+ * `grok_imagine_1_5` is an *Unrecognized key*, and `resolution` on any seedance
+ * is the same. `ModelNote.shape` says which arm a model takes, so sending the
+ * wrong key is now a compile error rather than a 400 discovered by a render.
+ */
+export type SubmitSpec = SubmitByRatio | SubmitByResolution;
 
 /** A task, as far as this module reads one. */
 export interface RunwayTask {

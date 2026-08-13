@@ -91,6 +91,8 @@ function render(overrides: Partial<RenderRecord> = {}): RenderRecord {
     taskId: "task-1",
     model: "seedance2",
     ratio: "720:1280",
+    resolution: null,
+    keyframes: 2,
     duration: 15,
     reference: "reference.png",
     framing: "mid_face_visible",

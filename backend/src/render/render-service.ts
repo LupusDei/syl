@@ -3,9 +3,26 @@ import { basename, dirname, resolve } from "node:path";
 
 import { instant, systemClock, type Clock } from "../services/clock.js";
 import { creditsFor, usdOf } from "./credits.js";
-import { framingNote, FRAMING_IDS, type Framing, type FramingNote } from "./framing.js";
+import {
+  framingNote,
+  FRAMING_IDS,
+  TEMPLATE_FRAMING,
+  type Framing,
+  type FramingNote,
+} from "./framing.js";
 import { extractFrames, ffmpegRunner, type ExtractResult, type FrameRunner } from "./frames.js";
 import { joinVideos, lastFrame } from "./join.js";
+import {
+  canAnchorLikeness,
+  defaultResolution,
+  maxSecondsFor,
+  minSecondsFor,
+  modelNote,
+  HOUSE_MODEL,
+  MODEL_IDS,
+  type KeyframePosition,
+  type ModelNote,
+} from "./models.js";
 import { isTerminal, type RenderBackend, type PositionedImage } from "./runway.js";
 import { isRenderName, RENDER_PREFIX, type Studio } from "./studio.js";
 import { Wardrobe } from "./wardrobe.js";
@@ -106,8 +123,46 @@ export interface RenderRecord {
    * exists.
    */
   readonly taskId: string | null;
+  /**
+   * The model that made it.
+   *
+   * **Was a constant and is now a choice** (`syl-023`), which is exactly why
+   * this field earns its keep: the back catalogue is a mixture, and a shot can
+   * only be reproduced from what actually produced it. A render that says
+   * nothing about its model is a render nobody can make a second one of.
+   */
   readonly model: string;
+  /** The video's shape. Derived from the opening, which overrules any ask. */
   readonly ratio: string;
+  /**
+   * The band, for a model whose geometry is a `resolution` rather than a ratio.
+   *
+   * `null` on every seedance and on **every sidecar written before models could
+   * be chosen**, which is most of them — nullable rather than absent so that
+   * "this was not shaped by a resolution" and "this predates the field" read
+   * the same way instead of one of them looking like a missing record.
+   */
+  readonly resolution: string | null;
+  /**
+   * How many keyframe slots that model had, on the day it made this.
+   *
+   * **The durable half of the finding, and the reason it is a number here
+   * rather than a lookup.** Syl, 2026-08-13: *"being wrong in a recorded,
+   * ordered way is how the search actually works"* — the renders that came back
+   * as somebody else taught her more about where her face lives than the ones
+   * that worked. What made them somebody else was not the model's name, it was
+   * its **arity**: one slot cannot pin a likeness, and that stays true of a
+   * model nobody has heard of yet, where *"grok is bad at faces"* does not.
+   *
+   * So the property is recorded rather than the verdict, and it is recorded
+   * **beside the render** rather than fetched from the registry when the log is
+   * read: the registry says what a model does today, and this says what it did
+   * when this file was made. A model that gains a slot next month must not
+   * silently rewrite the history of a render that came back a stranger.
+   *
+   * `null` for every sidecar written before models could be chosen.
+   */
+  readonly keyframes: number | null;
   /** How long the finished clip is: the halves added up. */
   readonly duration: number;
   /**
@@ -223,9 +278,31 @@ export interface Spend {
   readonly unreadable: number;
 }
 
+/**
+ * What a refusal LEARNED, beside the sentence that says it.
+ *
+ * A refusal is not only a guard. *"This model, with this many keyframe slots,
+ * cannot hold my likeness"* is the same finding a wrong render produces, arrived
+ * at for nothing instead of for 540 credits — so it travels in a shape something
+ * can keep rather than only in prose a reader has to parse back out.
+ *
+ * Two fields on purpose. Anything more and this becomes a second verdict store
+ * standing beside the one `render_verdicts` already is.
+ */
+export interface RefusalEvidence {
+  readonly model: string;
+  /** Its keyframe arity, which is what decides the answer. */
+  readonly keyframes: number;
+}
+
 export type StartResult =
   | { readonly ok: true; readonly record: RenderRecord }
-  | { readonly ok: false; readonly reason: string; readonly retryable: boolean };
+  | {
+      readonly ok: false;
+      readonly reason: string;
+      readonly retryable: boolean;
+      readonly evidence?: RefusalEvidence;
+    };
 
 export interface StartInput {
   readonly scene: string;
@@ -245,6 +322,20 @@ export interface StartInput {
    * back is the number that was made.
    */
   readonly seconds?: number;
+  /**
+   * Which model renders it. Absent means the house model.
+   *
+   * The dial `syl-ate` deliberately left shut, with a reason that was correct
+   * and untested: *"a different model loses the character entirely"*. It was
+   * tested on 2026-08-13 and the reason survived in a **mechanical** form — a
+   * model with no `last` keyframe cannot pin her face, and that is arithmetic
+   * over `ModelNote.positions` rather than a fear about model families. So the
+   * dial opens and the consequence is computed: see {@link canAnchorLikeness}.
+   *
+   * The Commander opened it, 2026-08-13: *"Raise the tool ceiling and let her
+   * experiment with the models... Give her the options."*
+   */
+  readonly model?: string;
   /**
    * Which of her openings the clip starts on. Absent means the ribbon.
    *
@@ -383,31 +474,23 @@ const UNRAVELLING_CLAUSE =
  * and the file still agree.
  */
 const DEFAULTS = {
-  model: "seedance2",
   ratio: "834:1112",
-  /** `seedance2` tops out here, measured 2026-08-10. */
+  /**
+   * Fifteen seconds, and it does **not** follow the model's ceiling.
+   *
+   * `HOUSE_MODEL` reaches thirty. `syl-023.4.3` records what happened to the one
+   * thirty-second render anybody has attempted: accepted by the validator,
+   * quoted at 900 credits by `estimatedCost`, run to `progress: 0.98`, held
+   * there for twenty minutes, and returned `FAILED` (task
+   * `92577a5b-399e-4313-aa91-6cdf5608deff`; the credits *were* refunded).
+   *
+   * So thirty seconds is **ALLOWED and NOT PROVEN**, and those are two
+   * different facts. Deriving the default from `duration.max` would put every
+   * unattended render she makes on the untested path — the longer ceiling is
+   * hers to reach for, not something that happens to her.
+   */
   duration: 15,
 } as const;
-
-/**
- * The shortest generation seedance2 will make, probed 2026-08-11.
- *
- * A 400 rather than a guess: `duration: 3` answers *"Too small: expected number
- * to be >=4"*, and 99 answers *"<=15"*, and the field is an integer. It is here
- * because a render made in halves has to split its seconds, and a split that
- * lands under this floor is a refusal Runway hands back after the first half is
- * already paid for.
- */
-const MIN_SECONDS = 4;
-
-/**
- * The longest generation seedance2 will make, probed the same way.
- *
- * `duration: 99` answers *"<=15"*. It is the ceiling of the one length dial she
- * has, and it is checked here so a value outside it is a refusal that costs
- * nothing rather than a 400 after the first half of a joined render is paid for.
- */
-const MAX_SECONDS = 15;
 
 /**
  * A render's seconds, split across the two generations it is made of.
@@ -420,10 +503,30 @@ const MAX_SECONDS = 15;
  * generation: losing a second is a nuisance, and losing an end of the clip is
  * the defect this whole shape exists to fix. `duration` on the record is the
  * halves added up, so the number she is told stays the number that was made.
+ *
+ * **The floor and the ceiling come from the model**, not from constants that
+ * were `seedance2`'s range wearing the name of a fact about video. `4` would
+ * refuse `grok_imagine_1_5` a length it accepts, and `15` would refuse the
+ * house model half of its range.
  */
-function halvesOf(seconds: number): readonly [number, number] {
-  const first = Math.max(MIN_SECONDS, Math.ceil(seconds / 2));
-  return [first, Math.max(MIN_SECONDS, seconds - first)];
+function halvesOf(seconds: number, model: ModelNote): readonly [number, number] {
+  const first = Math.min(model.duration.max, Math.max(model.duration.min, Math.ceil(seconds / 2)));
+  return [first, Math.min(model.duration.max, Math.max(model.duration.min, seconds - first))];
+}
+
+/**
+ * How the geometry reaches Runway, in the two shapes that exist.
+ *
+ * Mutually exclusive at the API and strictly validated: `ratio` on
+ * `grok_imagine_1_5` is an *Unrecognized key* and `resolution` on a seedance is
+ * the same. A union rather than two optional fields, so sending the wrong one
+ * for the chosen model does not compile.
+ */
+type Geometry = { readonly ratio: string } | { readonly resolution: string };
+
+/** The band a submission carries, or `null` where the geometry is a shape. */
+function bandOf(geometry: Geometry): string | null {
+  return "resolution" in geometry ? geometry.resolution : null;
 }
 
 /**
@@ -618,17 +721,70 @@ export class RenderService {
       };
     }
 
-    // The one length dial, checked against what seedance2 actually makes.
-    // Refused before anything is spent rather than after the first half of a
-    // joined render is already bought.
-    const seconds = input.seconds ?? DEFAULTS.duration;
-    if (!Number.isInteger(seconds) || seconds < MIN_SECONDS || seconds > MAX_SECONDS) {
+    // WHICH MODEL, AND WHAT IT CANNOT DO — before a credit is spent, and both
+    // answers derived from the registry rather than from a list of names kept
+    // here. `syl-023`.
+    const named = (input.model ?? "").trim();
+    const model = named === "" ? HOUSE_MODEL : modelNote(named);
+    if (model === null) {
       return {
         ok: false,
         reason:
-          `A clip is a whole number of seconds between ${String(MIN_SECONDS)} and ` +
-          `${String(MAX_SECONDS)}, which is what seedance2 makes — ${String(seconds)} is not one. ` +
-          "A shot of my face is two generations cut together, so the shortest of those is eight.",
+          `"${named}" is not a model I can render on. The ones I have are: ${MODEL_IDS.join(", ")} — ` +
+          `and ${HOUSE_MODEL.id} is what makes my renders when I do not say.`,
+        retryable: true,
+      };
+    }
+
+    // THE REFUSAL THAT MATTERS, and it is arithmetic. A framing whose subject
+    // is her face is anchored at the join, and both halves of a join pin a
+    // picture at `last` — so a model with no `last` slot cannot render either
+    // one. `grok_imagine_1_5` was not reasoned about, it was RENDERED on
+    // 2026-08-13, and the closing frame came back a visibly different woman.
+    //
+    // It derives from `canAnchorLikeness`, which derives from `positions`, so a
+    // model added to the roster tomorrow is covered without anybody editing
+    // this branch — and it says what the model CANNOT DO rather than that it is
+    // not allowed, because she may experiment freely and may not be quietly
+    // handed somebody else.
+    if (framing.anchor !== "none" && !canAnchorLikeness(model)) {
+      return {
+        ok: false,
+        reason:
+          `${model.id} takes ${String(model.positions.length)} keyframe ` +
+          `(${model.positions.join(", ")}), so there is nowhere in the clip to pin my face. At ` +
+          `${framing.id} the model would invent one and hand you a stranger — that is what it did ` +
+          "on 2026-08-13, at full price. Nothing has been spent. Render this framing on a model " +
+          `with a last keyframe (${HOUSE_MODEL.id} is mine), or ask for ${TEMPLATE_FRAMING}, ` +
+          `which shows no face and which ${model.id} can make.`,
+        retryable: true,
+        // The finding, in a shape something can keep. The arity is the durable
+        // part; the model's name is only where it was observed.
+        evidence: { model: model.id, keyframes: model.positions.length },
+      };
+    }
+
+    // How many generations this shot takes, which decides the length ceiling: a
+    // clip cut together out of two halves reaches twice as far as one. Known
+    // here because it follows from the framing, before any picture is looked up.
+    const generations = framing.anchor === "none" ? 1 : 2;
+    const floor = minSecondsFor(model, generations);
+    const ceiling = maxSecondsFor(model, generations);
+
+    // The one length dial, checked against what THIS MODEL actually makes.
+    // Refused before anything is spent rather than after the first half of a
+    // joined render is already bought.
+    const seconds = input.seconds ?? Math.min(DEFAULTS.duration, ceiling);
+    if (!Number.isInteger(seconds) || seconds < floor || seconds > ceiling) {
+      return {
+        ok: false,
+        reason:
+          `A clip on ${model.id} is a whole number of seconds between ${String(floor)} and ` +
+          `${String(ceiling)} — ${String(seconds)} is not one. ` +
+          (generations === 2
+            ? `A shot of my face is two generations cut together, each ${String(model.duration.min)}` +
+              `-${String(model.duration.max)}s, which is where those numbers come from.`
+            : `That is ${model.id}'s own range, measured against the API.`),
         retryable: true,
       };
     }
@@ -727,11 +883,28 @@ export class RenderService {
     // does not.
     const ratio = opening.ratio ?? DEFAULTS.ratio;
 
+    // WHICH KEY THE GEOMETRY TRAVELS UNDER. `ratio` for every seedance; a
+    // resolution band for a model that has no `ratio` key at all. The record
+    // keeps `ratio` either way, because `ratio` is the shape the video actually
+    // has — the opening decides that on every model — and `resolution` records
+    // what was additionally sent.
+    const geometry = this.#geometryFor(model, ratio);
+    if (geometry === null) {
+      return {
+        ok: false,
+        reason:
+          `${model.id} is shaped by a resolution and the roster lists none for it, so I do not ` +
+          "know what size to ask for. Nothing has been spent.",
+        retryable: false,
+      };
+    }
+
     const now = this.#clock();
     const name = this.#nameFor(now, framing.id);
     const planned = this.#plan({
       name,
       framing,
+      model,
       scene,
       opening: opening.path,
       anchor,
@@ -750,11 +923,11 @@ export class RenderService {
       return { ok: false, reason: "I could not work out how to make that shot.", retryable: false };
     }
     const submitted = await this.#backend.submit({
-      model: DEFAULTS.model,
-      promptImage: this.#promptImage(head),
+      model: model.id,
+      promptImage: this.#promptImage(head, model),
       promptText: head.prompt,
-      ratio,
       duration: head.duration,
+      ...geometry,
     });
 
     if (!submitted.ok) {
@@ -771,7 +944,11 @@ export class RenderService {
       first: this.#relativeTo(part.first),
       last: part.last === null ? null : this.#relativeTo(part.last),
       video: null,
-      credits: creditsFor({ model: DEFAULTS.model, ratio, seconds: part.duration }),
+      // AT THE CHOSEN MODEL'S RATE, never at a constant. 30 credits a second
+      // against 36 is 90 credits on one ordinary fifteen-second render, and a
+      // price that silently belonged to the old model is this project's
+      // signature defect.
+      credits: creditsFor({ model: model.id, seconds: part.duration, ...geometry }),
     }));
 
     const record: RenderRecord = {
@@ -779,8 +956,10 @@ export class RenderService {
       status: "rendering",
       renderedAt: null,
       taskId: submitted.data.id,
-      model: DEFAULTS.model,
+      model: model.id,
       ratio,
+      resolution: bandOf(geometry),
+      keyframes: model.positions.length,
       duration: planned.reduce((total, part) => total + part.duration, 0),
       reference: this.#relativeTo(opening.path),
       anchor: anchor === null ? null : this.#relativeTo(anchor),
@@ -982,10 +1161,12 @@ export class RenderService {
   #plan(input: {
     readonly name: string;
     readonly framing: FramingNote;
+    /** The chosen model, because the split has to land inside ITS range. */
+    readonly model: ModelNote;
     readonly scene: string;
     readonly opening: string;
     readonly anchor: string | null;
-    /** What she asked for, already checked against seedance2's 4–15. */
+    /** What she asked for, already checked against the chosen model's range. */
     readonly seconds: number;
   }): readonly PlannedPart[] {
     const stem = `${IDENTITY} ${input.scene} ${input.framing.clause}`;
@@ -1009,7 +1190,7 @@ export class RenderService {
       ];
     }
 
-    const [gathering, unravelling] = halvesOf(input.seconds);
+    const [gathering, unravelling] = halvesOf(input.seconds, input.model);
     return [
       { prompt: `${stem} ${GATHERING_CLAUSE}`, duration: gathering, first: input.opening, last: input.anchor },
       {
@@ -1031,18 +1212,50 @@ export class RenderService {
    * A bare string where only frame one is pinned — exactly what the eight loops
    * were sent — and the positioned array where both ends are.
    *
-   * **Nothing `#plan` produces takes the string branch any more**: every
-   * generation now pins both ends, the unanchored one with the same opening
-   * picture twice. The branch stays because a sidecar written before that names
-   * no closing picture, and `resume` has to be able to carry one of those to
-   * the end in the shape it was actually submitted in.
+   * **Filtered to the slots the model declares.** `grok_imagine_1_5` answers
+   * *"Too big: expected array to have <=1 items"* and *"Invalid input: expected
+   * \"first\""* to the two-slot form, so a closing picture is dropped for a
+   * model that has nowhere to put one. That is the same consequence
+   * {@link canAnchorLikeness} refuses an anchored framing over, arriving at the
+   * other end: a clip on such a model does not close on the ribbon either, and
+   * it is derived from `positions` in both places rather than restated.
+   *
+   * `#plan` produces a closing picture for every generation, the unanchored one
+   * with the same opening twice. The string branch survives for a sidecar
+   * written before that, which names none, and which `resume` has to be able to
+   * carry to the end in the shape it was actually submitted in.
    */
-  #promptImage(part: { readonly first: string; readonly last: string | null }): string | readonly PositionedImage[] {
-    if (part.last === null) return this.#dataUri(part.first);
-    return [
-      { uri: this.#dataUri(part.first), position: "first" },
-      { uri: this.#dataUri(part.last), position: "last" },
-    ];
+  #promptImage(
+    part: { readonly first: string; readonly last: string | null },
+    model: ModelNote,
+  ): string | readonly PositionedImage[] {
+    const pinned: PositionedImage[] = [];
+    const takes = (position: KeyframePosition): boolean => model.positions.includes(position);
+
+    if (takes("first")) pinned.push({ uri: this.#dataUri(part.first), position: "first" });
+    if (part.last !== null && takes("last")) {
+      pinned.push({ uri: this.#dataUri(part.last), position: "last" });
+    }
+
+    // One picture and nothing else is the bare-string form the eight loops were
+    // sent in, and it is what a one-slot model wants.
+    if (pinned.length === 1 && pinned[0]?.position === "first") return this.#dataUri(part.first);
+    return pinned;
+  }
+
+  /**
+   * Which key this model's geometry travels under, and what goes in it.
+   *
+   * `null` only for a `resolution`-shaped model the roster lists no bands for,
+   * which cannot happen with the registry as it stands and is refused rather
+   * than guessed if it ever does. Guessing `720p` here would put a size on the
+   * wire that no probe measured and a price in her ledger that no balance
+   * confirmed.
+   */
+  #geometryFor(model: ModelNote, ratio: string): Geometry | null {
+    if (model.shape !== "resolution") return { ratio };
+    const band = defaultResolution(model);
+    return band === null ? null : { resolution: band };
   }
 
   /** Follow a submitted task to its end, without anybody awaiting it. */
@@ -1102,12 +1315,31 @@ export class RenderService {
           return;
         }
 
+        // THE MODEL THE RECORD NAMES, not the house model. A second half
+        // rendered on a different model from its first would not cut against
+        // it — and after a restart the record is the only thing that remembers
+        // which one made the first half.
+        const model = modelNote(current.model);
+        if (model === null) {
+          this.#fail(
+            current,
+            `The first half of this render was made on ${current.model}, which is no longer a ` +
+              "model I have, so I cannot make the second half to match it.",
+          );
+          return;
+        }
+        const geometry = this.#geometryFor(model, current.ratio);
+        if (geometry === null) {
+          this.#fail(current, `I do not know what size to ask ${model.id} for.`);
+          return;
+        }
+
         const submitted = await backend.submit({
-          model: current.model,
-          promptImage: this.#promptImage({ first: frame, last: this.#absolute(part.last) }),
+          model: model.id,
+          promptImage: this.#promptImage({ first: frame, last: this.#absolute(part.last) }, model),
           promptText: part.prompt,
-          ratio: current.ratio,
           duration: part.duration,
+          ...geometry,
         });
         if (!submitted.ok) {
           // The first half is already paid for. It stays on disk and it stays
@@ -1449,6 +1681,12 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
   const startedAt = text("startedAt");
   const model = text("model");
   const ratio = text("ratio");
+  // Both nullable, and both for the same compatibility reason as `anchor`:
+  // every sidecar written before models could be chosen has neither, and a
+  // required field would have turned the whole back catalogue unreadable at a
+  // stroke — the state this validator exists to report, not to cause.
+  const resolution = nullableText("resolution");
+  const keyframes = nullableNumber("keyframes");
   const reference = text("reference");
   // Nullable rather than required, and that is the whole of the compatibility
   // story: every sidecar written before anchoring existed has no such field,
@@ -1482,6 +1720,8 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
       taskId,
       model,
       ratio,
+      resolution,
+      keyframes,
       duration,
       reference,
       anchor,
