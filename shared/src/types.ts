@@ -853,7 +853,7 @@ export type LogPage = {
  * What a star IS. Effectively immutable per node — a person does not
  * become an event — which is why it is a partition key in the store.
  */
-export type MemoryNodeKind = "fact" | "memory" | "person" | "source" | "event" | "goal" | "decision";
+export type MemoryNodeKind = "fact" | "memory" | "person" | "source" | "event" | "goal" | "decision" | "place" | "self" | "instruction";
 
 /**
  * Depth. `hot` is the live region; `cold` is below the relevance floor,

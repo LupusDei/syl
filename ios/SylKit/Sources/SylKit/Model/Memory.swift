@@ -25,7 +25,29 @@ import Foundation
 
 /// What a star IS. Effectively immutable per node — a person does not become an event.
 public enum MemoryNodeKind: String, Codable, Equatable, Sendable, CaseIterable {
-    case fact, memory, person, source, event, goal, decision
+
+    case fact, memory, person, source, event, goal, decision, place, instruction
+    /// `self_` because `self` is a Swift keyword. The wire value is `"self"`.
+    case self_ = "self"
+
+    /// A kind this build has never heard of. Never sent, only received.
+    ///
+    /// **`syl-025`, and it is `syl-020` again in a different enum.** `MemoryNode.kind`
+    /// is non-optional, so an unrecognised value used to fail the decode of the node,
+    /// which fails the array, which fails the whole page — not one row skipped, the
+    /// screen. The contract had been four migrations behind the store's vocabulary
+    /// before anyone noticed, because nothing tested parity and no node of a new kind
+    /// had reached a device yet.
+    ///
+    /// "Keep the list complete" is not a property that survives two release trains: the
+    /// app and the service ship independently, so either can be ahead. The list is kept
+    /// current anyway — it is just no longer load-bearing.
+    case unrecognised
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = MemoryNodeKind(rawValue: raw) ?? .unrecognised
+    }
 }
 
 /// Depth. **None of the three means deleted** — see this file's header.

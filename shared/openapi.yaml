@@ -3110,7 +3110,7 @@ components:
       description: |
         What a star IS. Effectively immutable per node — a person does not
         become an event — which is why it is a partition key in the store.
-      enum: [fact, memory, person, source, event, goal, decision]
+      enum: [fact, memory, person, source, event, goal, decision, place, self, instruction]
 
     MemoryTier:
       type: string
