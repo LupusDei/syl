@@ -75,6 +75,7 @@ import { assessPower, describePower } from "./ops/power.js";
 import { installShutdownHandlers } from "./ops/shutdown.js";
 import { tailnetCertProbe } from "./ops/tailnet-cert.js";
 import { RenderService } from "./render/render-service.js";
+import { HealthSamples } from "./health/samples.js";
 import { RenderVerdicts } from "./render/verdicts.js";
 import { RunwayClient } from "./render/runway.js";
 import { ensureOpening, ensureReference, studioAt, studioRootFrom } from "./render/studio.js";
@@ -84,6 +85,10 @@ import { createJobRouter } from "./routes/jobs.js";
 import { createLogRouter } from "./routes/logs.js";
 import { createMemoryRouter, type MemoryViews } from "./routes/memory.js";
 import { createReminderRouter } from "./routes/reminders.js";
+// His body, as opposed to the service's. Two files share the `/health` prefix and
+// nothing else: `routes/health.ts` is LIVENESS, the one unauthenticated route in
+// the contract. See the header of `routes/health-data.ts`.
+import { createHealthDataRouter } from "./routes/health-data.js";
 import { createRenderRouter } from "./routes/renders.js";
 import { createSendingRouter } from "./routes/sendings.js";
 import { createSyncRouter } from "./routes/sync.js";
@@ -334,6 +339,11 @@ export interface AppDependencies {
    */
   readonly renderVerdicts: RenderVerdicts;
   /**
+   * His health observations. Deliberately NOT reachable from the memory graph —
+   * there is no path, by construction. See `0031_health_observations.sql`.
+   */
+  readonly health: HealthSamples;
+  /**
    * The things she chose to give him: her words, and the video of her saying
    * them.
    *
@@ -429,6 +439,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     attachments,
     renders,
     renderVerdicts,
+    health,
     sendings,
     composer,
     probes,
@@ -492,6 +503,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // for the argument, which is that this is the first surface she reaches for
   // herself rather than for him, and that it reaches nothing of his.
   api.use(createRenderRouter({ renders, idempotency, authenticate, verdicts: renderVerdicts }));
+  api.use(createHealthDataRouter({ health, idempotency, authenticate }));
   // What she has already given him. Unlike `/renders` this is his surface, so
   // it takes an ordinary `device` token.
   api.use(createSendingRouter({ sendings, composer, idempotency, authenticate }));
@@ -1512,6 +1524,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // own face is not a fact about his life, and the search ENDS once she likes
   // the likeness. Isolated so that it drops in one migration when it does.
   const renderVerdicts = new RenderVerdicts({ db: database.handle, clock });
+  const health = new HealthSamples({ db: database.handle, clock });
   const renders = new RenderService({
     studio,
     backend: runwaySecret === "" ? null : new RunwayClient({ secret: runwaySecret }),
@@ -1592,6 +1605,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       attachments,
       renders,
       renderVerdicts,
+      health,
       sendings,
       composer,
       renderWatches,

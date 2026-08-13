@@ -17,6 +17,7 @@ import { HerOwnMemory } from "../../src/memory/remember.js";
 import type { Retriever } from "../../src/memory/retrieve.js";
 import { EdgeWeights } from "../../src/memory/weights.js";
 import { WorkingMemory } from "../../src/memory/working.js";
+import { HealthSamples } from "../../src/health/samples.js";
 import { RenderVerdicts } from "../../src/render/verdicts.js";
 import { RenderService, type RenderRecord } from "../../src/render/render-service.js";
 import { studioAt } from "../../src/render/studio.js";
@@ -377,6 +378,7 @@ export function testDeps(db: SylDatabase): {
   readonly attachments: AttachmentStore;
   readonly renders: RenderService;
   readonly renderVerdicts: RenderVerdicts;
+  readonly health: HealthSamples;
   readonly sendings: SendingStore;
   readonly composer: SendingService;
   readonly renderWatches: RenderWatchStore;
@@ -440,6 +442,8 @@ export function testDeps(db: SylDatabase): {
     // reach, so there is nothing to fake and faking it would only hide the
     // append-only property that is the point of the store (`syl-b0i`).
     renderVerdicts: new RenderVerdicts({ db: db.handle, clock }),
+    // Real, against the same database. A plain table with no backend to reach.
+    health: new HealthSamples({ db: db.handle, clock }),
     sendings,
     // Composes for real, against the same stores — but its compressor refuses
     // rather than shelling out, so no test needs ffmpeg and none decodes a file

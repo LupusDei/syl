@@ -104,6 +104,22 @@ const UNDECLARED: readonly string[] = [
   // shows her renders: a second client would otherwise have to guess the body.
   "POST /renders/{name}/verdicts",
   "GET /renders/{name}/verdicts",
+  // `syl-t9tj` — his health. Joins the debt above, and it is the entry on this
+  // list most likely to acquire a second client: the phone is the only writer
+  // today, but the admin view (`syl-t9tj.3`) reads the series, and anything that
+  // charts his body later would look for these here first.
+  //
+  // Note which one is the WRITE, and note what its body carries: a per-type
+  // authorisation report that the server REFUSES to default. A second client
+  // guessing at that shape would guess the one field the whole feature exists to
+  // make un-guessable.
+  //
+  // Deliberately NOT joined by `GET /health` — that is liveness, it is published,
+  // and it is the one unauthenticated route in the contract. Two files share the
+  // prefix and nothing else.
+  "POST /health/samples",
+  "GET /health/watermarks",
+  "GET /health/series",
 ];
 
 /** Path parameters that are syntactically valid but name nothing. */
