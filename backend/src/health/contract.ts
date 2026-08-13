@@ -89,8 +89,26 @@ export function isHealthType(value: unknown): value is HealthType {
  * names it instead of hiding it.
  *
  * `unavailable` is separate because it is a different fact with a different
- * remedy: no watch means no HRV, and telling him to grant a permission he has
- * already granted is useless advice.
+ * remedy: telling him to grant a permission he has already granted is useless
+ * advice.
+ *
+ * **Narrower in practice than it first reads, and the client proved it rather
+ * than assuming it** (`syl-m3gi`). The obvious example — "no watch means no
+ * HRV" — is NOT detectable per type: `HKHealthStore.isHealthDataAvailable()`
+ * answers device-wide only. So the phone emits `unavailable` for exactly two
+ * facts, both uniform across all seven types: HealthKit is absent from the
+ * device, or the SDK no longer knows the identifier. A phone with no watch
+ * reports HRV as `undisclosed`, which is correct — it is genuinely
+ * indistinguishable from a type he declined. No detector was invented to make
+ * the example true.
+ *
+ * **And `denied` is currently unreachable from the phone.** `HealthReader` has
+ * four provable states and none of them maps to it, because this app has no way
+ * to prove he said no — read authorisation is exactly what iOS will not
+ * disclose. The state stays in the contract because it is a real fact a future
+ * client, or he himself in the admin, could substantiate. But a reader who sees
+ * `denied` in the store today should ask where it came from rather than believe
+ * it.
  *
  * **Only `authorised` makes silence evidence** ({@link silenceIsEvidence}), so
  * adding states is safe in the direction that matters: an unproven type simply

@@ -50,6 +50,14 @@ export const NAV_ITEMS: readonly NavItem[] = [
     status: "ready",
   },
   {
+    path: "/health",
+    label: "Health",
+    summary:
+      "Every stored health type over a window, with its source — and an empty panel that says which KIND of empty it is: nothing happened, or nobody looked.",
+    bead: "syl-t9tj.3.2",
+    status: "ready",
+  },
+  {
     path: "/reminders",
     label: "Reminders",
     summary:

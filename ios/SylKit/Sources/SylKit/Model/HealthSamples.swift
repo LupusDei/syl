@@ -59,20 +59,37 @@ extension HealthType {
 
 // MARK: - What the phone was allowed to read
 
-/// The contract's `AuthorisationState`.
+/// The contract's `AuthorisationState`. **Five states, and the order and spelling here
+/// are copied from `AUTHORISATION_STATES`, including `authorised`.**
 ///
-/// Three states and not two, because `notDetermined` and `denied` need different things
-/// from him: one is a prompt he has not seen, the other is an answer he gave. Collapsing
-/// them would mean re-asking for something he declined.
+/// It began as three — `authorised | denied | notDetermined` — which is the model Apple's
+/// documentation reads like and is not the one the API can answer. `denied`,
+/// authorised-but-quiet, and authorised-then-revoked are ONE indistinguishable state on
+/// this platform, so the phone had to narrow all three to `denied`, which put the
+/// empty-versus-denied conflation back one level up, inside the very field built to
+/// abolish it. Build 0.9.12 shipped that narrowing against real data and reported
+/// `denied` for the three types that merely had no samples in them.
 ///
-/// **What HealthKit can actually prove is narrower than this enum suggests** — see
-/// `HealthReadAuthorisation` in the app target, which is the honest four-state version,
-/// and `HealthReadAuthorisation.wireState`, which is the one place the narrowing
-/// happens.
+/// The contract then gained the two states the platform actually needs:
+///
+/// - `undisclosed` — asked, and iOS will not say. **Not "he denied it".**
+/// - `unavailable` — the device cannot produce it at all.
+///
+/// so the lossy mapping is gone. See `HealthReadAuthorisation` in the app target for what
+/// the phone can *prove*, and `HealthReadAuthorisation.wireState` for the translation,
+/// which is now total rather than narrowing.
+///
+/// **Only `authorised` makes silence evidence** (``HealthUpload/silenceIsEvidence(_:)``),
+/// so widening this enum is safe in the direction that matters: a state nobody proved
+/// never licenses a conclusion drawn from its quiet.
 public enum HealthAuthorisationState: String, Codable, Equatable, Hashable, Sendable, CaseIterable {
     case authorised
     case denied
     case notDetermined
+    /// Asked, and the platform will not say.
+    case undisclosed
+    /// This device cannot measure it.
+    case unavailable
 }
 
 // MARK: - The upload
@@ -162,8 +179,14 @@ extension HealthUpload {
     ///
     /// Mirrors the contract's `silenceIsEvidence`, and is the one function that encodes
     /// the whole point of the report: only an `authorised` type with nothing in it means
-    /// nothing happened. The other two mean we did not look, and a conclusion drawn from
-    /// them would be about his phone rather than about him.
+    /// nothing happened. Every other state means we did not look, or cannot say we
+    /// looked, and a conclusion drawn from one would be about his phone rather than about
+    /// him.
+    ///
+    /// Deliberately an equality and not a set of exclusions, exactly as the contract
+    /// writes it. Spelled `state != .denied`, every state added later would silently
+    /// become evidence — which is how `undisclosed` would have started licensing
+    /// conclusions about a body nobody looked at.
     public static func silenceIsEvidence(_ state: HealthAuthorisationState) -> Bool {
         state == .authorised
     }

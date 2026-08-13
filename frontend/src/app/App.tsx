@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from "../auth/AuthProvider";
 import { ConversationsView } from "../features/conversations/ConversationsView";
 import { DeliveryView } from "../features/delivery/DeliveryView";
 import { DevicesView } from "../features/devices/DevicesView";
+import { HealthView } from "../features/health/HealthView";
 import { JobsView } from "../features/jobs/JobsView";
 import { LogsView } from "../features/logs/LogsView";
 import { MemoryView } from "../features/memory/MemoryView";
@@ -27,6 +28,7 @@ const VIEWS: Readonly<Record<string, ReactElement>> = {
   "/jobs": <JobsView />,
   "/logs": <LogsView />,
   "/memory": <MemoryView />,
+  "/health": <HealthView />,
   "/reminders": <RemindersView />,
   "/delivery": <DeliveryView />,
   "/conversations": <ConversationsView />,

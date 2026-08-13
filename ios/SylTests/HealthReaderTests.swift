@@ -6,7 +6,7 @@ import XCTest
 
 /// `syl-t9tj.1.2`. The distinction the whole health feature rests on, tested at the two
 /// places it can actually be got wrong: the pure judgement about one type's permission,
-/// and the narrowing of four honest states onto the contract's three.
+/// and the translation of the four states the phone can prove onto the contract's five.
 ///
 /// None of this needs a device, a grant, or a body. `HealthReader.authorisation` takes the
 /// two facts the platform will give up and returns what may be claimed from them; the
@@ -15,11 +15,10 @@ import XCTest
 final class HealthReaderTests: XCTestCase {
     // MARK: - Empty is not denied. The one guarantee.
 
-    func testShouldTellADeniedTypeApartFromAnAuthorisedTypeWithNothingInIt() {
-        // He has denied steps. iOS has been asked and will not say what he answered, and
-        // the query comes back empty — the same zero samples an authorised type produces
-        // on a quiet day.
-        let denied = HealthReader.authorisation(
+    func testShouldTellAnUnprovenTypeApartFromAnAuthorisedTypeWithNothingInIt() {
+        // Steps: iOS has been asked and will not say what he answered, and the query comes
+        // back empty — the same zero samples an authorised type produces on a quiet day.
+        let unproven = HealthReader.authorisation(
             sawSamples: false,
             provenReadableBefore: false,
             requestStatus: .unnecessary
@@ -33,17 +32,29 @@ final class HealthReaderTests: XCTestCase {
             requestStatus: .unnecessary
         )
 
-        XCTAssertNotEqual(denied, quiet, "the two situations HealthKit refuses to separate")
-        XCTAssertEqual(denied.wireState, .denied)
+        XCTAssertNotEqual(unproven, quiet, "the two situations HealthKit refuses to separate")
+        XCTAssertEqual(unproven.wireState, .undisclosed)
         XCTAssertEqual(quiet.wireState, .authorised)
         XCTAssertFalse(
-            HealthUpload.silenceIsEvidence(denied.wireState),
+            HealthUpload.silenceIsEvidence(unproven.wireState),
             "so the server never reads 'we were not allowed to look' as 'nothing happened'"
         )
         XCTAssertTrue(HealthUpload.silenceIsEvidence(quiet.wireState))
     }
 
-    func testShouldTellAPromptHeHasNotSeenApartFromAnAnswerHeGave() {
+    func testShouldNotReportDeniedForATypeItOnlyFailedToProve() {
+        // The 0.9.12 regression, pinned. Build 0.9.12 uploaded 61,030 real samples and
+        // reported `denied` for restingHeartRate, heartRateVariability and bodyMass —
+        // exactly the three types with no data in them — because the contract had three
+        // states and `undisclosed` had nowhere to go. `denied` is a claim about an answer
+        // the Commander gave, and this app cannot prove he gave one.
+        XCTAssertFalse(
+            HealthReadAuthorisation.allCases.contains { $0.wireState == .denied },
+            "no state the phone can prove is 'he said no'"
+        )
+    }
+
+    func testShouldTellAPromptHeHasNotSeenApartFromAnAnswerItCannotRead() {
         let neverAsked = HealthReader.authorisation(
             sawSamples: false,
             provenReadableBefore: false,
@@ -56,8 +67,25 @@ final class HealthReaderTests: XCTestCase {
         )
 
         XCTAssertEqual(neverAsked.wireState, .notDetermined, "so he can still be asked")
-        XCTAssertEqual(asked.wireState, .denied, "so he is not re-asked for something he declined")
+        XCTAssertEqual(
+            asked.wireState,
+            .undisclosed,
+            "asked, and the platform will not say — not 'he declined'"
+        )
         XCTAssertNotEqual(neverAsked, asked)
+    }
+
+    func testShouldTellAnUndisclosedTypeApartFromAnUnavailableOne() {
+        // Three distinct facts, three distinct words, none of them `denied`: a type nobody
+        // could confirm, a device with no HealthKit at all, and a type proven readable and
+        // quiet. The admin can act on each differently; it could act on none of them when
+        // all three arrived as `denied`.
+        XCTAssertEqual(HealthReadAuthorisation.undisclosed.wireState, .undisclosed)
+        XCTAssertEqual(HealthReadAuthorisation.unavailable.wireState, .unavailable)
+        XCTAssertNotEqual(
+            HealthReadAuthorisation.undisclosed.wireState,
+            HealthReadAuthorisation.unavailable.wireState
+        )
     }
 
     // MARK: - A sample in hand outranks everything
@@ -90,13 +118,24 @@ final class HealthReaderTests: XCTestCase {
         )
     }
 
-    // MARK: - The narrowing onto the contract
+    // MARK: - The translation onto the contract
 
-    func testShouldNarrowTheFourHonestStatesOntoTheContractsThreeFailingSafe() {
+    func testShouldGiveEveryProvableStateItsOwnNameOnTheWire() {
+        // A translation, not a narrowing — the contract gained `undisclosed` and
+        // `unavailable`, so nothing is collapsed on the way out any more.
         XCTAssertEqual(HealthReadAuthorisation.notDetermined.wireState, .notDetermined)
         XCTAssertEqual(HealthReadAuthorisation.readable.wireState, .authorised)
-        XCTAssertEqual(HealthReadAuthorisation.undisclosed.wireState, .denied)
-        XCTAssertEqual(HealthReadAuthorisation.unavailable.wireState, .denied)
+        XCTAssertEqual(HealthReadAuthorisation.undisclosed.wireState, .undisclosed)
+        XCTAssertEqual(HealthReadAuthorisation.unavailable.wireState, .unavailable)
+    }
+
+    func testShouldMapEveryProvableStateToADistinctWireState() {
+        // The property behind the four assertions above: the mapping is injective, so no
+        // future case can be folded onto an existing word without this failing. Folding is
+        // exactly how `undisclosed` became `denied` on a real phone.
+        let wire = HealthReadAuthorisation.allCases.map(\.wireState)
+
+        XCTAssertEqual(Set(wire).count, HealthReadAuthorisation.allCases.count)
     }
 
     func testShouldNeverLetAnUnprovenStateBecomeEvidence() {
@@ -123,7 +162,7 @@ final class HealthReaderTests: XCTestCase {
 
         XCTAssertEqual(report.count, HealthType.allCases.count)
         XCTAssertEqual(report[.steps], .authorised)
-        XCTAssertEqual(report[.sleep], .denied, "absent means unproven, never assumed fine")
+        XCTAssertEqual(report[.sleep], .undisclosed, "absent means unproven, never assumed fine")
         XCTAssertTrue(HealthUpload(authorisation: report, samples: []).isComplete)
     }
 

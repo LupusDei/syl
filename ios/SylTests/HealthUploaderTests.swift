@@ -160,9 +160,10 @@ final class HealthUploaderTests: XCTestCase {
 
     // MARK: - The report has to arrive even when nothing else does
 
-    func testShouldUploadAnEmptyBatchSoADeniedTypeStillReachesTheServer() async {
-        // The only way the server learns steps is denied. A client that skipped the call
-        // would leave silence unattributable, which is the whole defect this closes.
+    func testShouldUploadAnEmptyBatchSoAnUnprovenTypeStillReachesTheServer() async {
+        // The only way the server learns steps could not be confirmed. A client that
+        // skipped the call would leave silence unattributable, which is the whole defect
+        // this closes.
         let marks = FakeWatermarkStore()
         let reader = FakeHealthReader(
             pages: [page(samples: [], authorisation: [.steps: .undisclosed])]
@@ -174,7 +175,12 @@ final class HealthUploaderTests: XCTestCase {
         XCTAssertTrue(run.succeeded)
         XCTAssertEqual(transport.uploads.count, 1)
         XCTAssertEqual(transport.uploads.first?.samples.count, 0)
-        XCTAssertEqual(transport.uploads.first?.authorisation[.steps], .denied)
+        XCTAssertEqual(transport.uploads.first?.authorisation[.steps], .undisclosed)
+        XCTAssertEqual(
+            transport.uploads.first?.authorisation[.sleep],
+            .authorised,
+            "and the types that were proven still say so in the same report"
+        )
     }
 
     func testShouldSendACompleteReportOnEveryBatchOfAColdStart() async {
@@ -217,8 +223,8 @@ final class HealthUploaderTests: XCTestCase {
         XCTAssertTrue(run.succeeded)
         let sent = try? XCTUnwrap(transport.uploads.first)
         XCTAssertEqual(sent?.authorisation.count, HealthType.allCases.count)
-        XCTAssertEqual(sent?.authorisation[.bodyMass], .denied)
-        XCTAssertFalse(HealthUpload.silenceIsEvidence(.denied))
+        XCTAssertEqual(sent?.authorisation[.bodyMass], .undisclosed)
+        XCTAssertFalse(HealthUpload.silenceIsEvidence(.undisclosed))
     }
 
     // MARK: - Sixty days from cold, with no special path
