@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { FRAMING_IDS } from "../../src/render/framing.js";
+import { canAnchorLikeness, HOUSE_MODEL, MODELS, MODEL_IDS } from "../../src/render/models.js";
 import { sightingOf } from "../../src/render/pictures.js";
 import { SylApiClient, type FetchLike } from "../../src/tools/client.js";
 import { TOOLS } from "../../src/tools/schemas.js";
@@ -478,16 +479,50 @@ describe("the dials", () => {
     expect(asked?.body).toEqual(expect.objectContaining({ seconds: 8, opening: "the-long-fall" }));
   });
 
-  it("should offer no dial for the shape or the model", () => {
-    // The two that must NOT be dials. `ratio` follows the opening whatever is
-    // asked, so it would be a control that does nothing; a different model
-    // loses her character entirely. A dial that does not work is worse than no
-    // dial, because she would reason about it.
+  it("should offer no dial for the shape, which is the one that would do nothing", () => {
+    // `ratio` follows the opening whatever is asked — the opening is frame one
+    // and every model takes the video's aspect from it — so exposing it would
+    // be a control that does nothing. A dial that does not work is worse than
+    // no dial, because she would reason about it.
+    //
+    // `model` USED TO BE HERE, on a different argument: "a different model
+    // loses her character entirely". That was correct and untested, which is
+    // the `syl-63v` shape; it was tested on 2026-08-13 and survived as
+    // arithmetic over keyframe slots rather than as a fear, and the Commander
+    // opened the dial. The next test is what replaced this half.
     const render = TOOLS.find((tool) => tool.name === "render_me");
     const properties = (render?.inputSchema as { properties?: Record<string, unknown> }).properties ?? {};
 
     expect(Object.keys(properties)).not.toContain("ratio");
-    expect(Object.keys(properties)).not.toContain("model");
+  });
+
+  it("should offer the model as a dial, built from the roster rather than beside it", () => {
+    // The Commander, 2026-08-13: "Raise the tool ceiling and let her experiment
+    // with the models... Give her the options."
+    const render = TOOLS.find((tool) => tool.name === "render_me");
+    const model = (
+      render?.inputSchema as {
+        properties?: Record<string, { enum?: readonly string[]; description?: string }>;
+      }
+    ).properties?.["model"];
+
+    // Every model on the roster and nothing else — derived, so a model added to
+    // `models.ts` reaches her without anybody remembering this file exists.
+    expect(model?.enum).toEqual([...MODEL_IDS]);
+    // And it carries the consequence, which is the whole reason the dial is
+    // safe to open: a model with one keyframe hands her a stranger.
+    expect(model?.description ?? "").toContain(HOUSE_MODEL.id);
+    for (const one of MODELS.filter((each) => !canAnchorLikeness(each))) {
+      expect(model?.description ?? "", one.id).toContain(one.id);
+    }
+  });
+
+  it("should let her read the models back, because a dial she cannot see is one she cannot learn from", () => {
+    const look = TOOLS.find((tool) => tool.name === "see_myself");
+    const of = (look?.inputSchema as { properties?: Record<string, { enum?: readonly string[] }> })
+      .properties?.["of"];
+
+    expect(of?.enum).toContain("models");
   });
 
   it("should tell her that the opening decides the shape, rather than letting it surprise her", () => {

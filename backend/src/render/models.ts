@@ -300,11 +300,6 @@ export function maxSecondsFor(model: ModelNote, generations: number): number {
   return model.duration.max * Math.max(1, generations);
 }
 
-/** The shortest finished clip, on the same reasoning. */
-export function minSecondsFor(model: ModelNote, generations: number): number {
-  return model.duration.min * Math.max(1, generations);
-}
-
 /**
  * The enum's description, as the schema carries it.
  *

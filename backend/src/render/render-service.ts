@@ -16,7 +16,6 @@ import {
   canAnchorLikeness,
   defaultResolution,
   maxSecondsFor,
-  minSecondsFor,
   modelNote,
   HOUSE_MODEL,
   MODEL_IDS,
@@ -768,8 +767,15 @@ export class RenderService {
     // clip cut together out of two halves reaches twice as far as one. Known
     // here because it follows from the framing, before any picture is looked up.
     const generations = framing.anchor === "none" ? 1 : 2;
-    const floor = minSecondsFor(model, generations);
     const ceiling = maxSecondsFor(model, generations);
+    // THE FLOOR IS ONE GENERATION'S, NOT TWO, and that asymmetry is deliberate.
+    // A joined shot cannot really be shorter than two of the model's shortest —
+    // but asking for five and being refused teaches her nothing, while asking
+    // for five and being told the clip is eight is a dial she can read back
+    // even when it did not do what she asked. `halvesOf` rounds up and
+    // `duration` on the record is the halves added up, so the number she is
+    // told stays the number that was made.
+    const floor = model.duration.min;
 
     // The one length dial, checked against what THIS MODEL actually makes.
     // Refused before anything is spent rather than after the first half of a
