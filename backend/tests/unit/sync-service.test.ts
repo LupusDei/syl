@@ -5,7 +5,6 @@ import { fixedClock } from "../../src/services/clock.js";
 import { INTERACTIVE_CONVERSATION_ID, type SylDatabase } from "../../src/services/database.js";
 import { DeviceTokenService } from "../../src/services/device-token-service.js";
 import { GoalService } from "../../src/services/goal-service.js";
-import { JobStore } from "../../src/services/job-store.js";
 import { MessageStore } from "../../src/services/message-store.js";
 import { Outbox } from "../../src/services/outbox.js";
 import { PagingError } from "../../src/services/paging.js";
@@ -39,7 +38,6 @@ let reminders: ReminderService;
 let messages: MessageStore;
 let devices: DeviceTokenService;
 let outbox: Outbox;
-let jobs: JobStore;
 let sendings: SendingStore;
 
 const clock = fixedClock(TEST_NOW);
@@ -52,7 +50,6 @@ beforeEach(() => {
   goals = new GoalService({ db: db.handle, clock });
   devices = new DeviceTokenService({ db: db.handle, clock });
   outbox = new Outbox({ db: db.handle, clock });
-  jobs = new JobStore({ db: db.handle, clock });
   sendings = new SendingStore({
     db: db.handle,
     clock,
@@ -61,7 +58,7 @@ beforeEach(() => {
   sync = new SyncService({
     db: db.handle,
     clock,
-    resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings }),
+    resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, sendings }),
   });
 });
 
@@ -256,7 +253,7 @@ describe("the resolver map", () => {
     // the contract without a source does not compile. This asserts the other
     // half: that the runtime list this service filters by has not drifted from
     // the generated union.
-    const resolvers = syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings });
+    const resolvers = syncResolvers({ messages, reminders, todos, goals, devices, outbox, sendings });
     expect(Object.keys(resolvers).sort()).toEqual([...SYNC_RESOURCE_TYPES].sort());
   });
 
@@ -273,7 +270,7 @@ describe("the resolver map", () => {
       date: "2099-01-02",
     });
 
-    const resolvers = syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings });
+    const resolvers = syncResolvers({ messages, reminders, todos, goals, devices, outbox, sendings });
     expect(resolvers.todo(todo.id)).toEqual(todo);
     expect(resolvers.goal(goal.id)).toEqual(goal);
     expect(resolvers.reminder(reminder.id)).toEqual(reminder);
@@ -283,7 +280,7 @@ describe("the resolver map", () => {
   });
 
   it("should return null for an id no store knows", () => {
-    const resolvers = syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings });
+    const resolvers = syncResolvers({ messages, reminders, todos, goals, devices, outbox, sendings });
     for (const type of SYNC_RESOURCE_TYPES) {
       expect(resolvers[type](`syl:${type}:00000000-0000-7000-8000-00000000dead`)).toBeNull();
     }

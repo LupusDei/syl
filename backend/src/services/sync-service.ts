@@ -68,8 +68,6 @@ const EVERY_TYPE: Readonly<Record<SyncResourceType, true>> = {
   goal: true,
   device: true,
   delivery: true,
-  job: true,
-  run: true,
   sending: true,
 };
 

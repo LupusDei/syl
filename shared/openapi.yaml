@@ -3279,7 +3279,7 @@ components:
         `Message.attachments` is served inline. A sending has its own surface,
         its own list and its own lifecycle after the message is written, so it
         is the resource that changes when a video finally lands.
-      enum: [conversation, message, reminder, todo, goal, device, delivery, job, run, sending]
+      enum: [conversation, message, reminder, todo, goal, device, delivery, sending]
 
     SyncChangeOp:
       type: string

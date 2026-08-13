@@ -941,7 +941,7 @@ export type MemoryConstellation = {
  * its own list and its own lifecycle after the message is written, so it
  * is the resource that changes when a video finally lands.
  */
-export type SyncResourceType = "conversation" | "message" | "reminder" | "todo" | "goal" | "device" | "delivery" | "job" | "run" | "sending";
+export type SyncResourceType = "conversation" | "message" | "reminder" | "todo" | "goal" | "device" | "delivery" | "sending";
 
 export type SyncChangeOp = "upsert" | "delete";
 

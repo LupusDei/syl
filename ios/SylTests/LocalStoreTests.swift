@@ -411,10 +411,16 @@ final class LocalStoreTests: XCTestCase {
     }
 
     func testShouldIgnoreADeleteForAResourceTypeTheDeviceDoesNotStore() throws {
-        // Jobs and runs are the admin surface's business, read live. Skipping is
-        // correct, not a gap.
-        XCTAssertNil(LocalStore.tableName(for: .job))
-        XCTAssertNoThrow(try store.delete(type: .job, id: "syl:job:whatever"))
+        // Devices and deliveries are the service's business, not the phone's.
+        // Skipping is correct, not a gap.
+        //
+        // `.job` and `.run` stood here until `syl-020`: they are no longer sync
+        // resources at all, so there is no longer a case to skip. Jobs and runs remain
+        // the admin surface's business and it still reads them live from `/jobs` and
+        // `/runs` — what changed is that they stopped being written to a change feed
+        // no client ever stored one from.
+        XCTAssertNil(LocalStore.tableName(for: .device))
+        XCTAssertNoThrow(try store.delete(type: .device, id: "syl:device:whatever"))
     }
 
     // MARK: - Migrations
