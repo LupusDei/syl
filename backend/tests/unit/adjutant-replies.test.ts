@@ -43,7 +43,6 @@ import { testDatabase, TEST_NOW } from "../helpers/service.js";
  * below is about the gap between them.
  */
 
-const HER = "syl";
 const NOW = TEST_NOW;
 const iso = (ms: number): string => new Date(ms).toISOString();
 
@@ -128,7 +127,7 @@ function reply(
 }
 
 function answersOver(fleet: FakeFleet): AgentAnswers {
-  return new AgentAnswers({ fleet, seen, agentId: HER, clock: fixedClock(NOW) });
+  return new AgentAnswers({ fleet, seen, clock: fixedClock(NOW) });
 }
 
 // ---------------------------------------------------------------------------
@@ -209,17 +208,105 @@ describe("AgentAnswers — an answer finds its way back to her", () => {
   });
 
   it("should not mistake a DM carrying no correlation id for an answer", async () => {
-    // An agent talks to her for reasons that have nothing to do with a question
-    // she asked. Presenting that as an answer would attach somebody's passing
-    // remark to a question about the Commander's money.
+    // The recipient answers the ordinary way and may quote nothing back, so an
+    // unmatched DM from an agent she is waiting on is still filed against the
+    // question — that is rule 4, and without it a fleet that never echoes the
+    // ref leaves her back in the void.
+    //
+    // What must NOT happen is that a guess is relayed as a fact. Presenting
+    // somebody's passing remark as the treasurer's answer about the Commander's
+    // money is a false confirmation, which is the defect this epic is about.
     const fleet = fakeFleet();
-    question(fleet);
+    question(fleet, { question: "What is he paying for health insurance?" });
     reply(fleet, { body: "Morning. Anything you need from me today?" });
 
     const answers = answersOver(fleet);
     await answers.collect();
+    const contributed = answers.surface();
 
-    expect(answers.surface()).toBeUndefined();
+    expect(contributed?.text).toContain("Morning. Anything you need");
+    expect(contributed?.text).toContain("DID NOT SAY WHICH QUESTION");
+    expect(contributed?.text).not.toMatch(/, answering what you asked/u);
+    // And she is still waiting: nothing has told her the question was addressed.
+    expect(answers.outstanding().map((q) => q.question)).toEqual([
+      "What is he paying for health insurance?",
+    ]);
+  });
+
+  it("should not surface a DM from an agent it is not waiting on as an answer at all", async () => {
+    // There is nothing to attach it to. Rule 4 is a guess between her own
+    // outstanding questions, not a licence to call any message an answer.
+    const fleet = fakeFleet();
+    const id = question(fleet, { to: "raynor" });
+    reply(fleet, { from: "raynor", threadId: id, body: "Done." });
+    reply(fleet, { from: "raynor", body: "Also, unrelated: nice weather." });
+
+    const answers = answersOver(fleet);
+    await answers.collect();
+
+    const contributed = answers.surface();
+    expect(contributed?.text).toContain("Done.");
+    expect(contributed?.text).not.toContain("nice weather");
+  });
+
+  it("should file an unmatched reply against the most recent question asked before it arrived", async () => {
+    const fleet = fakeFleet();
+    question(fleet, { question: "What did the roof cost?", at: NOW - 3 * 60_000 });
+    question(fleet, { question: "And the gutters?", at: NOW - 2 * 60_000 });
+    // Asked AFTER the reply landed, so it cannot be what the reply is about.
+    question(fleet, { question: "One more thing.", at: NOW + 60_000 });
+    reply(fleet, { body: "About nine thousand.", at: iso(NOW) });
+
+    const answers = answersOver(fleet);
+    await answers.collect();
+
+    const text = answers.surface()?.text ?? "";
+    expect(text).toContain("And the gutters?");
+    expect(text).not.toContain("One more thing.");
+  });
+
+  it("should say how many other questions were outstanding when it guessed", async () => {
+    // THE AMBIGUOUS CASE, named rather than hidden. Two questions to one agent
+    // and a reply that says which one it answers is a coin toss — so she is
+    // told it was one, and how many others it might have been.
+    const fleet = fakeFleet();
+    question(fleet, { question: "What did the roof cost?", at: NOW - 3 * 60_000 });
+    question(fleet, { question: "And the gutters?", at: NOW - 2 * 60_000 });
+    reply(fleet, { body: "About nine thousand.", at: iso(NOW) });
+
+    const answers = answersOver(fleet);
+    await answers.collect();
+
+    expect(answers.surface()?.text).toMatch(/1 other question is outstanding/u);
+  });
+
+  it("should keep both questions outstanding when a reply only guessed at one of them", async () => {
+    const fleet = fakeFleet();
+    question(fleet, { question: "What did the roof cost?", at: NOW - 3 * 60_000 });
+    question(fleet, { question: "And the gutters?", at: NOW - 2 * 60_000 });
+    reply(fleet, { body: "About nine thousand.", at: iso(NOW) });
+
+    const answers = answersOver(fleet);
+    await answers.collect();
+    answers.surface();
+
+    expect(answers.outstanding()).toHaveLength(2);
+  });
+
+  it("should prefer the id the agent actually quoted over the question it would have guessed", async () => {
+    // Rules 1-3 are facts and rule 4 is a guess. A reply that says which
+    // question it answers must never be overruled by recency.
+    const fleet = fakeFleet();
+    const roof = question(fleet, { question: "What did the roof cost?", at: NOW - 3 * 60_000 });
+    question(fleet, { question: "And the gutters?", at: NOW - 2 * 60_000 });
+    reply(fleet, { body: `About nine thousand. ${roof}`, at: iso(NOW) });
+
+    const answers = answersOver(fleet);
+    await answers.collect();
+
+    const text = answers.surface()?.text ?? "";
+    expect(text).toContain("answering what you asked them");
+    expect(text).toContain("What did the roof cost?");
   });
 
   it("should surface a reply that arrived while a turn was in flight on the NEXT turn, not lose it", async () => {
@@ -247,16 +334,30 @@ describe("AgentAnswers — an answer finds its way back to her", () => {
     // surface silently swallows replies — a system reporting success while
     // losing the thing, which is the bug this whole epic exists to fix.
     const fleet = fakeFleet();
-    question(fleet);
-    reply(fleet, { id: "in-chatter", body: "Morning. Anything you need?" });
+    const id = question(fleet, { at: NOW - 120_000 });
+    // Answered, plainly, with the ref quoted back — so this one IS surfaced and
+    // nothing is outstanding with the treasurer afterwards.
+    reply(fleet, { id: "in-answer", threadId: id, body: "It is $1,485 a month.", at: iso(NOW - 60_000) });
+    // And then they say something else, which answers nothing and is READ on
+    // every single poll from now until Adjutant forgets it.
+    reply(fleet, { id: "in-chatter", body: "Morning. Anything you need?", at: iso(NOW) });
 
     const answers = answersOver(fleet);
     await answers.collect();
     answers.surface();
 
     // The ledger IS the cursor here — `RepliesSeen.lastFrom` derives it rather
-    // than mutating a watermark, precisely so that reading cannot move it.
-    expect(seen.lastFrom("treasurer")).toBeNull();
+    // than mutating a watermark, precisely so that reading cannot move it. A
+    // watermark would now sit at the chatter, which is LATER than the answer,
+    // and the next real answer stamped in between would be swallowed.
+    expect(seen.lastFrom("treasurer")?.messageId).toBe("in-answer");
+    expect(seen.unseen([{ messageId: "in-chatter", from: "treasurer", at: iso(NOW) }])).toHaveLength(
+      1,
+    );
+
+    // And reading it again, on turn after turn, still does not move anything.
+    await answers.collect();
+    expect(answers.surface()).toBeUndefined();
     expect(seen.unseen([{ messageId: "in-chatter", from: "treasurer", at: iso(NOW) }])).toHaveLength(
       1,
     );
@@ -377,7 +478,6 @@ describe("AgentAnswers.collect — when the fleet is not answering", () => {
     const stubborn = new AgentAnswers({
       fleet: broken,
       seen,
-      agentId: HER,
       clock: fixedClock(NOW),
     });
     // A fresh object has staged nothing, so this asserts the weaker half: a
@@ -402,7 +502,6 @@ describe("AgentAnswers.collect — when the fleet is not answering", () => {
     const answers = new AgentAnswers({
       fleet: exploding,
       seen,
-      agentId: HER,
       clock: fixedClock(NOW),
     });
 

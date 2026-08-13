@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import type { Goal, HealthStatus, Reminder, ReminderOrigin, Sending, Todo } from "@syl/shared";
 
 import { AdjutantClient } from "../agents/adjutant-client.js";
+import { newCorrelationId, refLine } from "../agents/answers.js";
 import { mayReach, notOnTheRoster } from "../agents/roster.js";
 
 import { verifyUrgency } from "../harness/urgency.js";
@@ -797,7 +798,20 @@ const askAgent: ToolHandler = async (input, context) => {
     };
   }
 
-  const sent = await context.fleet.ask(who, question);
+  // THE RETURN LEG STARTS HERE (`syl-j8fa.5`). A question that cannot be
+  // recognised when it is answered is a question asked into a void: she had
+  // never received a reply, because nothing tied one to what provoked it.
+  //
+  // The id goes in the TEXT as well as on the thread and in the metadata, and
+  // the text is the one that matters. Adjutant injects the message BODY into
+  // the recipient's session, so a thread id they never see is one they cannot
+  // echo — and the whole design rests on the recipient answering the ordinary
+  // way, with nothing required of them. `agents/answers.ts` has the argument.
+  const correlationId = newCorrelationId();
+  const sent = await context.fleet.ask(who, `${question}\n\n${refLine(correlationId)}`, {
+    threadId: correlationId,
+    metadata: { correlationId },
+  });
   if (!sent.ok) {
     return {
       ok: false,
@@ -815,7 +829,12 @@ const askAgent: ToolHandler = async (input, context) => {
     // Deliberately not `subject: the answer`. Nothing has been answered — most
     // agents are offline most of the time, and a verb that implied otherwise
     // would have her telling him the treasurer said something.
-    subject: { who, question, messageId: sent.data.messageId },
+    //
+    // `correlationId` is here so the thing she says out loud and the thing the
+    // service matches on are the same string. Nothing is written down on this
+    // side: the question lives in Adjutant, which is where the answer is going
+    // to land, and this process has no database to write it to anyway.
+    subject: { who, question, messageId: sent.data.messageId, correlationId },
     at: sent.data.at,
   };
 };

@@ -2087,9 +2087,13 @@ describe("ask_agent — putting a question to someone who knows more", () => {
     );
 
     expect(envelope).toMatchObject({ ok: true, action: "ask_agent" });
-    expect(asked).toEqual([
-      { who: "treasurer", body: "What is he paying for health insurance?" },
-    ]);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.who).toBe("treasurer");
+    // `toContain`, not `toEqual`: the body also carries the correlation id the
+    // return leg matches an answer on (`syl-j8fa.5`, `agents/answers.ts`), and
+    // what this test is about is that she asked the right person the right
+    // thing. The stamping has its own tests in `adjutant-replies.test.ts`.
+    expect(asked[0]?.body).toContain("What is he paying for health insurance?");
     if (envelope.ok) {
       const subject = envelope.subject as Record<string, unknown>;
       expect(subject["who"]).toBe("treasurer");
