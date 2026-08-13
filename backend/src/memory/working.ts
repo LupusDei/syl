@@ -279,6 +279,37 @@ export const WORKING_MEMORY_EXCLUDED_KINDS: readonly MemoryNodeKind[] = ["self"]
 
 const EXCLUDED_KINDS = new Set<MemoryNodeKind>(WORKING_MEMORY_EXCLUDED_KINDS);
 
+/**
+ * Kinds this projection may never drop for want of room — `syl-024.3`.
+ *
+ * **Section order is RENDERING and nothing else, and that is the trap this
+ * constant exists to close.** `## Standing orders` leads
+ * {@link WORKING_MEMORY_SECTIONS}, which reads like protection and is not:
+ * admission is greedy in SALIENCE order and stops at the first entry that does
+ * not fit, so an instruction could survive the night at full strength, keep
+ * every edge, and simply never reach her because something outranked it and the
+ * budget filled. Nothing looks wrong afterwards — the node is hot, the graph is
+ * intact, and there is no error anywhere. That is the worse of the two ways an
+ * order disappears; the other is decay, and `DEMOTE_SWEEP_SQL` closes it.
+ *
+ * Her requirement was "unfadeable", and an order dropped at admission has faded
+ * whatever the tier column says. So pinned candidates are admitted BEFORE the
+ * greedy loop runs and are never part of what it can break on. A high
+ * {@link KIND_FLOOR_SQL} floor is not a substitute: a floor decides the ORDER
+ * things are considered in, and this decides whether there was room at all.
+ *
+ * The consequence, stated plainly because it is a real cost: standing orders
+ * spend the budget first, so a large enough set of them squeezes what he told
+ * her ABOUT HIMSELF out of the same document. That is the right way round — he
+ * can see what he told her and revise it, and no amount of reading can recover
+ * what was silently withheld — and past the point where they do not fit at all
+ * this fails loudly rather than choosing for him. See
+ * {@link WorkingMemoryPinnedOverflowError}.
+ */
+export const WORKING_MEMORY_PINNED_KINDS: readonly MemoryNodeKind[] = ["instruction"];
+
+const PINNED_KINDS = new Set<MemoryNodeKind>(WORKING_MEMORY_PINNED_KINDS);
+
 const SECTION_RANK = new Map<MemoryNodeKind, number>(
   WORKING_MEMORY_SECTIONS.map((section, index) => [section.kind, index]),
 );
@@ -402,6 +433,44 @@ export class WorkingMemoryOverflowError extends Error {
         `the auto-memory index (syl-03d). Failing here is the whole point.`,
     );
     this.name = "WorkingMemoryOverflowError";
+    this.bytes = bytes;
+    this.maxBytes = maxBytes;
+  }
+}
+
+/**
+ * What he told her to be does not fit in what she is handed — `syl-024.3`.
+ *
+ * The one honest end of the pinning guarantee. {@link WORKING_MEMORY_PINNED_KINDS}
+ * promises a standing order is never dropped for want of room, and a promise
+ * with no failure mode is a promise that quietly breaks: past some number of
+ * orders the only alternatives are to drop one anyway or to say so.
+ *
+ * It says so, and the cost of that is understood — regeneration fails, so the
+ * projection freezes at the last good one until someone looks. That is the
+ * right trade in both directions. Frozen is stale and recoverable; a silently
+ * dropped standing order is neither, and it is invisible from the graph, from
+ * the log and from the document itself. Same argument as
+ * {@link WorkingMemoryOverflowError} one level up, and as constraint 4: the
+ * system does not get to decide on its own to stop carrying something.
+ */
+export class WorkingMemoryPinnedOverflowError extends Error {
+  /** How many pinned entries there were. */
+  readonly pinned: number;
+  readonly bytes: number;
+  readonly maxBytes: number;
+
+  constructor(pinned: number, bytes: number, maxBytes: number) {
+    super(
+      `Refusing to build a working-memory projection: ${String(pinned)} standing orders render ` +
+        `to ${String(bytes)} bytes against a budget of ${String(maxBytes)}, so there is no ` +
+        `projection that carries all of them. A standing order is what the Commander told Syl ` +
+        `to BE, and it is never dropped to make room (syl-024.3) — an order cut at admission ` +
+        `has faded whatever the graph says, and nothing anywhere reports it. Raise the budget ` +
+        `or retire an order; both are his call, and neither is this function's.`,
+    );
+    this.name = "WorkingMemoryPinnedOverflowError";
+    this.pinned = pinned;
     this.bytes = bytes;
     this.maxBytes = maxBytes;
   }
@@ -548,6 +617,14 @@ function render(
  * {@link WORKING_MEMORY_EXCLUDED_KINDS} is applied first, before ranking, so an
  * excluded kind is neither admitted nor reported as dropped: it is not part of
  * this question at all.
+ *
+ * {@link WORKING_MEMORY_PINNED_KINDS} is applied next, and it is what makes
+ * "a standing order is never dropped" true rather than intended: pinned
+ * candidates are admitted BEFORE the loop and are not among the entries it can
+ * break on, so the greedy tail is drawn only from what may be dropped.
+ *
+ * @throws {WorkingMemoryPinnedOverflowError} when the pinned entries alone do
+ * not fit — the one case where the guarantee cannot be kept, said out loud.
  */
 export function buildWorkingMemory(
   candidates: readonly WorkingMemoryCandidate[],
@@ -555,18 +632,37 @@ export function buildWorkingMemory(
 ): WorkingMemoryPlan {
   const maxBytes = options.maxBytes ?? WORKING_MEMORY_MAX_BYTES;
   const maxLines = options.maxLines ?? WORKING_MEMORY_MAX_LINES;
+  const overBudget = (trial: string): boolean =>
+    byteLength(trial) > maxBytes || trial.split("\n").length > maxLines;
 
   const asked = candidates.filter((candidate) => !EXCLUDED_KINDS.has(candidate.kind));
   const ordered = [...asked].sort(rank);
-  const admitted: WorkingMemoryCandidate[] = [];
+  const pinned = ordered.filter((candidate) => PINNED_KINDS.has(candidate.kind));
+  const optional = ordered.filter((candidate) => !PINNED_KINDS.has(candidate.kind));
 
-  for (const candidate of ordered) {
-    const trial = render([...admitted, candidate], ordered.slice(admitted.length + 1));
-    if (byteLength(trial) > maxBytes || trial.split("\n").length > maxLines) break;
-    admitted.push(candidate);
+  // The smallest projection this input HAS: everything pinned, nothing else,
+  // and the notice naming the rest. If that does not fit, no plan exists — so
+  // say which half could not be given up rather than dropping it and reporting
+  // a healthy build. Skipped when nothing is pinned, because then there is no
+  // guarantee to fail and the store's own guard is the right place to refuse.
+  const floor = render(pinned, optional);
+  if (pinned.length > 0 && overBudget(floor)) {
+    throw new WorkingMemoryPinnedOverflowError(pinned.length, byteLength(floor), maxBytes);
   }
 
-  const dropped = ordered.slice(admitted.length);
+  const admittedOptional: WorkingMemoryCandidate[] = [];
+
+  for (const candidate of optional) {
+    const trial = render(
+      [...pinned, ...admittedOptional, candidate],
+      optional.slice(admittedOptional.length + 1),
+    );
+    if (overBudget(trial)) break;
+    admittedOptional.push(candidate);
+  }
+
+  const admitted = [...pinned, ...admittedOptional];
+  const dropped = optional.slice(admittedOptional.length);
   const text = render(admitted, dropped);
 
   // Rendered order, not admission order: `included` is what a caller shows

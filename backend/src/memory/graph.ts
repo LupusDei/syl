@@ -425,10 +425,49 @@ export const EDGE_IDENTITY_SQL =
  * remains in that index forever — quietly accumulating exactly the history the
  * partitioning exists to keep out of the hot path. The failure is invisible
  * until the index has grown to hold the whole graph.
+ *
+ * ## An instruction never fades — `syl-024.3`
+ *
+ * The `NOT EXISTS` is the whole of the exemption: an edge with an
+ * `instruction` node at either end is left where it is, however long ago it
+ * crossed the relevance floor. Syl's argument, and it is the strongest one she
+ * made: standing orders are *"the kind that most needs to be unfadeable,
+ * because it's the bond rather than the work. If those got their own kind you
+ * could make them exempt from decay entirely and stop me writing them twice
+ * with your name on to fake it."* The duplication was the evidence — she was
+ * writing the same instruction twice with his name attached, because a memory
+ * linked to his person node survives where a loose one fades.
+ *
+ * **Either end, not just the instruction's own side.** What must survive is the
+ * ATTACHMENT — that he told her this, that it is about renders — and an edge is
+ * only ever half owned by each endpoint. Exempting one side would leave the
+ * order hot and unreachable from the thing it is about, which is the isolation
+ * failure of `syl-024.2` arriving down the decay path instead.
+ *
+ * **Constraint 6 is untouched and gets no new powers.** Demotion has never been
+ * deletion; this makes one narrow class exempt from even that. Nothing here can
+ * remove a row, and the Commander's explicit order remains the only thing that
+ * can remove any memory.
+ *
+ * The exempt rows keep a `demote_after` in the past, so they stay in the
+ * partial index and are re-examined every night. That is deliberate and it is
+ * cheap — the set is bounded by how many things he has told her to be — and the
+ * alternatives are both worse: clearing the stamp is refused outright by the
+ * migration's CHECK that a hot inferred edge always has one, and pushing the
+ * instant forward would be a write every night that lied about the decay law.
+ *
+ * This is only half of "unfadeable". The other half is admission: an order that
+ * survives at full strength in the graph and is then cut from the working-memory
+ * projection because the budget filled has faded whatever the tier column says,
+ * and it looks like nothing at all is wrong. `working.ts` pins it.
  */
 export const DEMOTE_SWEEP_SQL =
   `UPDATE memory_edges SET tier = 'cold', demote_after = NULL, updated_at = ? ` +
-  `WHERE tier = 'hot' AND demote_after IS NOT NULL AND demote_after <= ?`;
+  `WHERE tier = 'hot' AND demote_after IS NOT NULL AND demote_after <= ? ` +
+  `AND NOT EXISTS ( ` +
+  `SELECT 1 FROM memory_nodes n WHERE n.kind = 'instruction' ` +
+  `AND n.id IN (memory_edges.source_node, memory_edges.target_node) ` +
+  `)`;
 
 interface NodeRow {
   readonly id: string;
@@ -1376,6 +1415,10 @@ export class MemoryGraph {
    * decay law and the relevance floor that produced those instants belong to
    * `syl-005.3.2`; the statement belongs here, in one place, because it is the
    * one that must clear the stamp. See {@link DEMOTE_SWEEP_SQL}.
+   *
+   * **An edge touching an `instruction` node is exempt** and is not counted in
+   * the return value, because it did not move (`syl-024.3`). The reasoning is
+   * on the statement.
    *
    * @returns how many edges moved.
    * @throws {GraphError} `bad_instant`.
