@@ -883,7 +883,7 @@ struct LocalStore: Sendable {
         // anything here. Naming the table would make acceptance item 6 true only for as
         // long as no `op: "delete"` ever arrived for one.
         case .sending: return nil
-        case .device, .delivery: return nil
+        case .device, .delivery, .unrecognised: return nil
         }
     }
 

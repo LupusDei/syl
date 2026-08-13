@@ -198,10 +198,18 @@ final class ModelCodingTests: XCTestCase {
     /// and until this test the phone would simply have stopped synchronising the first
     /// time she sent him something.
     func testShouldDecodeEveryResourceTypeTheContractCanPutOnTheSyncFeed() throws {
-        // Straight from `SyncResourceType` in `shared/openapi.yaml`.
+        // Straight from `SyncResourceType` in `shared/openapi.yaml`, PLUS the two the
+        // contract has since dropped and a string no contract ever had.
+        //
+        // `job` and `run` left the contract in `syl-020` and belong in this list more
+        // than ever: the app and the server ship separately, so a phone carrying this
+        // build still receives rows the service wrote before its migration ran. If an
+        // unknown type could fail the page, updating first would kill sync outright.
+        // `flibbertigibbet` stands for every type not invented yet.
         let contractTypes = [
             "conversation", "message", "reminder", "todo", "goal",
-            "device", "delivery", "job", "run", "sending",
+            "device", "delivery", "sending",
+            "job", "run", "flibbertigibbet",
         ]
 
         for type in contractTypes {
