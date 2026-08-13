@@ -214,9 +214,30 @@ survived a second change of mechanism without anyone having to remember it.
 **A sentence never wins an argument with a pinned frame**, so each half carries
 only the clause its own frames support: `GATHERING_CLAUSE` does not promise the
 ribbon coming back, and `UNRAVELLING_CLAUSE` does not describe it forming.
-`LOOP_CLAUSE` — *"the first and last frames are identical"* — goes only to a
-generation that really was given one picture. Between them the two halves tell
-`LOOP_CLAUSE`'s arc, in two pieces because Runway has two slots.
+`LOOP_CLAUSE` — *"the first and last frames are identical"* — goes to a
+generation that really does open and close on the ribbon. Between them the two
+halves tell `LOOP_CLAUSE`'s arc, in two pieces because Runway has two slots.
+
+**And the unanchored path did not follow that rule, which cost the closing
+ribbon on every loop the service made** (`syl-gi5m`, 2026-08-13). The paragraph
+above used to end *"goes only to a generation that really was given one
+picture"*, and that was the mistake in one line: an unanchored shot was sent
+`promptImage` as a bare string, one keyframe, and asked for the closing ribbon
+in prose. `LOOP_CLAUSE` then asserted two things that cannot both be true — *"she
+unravels back into the ribbon and **it streams away, leaving empty starfield**"*
+and *"the first and last frames are identical: the bare ribbon"*. If the ribbon
+streams away, the last frame is not the ribbon. The model obeyed the earlier
+sentence. Measured by extracting both frames of
+`syl-20260813t042030321z-face-turned-away.mp4`, made by the deployed build: first
+frame the bare ribbon, last frame empty starfield with nothing in it.
+
+The fix is the one this whole document is about, applied to the other end of the
+clip. **An unanchored framing has no face to pin, so the `last` slot is free** —
+it now gets the same opening picture as `first`, and the loop is true by
+construction rather than by wording. The closing sentence was rewritten to agree
+with it. Note which half of that fix mattered: the clause had already been
+rewritten once, for the *opening* frame, and had not moved a frame then either.
+The picture moved it. **Ask the frame, not the prose.**
 
 **Both halves are kept**, under `renders/parts/`, with the join frame and the
 concat list. `SOUL.md`: *"Never delete a render, and never let one be deleted."*

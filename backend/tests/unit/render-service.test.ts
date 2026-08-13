@@ -276,20 +276,67 @@ describe("asking for a render", () => {
     expect(bytesOf(firstFrameOf(backend.specs[0]?.promptImage))).not.toEqual(REFERENCE_BYTES);
   });
 
-  it("should send the ribbon alone for the reel framing, so the clip ends where it began", async () => {
-    // The template and all eight of the Commander's favourites. Its likeness
-    // holds because no face is ever toward the camera, so it needs no anchor —
-    // and pinning a closing frame would break the loop, whose whole trick is
-    // that the first and last frames are the same bare ribbon.
+  it("should pin the ribbon at BOTH ends of an unanchored render, so the clip ends where it began", async () => {
+    // MEASURED ON A REAL FILE, not reasoned about:
+    // `~/.syl/renders/syl-20260813t042030321z-face-turned-away.mp4`, made by the
+    // deployed build. First frame the bare ribbon — correct, `promptImage` pins
+    // it. **Last frame empty starfield with no ribbon in it** — wrong, and the
+    // Commander's one requirement for these clips is that they start on the
+    // ribbon of light and end on the ribbon of light.
+    //
+    // This test used to assert the opposite, on the belief that "pinning a
+    // closing frame would break the loop". It is the other way round: an
+    // unanchored framing has no face to pin, so the `last` slot is FREE, and
+    // putting the opening ribbon in it makes the loop true by construction.
+    // That is the one lesson `docs/VIDEO.md` carries — a pinned frame beats a
+    // sentence asking for one — applied to the end of the clip instead of the
+    // beginning.
     const backend = fakeBackend();
     const service = serviceWith(backend);
 
     await service.start({ ...ASK, framing: "face_turned_away" });
 
     const sent = backend.specs[0]?.promptImage;
-    expect(typeof sent).toBe("string");
-    expect(sent as string).toMatch(/^data:image\/png;base64,/u);
-    expect(bytesOf(sent as string)).toEqual(OPENING_BYTES);
+    expect(Array.isArray(sent)).toBe(true);
+    const images = sent as readonly { readonly uri: string; readonly position: string }[];
+    expect(images.map((image) => image.position)).toEqual(["first", "last"]);
+    // The same picture at both ends — not merely two pictures.
+    expect(bytesOf(images[0]?.uri ?? "")).toEqual(OPENING_BYTES);
+    expect(bytesOf(images[1]?.uri ?? "")).toEqual(OPENING_BYTES);
+    expect(images[1]?.uri).toBe(images[0]?.uri);
+    // And it is her likeness that is NOT pinned here, which is what left the
+    // slot free in the first place.
+    expect(bytesOf(images[1]?.uri ?? "")).not.toEqual(REFERENCE_BYTES);
+  });
+
+  it("should not tell an unanchored generation the ribbon leaves at the end, when the ribbon is pinned there", async () => {
+    // The cause of the defect above, and it is instructive. `LOOP_CLAUSE`
+    // asserted two things that cannot both be true: *"she unravels back into
+    // the ribbon and it streams away, leaving empty starfield"* AND *"the first
+    // and last frames are identical: the bare ribbon"*. If the ribbon streams
+    // away the last frame is not the ribbon. The model resolved the
+    // contradiction by obeying the first sentence, and the clip ended on
+    // nothing.
+    //
+    // A closing sentence that contradicts a pinned last frame is the defect
+    // this whole line of work started from, so the prose has to agree with the
+    // frames actually sent: the ribbon is pinned at both ends, therefore she
+    // unravels back INTO the ribbon and the shot closes on it.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+
+    const started = await service.start({ ...ASK, framing: "face_turned_away" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    const prompt = backend.specs[0]?.promptText ?? "";
+    expect(prompt).not.toMatch(/leaving empty starfield/iu);
+    expect(prompt).not.toMatch(/streams away/iu);
+    // Still the transformation, and still the loop.
+    expect(prompt).toMatch(/unravels back into the ribbon/iu);
+    expect(prompt).toMatch(/first and last frames are identical/iu);
+    // The sidecar records what was sent, so this is checkable after the fact.
+    expect(started.record.prompt).toBe(prompt);
   });
 
   it("should pin her face as the frame the two halves are cut on", async () => {
@@ -476,9 +523,12 @@ describe("asking for a render", () => {
     await service.drain();
 
     expect(backend.specs).toHaveLength(1);
-    expect(typeof backend.specs[0]?.promptImage).toBe("string");
     expect(started.record.parts).toHaveLength(1);
     expect(backend.specs[0]?.duration).toBe(15);
+    // One generation, two keyframes: both ends of that single clip are the
+    // ribbon, which is what the loop needs and what needs no join.
+    expect(started.record.parts[0]?.first).toBe(DEFAULT_OPENING);
+    expect(started.record.parts[0]?.last).toBe(DEFAULT_OPENING);
   });
 
   it("should bill only the halves that reached Runway when the second one will not start", async () => {
