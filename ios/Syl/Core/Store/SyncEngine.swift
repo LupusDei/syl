@@ -442,7 +442,7 @@ actor SyncEngine {
             // and nothing anywhere assumes it did.
             guard let value = try change.decodeResource(as: Sending.self) else { return false }
             try store.replaceSendings(SendingPage(items: [value], nextCursor: nil, hasMore: false))
-        case .device, .delivery:
+        case .device, .delivery, .unrecognised:
             // Not stored on the device. The admin surface reads these live and the
             // phone has no use for them; skipping is correct, not a gap.
             //
