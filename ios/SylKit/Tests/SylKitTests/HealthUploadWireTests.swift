@@ -102,11 +102,50 @@ final class HealthUploadWireTests: XCTestCase {
         XCTAssertEqual(HealthType.bodyMass.unit, "lb")
     }
 
-    func testShouldSpellTheThreeAuthorisationStatesTheContractsWay() {
+    func testShouldSpellTheFiveAuthorisationStatesTheContractsWay() {
+        // Copied character for character from AUTHORISATION_STATES in
+        // backend/src/health/contract.ts, `authorised` included. A state this client
+        // spells differently is a 400 on a phone nobody is looking at.
         XCTAssertEqual(
             HealthAuthorisationState.allCases.map(\.rawValue),
-            ["authorised", "denied", "notDetermined"]
+            ["authorised", "denied", "notDetermined", "undisclosed", "unavailable"]
         )
+    }
+
+    func testShouldEncodeEveryAuthorisationStateAsItsContractSpelling() throws {
+        // The two states the contract gained after this client shipped are the ones with
+        // no encoding history behind them, so they are the ones a typo would reach
+        // production through.
+        for state in HealthAuthorisationState.allCases {
+            let upload = HealthUpload(
+                authorisation: report(steps: state, otherwise: .authorised),
+                samples: []
+            )
+            let authorisation = try XCTUnwrap(
+                try object(from: upload)["authorisation"] as? [String: Any]
+            )
+            XCTAssertEqual(authorisation["steps"] as? String, state.rawValue)
+        }
+    }
+
+    func testShouldDecodeTheTwoStatesTheContractGainedAfterThisClientShipped() throws {
+        let wire = """
+            {
+              "authorisation": {
+                "heartRate": "authorised", "restingHeartRate": "undisclosed",
+                "heartRateVariability": "unavailable", "sleep": "denied",
+                "steps": "notDetermined", "workout": "undisclosed",
+                "bodyMass": "undisclosed"
+              },
+              "samples": []
+            }
+            """
+
+        let decoded = try SylJSON.decoder().decode(HealthUpload.self, from: Data(wire.utf8))
+
+        XCTAssertEqual(decoded.authorisation[.restingHeartRate], .undisclosed)
+        XCTAssertEqual(decoded.authorisation[.heartRateVariability], .unavailable)
+        XCTAssertTrue(decoded.isComplete)
     }
 
     // MARK: - Completeness is the client's business too
@@ -133,6 +172,20 @@ final class HealthUploadWireTests: XCTestCase {
         XCTAssertTrue(HealthUpload.silenceIsEvidence(.authorised))
         XCTAssertFalse(HealthUpload.silenceIsEvidence(.denied))
         XCTAssertFalse(HealthUpload.silenceIsEvidence(.notDetermined))
+        XCTAssertFalse(HealthUpload.silenceIsEvidence(.undisclosed))
+        XCTAssertFalse(HealthUpload.silenceIsEvidence(.unavailable))
+    }
+
+    func testShouldNeverLetAStateAddedLaterBecomeEvidenceByDefault() {
+        // The property rather than the five cases: whatever the contract grows next, only
+        // `authorised` licenses a conclusion drawn from quiet. This is the guard that
+        // catches `state != .denied` being written here in a hurry.
+        for state in HealthAuthorisationState.allCases where state != .authorised {
+            XCTAssertFalse(
+                HealthUpload.silenceIsEvidence(state),
+                "\(state.rawValue) is not proof that we were allowed to look"
+            )
+        }
     }
 
     // MARK: - The endpoint
@@ -151,11 +204,14 @@ final class HealthUploadWireTests: XCTestCase {
     }
 
     func testShouldSendAnEmptyBatchRatherThanSkipIt() throws {
-        // An empty batch is how a denied type reaches the server at all. A client that
-        // optimised it away would leave the server unable to attribute the silence, which
-        // is the entire defect this feature exists to close.
+        // An empty batch is how an unreadable type reaches the server at all. A client
+        // that optimised it away would leave the server unable to attribute the silence,
+        // which is the entire defect this feature exists to close.
         let endpoint = try SylAPI.uploadHealthSamples(
-            HealthUpload(authorisation: report(steps: .denied, otherwise: .authorised), samples: []),
+            HealthUpload(
+                authorisation: report(steps: .undisclosed, otherwise: .authorised),
+                samples: []
+            ),
             idempotencyKey: "key-2"
         )
 
@@ -163,7 +219,10 @@ final class HealthUploadWireTests: XCTestCase {
             try JSONSerialization.jsonObject(with: XCTUnwrap(endpoint.body)) as? [String: Any]
         )
         XCTAssertEqual((json["samples"] as? [Any])?.count, 0)
-        XCTAssertEqual((json["authorisation"] as? [String: Any])?["steps"] as? String, "denied")
+        XCTAssertEqual(
+            (json["authorisation"] as? [String: Any])?["steps"] as? String,
+            "undisclosed"
+        )
     }
 
     // MARK: - Helpers

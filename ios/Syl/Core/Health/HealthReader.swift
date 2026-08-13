@@ -38,14 +38,23 @@ import SylKit
 ///   are not allowed to read. It is the only positive proof the platform offers, and it
 ///   only exists when there is data.
 ///
-/// So the honest states are four, not three — see ``HealthReadAuthorisation`` — and the
-/// narrowing to the contract's three happens in exactly one place,
-/// ``HealthReadAuthorisation/wireState``, where it can be read and argued with.
+/// So what the phone can honestly claim is four states — see ``HealthReadAuthorisation``
+/// — and every one of them now has a name on the wire. It did not always: the contract's
+/// first draft had three states, `authorised | denied | notDetermined`, and
+/// ``HealthReadAuthorisation/wireState`` narrowed `undisclosed` and `unavailable` onto
+/// `denied` because there was nowhere else to put them. **Build 0.9.12 shipped that
+/// narrowing against 61,030 real samples and reported "he denied it" for the three types
+/// that merely had nothing in them** — the exact empty-versus-denied conflation this
+/// whole feature exists to abolish, reappearing one level up inside the field built to
+/// abolish it. The contract then gained `undisclosed` and `unavailable` (`syl-m3gi`), so
+/// the mapping is a translation now and not a judgement.
 ///
 /// **The residual hole, stated rather than hidden**: read access revoked in Settings
 /// *after* this app has proven it readable is undetectable by any API. Samples simply
-/// stop arriving. See ``HealthReadAuthorisation/undisclosed`` for what is done about it
-/// and what is not.
+/// stop arriving, the proof ledger keeps reporting `authorised`, and the server reads the
+/// resulting silence as evidence. No client-side fix exists — a server-side staleness
+/// check (a type that was dense and went quiet) is the only available signal. See
+/// ``HealthReadAuthorisation/undisclosed``.
 protocol HealthReading: Sendable {
     /// Present the HealthKit sheet for all seven types, once. A no-op on a second call:
     /// iOS shows nothing if it has already asked.
@@ -67,9 +76,12 @@ protocol HealthReading: Sendable {
 
 /// What the phone can **prove** about one type's read permission.
 ///
-/// Four cases where the wire has three, because two of the wire's three are not
-/// separable on this platform and pretending otherwise would produce an authorisation
-/// report that is itself a guess — which is worse than none, because it will be trusted.
+/// Four cases where the wire has five, and the missing one is `denied`: **this app can
+/// never prove that he said no.** iOS offers no API that reports read authorisation, so a
+/// type he denied and a type he granted that has simply never produced a sample arrive
+/// here identical. ``undisclosed`` is that union, named rather than guessed at — an
+/// authorisation report that is itself a guess is worse than none, because it will be
+/// trusted.
 enum HealthReadAuthorisation: String, Equatable, Hashable, Sendable, CaseIterable {
     /// **Proven.** `statusForAuthorizationRequest` says iOS would still present a prompt
     /// for this type, so the Commander has never answered for it. A prompt he has not
@@ -92,40 +104,58 @@ enum HealthReadAuthorisation: String, Equatable, Hashable, Sendable, CaseIterabl
     /// (3) is why ``HealthProofLedger`` records the proof but this enum does not treat it
     /// as permanent truth on its own — though nothing on the platform can actually catch
     /// a revocation, so (3) presents exactly as (2) until he says something.
+    ///
+    /// It reaches the wire as `undisclosed`, which is what it is. It used to reach the
+    /// wire as `denied`, which is (1) asserted about all three.
     case undisclosed
 
-    /// HealthKit does not exist on this device.
+    /// **HealthKit is not present on this device**, or the running SDK no longer knows
+    /// this type's identifier at all.
+    ///
+    /// Read the scope narrowly, because the wire word is broader than what this app can
+    /// see. Both facts behind this case are device-wide or SDK-wide:
+    /// `HKHealthStore.isHealthDataAvailable()` answers about the *device*, never about one
+    /// type, and `healthKitObjectType` going nil is an SDK break. **There is no per-type
+    /// "this device has no sensor for it" detector**, so "he owns no watch, so HRV is
+    /// unavailable" is a fact this file cannot establish and does not claim: an
+    /// unmeasurable type on a HealthKit-capable phone reports ``undisclosed``, correctly,
+    /// because it is genuinely indistinguishable from a type he declined. A guessed state
+    /// is worse than an absent one.
     case unavailable
 }
 
 extension HealthReadAuthorisation {
-    /// The narrowing to the contract's three states. **The one place a judgement is made,
-    /// so it is the one place to argue with.**
+    /// This enum's four cases on the wire. **A translation, not a judgement** — every
+    /// case has a name in `AUTHORISATION_STATES` and keeps it.
     ///
-    /// `undisclosed` becomes `denied`, and that is a deliberate choice of which way to be
-    /// wrong. The only consumer that matters is the contract's `silenceIsEvidence`, which
-    /// is true for `authorised` alone — so:
+    /// It used to be a narrowing, and the narrowing was a workaround. The contract's first
+    /// draft had three states, so `undisclosed` and `unavailable` both went out as
+    /// `denied`; the argument for it was that the only consumer that matters is
+    /// `silenceIsEvidence`, which is true for `authorised` alone, so a wrong `denied` cost
+    /// a *label* while a wrong `authorised` cost a *conclusion about a body nobody looked
+    /// at*. That reasoning was sound about the risk and wrong about the remedy: the right
+    /// answer to "the contract cannot say this" is to widen the contract, and it has been
+    /// widened (`syl-m3gi`). **The label was not cheap either.** Build 0.9.12 shipped
+    /// 61,030 samples and reported `denied` for `restingHeartRate`,
+    /// `heartRateVariability` and `bodyMass` — the three types with no data — which is not
+    /// a stale label that corrects itself, it is a false statement about what the
+    /// Commander answered, and it is the empty-versus-denied conflation this feature
+    /// exists to abolish, put back inside the field that abolishes it.
     ///
-    /// - mapping `undisclosed` to `authorised` would let the server read "we were not
-    ///   allowed to look" as "nothing happened". That is the exact conclusion this whole
-    ///   feature was built to make impossible, surfaced to him through Focus at the level
-    ///   reserved for things that matter.
-    /// - mapping it to `denied` costs a *label*: a genuinely authorised type that has
-    ///   never yet produced a sample reads as denied in the admin until it does. Wrong,
-    ///   visible, and it corrects itself the moment one sample arrives.
+    /// So there is **no `denied` on this side at all**: this app cannot prove he said no,
+    /// and now it no longer has to pretend it can.
     ///
-    /// A wrong label he can see beats a wrong conclusion he cannot. `unavailable` goes the
-    /// same way for the same reason — a device with no HealthKit has not observed that he
-    /// did nothing.
-    ///
-    /// **The contract cannot express `undisclosed`, and it should.** `syl-m3gi`, filed
-    /// rather than faked — the contract is pinned, so this mapping is lossy on purpose and
-    /// says so here rather than in a commit message.
+    /// What survives unchanged is the residual: **read access revoked in Settings after a
+    /// proof is undetectable.** The samples just stop, the ledger keeps saying `readable`,
+    /// and this maps it to `authorised` — so the server does treat that silence as
+    /// evidence. Named here so nobody looks for the API that would fix it; only a
+    /// server-side staleness check can see it.
     var wireState: HealthAuthorisationState {
         switch self {
         case .notDetermined: return .notDetermined
         case .readable: return .authorised
-        case .undisclosed, .unavailable: return .denied
+        case .undisclosed: return .undisclosed
+        case .unavailable: return .unavailable
         }
     }
 }
@@ -151,6 +181,12 @@ struct HealthReadPage: Equatable, Sendable {
     }
 
     /// The report as the wire wants it. Complete by construction.
+    ///
+    /// A type the read somehow said nothing about falls to ``HealthReadAuthorisation/undisclosed``
+    /// rather than being dropped, because the server refuses an incomplete report and the
+    /// default it would otherwise need is a guess about permission. `undisclosed` is the
+    /// literally true thing to say about a type nobody looked at, and it makes no silence
+    /// evidence.
     var wireAuthorisation: [HealthType: HealthAuthorisationState] {
         var report: [HealthType: HealthAuthorisationState] = [:]
         for type in HealthType.allCases {
@@ -167,13 +203,14 @@ struct HealthReadPage: Equatable, Sendable {
 /// Without this, `readable` would be a property of the current batch rather than of the
 /// permission — and in steady state most batches are empty for most types (he weighs
 /// himself weekly; he does not work out every day). Every quiet type would report
-/// `denied` on nearly every upload, the server would never treat any silence as evidence,
-/// and the admin would show "not authorised" for a phone that is working perfectly. The
-/// report would be complete, arrive on every upload, and mean nothing.
+/// `undisclosed` on nearly every upload, the server would never treat any silence as
+/// evidence, and the admin would show "we cannot confirm we may read this" for a phone
+/// that is working perfectly. The report would be complete, arrive on every upload, and
+/// mean nothing.
 ///
 /// What it deliberately does **not** do is expire. A proof that decayed would flip a
-/// working type to `denied` after a quiet fortnight, which is the same uselessness on a
-/// timer.
+/// working type back to `undisclosed` after a quiet fortnight, which is the same
+/// uselessness on a timer.
 protocol HealthProofLedger: Sendable {
     func provenReadableAt(_ type: HealthType) -> Date?
     func recordProvenReadable(_ type: HealthType, at instant: Date)
