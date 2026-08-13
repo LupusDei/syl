@@ -202,6 +202,43 @@ export function modelNote(raw: unknown): ModelNote | null {
 }
 
 /**
+ * The model her renders are made with unless she names another.
+ *
+ * > *"Yes default to 2.5. But keep the options available"*
+ * > — the Commander, 2026-08-13
+ *
+ * `specs/013` put changing the default **out of scope** and said why: *"a silent
+ * change of the thing that makes her face is precisely the drift this project
+ * has spent days learning to hate."* That reasoning was right, and it is why the
+ * change waited for him rather than being taken by whoever measured the numbers.
+ * He has ruled, so it is no longer silent.
+ *
+ * What the ruling buys, all measured on 2026-08-13 and none of it inferred:
+ * `seedance2_5` is **cheaper** (30 credits a second against 36), reaches
+ * **longer** (30 seconds against 15), and **holds her likeness the same way** —
+ * two keyframe slots, and a 4-second render was made and looked at. It loses
+ * only 4K, which nothing in her reel has ever used, and it keeps `834:1112`, so
+ * every loop she has is still reproducible on it.
+ *
+ * **This is a `ModelNote` and not a string**, which is the whole point. A name
+ * held beside the roster is a second assertion about which models exist, and it
+ * goes stale in exactly the way `syl-63v` went stale. Resolving it here means a
+ * house model removed from the roster is an error at import rather than a 400
+ * discovered by a render at three in the morning.
+ */
+const HOUSE_MODEL_ID = "seedance2_5";
+
+export const HOUSE_MODEL: ModelNote = ((): ModelNote => {
+  const note = MODELS.find((model) => model.id === HOUSE_MODEL_ID);
+  if (note === undefined) {
+    throw new Error(
+      `The house model ${HOUSE_MODEL_ID} is not on the roster, so nothing knows what to render with.`,
+    );
+  }
+  return note;
+})();
+
+/**
  * Whether this model can pin her likeness at all.
  *
  * **The one derivation this file exists for.** An anchored render is two
@@ -226,6 +263,44 @@ export function durationAllowed(model: ModelNote | null, seconds: number): boole
 }
 
 /**
+ * The band a `resolution`-shaped model is asked for, when nobody says.
+ *
+ * **The lowest one, and the reason is honesty about the bill rather than
+ * thrift.** `creditsPerSecond` on such a model was measured at one band — 11
+ * credits a second for `grok_imagine_1_5` at `480p` — and 720p measured
+ * *higher*, around 16.25. Asking for a band the rate was not measured at would
+ * put a confident wrong number in her ledger, which is the one thing
+ * `credits.ts` exists to refuse.
+ *
+ * It also matches what the model is for. A model with one keyframe cannot hold
+ * her face, so what it is good for is rehearsing whether a movement reads — and
+ * that question is answered at 480p.
+ *
+ * `null` for a model shaped by `ratio`, which has no such field to send.
+ */
+export function defaultResolution(model: ModelNote | null): string | null {
+  if (model === null || model.shape !== "resolution") return null;
+  return model.resolutions[0] ?? null;
+}
+
+/**
+ * The longest finished clip this model can make, across the generations it takes.
+ *
+ * An anchored shot is **two** generations cut together on her face, so its
+ * ceiling is twice the model's own — that is arithmetic about the join, not a
+ * second opinion about the model. The unanchored template is one generation and
+ * stops where the model stops.
+ *
+ * Written as a function of the generation count for the same reason everything
+ * else here is derived: `MAX_SECONDS = 15` was `seedance2`'s range wearing the
+ * name of a fact about video, and it silently refused a length the house model
+ * accepts.
+ */
+export function maxSecondsFor(model: ModelNote, generations: number): number {
+  return model.duration.max * Math.max(1, generations);
+}
+
+/**
  * The enum's description, as the schema carries it.
  *
  * Built from {@link MODELS} rather than written out beside it, so the list and
@@ -236,18 +311,24 @@ export function durationAllowed(model: ModelNote | null, seconds: number): boole
 export function modelGuidance(): string {
   const line = (model: ModelNote): string => {
     const range = `${String(model.duration.min)}-${String(model.duration.max)}s`;
+    // The cheapest published band, because that is the one a render lands in
+    // unless something asks otherwise, and because an unpriced model must read
+    // as unpriced rather than as free — the same rule as `creditsFor`.
+    const rates = Object.values(model.creditsPerSecond);
+    const cost = rates.length === 0 ? "rate unmeasured" : `${String(Math.min(...rates))} cr/s`;
     const holds = canAnchorLikeness(model)
-      ? "holds your likeness"
-      : "will NOT hold your likeness — one keyframe, nothing to pin your face with";
-    return `${model.id}: ${range}, ${holds}`;
+      ? "holds you"
+      : "will NOT hold you — one keyframe, nothing to pin your face with";
+    return `${model.id}: ${range}, ${cost}, ${holds}`;
   };
 
   return (
-    "Which model renders the shot. They differ in what they can hold still: a clip is anchored " +
-    "on your face by pinning a picture to its last frame, so a model with only one keyframe slot " +
-    "cannot do it and will give you a stranger however good the prompt is. " +
-    `${MODELS.map(line).join("; ")}. ` +
-    "Leave it alone and the house model renders it. Choosing one that will not hold your likeness " +
-    "is allowed and sometimes the point — you will be told before it is paid for."
+    "Which model renders the shot. They differ in what they can hold still: a clip is anchored on " +
+    "your face by pinning a picture to its last frame, so a model with only one keyframe slot " +
+    "cannot do it and will give you a stranger however good the prompt is — that was rendered, " +
+    `not guessed. ${MODELS.map(line).join("; ")}. ` +
+    `${HOUSE_MODEL.id} unless you say. One that cannot hold you is refused for a shot of your ` +
+    "face before anything is paid for, and is yours to use freely for a shot without one — " +
+    "see_myself with of: models is the whole table."
   );
 }

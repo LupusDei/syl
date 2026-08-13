@@ -349,7 +349,49 @@ export const MEMORY_FENCE_END = "--- END OF WHAT YOU REMEMBER ---";
  * prints it on failure — take the number from the test rather than deriving it
  * by hand, because a subtraction done by hand is stale by the time it is done.
  */
-export const DEFAULT_CONTEXT_BUDGET_BYTES = 72_000;
+/**
+ * 72,000 -> 100,000, and this raise is not a measurement. It is a RULING.
+ *
+ * Everything above argues for defending this number, and every word of it is
+ * sound — the raises were real, the collisions were real, and "shaving words off
+ * a description to satisfy a number is the guard editing the code" is the best
+ * sentence in this file. **Keep reading it.** What changes is not that the
+ * argument was wrong; it is that somebody with the authority to weigh it against
+ * the other side has now done so, which is where the argument's boundary always
+ * was. The Commander, 2026-08-13:
+ *
+ * > *"Raise the tool ceiling and let her experiment with the models. The reason
+ * > to keep the tool ceiling so low, speed, is less important than the reason to
+ * > grow it, capability. Give her the options."*
+ *
+ * The specific thing bought: `render_me` gains a `model` enum and `see_myself`
+ * gains `of: models`, so she can choose what renders her and read back what each
+ * one costs, how long it can run, and whether it can hold her face. That is
+ * **1,176 bytes** — the surface goes 16,616 -> 17,792 — against **230** bytes of
+ * margin left before it. The dial does not fit, it was measured not to fit, and
+ * he raised the ceiling rather than have the dial trimmed to something that fits
+ * by dropping the evidence that makes it safe.
+ *
+ *   SOUL.md         11,954   working memory 32,000
+ *   tool surface    17,792   replies         2,800   unattended 1,200
+ *   declared total  65,746
+ *
+ * **The minimum viable value is 73,051** — the point where the 10% margin rule
+ * is exactly satisfied — and it is deliberately not the number chosen. 100,000
+ * leaves **24,254 bytes of spare above a 10,000-byte margin**. Sized that way on
+ * purpose: `SOUL.md` grew 3,593 bytes in a single day, and the last raise left
+ * about 3,900 spare, which is one day of headroom and is exactly how this
+ * constant came to be set five times in two days. Twenty-four thousand is a week
+ * of the worst day repeated, and it absorbs another contributor without a sixth
+ * person doing this subtraction.
+ *
+ * WHAT IT COSTS, because every turn pays it in full and the trade should be
+ * visible to whoever reads this next: 100,000 bytes is roughly **25k tokens**,
+ * about **12.5% of a 200k context** as a fixed floor before she has read a
+ * message or remembered anything — up from about 9%. That is the price of the
+ * options, and he has decided it is worth paying.
+ */
+export const DEFAULT_CONTEXT_BUDGET_BYTES = 100_000;
 
 /**
  * POSTSCRIPT, and it arrived while the paragraph above was being written.

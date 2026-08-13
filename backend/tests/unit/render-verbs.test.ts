@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { FRAMING_IDS } from "../../src/render/framing.js";
+import { canAnchorLikeness, HOUSE_MODEL, MODELS, MODEL_IDS } from "../../src/render/models.js";
 import { sightingOf } from "../../src/render/pictures.js";
 import { SylApiClient, type FetchLike } from "../../src/tools/client.js";
 import { TOOLS } from "../../src/tools/schemas.js";
@@ -478,16 +479,104 @@ describe("the dials", () => {
     expect(asked?.body).toEqual(expect.objectContaining({ seconds: 8, opening: "the-long-fall" }));
   });
 
-  it("should offer no dial for the shape or the model", () => {
-    // The two that must NOT be dials. `ratio` follows the opening whatever is
-    // asked, so it would be a control that does nothing; a different model
-    // loses her character entirely. A dial that does not work is worse than no
-    // dial, because she would reason about it.
+  it("should offer no dial for the shape, which is the one that would do nothing", () => {
+    // `ratio` follows the opening whatever is asked — the opening is frame one
+    // and every model takes the video's aspect from it — so exposing it would
+    // be a control that does nothing. A dial that does not work is worse than
+    // no dial, because she would reason about it.
+    //
+    // `model` USED TO BE HERE, on a different argument: "a different model
+    // loses her character entirely". That was correct and untested, which is
+    // the `syl-63v` shape; it was tested on 2026-08-13 and survived as
+    // arithmetic over keyframe slots rather than as a fear, and the Commander
+    // opened the dial. The next test is what replaced this half.
     const render = TOOLS.find((tool) => tool.name === "render_me");
     const properties = (render?.inputSchema as { properties?: Record<string, unknown> }).properties ?? {};
 
     expect(Object.keys(properties)).not.toContain("ratio");
-    expect(Object.keys(properties)).not.toContain("model");
+  });
+
+  it("should offer the model as a dial, built from the roster rather than beside it", () => {
+    // The Commander, 2026-08-13: "Raise the tool ceiling and let her experiment
+    // with the models... Give her the options."
+    const render = TOOLS.find((tool) => tool.name === "render_me");
+    const model = (
+      render?.inputSchema as {
+        properties?: Record<string, { enum?: readonly string[]; description?: string }>;
+      }
+    ).properties?.["model"];
+
+    // Every model on the roster and nothing else — derived, so a model added to
+    // `models.ts` reaches her without anybody remembering this file exists.
+    expect(model?.enum).toEqual([...MODEL_IDS]);
+    // And it carries the consequence, which is the whole reason the dial is
+    // safe to open: a model with one keyframe hands her a stranger.
+    expect(model?.description ?? "").toContain(HOUSE_MODEL.id);
+    for (const one of MODELS.filter((each) => !canAnchorLikeness(each))) {
+      expect(model?.description ?? "", one.id).toContain(one.id);
+    }
+  });
+
+  it("should let her read the models back, because a dial she cannot see is one she cannot learn from", () => {
+    const look = TOOLS.find((tool) => tool.name === "see_myself");
+    const of = (look?.inputSchema as { properties?: Record<string, { enum?: readonly string[] }> })
+      .properties?.["of"];
+
+    expect(of?.enum).toContain("models");
+  });
+});
+
+describe("see_myself of: models", () => {
+  /** No routes at all: the roster is a compiled-in constant, not a fetch. */
+  const noBackend = (): ToolContext =>
+    contextFor(() => Promise.reject(new Error("the roster must not reach the network")));
+
+  it("should answer every model on the roster without asking the service", async () => {
+    // The read-back is served from `models.ts` in this process. A round trip
+    // would add a hop and a failure mode to reach the same constant — there is
+    // nothing per-machine about which keyframe slots a model has — and this
+    // fetch throws, so a regression to an HTTP call fails here rather than at
+    // three in the morning on a machine with no service running.
+    const { envelope, isError } = await call(noBackend(), "see_myself", { of: "models" });
+    expect(isError).toBe(false);
+
+    const subject = envelope["subject"] as {
+      house?: string;
+      items?: readonly { id: string; holdsYou: boolean; keyframes: readonly string[] }[];
+    };
+    expect(subject.items?.map((one) => one.id)).toEqual([...MODEL_IDS]);
+    expect(subject.house).toBe(HOUSE_MODEL.id);
+  });
+
+  it("should derive whether a model holds her face from its keyframe slots", async () => {
+    // Never a stored flag — `syl-63v` is what a stored one cost. Checked over
+    // the whole roster rather than over one name, so a model added later is
+    // covered by the property rather than by somebody remembering.
+    const { envelope } = await call(noBackend(), "see_myself", { of: "models" });
+    const items =
+      (envelope["subject"] as { items?: readonly { id: string; holdsYou: boolean }[] }).items ?? [];
+
+    for (const row of items) {
+      const registry = MODELS.find((model) => model.id === row.id);
+      expect(row.holdsYou, row.id).toBe(canAnchorLikeness(registry ?? null));
+    }
+  });
+
+  it("should say what a model costs, and say nothing rather than zero when nobody has measured", async () => {
+    // A rate of `null` reads as unpriced; a rate of `0` reads as free. One of
+    // those is true of `seedance2_mini` and the other would land in her ledger
+    // as a render that cost nothing.
+    const { envelope } = await call(noBackend(), "see_myself", { of: "models" });
+    const items =
+      (envelope["subject"] as { items?: readonly { id: string; creditsPerSecond: number | null }[] })
+        .items ?? [];
+
+    for (const row of items) {
+      const rates = Object.values(
+        MODELS.find((model) => model.id === row.id)?.creditsPerSecond ?? {},
+      );
+      expect(row.creditsPerSecond, row.id).toBe(rates.length === 0 ? null : Math.min(...rates));
+    }
   });
 
   it("should tell her that the opening decides the shape, rather than letting it surprise her", () => {

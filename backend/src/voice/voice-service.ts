@@ -287,6 +287,13 @@ export class VoiceService {
       // own provenance is one file away, under `voicedFrom`.
       model: this.#voice.model,
       ratio: source.ratio,
+      // The video's geometry and keyframe arity, carried over from the render
+      // this is a voiced copy of. `seed_audio` has neither — it is handed an
+      // mp3 and words — so inventing values here would put a claim about a
+      // speech model into a field that describes a video model. What the source
+      // says is what is true of the frames, which is what these two describe.
+      resolution: source.resolution,
+      keyframes: source.keyframes,
       duration: source.duration,
       reference: source.reference,
       // Both pictures carried over from the video this is a voiced copy of.

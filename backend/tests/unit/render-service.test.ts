@@ -6,9 +6,21 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { fixedClock } from "../../src/services/clock.js";
 import type { FrameRunner } from "../../src/render/frames.js";
+import { HOUSE_MODEL } from "../../src/render/models.js";
 import { RenderService, type RenderRecord } from "../../src/render/render-service.js";
 import type { RenderBackend, RunwayResult, RunwayTask, SubmitSpec } from "../../src/render/runway.js";
 import { DEFAULT_OPENING, DEFAULT_REFERENCE, studioAt } from "../../src/render/studio.js";
+
+/**
+ * What a second of the house model's video costs, taken from the registry.
+ *
+ * **Not the literal these assertions used to carry.** They said 540 and 288,
+ * which is `seedance2` at 36 credits a second — correct on the day they were
+ * written and quietly wrong the moment the default moved to a model that costs
+ * 30. A test that hard-codes a price is the same defect as code that does; it
+ * just fails later and blames the wrong change.
+ */
+const RATE = HOUSE_MODEL.creditsPerSecond.sd ?? 0;
 
 /**
  * Syl rendering herself, and being able to say what it cost.
@@ -548,8 +560,9 @@ describe("asking for a render", () => {
     const record = service.get(started.record.name);
     expect(record?.status).toBe("failed");
     expect(record?.reason).toContain("402");
-    expect(record?.credits).toBe(288);
-    expect(service.spend().credits).toBe(288);
+    // The eight seconds of the first half only, at the house model's rate.
+    expect(record?.credits).toBe(RATE * 8);
+    expect(service.spend().credits).toBe(RATE * 8);
     expect(service.spend().seconds).toBe(8);
     // The half that was paid for is still there.
     expect(existsSync(studio.part(started.record.name, 1))).toBe(true);
@@ -938,10 +951,11 @@ describe("what she has spent", () => {
     await service.drain();
 
     const record = service.get(started.record.name);
-    // Seedance2 at 720p is 36 credits a second, fifteen seconds, a credit is a
-    // cent. The number is Runway's, not ours.
-    expect(record?.credits).toBe(540);
-    expect(record?.usd).toBeCloseTo(5.4, 5);
+    // The house model's own rate, fifteen seconds, a credit is a cent. The
+    // number is Runway's, not ours, and it follows the model rather than
+    // standing still while the model changes underneath it.
+    expect(record?.credits).toBe(RATE * 15);
+    expect(record?.usd).toBeCloseTo(RATE * 0.15, 5);
   });
 
   it("should total everything on disk, so the answer cannot drift from the records", async () => {
@@ -957,8 +971,8 @@ describe("what she has spent", () => {
     const spend = service.spend();
     expect(spend.renders).toBe(2);
     expect(spend.ready).toBe(2);
-    expect(spend.credits).toBe(1080);
-    expect(spend.usd).toBeCloseTo(10.8, 5);
+    expect(spend.credits).toBe(RATE * 30);
+    expect(spend.usd).toBeCloseTo(RATE * 0.3, 5);
     expect(spend.seconds).toBe(30);
   });
 
@@ -980,7 +994,7 @@ describe("what she has spent", () => {
     const spend = service.spend();
     expect(spend.renders).toBe(1);
     expect(spend.failed).toBe(1);
-    expect(spend.credits).toBe(540);
+    expect(spend.credits).toBe(RATE * 15);
   });
 
   it("should start at nothing on a machine that has never rendered", () => {
