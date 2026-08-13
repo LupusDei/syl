@@ -1635,11 +1635,15 @@ const showHim: ToolHandler = async (input, context) => {
  *
  * Declared here rather than imported from `connections/intake-view.ts`, like
  * `RenderRow` and `WardrobeRow` above it — and on this one the convention is
- * load-bearing rather than tidy. `us4-untrusted-content-cannot-act` asserts
- * that **`index.ts` is the only file outside `connections/` that imports from
- * it**, which is how "exactly one door into the quarantine" stays a property a
- * grep can check. A type-only import would still be an import, and would spend
- * that assertion's meaning on a convenience.
+ * load-bearing rather than tidy. `reader-containment.test.ts` asserts that
+ * **nothing under `src/` outside `connections/` imports that module**, which is
+ * how "exactly one door out of the quarantine" stays a property a grep can
+ * check. A type-only import would still be an import, and would spend that
+ * assertion's meaning on a convenience.
+ *
+ * The same file asserts that nothing under `tools/` imports `intake-store.ts`
+ * either. This handler runs holding MCP tools, and the store's row is where
+ * `title` and the raw `failure` live.
  *
  * It carries no `title` and no `failure`, and that is the whole shape of the
  * route's answer rather than a subset this file chose. See `intake-view.ts`.
