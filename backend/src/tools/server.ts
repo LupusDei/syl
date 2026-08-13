@@ -955,14 +955,54 @@ const remember: ToolHandler = async (input, context) => {
     .map((value) => value.trim())
     .filter((value) => value !== "");
 
-  const kept = await context.client.post<{ readonly at: string }>("/memory/remember", {
-    thought,
-    because,
-    ...(about.length === 0 ? {} : { about }),
-  });
+  const kept = await context.client.post<{ readonly at: string; readonly created: boolean }>(
+    "/memory/remember",
+    {
+      thought,
+      because,
+      ...(about.length === 0 ? {} : { about }),
+    },
+  );
   if (!kept.ok) return refused("remember", kept.failure);
 
-  return { ok: true, action: "remember", subject: kept.data, at: kept.data.at };
+  // **`created` is carried, not dropped. `syl-018`.**
+  //
+  // This returned a bare `ok: true` whichever happened, so a reused node — the
+  // correct, deliberate behaviour when she reaches the same conclusion twice —
+  // was reported to her as a fresh write. She found it herself, and only because
+  // she went looking:
+  //
+  // > "That's the dangerous class of failure: not an error, a false
+  // >  confirmation. If I hadn't verified, I'd have told you four things were
+  // >  saved and two of them would simply not exist tomorrow."
+  //
+  // The same shape as `syl-y82`, where `remind_me` required a `because` and
+  // discarded it: a value computed correctly one layer down, dropped by the
+  // layer above, and the caller told something that is not true. `HerOwnMemory`
+  // has always returned this honestly.
+  //
+  // **Reuse is not failure and is not reported as one** — `ok` stays true. What
+  // she is owed is which of the two happened, because "I saved that" and "I had
+  // already saved that" are different sentences to say to him, and only one of
+  // them is true at a time.
+  //
+  // Nothing is lost when a memory is reused: identity matches the label AND the
+  // body exactly (`MEMORY_IDENTITY_SQL`), so a reused node is one she wrote in
+  // the same words, not a near-miss quietly collapsed into an older thought.
+  return {
+    ok: true,
+    action: "remember",
+    created: kept.data.created,
+    ...(kept.data.created
+      ? {}
+      : {
+          note:
+            "You had already written this, in these words, and that memory still stands — " +
+            "nothing was overwritten and nothing was added.",
+        }),
+    subject: kept.data,
+    at: kept.data.at,
+  };
 };
 
 /** How much of each list she is shown. Enough to talk about, not a data dump. */

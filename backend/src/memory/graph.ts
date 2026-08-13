@@ -2,6 +2,7 @@ import { instant, parseInstant, systemClock, type Clock } from "../services/cloc
 import { isId } from "../services/id.js";
 import type { Database } from "../services/sqlite.js";
 import {
+  ENTITY_NODE_KINDS,
   newMemoryEdgeId,
   newMemoryNodeId,
   nodePartition,
@@ -58,6 +59,7 @@ import {
  * | Scans — hot tier only             | Identity lookups — every tier          |
  * | --------------------------------- | -------------------------------------- |
  * | {@link MemoryGraph.listNodes}     | {@link MemoryGraph.getNode}            |
+ * | {@link MemoryGraph.nodeNamed}     |                                        |
  * | {@link MemoryGraph.neighbourhood} | {@link MemoryGraph.getEdge}            |
  * | {@link MemoryGraph.edgesTouching} | {@link MemoryGraph.findEdge}           |
  * |                                   | {@link MemoryGraph.edgesBetween}       |
@@ -624,6 +626,35 @@ export class MemoryGraph {
   /** One node by id, or `null`. An IDENTITY LOOKUP: it spans every tier. */
   getNode(id: string): MemoryNode | null {
     const row = this.#db.prepare(`SELECT ${NODE_COLUMNS} FROM memory_nodes WHERE id = ?`).get(id);
+    return row === undefined ? null : toNode(row as unknown as NodeRow);
+  }
+
+  /**
+   * A THING she already knows, by name, or `null`.
+   *
+   * Only the kinds that name a thing rather than a claim, so a fact whose label
+   * happens to read like a name cannot be mistaken for the thing it is about —
+   * the distinction `syl-016.4` exists for.
+   *
+   * **Exact label match, case-insensitive, and no fuzziness on purpose.** Every
+   * caller uses this to decide what a new statement is ABOUT, and a near-match
+   * attaches it to the wrong subject. Being silent about who is recoverable;
+   * being confidently wrong about who is not.
+   *
+   * Added for `syl-022`, where the caller is an untrusted article and the answer
+   * decides whether a webpage may name someone in his life. There it is half of
+   * a stricter rule — **resolve, never mint** — so a name this returns `null`
+   * for is reported rather than created.
+   */
+  nodeNamed(name: string): MemoryNode | null {
+    const row = this.#db
+      .prepare(
+        `SELECT ${NODE_COLUMNS} FROM memory_nodes ` +
+          `WHERE label = ? COLLATE NOCASE AND tier = ? ` +
+          `AND kind IN (${ENTITY_NODE_KINDS.map(() => "?").join(", ")}) ` +
+          `ORDER BY updated_at DESC, id LIMIT 1`,
+      )
+      .get(name, SCANNED_TIER, ...ENTITY_NODE_KINDS);
     return row === undefined ? null : toNode(row as unknown as NodeRow);
   }
 

@@ -585,6 +585,62 @@ describe("remember", () => {
     });
   }
 
+  it("should say WHICH happened, so a reused memory is not reported as a fresh write", async () => {
+    // `syl-018`, and she found it herself — by searching afterwards rather than
+    // trusting the answer she had just been given:
+    //
+    // > "That's the dangerous class of failure: not an error, a false
+    // >  confirmation. If I hadn't verified, I'd have told you four things were
+    // >  saved and two of them would simply not exist tomorrow — and they were
+    // >  the two best ones."
+    //
+    // `HerOwnMemory` has always returned `created` honestly. The tool threw it
+    // away and answered `ok: true` either way, so "saved" was what she heard for
+    // a write that did not happen. Same shape as `syl-y82`: a value computed
+    // correctly one layer down and dropped by the layer above.
+    const api = keptApi({ created: false });
+
+    const { envelope } = await call(contextFor(api), "remember", {
+      fact: THOUGHT,
+      because: "He circles Tennessee and the reason is always Illinois.",
+    });
+
+    // Reuse is not a failure and must not be reported as one.
+    expect(envelope.ok).toBe(true);
+    if (!envelope.ok) return;
+    expect(envelope).toMatchObject({ created: false });
+  });
+
+  it("should tell her plainly that the memory already existed", async () => {
+    // Not a silent flag she has to notice. She turns this into a sentence for
+    // him, and "I saved that" and "I had already saved that" are different
+    // sentences — only one of which is true at a time.
+    const api = keptApi({ created: false });
+
+    const { envelope } = await call(contextFor(api), "remember", {
+      fact: THOUGHT,
+      because: "He circles Tennessee and the reason is always Illinois.",
+    });
+
+    if (!envelope.ok) return;
+    expect(JSON.stringify(envelope)).toMatch(/already/i);
+  });
+
+  it("should not claim a memory already existed when it was freshly written", async () => {
+    // The other half. A note about reuse on every write would be the same
+    // untruth pointing the other way, and she would learn to ignore it.
+    const api = keptApi({ created: true });
+
+    const { envelope } = await call(contextFor(api), "remember", {
+      fact: THOUGHT,
+      because: "He circles Tennessee and the reason is always Illinois.",
+    });
+
+    if (!envelope.ok) return;
+    expect(envelope).toMatchObject({ created: true });
+    expect(JSON.stringify(envelope)).not.toMatch(/already/i);
+  });
+
   it("should keep what she worked out, and say when", async () => {
     const api = keptApi();
 
