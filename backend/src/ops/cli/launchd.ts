@@ -57,6 +57,12 @@ export const FORWARDED_ENV: readonly string[] = [
   "SYL_ADJUTANT_URL",
   "SYL_ADJUTANT_AGENT_ID",
   "SYL_ADJUTANT_PROJECT_ROOT",
+  // Not `SYL_`-prefixed and not read through `config.ts`, so the derived test
+  // over that file cannot see it. It was present on the installed service and
+  // absent from this list, meaning the next install would have dropped it and
+  // she would have lost the ability to render, silently. Any credential the
+  // service needs belongs here whatever its name.
+  "RUNWAYML_API_SECRET",
 ];
 
 const forwarded: Record<string, string> = {};
