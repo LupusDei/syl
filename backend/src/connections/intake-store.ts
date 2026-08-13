@@ -330,6 +330,27 @@ export class IntakeStore {
     return row === undefined ? null : toSource(row as unknown as SourceRow);
   }
 
+  /**
+   * How many sources one principal has submitted since an instant.
+   *
+   * Counted from `created_at` over a rolling window rather than from a local
+   * day. A day is the right unit for something the Commander experiences — the
+   * sendings allowance is a day because he notices being interrupted — and the
+   * wrong one for something that only spends: a local midnight lets twenty
+   * readings happen in two minutes and still be two lawful days.
+   *
+   * Every channel counts, not only the one the caller is using. The ceiling is
+   * about what one principal has set running, and a principal that could reset
+   * it by relabelling its own submissions would have no ceiling.
+   */
+  countSince(requestedBy: string, since: string): number {
+    const row = this.#db
+      .prepare("SELECT count(*) AS n FROM intake_sources WHERE requested_by = ? AND created_at >= ?")
+      .get(requestedBy, since);
+    // Safe assertion: `count(*)` is always an integer.
+    return (row as unknown as { n: number }).n;
+  }
+
   /** Sources that still have a step to run, oldest first. */
   pending(): readonly IntakeSource[] {
     const rows = this.#db

@@ -224,6 +224,47 @@ describe("the agent scope, over HTTP", () => {
       expect(response.status).toBe(201);
     });
 
+    it("should let her point a reading at a page, which is the one thing that leaves the machine", async () => {
+      // `syl-r1t`. Everything under `connections/` was built and reachable only
+      // by whatever the ingestion job had been configured with — she could read
+      // what somebody else chose and could not say "read this page".
+      const response = await call("POST", "/intake", {
+        token: agentToken(),
+        body: { url: "https://example.com/tidy-desks" },
+      });
+
+      expect(response.status).toBe(201);
+    });
+
+    it("should hand a reading back without the page's own title in it", async () => {
+      // The return path is the boundary here, not the door. Her turn holds MCP
+      // tools, and `IntakeSource.title` is a substring of the fetched body
+      // lifted out with no model and no gate in between. Nothing has been
+      // fetched in this test, so what is asserted is the SHAPE: the route
+      // answers with a `Reading`, which has no field a title could be assigned
+      // to. `read-this.test.ts` proves the same property against a real page
+      // whose title is an instruction.
+      const created = await call("POST", "/intake", {
+        token: agentToken(),
+        body: { url: "https://example.com/tidy-desks" },
+      });
+      const { data } = (await created.json()) as Envelope<{ reading: Record<string, unknown> }>;
+
+      expect(data?.reading).toBeDefined();
+      expect(data?.reading).not.toHaveProperty("title");
+      expect(data?.reading).not.toHaveProperty("failure");
+    });
+
+    it("should still refuse her the log and the push targets, whatever else she gained", async () => {
+      // Asserted beside the widening rather than only in the sweep below. A
+      // surface that reaches the open internet is the one where somebody will
+      // eventually argue that another door is "basically the same thing", and
+      // the two that must never open are the record of what she did and the
+      // place a notification goes.
+      expect((await call("GET", "/logs", { token: agentToken() })).status).toBe(403);
+      expect((await call("GET", "/devices", { token: agentToken() })).status).toBe(403);
+    });
+
     it("should still refuse her the surface that grades her own memories", async () => {
       // The line the write does NOT cross, asserted next to the write itself so
       // the two are read together: she may add what she concluded, and she may
@@ -375,6 +416,11 @@ describe("everything the agent scope cannot reach, swept from the router", () =>
     // beside it: `/memory` here would make this sweep agree that the verdict
     // endpoint — which moves the weight of her own memories — is hers too.
     "/memory/remember",
+    // `syl-r1t`, and the second deliberate edit that widening the surface
+    // costs. Both intake operations are hers: submitting a link and reading
+    // back what crossed the gate are one act performed over two turns, because
+    // the fetching happens between them.
+    "/intake",
   ];
 
   /**
@@ -600,8 +646,22 @@ describe("AGENT_SURFACE", () => {
     // other entry is a read of his own data or of hers; this one lets her add
     // to her own memory, bounded by `HerOwnMemory` having no method that
     // deletes, supersedes or moves a weight.
+    //
+    // `syl-r1t` added `/intake`, and it is the first entry that reaches OFF
+    // THIS MACHINE — a request to the open internet, to a destination chosen
+    // from a URL she was handed, from a host on a tailnet where his Mac and her
+    // own API answer without any public exposure. That is an SSRF sink, and it
+    // is on this list anyway because the control that stops it is not this list:
+    // `connections/address-guard.ts` refuses every non-public address, refuses
+    // a redirect that changes host, and connects to the address it validated
+    // rather than resolving a second time. Widening her reach does not widen
+    // what a fetch may touch. What comes back is read by a turn with no tools
+    // and no memory, and crosses back as a schema-validated extract — the row's
+    // own `title` is raw response bytes and `intake-view.ts` has nowhere to put
+    // it. Read the note on `AGENT_SURFACES` before touching this line.
     expect([...AGENT_SURFACE].sort()).toEqual([
       "/goals",
+      "/intake",
       "/memory/recall",
       "/memory/remember",
       "/reminders",

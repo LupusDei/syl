@@ -649,6 +649,40 @@ export const TOOLS: readonly ToolSchema[] = [
     },
   },
   {
+    // THE VERB THE HEADER'S RULE 2 SAID WAS MISSING — `syl-r1t`.
+    //
+    // That rule named `research` as the thing deliberately absent, "because the
+    // fetch has to happen inside the sealed reader turn and that path is not
+    // built". It is built now: `connections/` fetches behind the address guard,
+    // parses without a model, reads each chunk through `runReaderTurn`, and
+    // hands back an extract that passed a schema gate. She could not point it
+    // at anything, which is the one piece this adds.
+    //
+    // Named `read_this` and not `research`. Research is a claim about the
+    // ANSWER — that it is complete, that it weighed sources — and she does none
+    // of that: she reads one page, in one document's own words, and tells him
+    // what it said. A verb that promised research would have her reasoning like
+    // something that had done some.
+    //
+    // Asking twice is how she waits. Nothing is fetched while she is talking to
+    // him, so the first call starts the reading and a second call with the same
+    // link answers with what it says — the same shape as `render_me` and
+    // `see_myself`, in one verb because the same link is the same reading.
+    name: "read_this",
+    description:
+      "Read a page and tell him what is in it. Ask again with the same link for what it said — " +
+      "the reading happens between your turns, and what comes back is what one document claims, " +
+      "not what is true.",
+    inputSchema: {
+      type: "object",
+      required: ["url", "because"],
+      properties: {
+        url: { type: "string", description: "The link, as he gave it to you." },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
     name: "whats_outstanding",
     description:
       "Look at what he currently has open — reminders, to-dos, goals. Use it before telling him what is on his plate, and before offering something he may already have.",
