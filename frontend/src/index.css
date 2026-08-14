@@ -769,14 +769,34 @@ code,
   border-color: var(--syl-accent);
 }
 
+/*
+ * The one standing the SERVER concluded rather than the phone reporting
+ * (`syl-8ys9.3.3`). Dashed rather than the dotted `unavailable` beside it,
+ * because the two carry the same word on the wire and mean different things:
+ * that one is "this device has no HealthKit", this one is "nothing has ever
+ * written this type".
+ */
+.health__type[data-standing="unpublished"] .silence--unlooked {
+  border-color: var(--syl-text-muted);
+  border-style: dashed;
+}
+
 .silence__text,
-.silence__remedy {
+.silence__remedy,
+.silence__grounds {
   margin: 0;
 }
 
 .silence__remedy {
   margin-block-start: var(--syl-space-2);
   color: var(--syl-text-muted);
+}
+
+/* The working under the verdict. Smaller than the claim it supports. */
+.silence__grounds {
+  margin-block-start: var(--syl-space-2);
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
 }
 
 .health__raw {

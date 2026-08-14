@@ -52,8 +52,24 @@ interface TypeAnswer {
   readonly silenceIsEvidence?: boolean;
   readonly samples?: readonly Record<string, unknown>[];
   readonly watermark?: string | null;
+  /** The server's grounds for an inferred `unavailable` (`syl-8ys9.3.3`). */
+  readonly unpublished?: Record<string, unknown> | null;
   readonly status?: number;
   readonly body?: string;
+}
+
+/** What the route sends beside an inferred `unavailable`. */
+function grounds(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    type: "heartRateVariability",
+    reported: "denied",
+    from: "2026-07-10",
+    to: "2026-08-13",
+    corroboratedDays: 35,
+    corroboratedBy: ["heartRate", "sleep", "steps"],
+    because: "Not one heartRateVariability sample has ever been held.",
+    ...overrides,
+  };
 }
 
 function sample(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -105,6 +121,7 @@ function stubApi(answers: Partial<Record<string, TypeAnswer>>): void {
               reportedAt: "2026-08-13T06:00:00.000Z",
               silenceIsEvidence: answer.silenceIsEvidence ?? state === "authorised",
               watermark: answer.watermark ?? null,
+              unpublished: answer.unpublished ?? null,
               samples: answer.samples ?? [],
             },
           }),
@@ -337,10 +354,87 @@ describe("HealthView", () => {
       "undisclosed",
       "notDetermined",
       "unavailable",
+      "unpublished",
       "denied",
       "unreported",
     ]) {
       expect(key.querySelector(`[data-standing="${standing}"]`), standing).not.toBeNull();
     }
+  });
+
+  /**
+   * `syl-8ys9.3.3` — the type his ring does not publish.
+   *
+   * The live case: `heartRateVariability` reports `denied`, is not denied, and
+   * the server says so with the window it drew that from. This screen has to
+   * show a seventh standing, keep it apart from the `unavailable` the PHONE
+   * reports, and offer him no permission to change — because there is none that
+   * would help.
+   */
+  it("should render a type nothing publishes apart from one the device cannot measure", async () => {
+    stubApi({
+      heartRateVariability: { state: "unavailable", unpublished: grounds() },
+      // The phone's own `unavailable`, which means HealthKit is absent from the
+      // device entirely. Same word on the wire, different fact.
+      steps: { state: "unavailable" },
+    });
+    renderView();
+
+    const never = await settled("heartRateVariability");
+    const absent = await settled("steps");
+
+    expect(never.getAttribute("data-standing")).toBe("unpublished");
+    expect(absent.getAttribute("data-standing")).toBe("unavailable");
+    // Neither is evidence about him, and both draw no line.
+    expect(never.getAttribute("data-evidence")).toBe("false");
+    expect(
+      screen.getByTestId("health-silence-heartRateVariability").querySelector("svg"),
+    ).toBeNull();
+  });
+
+  it("should never advise a permission change for a type no source publishes", async () => {
+    // The useless-advice failure in its newest form. He granted it; nothing
+    // writes it. Sending him to Settings is an errand that cannot succeed.
+    stubApi({ heartRateVariability: { state: "unavailable", unpublished: grounds() } });
+    renderView();
+
+    await settled("heartRateVariability");
+    const body = screen.getByTestId("health-silence-heartRateVariability").textContent ?? "";
+
+    expect(body).not.toMatch(/Privacy & Security/);
+    expect(body).not.toMatch(/Settings/);
+    expect(body).toMatch(/not a permission/i);
+  });
+
+  it("should show the window the judgement was drawn from, because the server inferred it", async () => {
+    stubApi({ heartRateVariability: { state: "unavailable", unpublished: grounds() } });
+    renderView();
+
+    await settled("heartRateVariability");
+    const shown = screen.getByTestId("health-grounds-heartRateVariability").textContent ?? "";
+
+    // The days, the window, and the label it overrode. An inference on this
+    // screen shows its working or it is just an assertion in a nicer font.
+    expect(shown).toMatch(/35 days/);
+    expect(shown).toContain("2026-07-10");
+    expect(shown).toContain("2026-08-13");
+    expect(shown).toContain("denied");
+  });
+
+  it("should fall back to what the phone reported when the grounds arrive half-formed", async () => {
+    // Fail closed. A finding with no window under it must not put a confident
+    // sentence about his equipment on the screen; the honest fallback is the
+    // state the phone actually sent.
+    stubApi({
+      heartRateVariability: {
+        state: "denied",
+        unpublished: { reported: "denied", corroboratedDays: 35 },
+      },
+    });
+    renderView();
+
+    const element = await settled("heartRateVariability");
+    expect(element.getAttribute("data-standing")).toBe("denied");
+    expect(screen.queryByTestId("health-grounds-heartRateVariability")).toBeNull();
   });
 });

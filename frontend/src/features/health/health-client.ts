@@ -28,6 +28,7 @@ import {
   type HealthSample,
   type HealthSeries,
   type HealthType,
+  type UnpublishedFinding,
 } from "./health-model";
 
 export interface SeriesParams {
@@ -68,6 +69,44 @@ function isAbort(cause: unknown): boolean {
 
 function isAuthorisationState(value: unknown): value is AuthorisationState {
   return typeof value === "string" && (AUTHORISATION_STATES as readonly string[]).includes(value);
+}
+
+/**
+ * The server's grounds for overriding the phone's report, or `null`.
+ *
+ * Coerced field by field for the same reason `state` is: this shape is not in
+ * `shared/openapi.yaml` yet, so nothing upstream validates it, and a half-formed
+ * finding rendered as a finding would put a confident sentence about his
+ * equipment on the screen with no window under it. **Anything short of complete
+ * is discarded**, which lands the panel back on the state the phone reported —
+ * the honest fallback, and the one this screen already knows how to render.
+ */
+function asUnpublished(type: HealthType, value: unknown): UnpublishedFinding | null {
+  if (typeof value !== "object" || value === null) return null;
+  const raw = value as Record<string, unknown>;
+
+  const reported = raw["reported"];
+  const from = raw["from"];
+  const to = raw["to"];
+  const days = raw["corroboratedDays"];
+  const by = raw["corroboratedBy"];
+  const because = raw["because"];
+
+  if (!isAuthorisationState(reported)) return null;
+  if (typeof from !== "string" || typeof to !== "string") return null;
+  if (typeof days !== "number" || !Number.isFinite(days)) return null;
+  if (!Array.isArray(by)) return null;
+  if (typeof because !== "string" || because.length === 0) return null;
+
+  return {
+    type,
+    reported,
+    from,
+    to,
+    corroboratedDays: days,
+    corroboratedBy: by.filter(isHealthType),
+    because,
+  };
 }
 
 /**
@@ -113,6 +152,7 @@ function asSeries(type: HealthType, payload: unknown, status: number): HealthSer
     reportedAt: typeof raw["reportedAt"] === "string" ? raw["reportedAt"] : null,
     silenceIsEvidence: raw["silenceIsEvidence"] === true,
     watermark: typeof raw["watermark"] === "string" ? raw["watermark"] : null,
+    unpublished: asUnpublished(type, raw["unpublished"]),
     // Rows are not re-validated one by one: a bad row is a store bug, and the
     // cost of being wrong about one of thirty thousand is a dash in a cell.
     // Safe assertion — the array-ness is proven above.

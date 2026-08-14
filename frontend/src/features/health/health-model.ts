@@ -132,6 +132,36 @@ export interface HealthSample {
 }
 
 /**
+ * Why the server overrode the phone's report for one type.
+ *
+ * `syl-8ys9.3.3`. Non-null means **nothing has ever published this type**: not
+ * one sample, ever, across a window in which the same source delivered
+ * everything else. That is a judgement the phone cannot make —
+ * `isHealthDataAvailable()` answers device-wide — and one the server can,
+ * because it is the only party that sees the whole history.
+ *
+ * It is an inference, so it arrives carrying what it was drawn from, and this
+ * screen renders those grounds rather than only the verdict. `reported` is the
+ * label it overrode, kept so the two can be compared instead of one quietly
+ * replacing the other.
+ */
+export interface UnpublishedFinding {
+  readonly type: HealthType;
+  /** What the phone actually said. Not destroyed by the inference. */
+  readonly reported: AuthorisationState;
+  /** First local day examined, `YYYY-MM-DD`. */
+  readonly from: string;
+  /** Last local day examined. */
+  readonly to: string;
+  /** Days in that window on which some other type produced a figure. */
+  readonly corroboratedDays: number;
+  /** Which types were arriving while this one never has. */
+  readonly corroboratedBy: readonly HealthType[];
+  /** The grounds as a sentence. */
+  readonly because: string;
+}
+
+/**
  * One type over a window, as `GET /health/series` returns it.
  *
  * `state: null` is a real answer and means the phone has never reported on this
@@ -139,6 +169,10 @@ export interface HealthSample {
  * from the contract's own function — this view reads it rather than
  * re-deriving it, so a state added later cannot start licensing conclusions
  * here by accident.
+ *
+ * `unpublished` is the one field on this shape the phone did not produce. When
+ * it is set, `state` reads `unavailable` because the SERVER concluded it, and
+ * the finding says on what — see {@link UnpublishedFinding}.
  */
 export interface HealthSeries {
   readonly type: HealthType;
@@ -148,22 +182,44 @@ export interface HealthSeries {
   readonly silenceIsEvidence: boolean;
   /** The newest `startedAt` held for this type, over ALL time — not this window. */
   readonly watermark: string | null;
+  readonly unpublished: UnpublishedFinding | null;
   readonly samples: readonly HealthSample[];
 }
 
 /* ------------------------------------------------------------- standings --- */
 
 /**
- * The six-way display state.
+ * The seven-way display state.
  *
  * `unreported` is this view's name for `state: null`. It is a standing in its
  * own right rather than a null check at each call site, because every one of
  * those call sites would otherwise have to remember not to fall through to
  * `denied`.
+ *
+ * `unpublished` is the seventh and it is not on the wire either: it is
+ * `unavailable` **as the server inferred it**, which is a different fact from
+ * `unavailable` as the phone reports it, with a different remedy. The phone's
+ * means "HealthKit is absent from this device, for every type". This one means
+ * "nothing has ever written THIS type to Health, while everything else was
+ * arriving". Rendering the inferred one under the reported one's words would
+ * tell him his phone has no HealthKit while thirteen other panels are full of
+ * data, which reads as a broken display and would rightly cost this screen its
+ * credibility.
  */
-export type Standing = AuthorisationState | "unreported";
+export type Standing = AuthorisationState | "unreported" | "unpublished";
 
-export function standingOf(state: AuthorisationState | null): Standing {
+/**
+ * The standing to render, from the state on the wire and the grounds beside it.
+ *
+ * The finding wins when it is present, because it is strictly more specific:
+ * the server only ever sets it alongside `unavailable`, and only when it can say
+ * what the emptiness was inferred from.
+ */
+export function standingOf(
+  state: AuthorisationState | null,
+  unpublished: UnpublishedFinding | null = null,
+): Standing {
+  if (unpublished !== null) return "unpublished";
   return state ?? "unreported";
 }
 
@@ -260,6 +316,18 @@ export const STANDINGS: Readonly<Record<Standing, StandingDescriptor>> = {
       "Settings → Privacy & Security → Health → Syl. Note that no current client can PROVE a refusal, so a state of `denied` did not come from the phone and its provenance is worth asking about.",
     evidence: false,
   },
+  unpublished: {
+    standing: "unpublished",
+    label: "nothing publishes it",
+    tone: "muted",
+    mark: "⊘",
+    headline: "Nothing has ever published this.",
+    silenceMeans:
+      "Not one sample of this type has ever reached us, across a window in which his other types arrived day after day. That is a fact about what his equipment writes to Health, not about his body — and the panel says which days it was drawn from, because the server inferred it rather than the phone reporting it.",
+    remedy:
+      "What is missing is a publisher, not a permission — look at what is supposed to be sending this type before looking at the permission sheet. iOS cannot separate a source that does not carry a type from a read that was refused, and this screen will not pretend it can; what it can say is that nothing has ever written one. Oura writes neither heart rate variability nor resting heart rate at all — read its permission list alphabetically and both are simply absent — so for those two an estimate is the only figure there will ever be. The inference retracts itself: the first sample that ever arrives ends it.",
+    evidence: false,
+  },
   unreported: {
     standing: "unreported",
     label: "never reported",
@@ -273,8 +341,16 @@ export const STANDINGS: Readonly<Record<Standing, StandingDescriptor>> = {
   },
 };
 
-export function standingDescriptor(state: AuthorisationState | null): StandingDescriptor {
-  return STANDINGS[standingOf(state)];
+export function standingDescriptor(
+  state: AuthorisationState | null,
+  unpublished: UnpublishedFinding | null = null,
+): StandingDescriptor {
+  return STANDINGS[standingOf(state, unpublished)];
+}
+
+/** The standing for a whole series, grounds included. */
+export function seriesStanding(series: HealthSeries | null): StandingDescriptor {
+  return standingDescriptor(series?.state ?? null, series?.unpublished ?? null);
 }
 
 /**
@@ -623,8 +699,15 @@ export interface FleetSummary {
   readonly flowing: number;
   /** Authorised and empty — genuinely nothing happened. */
   readonly measuredZero: number;
-  /** Empty, and the quiet proves nothing. Never counted as "no data". */
+  /**
+   * Empty, and the quiet proves nothing. Never counted as "no data".
+   *
+   * **Excludes {@link unpublished}**, which is the one empty case where the
+   * quiet does prove something — just not about him.
+   */
   readonly notLooked: number;
+  /** Empty because nothing has ever published them. Not a permission problem. */
+  readonly unpublished: number;
   readonly failed: number;
 }
 
@@ -632,6 +715,7 @@ export function summariseTypes(loads: readonly TypeLoad[]): FleetSummary {
   let flowing = 0;
   let measuredZero = 0;
   let notLooked = 0;
+  let unpublished = 0;
   let failed = 0;
 
   for (const load of loads) {
@@ -643,14 +727,18 @@ export function summariseTypes(loads: readonly TypeLoad[]): FleetSummary {
         measuredZero += 1;
         break;
       case "notLooked":
-        notLooked += 1;
+        // Counted apart, because the headline is where the useless advice
+        // starts: a type nothing publishes lumped in with "quiet proves
+        // nothing" sends him looking for a permission to fix.
+        if (load.series?.unpublished == null) notLooked += 1;
+        else unpublished += 1;
         break;
       default:
         failed += 1;
     }
   }
 
-  return { total: loads.length, flowing, measuredZero, notLooked, failed };
+  return { total: loads.length, flowing, measuredZero, notLooked, unpublished, failed };
 }
 
 export function fleetHeadline(summary: FleetSummary): string {
@@ -663,6 +751,9 @@ export function fleetHeadline(summary: FleetSummary): string {
     // The commonest state here is `undisclosed`, where the honest claim is
     // narrower than either: we do not know what the quiet means.
     parts.push(`${String(summary.notLooked)} whose quiet proves nothing`);
+  }
+  if (summary.unpublished > 0) {
+    parts.push(`${String(summary.unpublished)} nothing publishes`);
   }
   if (summary.failed > 0) parts.push(`${String(summary.failed)} could not be asked`);
   return `${parts.join(" · ")}.`;
