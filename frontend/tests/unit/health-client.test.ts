@@ -110,6 +110,55 @@ describe("createHealthClient", () => {
     expect(series.silenceIsEvidence).toBe(false);
   });
 
+  it("should read the grounds for an inferred `unavailable` when they are complete", async () => {
+    // `syl-8ys9.3.3`. The one field on this shape the phone did not produce:
+    // the server's own judgement that nothing has ever published this type.
+    const request = vi.fn(() =>
+      Promise.resolve(
+        ok(
+          payload({
+            type: "heartRateVariability",
+            state: "unavailable",
+            silenceIsEvidence: false,
+            unpublished: {
+              type: "heartRateVariability",
+              reported: "denied",
+              from: "2026-07-10",
+              to: "2026-08-13",
+              corroboratedDays: 35,
+              corroboratedBy: ["heartRate", "steps", "nonsense"],
+              because: "Not one heartRateVariability sample has ever been held.",
+            },
+          }),
+        ),
+      ),
+    );
+    const series = await clientFor(request).series({ type: "heartRateVariability" });
+
+    expect(series.unpublished?.reported).toBe("denied");
+    expect(series.unpublished?.corroboratedDays).toBe(35);
+    // A type name it does not know is dropped rather than rendered as a label
+    // lookup that comes back `undefined` on the screen.
+    expect(series.unpublished?.corroboratedBy).toEqual(["heartRate", "steps"]);
+  });
+
+  it("should discard half-formed grounds rather than render a claim with no window under it", async () => {
+    // Fail closed, exactly as `state` does. A finding missing its window is an
+    // assertion about his equipment with nothing to check it against, and the
+    // honest fallback is the state the phone reported.
+    const request = vi.fn(() =>
+      Promise.resolve(ok(payload({ unpublished: { reported: "denied", corroboratedDays: 35 } }))),
+    );
+    const series = await clientFor(request).series({ type: "steps" });
+    expect(series.unpublished).toBeNull();
+  });
+
+  it("should read an absent `unpublished` as null, so nothing infers a judgement", async () => {
+    const request = vi.fn(() => Promise.resolve(ok(payload())));
+    const series = await clientFor(request).series({ type: "steps" });
+    expect(series.unpublished).toBeNull();
+  });
+
   it("should refuse a series answered under a DIFFERENT type", async () => {
     // It would otherwise be charted under the wrong heading, which is worse
     // than no chart at all.

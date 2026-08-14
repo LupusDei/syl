@@ -16,8 +16,8 @@ import {
   isHistoricOnly,
   pointsAttribute,
   readingOf,
+  seriesStanding,
   sparklineSegments,
-  standingDescriptor,
   summarise,
   summariseTypes,
   windowChoice,
@@ -155,7 +155,7 @@ export function HealthView({ now: pinnedNow }: HealthViewProps): ReactElement {
 }
 
 /**
- * The six standings, spelled out once.
+ * The seven standings, spelled out once.
  *
  * Not decoration. The chips on the panels are short by necessity and the
  * difference between `denied` and `undisclosed` is the difference between "go
@@ -165,11 +165,14 @@ export function HealthView({ now: pinnedNow }: HealthViewProps): ReactElement {
 function StandingKey(): ReactElement {
   // `undisclosed` sits second because it is the COMMON case on this platform,
   // not an edge one — iOS will not confirm a read grant, so it is what his
-  // empty types actually carry. `denied` sits near the bottom for the opposite
-  // reason: no current client can produce it.
+  // empty types actually carry. `unpublished` sits third because it is what his
+  // two permanently empty types actually are, and it is the only entry here the
+  // SERVER concluded rather than the phone reporting. `denied` sits near the
+  // bottom for the opposite reason: no current client can produce it.
   const order: readonly Standing[] = [
     "authorised",
     "undisclosed",
+    "unpublished",
     "notDetermined",
     "unavailable",
     "denied",
@@ -212,7 +215,11 @@ interface TypePanelProps {
 function TypePanel({ state, range, onRetry }: TypePanelProps): ReactElement {
   const load = asLoad(state);
   const reading = readingOf(load);
-  const descriptor = standingDescriptor(state.series?.state ?? null);
+  // Read from the whole series rather than from `state` alone: an inferred
+  // `unavailable` and a reported one are different facts with different
+  // remedies, and only the grounds beside the state tell them apart.
+  const descriptor = seriesStanding(state.series);
+  const unpublished = state.series?.unpublished ?? null;
   const samples = state.series?.samples ?? [];
   const summary = summarise(samples);
   const unit = state.series?.unit ?? "";
@@ -322,6 +329,19 @@ function TypePanel({ state, range, onRetry }: TypePanelProps): ReactElement {
           {descriptor.remedy !== null && (
             <p className="silence__remedy">
               <strong>Remedy:</strong> {descriptor.remedy}
+            </p>
+          )}
+          {unpublished !== null && (
+            /* The grounds, printed under the verdict. This is the one standing
+               on the page the SERVER concluded rather than the phone reporting,
+               so it is the one that has to show its working — otherwise it is a
+               confident sentence about his equipment with nothing under it. */
+            <p className="silence__grounds mono" data-testid={`health-grounds-${state.type}`}>
+              Inferred from {formatCount(unpublished.corroboratedDays)} days between{" "}
+              {unpublished.from} and {unpublished.to}, on which{" "}
+              {unpublished.corroboratedBy.map((type) => TYPE_LABELS[type]).join(", ")} were
+              arriving and this was not. The phone reported{" "}
+              <code>{unpublished.reported}</code>.
             </p>
           )}
         </div>

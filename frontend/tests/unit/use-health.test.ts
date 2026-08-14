@@ -33,6 +33,7 @@ function series(type: HealthType, overrides: Partial<HealthSeries> = {}): Health
     reportedAt: "2026-08-13T06:00:00.000Z",
     silenceIsEvidence: true,
     watermark: null,
+    unpublished: null,
     samples: [],
     ...overrides,
   };

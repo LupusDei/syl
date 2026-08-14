@@ -27,6 +27,7 @@ import {
   type HealthSeries,
   type HealthType,
   type Standing,
+  type UnpublishedFinding,
 } from "../../src/features/health/health-model";
 
 /**
@@ -45,6 +46,7 @@ function series(overrides: Partial<HealthSeries> = {}): HealthSeries {
     reportedAt: "2026-08-13T06:00:00.000Z",
     silenceIsEvidence: true,
     watermark: "2026-08-13T05:00:00.000Z",
+    unpublished: null,
     samples: [],
     ...overrides,
   };
@@ -62,10 +64,34 @@ function sample(overrides: Partial<HealthSample> = {}): HealthSample {
   };
 }
 
-const ALL_STANDINGS: readonly Standing[] = [...AUTHORISATION_STATES, "unreported"];
+/** The server's grounds for an inferred `unavailable`, as the wire carries them. */
+function finding(overrides: Partial<UnpublishedFinding> = {}): UnpublishedFinding {
+  return {
+    type: "heartRateVariability",
+    reported: "denied",
+    from: "2026-07-10",
+    to: "2026-08-13",
+    corroboratedDays: 35,
+    corroboratedBy: ["heartRate", "sleep", "steps"],
+    because: "Not one heartRateVariability sample has ever been held.",
+    ...overrides,
+  };
+}
+
+/**
+ * Seven, not five.
+ *
+ * Two of them are not on the wire and both had to be invented here: `unreported`
+ * for `state: null`, and `unpublished` for an `unavailable` the SERVER inferred
+ * (`syl-8ys9.3.3`) rather than the phone reporting. The second is not a
+ * refinement of the first — it has a different cause and a different remedy, and
+ * rendering it under `unavailable`'s words would tell him his phone has no
+ * HealthKit while twelve other panels are full of data.
+ */
+const ALL_STANDINGS: readonly Standing[] = [...AUTHORISATION_STATES, "unreported", "unpublished"];
 
 describe("standings", () => {
-  it("should describe every one of the six standings, so none can render blank", () => {
+  it("should describe every one of the seven standings, so none can render blank", () => {
     for (const standing of ALL_STANDINGS) {
       const descriptor = STANDINGS[standing];
       expect(descriptor.label.length, standing).toBeGreaterThan(0);
@@ -146,6 +172,46 @@ describe("standings", () => {
     for (const standing of ALL_STANDINGS) {
       expect(STANDINGS[standing].evidence, standing).toBe(standing === "authorised");
     }
+  });
+
+  it("should never advise a permission change for a type nothing publishes", () => {
+    // `syl-8ys9.3.3`. THE useless-advice failure, in its newest form: telling
+    // him to grant something he already granted, for a type no source writes at
+    // all. The remedy has to say what is actually missing, which is a publisher.
+    const remedy = STANDINGS.unpublished.remedy ?? "";
+    expect(remedy).not.toMatch(/Settings/);
+    expect(remedy).not.toMatch(/Privacy & Security/);
+    expect(remedy).toMatch(/not a permission/i);
+  });
+
+  it("should keep the inferred `unavailable` apart from the reported one", () => {
+    // The phone's `unavailable` is device-wide — HealthKit is absent — and the
+    // server's is about one type. Sharing a chip would put "this device has no
+    // HealthKit at all" under a panel on a page of full charts.
+    expect(STANDINGS.unpublished.label).not.toBe(STANDINGS.unavailable.label);
+    expect(STANDINGS.unpublished.mark).not.toBe(STANDINGS.unavailable.mark);
+    expect(STANDINGS.unpublished.silenceMeans).not.toMatch(/HealthKit/);
+  });
+
+  it("should read the grounds, not the state, when deciding it was never published", () => {
+    const grounds = finding();
+
+    // The state on the wire is `unavailable` in both cases, and only the grounds
+    // beside it separate a device with no HealthKit from a type no source writes.
+    expect(standingOf("unavailable")).toBe("unavailable");
+    expect(standingOf("unavailable", grounds)).toBe("unpublished");
+    expect(standingDescriptor("unavailable", grounds).label).toBe(STANDINGS.unpublished.label);
+  });
+
+  it("should never call an unpublished type's silence evidence about him", () => {
+    // The trap the backend guards too. Nothing was ever measured, so there is no
+    // fact about his body in the emptiness — whatever the label above it says.
+    expect(STANDINGS.unpublished.evidence).toBe(false);
+    expect(
+      silenceIsEvidence(
+        series({ state: "unavailable", silenceIsEvidence: false, unpublished: finding() }),
+      ),
+    ).toBe(false);
   });
 
   it("should read a null state as `unreported`, never as `denied`", () => {
@@ -452,6 +518,15 @@ describe("summariseTypes", () => {
     failed: false,
   };
   const broken = { type: "sleep" as HealthType, series: null, failed: true };
+  const neverPublished = {
+    type: "heartRateVariability" as HealthType,
+    series: series({
+      state: "unavailable" as AuthorisationState,
+      silenceIsEvidence: false,
+      unpublished: finding(),
+    }),
+    failed: false,
+  };
 
   it("should count the two kinds of empty SEPARATELY", () => {
     const summary = summariseTypes([authorisedEmpty, undisclosedEmpty, flowing, broken]);
@@ -459,6 +534,28 @@ describe("summariseTypes", () => {
     expect(summary.notLooked).toBe(1);
     expect(summary.flowing).toBe(1);
     expect(summary.failed).toBe(1);
+  });
+
+  it("should count a type nothing publishes apart from a type nobody looked at", () => {
+    // Lumping them together is where the useless advice starts: the headline
+    // would send him hunting for a permission to fix on a type no permission
+    // reaches.
+    const summary = summariseTypes([undisclosedEmpty, neverPublished]);
+    expect(summary.notLooked).toBe(1);
+    expect(summary.unpublished).toBe(1);
+  });
+
+  it("should say plainly that nothing publishes them, rather than that they were not read", () => {
+    const headline = fleetHeadline(summariseTypes([neverPublished]));
+    expect(headline).toMatch(/nothing publishes/i);
+    expect(headline).not.toMatch(/quiet proves nothing/);
+    expect(headline).not.toMatch(/no data/i);
+  });
+
+  it("should not raise the alarm over a type nothing publishes, because nothing is wrong", () => {
+    // There is no fault here and no action for him to take. A warning tone on
+    // this is a page that cries wolf on his ring's ordinary shape.
+    expect(fleetTone(summariseTypes([neverPublished, flowing]))).toBe("ok");
   });
 
   it("should never describe an unconfirmed type as having no data", () => {

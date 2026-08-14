@@ -21,7 +21,11 @@ import {
   type AuthorisationRecord,
   type HealthSamples,
 } from "../health/samples.js";
-import { summariseHealth } from "../health/summarise.js";
+import {
+  summariseHealth,
+  unpublishedTypes,
+  type UnpublishedFinding,
+} from "../health/summarise.js";
 import type { Clock } from "../services/clock.js";
 import type { IdempotencyStore } from "../services/idempotency.js";
 import { ApiFailure, sendOk } from "./envelope.js";
@@ -210,15 +214,25 @@ function optionalInstant(request: Request, field: string): string | undefined {
  * function rather than recomputed, so no reader has to know that `authorised` is
  * the only state under which an empty series means "nothing happened".
  */
-function authorisationOnTheWire(record: AuthorisationRecord | null): {
+function authorisationOnTheWire(
+  record: AuthorisationRecord | null,
+  unpublished: UnpublishedFinding | null = null,
+): {
   readonly state: AuthorisationState | null;
   readonly reportedAt: string | null;
   readonly silenceIsEvidence: boolean;
+  readonly unpublished: UnpublishedFinding | null;
 } {
+  // The inferred label wins over the reported one — see `unpublishedTypes` in
+  // `health/summarise.ts` — and `reportedAt` still describes the report the
+  // phone sent, because the inference did not replace the report, only the
+  // sentence drawn from it. The state it overrode travels inside the finding.
+  const state = unpublished === null ? record?.state ?? null : "unavailable";
   return {
-    state: record?.state ?? null,
+    state,
     reportedAt: record?.reportedAt ?? null,
-    silenceIsEvidence: record === null ? false : silenceIsEvidence(record.state),
+    silenceIsEvidence: state === null ? false : silenceIsEvidence(state),
+    unpublished,
   };
 }
 
@@ -474,7 +488,15 @@ export function createHealthDataRouter(options: HealthDataRouterOptions): Router
       sendOk(response, {
         type,
         unit: UNITS[type],
-        ...authorisationOnTheWire(health.authorisationFor(type)),
+        // Judged for THIS type only, and the cheap half is checked first: a type
+        // with a watermark is disqualified by a single-row read, so the day
+        // aggregate is paid for only by a type that has never produced anything.
+        // On his store that is three types out of thirteen, and on a healthy one
+        // it is none.
+        ...authorisationOnTheWire(
+          health.authorisationFor(type),
+          unpublishedTypes({ samples: health, now: clock(), tz, types: [type] })[type] ?? null,
+        ),
         watermark: health.watermark(type),
         samples,
       });
