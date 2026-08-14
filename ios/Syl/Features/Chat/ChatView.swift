@@ -37,6 +37,17 @@ struct ChatView: View {
     /// The id of the sentinel at the foot of the transcript.
     private static let footAnchor = "transcript-foot"
 
+    /// How close to the top of the loaded range counts as asking for more history.
+    ///
+    /// Roughly half a screen. Far enough that it fires while he is still dragging, rather
+    /// than after he has hit the end and stopped; near enough that resting part-way up the
+    /// transcript loads nothing, which is the difference between proximity and the mere
+    /// existence of the control.
+    private static let proximityToTheTop: CGFloat = 400
+
+    /// Names the scroll view's own space, so the content's offset within it can be read.
+    private static let scrollSpace = "transcript-scroll"
+
     var body: some View {
         ZStack {
             // The same backdrop as home, and for the same reason: the thing that
@@ -200,7 +211,17 @@ struct ChatView: View {
             ZStack(alignment: .bottom) {
                 ScrollView {
                     transcriptContent
+                        .background(
+                            GeometryReader { geometry in
+                                Color.clear.preference(
+                                    key: NearTheTopKey.self,
+                                    value: geometry.frame(in: .named(Self.scrollSpace)).minY
+                                        >= -Self.proximityToTheTop
+                                )
+                            }
+                        )
                 }
+                .coordinateSpace(name: Self.scrollSpace)
                 .scrollIndicators(.hidden)
                 // Her turns dissolve at the top edge instead of colliding with her name.
                 //
@@ -233,6 +254,36 @@ struct ChatView: View {
                 // `.interactively` rather than `.immediately` so the keyboard tracks the
                 // finger and can be pulled back by reversing. The gesture is reversible,
                 // which `.immediately` is not.
+                // **Scroll geometry, and deliberately not a lifecycle callback.**
+                //
+                // The obvious wiring is the symmetric pair on the `EarlierMessages` row —
+                // `.onAppear` to load, `.onDisappear` to re-arm. It is wrong in a way that
+                // reads as correct: both fire as that row is realised and derealised, and
+                // a load moves that row, so the `onDisappear` would clear the latch the
+                // load had just set. The latch would be defeated by the precise mechanism
+                // it exists to survive, and every model-level test would still pass,
+                // because they call the two methods in a hand-written order the view does
+                // not follow.
+                //
+                // The content's offset within the scroll view has none of that. It is a
+                // property of the scroll view rather than of any row inside the
+                // `LazyVStack`, so nothing about rebuilding the stack can produce a
+                // spurious crossing.
+                //
+                // `onScrollGeometryChange` would say this in one line and is iOS 18; this
+                // app deploys to 17. A preference carrying the already-reduced BOOLEAN
+                // rather than the raw offset is what keeps the behaviour identical:
+                // SwiftUI delivers a preference change only when the value differs, so the
+                // action runs once per crossing rather than on every frame of a drag.
+                .onPreferenceChange(NearTheTopKey.self) { isNearTheTop in
+                    Task { @MainActor in
+                        if isNearTheTop {
+                            await model.reachedTheTopOfTheWindow()
+                        } else {
+                            model.leftTheTopOfTheWindow()
+                        }
+                    }
+                }
                 .scrollDismissesKeyboard(.interactively)
                 // A plain `.onTapGesture` on the ScrollView would swallow taps on the
                 // messages themselves and compete with the scroll gesture. A
@@ -293,5 +344,20 @@ struct ChatView: View {
         withAnimation(reduceMotion ? nil : SylTheme.Motion.settle) {
             proxy.scrollTo(Self.footAnchor, anchor: .bottom)
         }
+    }
+}
+
+/// Whether the transcript is scrolled close enough to the top of its loaded range that he
+/// is asking for more history.
+///
+/// Carries the **reduced** boolean rather than the raw offset on purpose. SwiftUI delivers
+/// a preference change only when the value differs, so reducing before publishing turns a
+/// continuous stream of offsets into one event per crossing — which is the whole
+/// requirement, expressed in the type rather than in a guard someone has to remember.
+private struct NearTheTopKey: PreferenceKey {
+    static let defaultValue = false
+
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
     }
 }

@@ -319,8 +319,8 @@ class ChatHostedTranscriptCase: XCTestCase {
     /// immediately after one measures the frame before it — which is a probe that reads
     /// zero no matter what the view does, and it would have made the keystroke test pass
     /// on the unfixed code.
-    fileprivate func settle(_ window: UIWindow) async {
-        for _ in 0..<6 {
+    fileprivate func settle(_ window: UIWindow, passes: Int = 6) async {
+        for _ in 0..<passes {
             try? await Task.sleep(for: .milliseconds(20))
             window.layoutIfNeeded()
         }
@@ -592,6 +592,122 @@ final class ChatUnattendedGrowthTests: ChatHostedTranscriptCase {
             Parked at the top, the window reached \(widest) messages. One arrival at the \
             top is one page. Anything more is a load that re-triggered itself on the \
             rebuild it caused, and it stops only when the whole conversation is resident.
+            """
+        )
+    }
+}
+
+/// Reaching back through history, at the seam where it actually happens (`syl-025.3.1`).
+///
+/// All three assertions are made against **scroll geometry** rather than against model
+/// calls, because that is where the requirements live: "the turn he was reading does not
+/// move", "proximity to the top is the trigger", "resting short of the top loads nothing".
+/// None of those can be stated in terms of a method being called.
+///
+/// Position preservation is asserted as *offset moved exactly as much as content grew*.
+/// That is SC-004 without needing to identify a particular row: if everything added went
+/// in above him and nothing shifted underneath, those two numbers are equal, and if the
+/// view jumped they are not.
+final class ChatReachingBackTests: ChatHostedTranscriptCase {
+    /// How close to the top counts as "he is asking for more".
+    private static let proximity: CGFloat = 400
+
+    func testShouldNotMoveWhatHeIsReadingWhenOlderMessagesArePrepended() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window)
+
+        let scroll = try XCTUnwrap(transcriptScrollView(in: window))
+        // Somewhere in the middle of the loaded range, reading.
+        scroll.setContentOffset(CGPoint(x: 0, y: Self.proximity), animated: false)
+        await settle(window)
+
+        // **Distance from the FOOT, not content size and not raw offset.**
+        //
+        // A `LazyVStack` recomputes its content size as rows are realised, so
+        // `contentSize` moves for reasons that have nothing to do with messages arriving —
+        // measured here at 4,753 both before and after a fifty-message prepend, because
+        // the new rows were above the viewport and never realised. An assertion built on
+        // it is reading noise.
+        //
+        // The newest message is the one thing that cannot move: history is added at the
+        // other end. So his distance from it is the invariant, and both terms come from
+        // the same frame.
+        let before = scroll.contentSize.height - scroll.contentOffset.y - scroll.bounds.height
+        let opened = model.snapshot.groups.flatMap(\.messages).count
+
+        await model.loadEarlier()
+        await settle(window, passes: 50)
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            opened + ChatPaging.pageSize,
+            "no history was prepended, so nothing was tested"
+        )
+
+        let after = scroll.contentSize.height - scroll.contentOffset.y - scroll.bounds.height
+        XCTAssertEqual(
+            after,
+            before,
+            accuracy: 2,
+            """
+            He was \(Int(before)) points from the newest message and is now \(Int(after)). \
+            Fifty older turns arrived at the far end of the transcript; nothing he was \
+            looking at should have moved. A change of \(Int(abs(after - before))) points is \
+            the view jumping under his finger.
+            """
+        )
+    }
+
+    func testShouldLoadNothingWhileHeRestsShortOfTheTop() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window)
+
+        let scroll = try XCTUnwrap(transcriptScrollView(in: window))
+        let opened = model.snapshot.groups.flatMap(\.messages).count
+
+        // Well up the transcript, and well short of the top.
+        scroll.setContentOffset(
+            CGPoint(x: 0, y: Self.proximity * 4),
+            animated: false
+        )
+        for _ in 0..<50 {
+            try? await Task.sleep(for: .milliseconds(20))
+            window.layoutIfNeeded()
+        }
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            opened,
+            "proximity to the top is the trigger, not the existence of the control"
+        )
+    }
+
+    func testShouldLoadOnePageWhenHeScrollsToTheTop() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window)
+
+        let scroll = try XCTUnwrap(transcriptScrollView(in: window))
+        let opened = model.snapshot.groups.flatMap(\.messages).count
+
+        scroll.setContentOffset(CGPoint(x: 0, y: 0), animated: false)
+        for _ in 0..<50 {
+            try? await Task.sleep(for: .milliseconds(20))
+            window.layoutIfNeeded()
+        }
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            opened + ChatPaging.pageSize,
+            """
+            Reaching the top loaded \(model.snapshot.groups.flatMap(\.messages).count - opened) \
+            messages. It must load exactly one page: fewer means he has to reach for a \
+            control to keep going, more means the window is running away again.
             """
         )
     }

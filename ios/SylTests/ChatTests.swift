@@ -717,6 +717,40 @@ final class ChatViewModelTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testShouldNotSpendTheAutomaticTriggerOnALoadThatCouldNotHappen() async throws {
+        // The trigger is a licence to load one page, not a licence to have tried. If a tap
+        // is already in flight when he arrives at the top, the arrival must still be worth
+        // something once that tap finishes — otherwise the automatic trigger is consumed
+        // by a load it did not cause and he is back to tapping.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+
+        // `async let` will not do here: which of the two runs first is the runtime's
+        // choice, and the run where the ARRIVAL wins tests nothing. Waiting on the flag
+        // makes "the tap is genuinely in flight" a precondition rather than a hope.
+        let tap = Task { await model.loadEarlier() }
+        var spins = 0
+        while !model.isLoadingEarlier && spins < 1_000 {
+            await Task.yield()
+            spins += 1
+        }
+        XCTAssertTrue(model.isLoadingEarlier, "the tap never got in flight, so nothing was tested")
+
+        await model.reachedTheTopOfTheWindow()
+        await tap.value
+
+        // Nothing has moved him away from the top, so the arrival is still unspent.
+        await model.reachedTheTopOfTheWindow()
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page * 3,
+            "the tap's page, then the arrival's page — the arrival was not swallowed by the tap"
+        )
+    }
+
     // MARK: - The parse cache (T040)
 
     func testShouldParseAMessageOnceAndReuseIt() {

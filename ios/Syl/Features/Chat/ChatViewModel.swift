@@ -199,7 +199,20 @@ final class ChatViewModel: ObservableObject {
     /// is destroyed and recreated by the very rebuild the load causes, so a latch in the
     /// view would be reset by the thing it exists to stop.
     func reachedTheTopOfTheWindow() async {
-        guard !automaticLoadIsSpent else { return }
+        // **Every condition is checked, and the latch is set, before the first `await`.**
+        // Two wrong shapes, both of which look right:
+        //
+        // - Spending the latch and *then* calling `widenTheWindow()` consumes the arrival
+        //   even when the widen early-returns — a tap already in flight, or nothing older
+        //   to read — so the trigger is gone and no page arrived. It degrades to "tap to
+        //   continue", which is the safe direction, and it is still wrong.
+        // - Spending it *after* the widen returns reopens the runaway outright, because
+        //   the widen suspends: further reports of the top re-enter across the await with
+        //   the latch still false.
+        //
+        // Synchronous guard, synchronous set, then suspend. Actor reentrancy cannot get
+        // between them.
+        guard !automaticLoadIsSpent, snapshot.mayHaveEarlier, !isLoadingEarlier else { return }
         automaticLoadIsSpent = true
         await widenTheWindow()
     }
