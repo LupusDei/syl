@@ -1,158 +1,120 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { AdjutantClient, OutboundMessage } from "../../src/agents/adjutant-client.js";
 import {
+  askBudget,
   ASK_BUDGET_WINDOW_MS,
   MAX_QUESTIONS_PER_AGENT_PER_WINDOW,
+  MAX_QUESTIONS_PER_WINDOW,
   newCorrelationId,
   questionsSentTo,
   refLine,
 } from "../../src/agents/answers.js";
-import { readCommanderSpoke, turnGatePath, writeTurnFacts } from "../../src/tools/config.js";
 import { SylApiClient } from "../../src/tools/client.js";
 import { createToolServer, type ToolContext } from "../../src/tools/server.js";
 
 /**
- * AN INBOUND MESSAGE MUST NEVER CAUSE AN OUTBOUND ONE. `syl-014.3.5`.
+ * AN INBOUND MESSAGE MUST NEVER CAUSE AN UNBOUNDED CHAIN. `syl-014.3.5`.
  *
  * Two agents holding a conversation on the Commander's subscription is the
- * failure, and **CLAUDE.md constraint 1 is the strongest constraint in the
- * project**: subscription rails only, never the metered API. The cost is not
- * bounded by politeness. An exchange that looks reasonable turn by turn can run
- * all night, and the first evidence is a bill or a rate limit rather than an
- * alert.
+ * failure, and **CLAUDE.md constraint 1 is the strongest constraint here**:
+ * subscription rails only, never the metered API.
  *
- * This was theoretical until `syl-j8fa.5`. Nothing routed a peer's words into
- * her turn, so an inbound message could not cause an outbound one because
- * inbound messages did not arrive. The return leg closed that loop, so this is
- * the assertion that has to close it back.
+ * Theoretical until `syl-j8fa.5`. Nothing routed a peer's words into her turn,
+ * so an inbound message could not cause an outbound one because inbound
+ * messages did not arrive. The return leg closed that loop.
  *
- * ## Two layers, and they fail differently
+ * ## What is deliberately NOT asserted
  *
- * **The gate** stops the LOOP: `ask_agent` refuses on any turn the Commander
- * did not himself speak on. A reply lands on an unattended turn and there is no
- * route from it to another message, so the cycle cannot turn once.
+ * That a reply cannot cause a message. **The follow-up question is the verb
+ * working**: "What does his insurance cost?" / "Which policy?" / "The auto
+ * one." A rule forbidding the second question delivers something that can hear
+ * and may not speak twice, which is barely better than the megaphone this epic
+ * started from.
  *
- * **The budget** stops the BURST, which the gate does nothing about: one turn he
- * did start can call `ask_agent` fifty times, and the gate is per turn. It is
- * also what still holds if the gate is ever bypassed, because it is computed
- * from Adjutant's own record rather than from anything in this process.
+ * ## What bounds it, in order of how much work each does
  *
- * Neither is a sentence in a prompt telling her not to. An instruction is not
- * an assertion, and this epic is about the difference.
+ * 1. **Her cadence.** Replies surface on her turns and her unattended turns are
+ *    hourly, so a loop cannot run faster than one exchange an hour. The
+ *    machine-speed runaway is not available, and no code here is what stops it.
+ * 2. **The budget below**, which bounds the case her cadence does not touch at
+ *    all: the burst inside a single turn.
+ * 3. **The fence** (`agents/fencing.ts`), which bounds AUTHORITY rather than
+ *    cost — nothing in a reply can give her an order.
+ *
+ * None of the three is a sentence in a prompt telling her not to. An
+ * instruction is not an assertion, and this epic is about the difference.
  */
 
 const NOW = Date.UTC(2026, 7, 13, 9, 0, 0, 0);
 const iso = (ms: number): string => new Date(ms).toISOString();
 
-let home: string;
-
-beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "syl-gate-"));
-});
-
-afterEach(() => {
-  rmSync(home, { recursive: true, force: true });
-});
-
-// ---------------------------------------------------------------------------
-// The per-turn fact, and why it must be written on EVERY turn
-// ---------------------------------------------------------------------------
-
-describe("the turn gate", () => {
-  it("should say he spoke on a turn carrying his words", () => {
-    writeTurnFacts(home, "Ask the treasurer what the insurance costs.", true);
-
-    expect(readCommanderSpoke(turnGatePath(home))).toBe(true);
-  });
-
-  it("should say he did NOT speak on an unattended turn", () => {
-    writeTurnFacts(home, "It is 09:00. Anything to do?", false);
-
-    expect(readCommanderSpoke(turnGatePath(home))).toBe(false);
-  });
-
-  it("should be rewritten on EVERY turn, so it can never go stale", () => {
-    // THE DEFECT THIS ORDERING PREVENTS. `his-message.txt` is deliberately left
-    // alone by an unattended turn — `harness/urgency.ts` wants whatever he last
-    // actually said, and that is the safe direction there. Copying that
-    // behaviour here would be the opposite of safe: the hourly turn would
-    // inherit "he spoke" from a conversation an hour ago, and the loop this
-    // file exists to break would run on every heartbeat.
-    writeTurnFacts(home, "Ask the treasurer what the insurance costs.", true);
-    expect(readCommanderSpoke(turnGatePath(home))).toBe(true);
-
-    writeTurnFacts(home, "It is 10:00. Anything to do?", false);
-    expect(readCommanderSpoke(turnGatePath(home))).toBe(false);
-  });
-
-  it("should still leave his own words alone on an unattended turn", () => {
-    // The urgency seam's property, asserted here because this function is now
-    // the one place that writes both files and could break it in passing.
-    writeTurnFacts(home, "Wake me if the roof falls in.", true);
-    writeTurnFacts(home, "It is 03:00. Anything to do?", false);
-
-    expect(readCommanderSpoke(turnGatePath(home))).toBe(false);
-  });
-
-  it("should read a missing gate as 'he did not speak'", () => {
-    // The safe direction, and the same default as every other read across this
-    // seam. A tool server that cannot find the file must refuse rather than
-    // assume the permissive case.
-    expect(readCommanderSpoke(join(home, "nothing-here.json"))).toBe(false);
-  });
-
-  it("should read an unreadable or nonsense gate as 'he did not speak'", () => {
-    const path = turnGatePath(home);
-    writeTurnFacts(home, "anything", true);
-    writeFileSync(path, "{ this is not json", "utf8");
-
-    expect(readCommanderSpoke(path)).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// The budget, computed from Adjutant rather than from this process
-// ---------------------------------------------------------------------------
-
-describe("how many questions she may put to one agent", () => {
-  const question = (to: string, at: number): OutboundMessage => ({
-    messageId: `out-${String(at)}`,
+/** A question she put to an agent, as Adjutant recorded it. */
+function question(to: string, at: number): OutboundMessage {
+  return {
+    messageId: `out-${to}-${String(at)}`,
     to,
     body: `Something?\n\n${refLine(newCorrelationId())}`,
     at: iso(at),
+  };
+}
+
+/** `count` questions to one agent, all inside the window. */
+function questions(to: string, count: number): OutboundMessage[] {
+  return Array.from({ length: count }, (_, i) => question(to, NOW - (i + 1) * 1_000));
+}
+
+/**
+ * The same, against the wall clock.
+ *
+ * The handler reads `Date.now()` — the budget is a claim about the last hour of
+ * real time, and there is no clock on `ToolContext` to inject. So the tests
+ * that drive the VERB build their history relative to now, and the tests that
+ * drive the pure functions pass an explicit instant and stay deterministic.
+ * Freezing the wrong one of those would be a test that passes because it was
+ * written today.
+ */
+function recentQuestions(to: string, count: number): OutboundMessage[] {
+  const now = Date.now();
+  return Array.from({ length: count }, (_, i) => question(to, now - (i + 1) * 1_000));
+}
+
+// ---------------------------------------------------------------------------
+// Counting what actually left the machine
+// ---------------------------------------------------------------------------
+
+describe("questionsSentTo", () => {
+  it("should count the questions she put to that agent inside the window", () => {
+    expect(questionsSentTo("treasurer", [...questions("treasurer", 2), ...questions("raynor", 1)], NOW)).toBe(2);
   });
 
-  it("should count the questions she has put to that agent inside the window", () => {
-    const sent = [
-      question("treasurer", NOW - 60_000),
-      question("treasurer", NOW - 120_000),
-      question("raynor", NOW - 60_000),
-    ];
-
-    expect(questionsSentTo("treasurer", sent, NOW)).toBe(2);
+  it("should count every recipient when asked for the whole fleet", () => {
+    expect(questionsSentTo(null, [...questions("treasurer", 2), ...questions("raynor", 1)], NOW)).toBe(3);
   });
 
   it("should not count questions older than the window", () => {
-    const sent = [
-      question("treasurer", NOW - ASK_BUDGET_WINDOW_MS - 1),
-      question("treasurer", NOW - 60_000),
-    ];
+    const sent = [question("treasurer", NOW - ASK_BUDGET_WINDOW_MS - 1), question("treasurer", NOW - 1_000)];
 
     expect(questionsSentTo("treasurer", sent, NOW)).toBe(1);
   });
 
   it("should not count an ordinary message as a question", () => {
-    // Only a message carrying a correlation id is a question. She is entitled
-    // to say something to an agent without it counting against a budget for
-    // things she is owed answers to.
+    // Only a message carrying a correlation id is a question. She may say
+    // thank you to an agent without spending the budget for things she is owed
+    // an answer to.
     const sent: OutboundMessage[] = [
-      { messageId: "out-1", to: "treasurer", body: "Thanks.", at: iso(NOW - 60_000) },
-      question("treasurer", NOW - 30_000),
+      { messageId: "out-1", to: "treasurer", body: "Thanks.", at: iso(NOW - 1_000) },
+      question("treasurer", NOW - 2_000),
+    ];
+
+    expect(questionsSentTo("treasurer", sent, NOW)).toBe(1);
+  });
+
+  it("should count a question whose timestamp it cannot read", () => {
+    // The alternative is a budget with a hole that anything malformed falls
+    // through, which is the shape of every guard this project has had to fix.
+    const sent: OutboundMessage[] = [
+      { messageId: "out-1", to: "treasurer", body: `?\n\n${refLine(newCorrelationId())}`, at: "not a date" },
     ];
 
     expect(questionsSentTo("treasurer", sent, NOW)).toBe(1);
@@ -160,19 +122,80 @@ describe("how many questions she may put to one agent", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The verb itself
+// The ceiling, and what she is left holding when she reaches it
 // ---------------------------------------------------------------------------
 
-describe("ask_agent cannot be reached by an inbound message", () => {
+describe("askBudget", () => {
+  it("should let a real exchange happen rather than stopping at the first follow-up", () => {
+    // THE POINT OF THE NUMBER. Ask, be told something that raises a follow-up,
+    // ask the follow-up. A ceiling that bit before this would have destroyed
+    // the conversation it was meant to protect.
+    for (let already = 0; already < MAX_QUESTIONS_PER_AGENT_PER_WINDOW; already += 1) {
+      expect(askBudget("treasurer", questions("treasurer", already), NOW), `after ${String(already)}`).toBeNull();
+    }
+  });
+
+  it("should stop her once she has asked one agent enough", () => {
+    const reason = askBudget("treasurer", questions("treasurer", MAX_QUESTIONS_PER_AGENT_PER_WINDOW), NOW);
+
+    expect(reason).not.toBeNull();
+  });
+
+  it("should surface to HIM rather than fail silently", () => {
+    // The refusal IS the surfacing: it is what she has instead of another
+    // message. A ceiling that produced a bare failure would look to her like a
+    // broken verb and to him like nothing at all.
+    const reason = askBudget("treasurer", questions("treasurer", MAX_QUESTIONS_PER_AGENT_PER_WINDOW), NOW) ?? "";
+
+    expect(reason).toContain("treasurer");
+    expect(reason).toMatch(/tell me|check with you|worth pressing/i);
+    // And it says what did NOT happen, which is the sentence this project keeps
+    // finding missing.
+    expect(reason).toMatch(/have not asked/i);
+  });
+
+  it("should still let her reach a different agent when one agent's budget is spent", () => {
+    // Per agent on purpose. What she has asked the treasurer says nothing about
+    // whether raynor should hear from her.
+    expect(askBudget("raynor", questions("treasurer", MAX_QUESTIONS_PER_AGENT_PER_WINDOW), NOW)).toBeNull();
+  });
+
+  it("should stop a burst that sprays the roster instead of pressing one agent", () => {
+    // The per-agent cap alone does not bound this: five agents at three each is
+    // fifteen messages out of a single turn, and every one of them is within
+    // its own ceiling.
+    const sprayed = [
+      ...questions("treasurer", 2),
+      ...questions("raynor", 2),
+      ...questions("artanis", 2),
+    ];
+    expect(sprayed).toHaveLength(MAX_QUESTIONS_PER_WINDOW);
+
+    expect(askBudget("tassadar", sprayed, NOW)).not.toBeNull();
+  });
+
+  it("should let her ask again once the window has passed", () => {
+    // A ceiling that never releases is a capability removed rather than
+    // bounded.
+    const old = Array.from({ length: MAX_QUESTIONS_PER_WINDOW }, (_, i) =>
+      question("treasurer", NOW - ASK_BUDGET_WINDOW_MS - (i + 1)),
+    );
+
+    expect(askBudget("treasurer", old, NOW)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The verb
+// ---------------------------------------------------------------------------
+
+describe("ask_agent — a reply cannot start an unbounded chain", () => {
   interface Fleet {
     readonly asked: { who: string; body: string }[];
     readonly client: ToolContext["fleet"];
   }
 
-  const fleet = (
-    sent: readonly OutboundMessage[] = [],
-    readFails = false,
-  ): Fleet => {
+  const fleet = (sent: readonly OutboundMessage[] = [], readFails = false): Fleet => {
     const asked: { who: string; body: string }[] = [];
     return {
       asked,
@@ -197,7 +220,7 @@ describe("ask_agent cannot be reached by an inbound message", () => {
     };
   };
 
-  const context = (over: Partial<ToolContext> = {}): ToolContext => ({
+  const context = (client: ToolContext["fleet"]): ToolContext => ({
     client: new SylApiClient({
       baseUrl: "http://127.0.0.1:8888/api/v1",
       token: "test-token",
@@ -207,9 +230,7 @@ describe("ask_agent cannot be reached by an inbound message", () => {
     }),
     tz: "America/Chicago",
     hisMessage: () => "",
-    commanderSpoke: () => true,
-    fleet: null,
-    ...over,
+    fleet: client,
   });
 
   const ask = async (ctx: ToolContext): Promise<Record<string, unknown>> => {
@@ -221,8 +242,8 @@ describe("ask_agent cannot be reached by an inbound message", () => {
         name: "ask_agent",
         arguments: {
           who: "treasurer",
-          question: "What is he paying for health insurance?",
-          because: "He asked me to find out.",
+          question: "Which policy did you mean?",
+          because: "They asked me to be specific.",
         },
       },
     });
@@ -230,81 +251,47 @@ describe("ask_agent cannot be reached by an inbound message", () => {
     return JSON.parse(result.content[0]?.text ?? "{}") as Record<string, unknown>;
   };
 
-  it("should refuse on a turn the Commander did not speak on, WITHOUT sending", async () => {
-    // THE ASSERTION. A reply from another agent reaches her on an unattended
-    // turn — that is the whole point of the return leg — and from that turn
-    // there is no route to another outbound message. The cycle cannot turn
-    // once.
-    const { asked, client } = fleet();
+  it("should allow the follow-up question, which is the verb working", async () => {
+    const { asked, client } = fleet(recentQuestions("treasurer", 1));
 
-    const envelope = await ask(context({ fleet: client, commanderSpoke: () => false }));
-
-    expect(envelope["ok"]).toBe(false);
-    expect(asked).toEqual([]);
-  });
-
-  it("should say WHY it refused, in something she can repeat to him", async () => {
-    const { client } = fleet();
-
-    const envelope = await ask(context({ fleet: client, commanderSpoke: () => false }));
-
-    // She has to be able to turn this into a sentence. "Forbidden" is a shrug,
-    // and a refusal she cannot explain is one he reads as a fault.
-    expect(String(envelope["reason"])).toMatch(/ask|him|next time you talk|when he/i);
-  });
-
-  it("should ask when he is in the loop", async () => {
-    const { asked, client } = fleet();
-
-    const envelope = await ask(context({ fleet: client, commanderSpoke: () => true }));
+    const envelope = await ask(context(client));
 
     expect(envelope["ok"]).toBe(true);
     expect(asked).toHaveLength(1);
   });
 
-  it("should refuse once she has spent the budget on that agent, even on his own turn", async () => {
-    // THE BURST, which the gate does nothing about: one turn he DID start can
-    // call this verb as many times as the model likes.
-    const spent = Array.from({ length: MAX_QUESTIONS_PER_AGENT_PER_WINDOW }, (_, i) => ({
-      messageId: `out-${String(i)}`,
-      to: "treasurer",
-      body: `Something?\n\n${refLine(newCorrelationId())}`,
-      at: iso(NOW - 60_000),
-    }));
-    const { asked, client } = fleet(spent);
+  it("should refuse past the ceiling WITHOUT sending, and say so in her own words", async () => {
+    const { asked, client } = fleet(recentQuestions("treasurer", MAX_QUESTIONS_PER_AGENT_PER_WINDOW));
 
-    const envelope = await ask(context({ fleet: client }));
+    const envelope = await ask(context(client));
 
     expect(envelope["ok"]).toBe(false);
     expect(asked).toEqual([]);
-  });
-
-  it("should still allow a different agent when one agent's budget is spent", async () => {
-    // The budget is per agent on purpose. "She has asked the treasurer three
-    // times this hour" says nothing about whether raynor should hear from her.
-    const spent = Array.from({ length: MAX_QUESTIONS_PER_AGENT_PER_WINDOW }, (_, i) => ({
-      messageId: `out-${String(i)}`,
-      to: "raynor",
-      body: `Something?\n\n${refLine(newCorrelationId())}`,
-      at: iso(NOW - 60_000),
-    }));
-    const { asked, client } = fleet(spent);
-
-    const envelope = await ask(context({ fleet: client }));
-
-    expect(envelope["ok"]).toBe(true);
-    expect(asked).toHaveLength(1);
+    expect(String(envelope["reason"])).toMatch(/have not asked/i);
+    // Not retryable: nothing the model does this turn changes the count, and a
+    // model that retried would spend the turn discovering that.
+    expect(envelope["retryable"]).toBe(false);
   });
 
   it("should fail CLOSED when it cannot read what she has already sent", async () => {
-    // A spend guard that opens when its evidence is unavailable is not a guard.
-    // Adjutant being unreadable means the budget cannot be checked, and the
-    // cost of guessing wrong is his subscription rather than one lost answer.
+    // A spend guard that opens when its evidence is unavailable is not a guard,
+    // and the thing on the other side of it is his subscription.
     const { asked, client } = fleet([], true);
 
-    const envelope = await ask(context({ fleet: client }));
+    const envelope = await ask(context(client));
 
     expect(envelope["ok"]).toBe(false);
+    expect(asked).toEqual([]);
+  });
+
+  it("should check the budget BEFORE anything leaves the process", async () => {
+    // The roster is checked before the transport for the same reason. A guard
+    // that fires after the send is a record of what happened, not a bound.
+    const { asked, client } = fleet(recentQuestions("treasurer", MAX_QUESTIONS_PER_AGENT_PER_WINDOW));
+
+    await ask(context(client));
+    await ask(context(client));
+
     expect(asked).toEqual([]);
   });
 });

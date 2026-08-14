@@ -552,6 +552,9 @@ describe("ask_agent — stamping a question so an answer can find its way home",
         sends.push({ who, body, ...(options === undefined ? {} : { options }) });
         return { ok: true as const, data: { messageId: "msg-1", at: iso(NOW) } };
       },
+      // Nothing asked yet, so the ask budget (`syl-014.3.5`) is untouched and
+      // these tests are about the stamping alone.
+      sent: async () => ({ ok: true as const, data: [] }),
     } as unknown as ToolContext["fleet"],
   });
 

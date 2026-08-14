@@ -135,6 +135,134 @@ export interface FleetReader {
 export const QUESTION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
+ * THE BOUND ON A CONVERSATION SHE DID NOT START. `syl-014.3.5`.
+ *
+ * A reply now reaches her turn, so a reply can cause a message, which causes a
+ * reply. Two agents talking on the Commander's subscription is constraint 1,
+ * and constraint 1 is the strongest one here.
+ *
+ * ## Why a window and not a hop count
+ *
+ * A hop count along the correlation chain is the obvious instrument and it was
+ * the one asked for. It is the weaker of the two **in this system**, and the
+ * reason is not a matter of taste:
+ *
+ * 1. **The chain can be broken by accident, and breaking it resets the bound
+ *    to zero.** A hop count only counts while every question is recognisable as
+ *    a continuation of the last. The model does not say "this is a follow-up";
+ *    it calls the verb with a name and a question. So continuation has to be
+ *    INFERRED — from a reply being in this turn's context — and the inference
+ *    fails in the ordinary case where she waits a turn before asking, or asks
+ *    in different words, or has two replies in front of her and only one chain
+ *    can be the parent. Every one of those is a fresh chain at depth zero.
+ * 2. **A ceiling on a chain is not a ceiling on cost.** Twenty chains of three
+ *    is sixty messages, and each one is depth 1.
+ * 3. **A window needs nothing from the model and nothing from inference.** It
+ *    counts what actually left the machine. There is no chain to lose, no depth
+ *    to reset, and no ambiguity about which chain a message belongs to.
+ *
+ * The two are the same instrument once you notice that what a hop count really
+ * bounds is "how many times may this keep going before she has to go back to
+ * him" — and a clock answers that without needing the chain to survive.
+ *
+ * ## What actually bounds the runaway, and it is not this
+ *
+ * **Her cadence.** Replies surface on her turns, and her unattended turns are
+ * hourly, so a loop cannot run faster than one exchange an hour no matter what
+ * this file says. The all-night machine-speed runaway is not available.
+ *
+ * Which tells you what this budget is really for: **the burst inside ONE
+ * turn**, which is the case her cadence does not bound at all. One turn can
+ * call the verb as many times as the model likes.
+ */
+export const ASK_BUDGET_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * How many questions she may put to ONE agent inside {@link ASK_BUDGET_WINDOW_MS}.
+ *
+ * Three, and it is deliberately the number a hop ceiling would have used. Ask,
+ * be told something that raises a follow-up, ask the follow-up — that is a
+ * conversation working, and it is the exchange a stricter rule would have
+ * destroyed. The fourth is where she stops and tells him instead.
+ *
+ * Per agent, because "she has asked the treasurer three times" says nothing
+ * about whether raynor should hear from her, and a shared pool lets one busy
+ * exchange silently mute every other one.
+ */
+export const MAX_QUESTIONS_PER_AGENT_PER_WINDOW = 3;
+
+/**
+ * How many questions she may put to the WHOLE fleet inside the same window.
+ *
+ * Six. The per-agent cap does not bound a burst that sprays the roster — five
+ * agents at three each is fifteen messages out of a single turn — and this is
+ * the number that does. Two agents fully consulted, or several asked once each,
+ * inside an hour in which she gets roughly one unattended turn.
+ */
+export const MAX_QUESTIONS_PER_WINDOW = 6;
+
+/**
+ * How many questions she has already put to this agent inside the window.
+ *
+ * Counts QUESTIONS, not messages: only something carrying a correlation id is a
+ * question. She is entitled to say thank you to an agent without it spending
+ * the budget for things she is owed an answer to.
+ *
+ * @param who the recipient to count, or `null` for every recipient.
+ */
+export function questionsSentTo(
+  who: string | null,
+  sent: readonly OutboundMessage[],
+  now: number,
+): number {
+  let count = 0;
+  for (const message of sent) {
+    if (who !== null && message.to !== who) continue;
+    if (correlationIdsIn(message).length === 0) continue;
+
+    const at = Date.parse(message.at);
+    // An unreadable stamp COUNTS. The alternative is a message that spends
+    // nothing because its timestamp was odd, which is a budget with a hole in
+    // it that anything malformed falls through.
+    if (Number.isNaN(at) || now - at <= ASK_BUDGET_WINDOW_MS) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Whether she has asked enough for now, and what she should say if she has.
+ *
+ * @returns `null` when she may ask, or a complete sentence explaining why she
+ * did not. A sentence rather than a code, because the refusal IS the surfacing:
+ * it is what she has instead of another message, and hitting a ceiling that
+ * produced only a silent failure would look to her like a broken verb and to
+ * him like nothing at all.
+ */
+export function askBudget(
+  who: string,
+  sent: readonly OutboundMessage[],
+  now: number,
+): string | null {
+  if (questionsSentTo(who, sent, now) >= MAX_QUESTIONS_PER_AGENT_PER_WINDOW) {
+    return (
+      `I have already put ${String(MAX_QUESTIONS_PER_AGENT_PER_WINDOW)} questions to ${who} in ` +
+      `the last hour and I would rather check with you than keep going on my own. I have not ` +
+      `asked again — tell me if it is worth pressing, or what you want me to ask instead.`
+    );
+  }
+
+  if (questionsSentTo(null, sent, now) >= MAX_QUESTIONS_PER_WINDOW) {
+    return (
+      `I have put ${String(MAX_QUESTIONS_PER_WINDOW)} questions to the others in the last hour, ` +
+      `which is as far as I go without checking. I have not asked ${who} — tell me if this one ` +
+      `matters more than waiting.`
+    );
+  }
+
+  return null;
+}
+
+/**
  * The shape of a correlation id, and why it is an ordinary Syl id.
  *
  * A bare token would have done the matching. This buys three things a token

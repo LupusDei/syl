@@ -2061,6 +2061,11 @@ describe("ask_agent — putting a question to someone who knows more", () => {
           asked.push({ who, body });
           return result;
         },
+        // She has asked nobody anything yet. `ask_agent` reads this before it
+        // sends, to bound how much of an exchange it can become without the
+        // Commander (`syl-014.3.5`); the ceiling has its own tests in
+        // `no-auto-reply.test.ts`.
+        sent: async () => ({ ok: true as const, data: [] }),
       } as unknown as AdjutantClient,
     };
   };
