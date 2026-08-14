@@ -40,13 +40,23 @@ import { testConfig, testDatabase, testDeps } from "../helpers/service.js";
  * measured here is what the database actually holds after real work:
  *
  *  1. Seed the four people `syl-ulf` evicted, and regenerate the projection.
- *  2. Upload **two thousand** measurements over HTTP, exactly as the phone
- *     does — real route, real validation, real store, real transaction.
+ *  2. Upload **thousands of** measurements over HTTP, exactly as the phone
+ *     does — real route, real validation, real store, real transaction — and
+ *     **of every type the contract carries**, not of a chosen two.
  *  3. Ask SQLite what it has.
  *
- * Two thousand samples against a handful of nodes. If there were any path at all
+ * Thousands of samples against a handful of nodes. If there were any path at all
  * from a measurement into the graph, the node count would not drift — it would
  * detonate, and the projection would come back full of heart rates.
+ *
+ * ## Fourteen chances now, not seven (`syl-8ys9.1.5`)
+ *
+ * The type set doubled, and a sweep that went on uploading heart rate and steps
+ * would have gone on passing while seven brand-new write paths were never
+ * exercised — a green test about a shape that is no longer the shape, which is
+ * the failure mode this project treats as worse than no test. So the upload is
+ * driven off `HEALTH_TYPES` itself and a separate assertion checks that it still
+ * covers all of them.
  *
  * The structural half is asserted too, because "the absence is the enforcement"
  * is a claim about the schema and can be read off the schema: no health table
@@ -76,7 +86,20 @@ function fullReport(): Record<HealthType, AuthorisationState> {
 const A_DAY_OF_HEART_RATE = 1_440;
 /** Plus a night of sleep blocks, a day of step totals, and the morning weight. */
 const EVERYTHING_ELSE = 560;
-const HOW_MANY = A_DAY_OF_HEART_RATE + EVERYTHING_ELSE;
+/**
+ * Every type that is not the two high-volume ones above.
+ *
+ * Read off `HEALTH_TYPES` rather than listed, so the fifteenth type is covered by
+ * the commit that adds it. The count doubled at `syl-8ys9.1` and the point of
+ * this test doubled with it: **fourteen chances to leak into the graph rather
+ * than seven.** A sweep that kept measuring the original two would have gone on
+ * passing while seven brand-new write paths went unexercised — green, and about
+ * a shape that is no longer the shape.
+ */
+const THE_REST = HEALTH_TYPES.filter((type) => type !== "heartRate" && type !== "steps");
+/** A couple of months of dailies for each, which is what the quiet types really look like. */
+const A_FEW = 60;
+const HOW_MANY = A_DAY_OF_HEART_RATE + EVERYTHING_ELSE + THE_REST.length * A_FEW;
 
 /**
  * A day's worth of measurements, spelled the way HealthKit spells them.
@@ -110,9 +133,39 @@ function aDayOfMeasurements(): readonly HealthSampleInput[] {
       source: "iPhone",
     });
   }
+  // The other twelve, under a third source name — the ring, which is where his
+  // real corpus comes from and which is also a second string the graph must not
+  // be holding afterwards.
+  for (const [index, type] of THE_REST.entries()) {
+    for (let day = 0; day < A_FEW; day += 1) {
+      const startedAt = new Date(midnight - day * 86_400_000).toISOString();
+      const endedAt = new Date(midnight - day * 86_400_000 + 60_000).toISOString();
+      samples.push({
+        type,
+        startedAt,
+        endedAt,
+        value: 10 + index + day / 10,
+        source: "Oura",
+      });
+    }
+  }
 
   return samples;
 }
+
+/**
+ * Every string a leak would have to carry: each type's name, and each source.
+ *
+ * The type names are the identity half — a node relabelled with a measurement
+ * carries one — and the sources are the provenance half. Both are checked
+ * because a leak does not have to grow a row count to be a leak.
+ */
+const NOTHING_IN_THE_GRAPH_MAY_CONTAIN: readonly string[] = [
+  ...HEALTH_TYPES,
+  "Apple Watch",
+  "iPhone",
+  "Oura",
+];
 
 let db: SylDatabase;
 let deps: AppDependencies;
@@ -192,7 +245,19 @@ async function uploadADay(): Promise<Envelope<UploadResult>> {
 }
 
 describe("a health sample cannot become a memory node", () => {
-  it("should leave the graph exactly the size it was after two thousand measurements arrive", async () => {
+  it("should cover every type the contract carries, so the sweep cannot go stale", () => {
+    // The guard on the guard. This file's whole claim is "N chances to fail, all
+    // taken", and that claim is only true while the upload below actually
+    // contains every type. A type added to `HEALTH_TYPES` and forgotten here
+    // leaves a write path nothing exercises, in the one test that exists because
+    // an unexercised path already evicted his family from her working memory.
+    const uploaded = new Set(aDayOfMeasurements().map((sample) => sample.type));
+
+    expect([...uploaded].sort()).toEqual([...HEALTH_TYPES].sort());
+    expect(uploaded.size).toBe(HEALTH_TYPES.length);
+  });
+
+  it("should leave the graph exactly the size it was after every type arrives at once", async () => {
     seedTheFamily();
     const before = new Map(memoryTables().map((table) => [table, countOf(table)]));
     // The check that keeps this test from being vacuous: there has to be a graph
@@ -237,11 +302,14 @@ describe("a health sample cannot become a memory node", () => {
     for (const who of ["The Commander", "Amanda", "Silas", "Evelyn"]) {
       expect(preamble).toContain(who);
     }
-    // And nothing about his heart is in the text that gets prepended to every
+    // And nothing about his body is in the text that gets prepended to every
     // turn. Raw measurements never ride in working memory — only conclusions do,
     // and a conclusion is written by the review lane, not by an upload.
-    expect(preamble).not.toContain("heartRate");
-    expect(preamble).not.toContain("Apple Watch");
+    for (const marker of NOTHING_IN_THE_GRAPH_MAY_CONTAIN) {
+      expect(preamble, `${marker} reached the document she reads every turn`).not.toContain(
+        marker,
+      );
+    }
   });
 
   it("should hold no node or edge carrying a sample's identity", async () => {
@@ -264,8 +332,9 @@ describe("a health sample cannot become a memory node", () => {
 
       for (const row of rows) {
         const text = JSON.stringify(row);
-        expect(text).not.toContain("heartRate");
-        expect(text).not.toContain("Apple Watch");
+        for (const marker of NOTHING_IN_THE_GRAPH_MAY_CONTAIN) {
+          expect(text, `${table} holds ${marker}`).not.toContain(marker);
+        }
         expect(text).not.toContain("health_samples");
       }
     }

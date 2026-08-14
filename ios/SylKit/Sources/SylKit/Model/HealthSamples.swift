@@ -12,7 +12,7 @@ import Foundation
 /// target, at `Core/Health/HealthReader.swift`, because `SylKit` builds on the host and
 /// HealthKit does not exist there.
 
-// MARK: - The seven types
+// MARK: - The fourteen types
 
 /// The contract's `HealthType`.
 ///
@@ -20,6 +20,16 @@ import Foundation
 /// nearly every conclusion leans on, while raw heart rate is the highest-volume type
 /// HealthKit offers. `bodyMass` is here because `Get back to 185 pounds` is already a
 /// goal in his memory graph.
+///
+/// The last seven are `syl-8ys9.1`: everything else Oura publishes to Apple Health. The
+/// Commander sent the permission screen and said get all of it, so the selection
+/// principle is no longer "what would be useful to reason over" but "what his source
+/// will hand us".
+///
+/// **The order is append-only and it is pinned.** `HealthUploadWireTests` compares
+/// `allCases.map(\.rawValue)` against the contract's `HEALTH_TYPES` sequence character
+/// for character, because `derive.ts` reports its series in that order and the admin
+/// renders in it. A case inserted in the middle reorders both, silently, on the wire.
 public enum HealthType: String, Codable, Equatable, Hashable, Sendable, CaseIterable {
     case heartRate
     case restingHeartRate
@@ -28,6 +38,16 @@ public enum HealthType: String, Codable, Equatable, Hashable, Sendable, CaseIter
     case steps
     case workout
     case bodyMass
+    case activeEnergy
+    /// Apple Health calls it **Resting Energy**; HealthKit calls it basal. The wire word
+    /// is HealthKit's, the admin's label is Apple's — he reads the admin beside the phone.
+    case basalEnergy
+    case bodyFatPercentage
+    /// Apple Health calls it **Cardio Fitness**.
+    case vo2Max
+    case height
+    case leanBodyMass
+    case respiratoryRate
 }
 
 /// **Required so a `[HealthType: _]` dictionary encodes as a JSON OBJECT.**
@@ -46,13 +66,31 @@ extension HealthType {
     ///
     /// `HealthReader` turns each of these into an `HKUnit` and asserts the two agree, so
     /// this table cannot drift away from the conversion that feeds it.
+    ///
+    /// Two of the seven added by `syl-8ys9.1` were read off a running simulator rather
+    /// than copied from documentation, because both would otherwise have been wrong:
+    ///
+    /// - **`vo2Max` is `mL/min·kg`.** Every way of spelling that unit — the composed
+    ///   `mL / (kg · min)`, `HKUnit(from: "ml/kg*min")`, `HKUnit(from: "mL/kg*min")` —
+    ///   normalises to that one `unitString`, so `ml/kg/min` (which the plan said) fails
+    ///   the drift comparison on the first run against a device.
+    /// - **`bodyFatPercentage` is `%` meaning PERCENTAGE POINTS**, while HealthKit's `%`
+    ///   means a fraction — an 18% reading arrives as `0.18`. The two share a
+    ///   `unitString`, so the drift comparison passes while the number is wrong by a
+    ///   hundred. ``HealthType/wireScale`` in the app target is the correction, and it is
+    ///   pinned by its own test because a silent factor of 100 is exactly the kind of
+    ///   thing a comparison of unit *names* cannot catch.
     public var unit: String {
         switch self {
-        case .heartRate, .restingHeartRate: return "count/min"
+        case .heartRate, .restingHeartRate, .respiratoryRate: return "count/min"
         case .heartRateVariability: return "ms"
         case .sleep, .workout: return "min"
         case .steps: return "count"
-        case .bodyMass: return "lb"
+        case .bodyMass, .leanBodyMass: return "lb"
+        case .activeEnergy, .basalEnergy: return "kcal"
+        case .bodyFatPercentage: return "%"
+        case .vo2Max: return "mL/min·kg"
+        case .height: return "cm"
         }
     }
 }

@@ -18,13 +18,23 @@ const soulBytes = statSync(new URL("../../../SOUL.md", import.meta.url)).size;
  * The tool surface against the two rules it has to keep, neither of which was
  * checked by anything.
  *
- * The surface fits the budget **today** — 3,163 of 4,018 — and the fit was
- * arithmetic in a channel message rather than an assertion. That is the same
- * shape as the stale build: correct now, silently wrong later, and wrong in a
- * way every other check still passes through. The number moves whenever
- * `SOUL.md` gains a paragraph or a verb gains a field, and it is a promise
- * between two tracks, which is exactly the kind of promise that needs a test
- * rather than a memory.
+ * The surface fits the budget **today** — it was 3,163 of 4,018 when this file
+ * was written — and the fit was arithmetic in a channel message rather than an
+ * assertion. That is the same shape as the stale build: correct now, silently
+ * wrong later, and wrong in a way every other check still passes through. The
+ * number moves whenever `SOUL.md` gains a paragraph or a verb gains a field, and
+ * it is a promise between two tracks, which is exactly the kind of promise that
+ * needs a test rather than a memory.
+ *
+ * **No figure in this comment is load-bearing and every one of them is stale.**
+ * The assertions below compute from the live constants, deliberately; the
+ * numbers here are only there to say what kind of quantity is being talked
+ * about. The last measurement that mattered: `syl-8ys9.1.4` doubled
+ * `how_has_he_been`'s `types` enum from seven health types to fourteen and moved
+ * the surface by **100 bytes**, 18,909 to 19,009, against a capability slot of
+ * 52,046 and 23,037 bytes of headroom above the 10% margin. So the ceiling did
+ * not move, and a widening of that shape does not need it to — which is the
+ * answer this file exists to hand over rather than have re-derived.
  */
 describe("the tool surface", () => {
   it("should fit the capability slot with the rest of the turn in place", () => {

@@ -163,6 +163,18 @@ export const DAILY_SUMMARY: Readonly<Record<HealthType, DailySummary>> = {
   steps: "total",
   workout: "total",
   bodyMass: "mean",
+  // The seven from `syl-8ys9.1`. Only the two energies accumulate — a day's
+  // active energy is the sum of the day's burns, exactly as steps are. The rest
+  // are readings OF something, and summing a body fat percentage over a day
+  // produces a number three orders of magnitude wrong with nothing to say so,
+  // which is what the block above exists to prevent.
+  activeEnergy: "total",
+  basalEnergy: "total",
+  bodyFatPercentage: "mean",
+  vo2Max: "mean",
+  height: "mean",
+  leanBodyMass: "mean",
+  respiratoryRate: "mean",
 };
 
 /** Why a series says nothing, when it says nothing. */

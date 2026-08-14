@@ -41,7 +41,7 @@
  */
 
 /**
- * The seven types read at the start (`syl-t9tj`).
+ * The fourteen types. Seven from `syl-t9tj`, seven more from `syl-8ys9.1`.
  *
  * `restingHeartRate` is kept distinct from `heartRate` on purpose: it is the
  * baseline nearly every conclusion leans on, while raw heart rate is the
@@ -49,6 +49,32 @@
  * `Get back to 185 pounds` is already a goal in his memory graph, which is what
  * lets the conclusion layer say something useful before a month of history
  * exists.
+ *
+ * ## The seven added, and why the list is his rather than ours
+ *
+ * The first seven were chosen. These seven are **everything else Oura actually
+ * publishes to Apple Health** — he sent the permission screenshot and said get
+ * all of it. So the selection principle changed: it is no longer "what would be
+ * useful to reason over", it is "what his source will hand us".
+ *
+ * ## Two types on this list will never arrive, and that is established
+ *
+ * Read Oura's published list alphabetically and two absences are load-bearing.
+ * **Heart Rate Variability** would sit between *Heart Rate* and *Height*;
+ * **Resting Heart Rate** would sit between *Respiratory Rate* and *Resting
+ * Energy*. Neither is there. Oura does not publish either, so no permission
+ * grant makes them arrive from his ring, and their emptiness is not a bug to
+ * fix. `restingHeartRate` is estimated from the quiet floor of raw heart rate
+ * (`derive.ts`), which was built as a convenience and is in fact the only way he
+ * will ever have that number. Saying so is `syl-8ys9.3`'s job; keeping both
+ * types addressable is this file's.
+ *
+ * ## The order is append-only
+ *
+ * `SylKit`'s `HealthType.allCases` is pinned against this sequence character for
+ * character, `derive.ts` reports its series in it, and the admin renders in it.
+ * A type inserted in the middle is a silent reordering of every one of those.
+ * New types go on the end.
  */
 export const HEALTH_TYPES = [
   "heartRate",
@@ -58,6 +84,13 @@ export const HEALTH_TYPES = [
   "steps",
   "workout",
   "bodyMass",
+  "activeEnergy",
+  "basalEnergy",
+  "bodyFatPercentage",
+  "vo2Max",
+  "height",
+  "leanBodyMass",
+  "respiratoryRate",
 ] as const;
 
 export type HealthType = (typeof HEALTH_TYPES)[number];
@@ -75,7 +108,7 @@ export function isHealthType(value: unknown): value is HealthType {
  * documentation reads like and is not the one the API can answer:
  *
  * - `authorizationStatus(for:)` answers about **sharing**. Syl requests read-only,
- *   so after the sheet it returns `.sharingDenied` for all seven types whatever he
+ *   so after the sheet it returns `.sharingDenied` for every type whatever he
  *   granted. It is the attractive wrong answer.
  * - `statusForAuthorizationRequest(toShare:read:)` reliably proves
  *   **`notDetermined`** — it answers "would iOS still show a prompt?".
@@ -96,7 +129,7 @@ export function isHealthType(value: unknown): value is HealthType {
  * than assuming it** (`syl-m3gi`). The obvious example — "no watch means no
  * HRV" — is NOT detectable per type: `HKHealthStore.isHealthDataAvailable()`
  * answers device-wide only. So the phone emits `unavailable` for exactly two
- * facts, both uniform across all seven types: HealthKit is absent from the
+ * facts, both uniform across every type: HealthKit is absent from the
  * device, or the SDK no longer knows the identifier. A phone with no watch
  * reports HRV as `undisclosed`, which is correct — it is genuinely
  * indistinguishable from a type he declined. No detector was invented to make
@@ -149,7 +182,35 @@ export interface HealthSampleInput {
   readonly source: string;
 }
 
-/** The unit each type's `value` is in. Fixed, so no sample carries its own. */
+/**
+ * The unit each type's `value` is in. Fixed, so no sample carries its own.
+ *
+ * **Every string here is the `unitString` of the `HKUnit` the phone converts
+ * through**, and `HealthReaderTests` compares the two directly. That is what
+ * stops the table drifting away from the conversion that feeds it — a drift
+ * here is a number that means something else with nothing to say so, and a
+ * resting heart rate in beats per *second* is 0.9, which is not obviously wrong
+ * to anything downstream.
+ *
+ * Two of the seven added by `syl-8ys9.1` were checked against a running
+ * simulator rather than written from the documentation, because both would have
+ * been wrong:
+ *
+ * - **`vo2Max` is `mL/min·kg`**, not `ml/kg/min` and not `ml/kg·min`. That is
+ *   what HealthKit itself calls the unit: every spelling of it — the composed
+ *   `mL / (kg · min)`, `HKUnit(from: "ml/kg*min")`, `HKUnit(from: "mL/kg*min")`
+ *   — normalises to that one string, so anything else here fails the comparison
+ *   on the first run against a device. The plan document said `ml/kg/min`.
+ * - **`bodyFatPercentage` is `%` meaning PERCENTAGE POINTS**, and HealthKit's
+ *   `%` means a fraction: an 18% reading comes back from `doubleValue(for:
+ *   .percent())` as `0.18`. The two units share a `unitString`, so the drift
+ *   comparison above passes while the number is wrong by a hundred. The phone
+ *   therefore scales this one type at the seam and pins the scale in its own
+ *   test — see `HealthType.wireScale` in `HealthReader.swift`. It is the only
+ *   type whose conversion is not the identity, and the only reason it is safe
+ *   is that it is written down in two places that are asserted against each
+ *   other.
+ */
 export const UNITS: Readonly<Record<HealthType, string>> = {
   heartRate: "count/min",
   restingHeartRate: "count/min",
@@ -158,6 +219,13 @@ export const UNITS: Readonly<Record<HealthType, string>> = {
   steps: "count",
   workout: "min",
   bodyMass: "lb",
+  activeEnergy: "kcal",
+  basalEnergy: "kcal",
+  bodyFatPercentage: "%",
+  vo2Max: "mL/min·kg",
+  height: "cm",
+  leanBodyMass: "lb",
+  respiratoryRate: "count/min",
 };
 
 /** One upload from the phone. */
@@ -218,8 +286,8 @@ export function sampleKey(sample: HealthSampleInput): string {
  * Every type is accounted for, or the upload is refused.
  *
  * Returns the types missing from a report. An empty array means the phone told us
- * about all seven, which is the only condition under which the server is entitled
- * to read "no samples" as "nothing happened".
+ * about all fourteen, which is the only condition under which the server is
+ * entitled to read "no samples" as "nothing happened".
  */
 export function unreportedTypes(
   authorisation: Partial<Record<HealthType, AuthorisationState>>,

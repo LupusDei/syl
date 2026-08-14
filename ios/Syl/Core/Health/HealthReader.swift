@@ -2,7 +2,8 @@ import Foundation
 import HealthKit
 import SylKit
 
-/// Reads the seven curated HealthKit types, and — the point of the whole file —
+/// Reads the fourteen HealthKit types the contract names, and — the point of the whole
+/// file —
 /// **reports what it was allowed to read alongside what it read.**
 ///
 /// `syl-t9tj.1.2`.
@@ -27,8 +28,8 @@ import SylKit
 /// Apple's part rather than an oversight we can work around:
 ///
 /// - `HKHealthStore.authorizationStatus(for:)` answers about *sharing* (writing). Syl
-///   asks for read only, so after the sheet it answers `.sharingDenied` for all seven
-///   types whatever the Commander actually granted. Reading it as a read status is the
+///   asks for read only, so after the sheet it answers `.sharingDenied` for every
+///   type whatever the Commander actually granted. Reading it as a read status is the
 ///   single most attractive wrong answer here, which is why it is named and rejected.
 /// - `statusForAuthorizationRequest(toShare:read:)` answers **"would iOS still present a
 ///   prompt for this?"** — nothing about the answer he gave. Asked one type at a time it
@@ -56,7 +57,7 @@ import SylKit
 /// check (a type that was dense and went quiet) is the only available signal. See
 /// ``HealthReadAuthorisation/undisclosed``.
 protocol HealthReading: Sendable {
-    /// Present the HealthKit sheet for all seven types, once. A no-op on a second call:
+    /// Present the HealthKit sheet for every type, once. A no-op on a second call:
     /// iOS shows nothing if it has already asked.
     func requestAuthorisation() async throws
 
@@ -259,6 +260,21 @@ extension HealthType {
         case .steps: return HKObjectType.quantityType(forIdentifier: .stepCount)
         case .workout: return HKObjectType.workoutType()
         case .bodyMass: return HKObjectType.quantityType(forIdentifier: .bodyMass)
+        // `syl-8ys9.1`. All seven are plain quantity samples — verified against a
+        // running simulator rather than assumed, because the epic's own list contains
+        // three things that are NOT samples (date of birth and sex are characteristics,
+        // blood pressure is a correlation) and forcing one of those into this shape
+        // would give it a fabricated `startedAt` and a baseline computed from one row.
+        // These seven are not those. Energies are cumulative, the rest discrete; every
+        // one of them resolves.
+        case .activeEnergy: return HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)
+        case .basalEnergy: return HKObjectType.quantityType(forIdentifier: .basalEnergyBurned)
+        case .bodyFatPercentage:
+            return HKObjectType.quantityType(forIdentifier: .bodyFatPercentage)
+        case .vo2Max: return HKObjectType.quantityType(forIdentifier: .vo2Max)
+        case .height: return HKObjectType.quantityType(forIdentifier: .height)
+        case .leanBodyMass: return HKObjectType.quantityType(forIdentifier: .leanBodyMass)
+        case .respiratoryRate: return HKObjectType.quantityType(forIdentifier: .respiratoryRate)
         }
     }
 
@@ -273,7 +289,7 @@ extension HealthType {
     /// from seconds through this same unit so the table stays the single statement of it.
     var healthKitUnit: HKUnit {
         switch self {
-        case .heartRate, .restingHeartRate:
+        case .heartRate, .restingHeartRate, .respiratoryRate:
             return HKUnit.count().unitDivided(by: .minute())
         case .heartRateVariability:
             return HKUnit.secondUnit(with: .milli)
@@ -281,9 +297,65 @@ extension HealthType {
             return .minute()
         case .steps:
             return .count()
-        case .bodyMass:
+        case .bodyMass, .leanBodyMass:
             return .pound()
+        case .activeEnergy, .basalEnergy:
+            return .kilocalorie()
+        case .bodyFatPercentage:
+            // Reads as a FRACTION. See ``wireScale`` — this is the one type where the
+            // unit name and the conversion disagree.
+            return .percent()
+        case .vo2Max:
+            // `mL/min·kg` once HealthKit normalises it, which is what the contract's
+            // table says. Composed rather than parsed from a string: `HKUnit(from:)`
+            // raises an uncatchable ObjC exception on anything it cannot read, so a
+            // typo would be a crash on his phone rather than a compile error here.
+            return HKUnit.literUnit(with: .milli)
+                .unitDivided(by: HKUnit.gramUnit(with: .kilo).unitMultiplied(by: .minute()))
+        case .height:
+            return .meterUnit(with: .centi)
         }
+    }
+
+    /// How many of the contract's units one ``healthKitUnit`` is worth.
+    ///
+    /// **One for every type but one, and the exception is the reason this property
+    /// exists rather than being folded into the call site.**
+    ///
+    /// `HealthUnitTests` compares `healthKitUnit.unitString` against the contract's
+    /// `unit` for every type, and that comparison is the whole defence against a number
+    /// that means something else with nothing to say so. It compares unit *names*, so it
+    /// cannot see a factor of a hundred hiding behind two identical ones — which is
+    /// exactly what `bodyFatPercentage` is: HealthKit's `%` is a fraction (an 18%
+    /// reading comes back from `doubleValue(for: .percent())` as `0.18`) and the
+    /// contract's `%` is percentage points. Both spell themselves `%`. The drift test
+    /// passes and the wire carries `0.18 %`.
+    ///
+    /// Storing the fraction and calling the unit `%` was the alternative and it is worse
+    /// than wrong, it is *plausible*: `0.18` is a number a body fat percentage could
+    /// never be, but a chart normalises it away and a baseline over it is internally
+    /// consistent. Nothing downstream would ever notice.
+    ///
+    /// So the correction is here, at the seam, named, and pinned by its own test. It is
+    /// deliberately not a second unit table: a scale that could be set per type by
+    /// anyone is a second place for the two halves to disagree about what `54` means.
+    var wireScale: Double {
+        switch self {
+        case .bodyFatPercentage: return 100
+        case .heartRate, .restingHeartRate, .heartRateVariability, .sleep, .steps,
+            .workout, .bodyMass, .activeEnergy, .basalEnergy, .vo2Max, .height,
+            .leanBodyMass, .respiratoryRate:
+            // Spelled out rather than defaulted, so a type added later has to make this
+            // decision instead of inheriting one.
+            return 1
+        }
+    }
+
+    /// One HealthKit quantity as the wire wants it: the contract's unit, at the
+    /// contract's scale. The single statement of the conversion, so no read path can
+    /// call `doubleValue(for:)` and quietly skip ``wireScale``.
+    func wireValue(of quantity: HKQuantity) -> Double {
+        quantity.doubleValue(for: healthKitUnit) * wireScale
     }
 }
 
@@ -488,9 +560,14 @@ final class HealthReader: HealthReading, @unchecked Sendable {
                 )
             }
 
-        case .heartRate, .restingHeartRate, .heartRateVariability, .steps, .bodyMass:
+        // Every remaining type is a plain quantity sample and they are read identically.
+        // Listed rather than defaulted, so a type added later has to state which shape
+        // HealthKit stores it in instead of silently falling into this branch — sleep is
+        // a category and workout is neither, and both would read as empty forever.
+        case .heartRate, .restingHeartRate, .heartRateVariability, .steps, .bodyMass,
+            .activeEnergy, .basalEnergy, .bodyFatPercentage, .vo2Max, .height,
+            .leanBodyMass, .respiratoryRate:
             guard let quantityType = type.healthKitObjectType as? HKQuantityType else { return [] }
-            let unit = type.healthKitUnit
             let descriptor = HKSampleQueryDescriptor(
                 predicates: [.quantitySample(type: quantityType, predicate: predicate)],
                 sortDescriptors: [SortDescriptor(\.startDate, order: .forward)],
@@ -501,7 +578,9 @@ final class HealthReader: HealthReading, @unchecked Sendable {
                     type: type,
                     startedAt: sample.startDate,
                     endedAt: sample.endDate,
-                    value: sample.quantity.doubleValue(for: unit),
+                    // Through `wireValue`, never `doubleValue(for:)` directly: body fat
+                    // needs a scale the unit name cannot express.
+                    value: type.wireValue(of: sample.quantity),
                     source: sample.sourceRevision.source.name
                 )
             }

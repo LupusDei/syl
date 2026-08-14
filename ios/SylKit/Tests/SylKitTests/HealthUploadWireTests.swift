@@ -80,19 +80,31 @@ final class HealthUploadWireTests: XCTestCase {
         XCTAssertNil(decoded.watermarks[.sleep], "partial, so an absent type stays absent")
     }
 
-    // MARK: - The seven types
+    // MARK: - The fourteen types
 
-    func testShouldCarryExactlyTheSevenTypesTheContractPins() {
+    func testShouldCarryExactlyTheFourteenTypesTheContractPinsInItsOrder() {
+        // Copied character for character from HEALTH_TYPES in
+        // backend/src/health/contract.ts, INCLUDING THE ORDER. Both halves matter and
+        // they fail differently: a spelling this client gets wrong is a 400 on a phone
+        // nobody is looking at, and when these two drifted before the phone reported
+        // `denied` for three types that were merely quiet. An ORDER this client gets
+        // wrong is quieter still — `derive.ts` reports its series in this sequence and
+        // the admin renders in it, so a case inserted in the middle relabels every panel
+        // on the page against data that did not move.
         XCTAssertEqual(
             HealthType.allCases.map(\.rawValue),
             [
                 "heartRate", "restingHeartRate", "heartRateVariability",
                 "sleep", "steps", "workout", "bodyMass",
+                "activeEnergy", "basalEnergy", "bodyFatPercentage",
+                "vo2Max", "height", "leanBodyMass", "respiratoryRate",
             ]
         )
     }
 
     func testShouldFixOneUnitPerTypeMatchingTheContractsUnitTable() {
+        // Every entry of UNITS in backend/src/health/contract.ts, spelled out rather than
+        // looped, because the thing being guarded IS the spelling.
         XCTAssertEqual(HealthType.heartRate.unit, "count/min")
         XCTAssertEqual(HealthType.restingHeartRate.unit, "count/min")
         XCTAssertEqual(HealthType.heartRateVariability.unit, "ms")
@@ -100,6 +112,24 @@ final class HealthUploadWireTests: XCTestCase {
         XCTAssertEqual(HealthType.steps.unit, "count")
         XCTAssertEqual(HealthType.workout.unit, "min")
         XCTAssertEqual(HealthType.bodyMass.unit, "lb")
+        XCTAssertEqual(HealthType.activeEnergy.unit, "kcal")
+        XCTAssertEqual(HealthType.basalEnergy.unit, "kcal")
+        XCTAssertEqual(HealthType.bodyFatPercentage.unit, "%")
+        // HealthKit's own unitString, checked against a running simulator. NOT
+        // `ml/kg/min` and not `ml/kg·min`; every spelling normalises to this one.
+        XCTAssertEqual(HealthType.vo2Max.unit, "mL/min·kg")
+        XCTAssertEqual(HealthType.height.unit, "cm")
+        XCTAssertEqual(HealthType.leanBodyMass.unit, "lb")
+        XCTAssertEqual(HealthType.respiratoryRate.unit, "count/min")
+    }
+
+    func testShouldGiveEveryTypeAUnitAndNeverAnEmptyOne() {
+        // The property behind the fourteen assertions above, so a case added later
+        // without a unit fails here rather than uploading a bare number. `unit` is
+        // exhaustive by the compiler; this catches the other way of getting it wrong.
+        for type in HealthType.allCases {
+            XCTAssertFalse(type.unit.isEmpty, "\(type.rawValue) has no unit")
+        }
     }
 
     func testShouldSpellTheFiveAuthorisationStatesTheContractsWay() {
@@ -129,13 +159,18 @@ final class HealthUploadWireTests: XCTestCase {
     }
 
     func testShouldDecodeTheTwoStatesTheContractGainedAfterThisClientShipped() throws {
+        // All fourteen, spelled out. A report that omits one is refused by the server,
+        // so a fixture that omits one is a fixture the server would never see.
         let wire = """
             {
               "authorisation": {
                 "heartRate": "authorised", "restingHeartRate": "undisclosed",
                 "heartRateVariability": "unavailable", "sleep": "denied",
                 "steps": "notDetermined", "workout": "undisclosed",
-                "bodyMass": "undisclosed"
+                "bodyMass": "undisclosed", "activeEnergy": "authorised",
+                "basalEnergy": "authorised", "bodyFatPercentage": "undisclosed",
+                "vo2Max": "authorised", "height": "undisclosed",
+                "leanBodyMass": "undisclosed", "respiratoryRate": "authorised"
               },
               "samples": []
             }

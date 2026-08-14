@@ -56,7 +56,11 @@
 
 import type { Tone } from "../../ui/Badge";
 
-/** The seven types read at the start. Mirrors `backend/src/health/contract.ts`. */
+/**
+ * The fourteen types. Mirrors `backend/src/health/contract.ts`, **in its order**
+ * — the panels render in this sequence, so a type inserted in the middle here
+ * silently reorders the page against the wire.
+ */
 export const HEALTH_TYPES = [
   "heartRate",
   "restingHeartRate",
@@ -65,6 +69,13 @@ export const HEALTH_TYPES = [
   "steps",
   "workout",
   "bodyMass",
+  "activeEnergy",
+  "basalEnergy",
+  "bodyFatPercentage",
+  "vo2Max",
+  "height",
+  "leanBodyMass",
+  "respiratoryRate",
 ] as const;
 
 export type HealthType = (typeof HEALTH_TYPES)[number];
@@ -73,7 +84,15 @@ export function isHealthType(value: unknown): value is HealthType {
   return typeof value === "string" && (HEALTH_TYPES as readonly string[]).includes(value);
 }
 
-/** What each type is called on a screen a human reads. */
+/**
+ * What each type is called on a screen a human reads.
+ *
+ * **Apple Health's wording, not HealthKit's identifier**, wherever the two
+ * differ — he is reading this beside the phone that produced the numbers, and a
+ * row called "Basal energy" next to a Health app that says "Resting Energy" is
+ * two names for one thing on the one screen where they have to be compared.
+ * `vo2Max` is "Cardio fitness" for the same reason.
+ */
 export const TYPE_LABELS: Readonly<Record<HealthType, string>> = {
   heartRate: "Heart rate",
   restingHeartRate: "Resting heart rate",
@@ -82,6 +101,13 @@ export const TYPE_LABELS: Readonly<Record<HealthType, string>> = {
   steps: "Steps",
   workout: "Workouts",
   bodyMass: "Body mass",
+  activeEnergy: "Active energy",
+  basalEnergy: "Resting energy",
+  bodyFatPercentage: "Body fat",
+  vo2Max: "Cardio fitness",
+  height: "Height",
+  leanBodyMass: "Lean body mass",
+  respiratoryRate: "Respiratory rate",
 };
 
 /** The five states the phone can report. */

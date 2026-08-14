@@ -152,7 +152,7 @@ final class HealthReaderTests: XCTestCase {
 
     // MARK: - The report is complete or it is nothing
 
-    func testShouldReportEverySevenTypesEvenWhenTheReadSaidNothingAboutThem() {
+    func testShouldReportEveryTypeEvenWhenTheReadSaidNothingAboutThem() {
         // The server refuses an upload that omits a type, and it is right to: the default
         // would have to be a guess about permission. A page that somehow lost a type
         // reports the conservative state rather than dropping the key.
@@ -181,13 +181,83 @@ final class HealthReaderTests: XCTestCase {
         }
     }
 
-    func testShouldResolveEverySevenTypesToAHealthKitObject() {
+    func testShouldDeclareAUnitHealthKitWillActuallyConvertEachTypeThrough() {
+        // The hole the comparison above cannot see. That one asks "does the contract name
+        // the same unit we convert through" — both sides of it are our own strings, so a
+        // pound declared for `respiratoryRate` satisfies it perfectly and then throws at
+        // `doubleValue(for:)` on his phone, at the one moment nobody is watching. This
+        // asks HEALTHKIT whether the pairing is legal.
+        for type in HealthType.allCases where type != .sleep && type != .workout {
+            guard let quantityType = type.healthKitObjectType as? HKQuantityType else {
+                continue
+            }
+            XCTAssertTrue(
+                quantityType.is(compatibleWith: type.healthKitUnit),
+                "\(type.rawValue) cannot be read in \(type.healthKitUnit.unitString)"
+            )
+        }
+    }
+
+    func testShouldResolveEveryTypeToAHealthKitObject() {
         for type in HealthType.allCases {
             XCTAssertNotNil(
                 type.healthKitObjectType,
                 "\(type.rawValue) has no HealthKit type, so it would read as empty forever"
             )
         }
+    }
+
+    func testShouldReadEveryTypeThatIsNotSleepOrWorkoutAsAPlainQuantityType() {
+        // `syl-8ys9.1` added seven types on the assumption that all seven are plain
+        // quantity samples. They are — but the epic's own list contains three things
+        // that are NOT (date of birth and sex are characteristics; blood pressure is a
+        // correlation of two values), so the assumption is worth asserting rather than
+        // remembering. A characteristic forced into this shape gets a fabricated
+        // `startedAt` and a baseline computed from one row.
+        for type in HealthType.allCases where type != .sleep && type != .workout {
+            XCTAssertTrue(
+                type.healthKitObjectType is HKQuantityType,
+                "\(type.rawValue) is not a quantity sample and cannot be read as one"
+            )
+        }
+    }
+
+    // MARK: - The one conversion that is not the identity
+
+    func testShouldScaleNothingButBodyFatWhereTheUnitNameHidesAFactorOfAHundred() {
+        // The gap the unit comparison above cannot see. HealthKit's `%` is a FRACTION
+        // and the contract's `%` is percentage points; both spell themselves `%`, so
+        // `unitString == unit` passes while the wire carries `0.18 %` for an eighteen
+        // percent reading. That number is not obviously wrong to anything downstream —
+        // a chart normalises it away and a baseline over it is internally consistent.
+        for type in HealthType.allCases where type != .bodyFatPercentage {
+            XCTAssertEqual(type.wireScale, 1, "\(type.rawValue) must convert as itself")
+        }
+
+        XCTAssertEqual(HealthType.bodyFatPercentage.wireScale, 100)
+    }
+
+    func testShouldPutEighteenPercentBodyFatOnTheWireAsEighteenAndNotAsPointOneEight() {
+        // The same statement measured through the real conversion rather than through
+        // the constant, because the constant is only correct if `wireValue` applies it.
+        let eighteenPercent = HKQuantity(unit: .percent(), doubleValue: 0.18)
+
+        XCTAssertEqual(HealthType.bodyFatPercentage.wireValue(of: eighteenPercent), 18, accuracy: 1e-9)
+    }
+
+    func testShouldConvertAQuantityThroughTheContractsUnitForEveryOtherType() {
+        // Two of the seven new types whose HKUnit was read off a running simulator
+        // rather than copied from documentation. A pound is not a kilogram and
+        // `mL/min·kg` is not `ml/kg/min`; both would have been silently wrong numbers.
+        let seventyKilos = HKQuantity(unit: .gramUnit(with: .kilo), doubleValue: 70)
+        XCTAssertEqual(
+            HealthType.leanBodyMass.wireValue(of: seventyKilos),
+            154.3235835,
+            accuracy: 1e-4
+        )
+
+        let twoMetres = HKQuantity(unit: .meter(), doubleValue: 1.8)
+        XCTAssertEqual(HealthType.height.wireValue(of: twoMetres), 180, accuracy: 1e-9)
     }
 
     // MARK: - Where a read starts

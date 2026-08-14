@@ -61,7 +61,7 @@ final class HealthUploader: Sendable {
         self.batchLimit = batchLimit
     }
 
-    /// Ask for the seven types, once. Safe to call on every foreground: iOS presents
+    /// Ask for every type, once. Safe to call on every foreground: iOS presents
     /// nothing if it has already asked.
     func requestAuthorisation() async throws {
         try await reader.requestAuthorisation()
