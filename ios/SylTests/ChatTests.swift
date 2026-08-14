@@ -535,6 +535,88 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, 3)
     }
 
+    // MARK: - The window is one page, and it stays one page (syl-025.1.1)
+    //
+    // Every fixture above this line is SHORTER than the window, which is exactly the
+    // condition under which the defect these tests describe does not exist. That is why
+    // nothing caught it. The rule from `docs/CONTEXT.md` — *any query with a `LIMIT`
+    // needs a test where the limit actually bites* — is the whole reason the seed here
+    // is 2,000 and the assertions are counted against one page rather than against
+    // "did we get everything".
+
+    /// The page the Commander asked for, and the server's own default.
+    ///
+    /// Written as a literal on purpose: this is the requirement (FR-002), not a
+    /// restatement of whatever the code happens to hold. `ChatPagingTests` is where the
+    /// production constant is pinned to it.
+    private static let page = 50
+
+    @MainActor
+    func testShouldLoadOnlyOnePageWhenTheConversationIsLong() async throws {
+        try store.upsert(longConversation())
+        // No limit passed — the window the phone itself opens with.
+        let model = makeModel()
+
+        await model.refresh()
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page,
+            """
+            First paint read \(model.snapshot.groups.flatMap(\.messages).count) messages \
+            of 2,000. It must read exactly one page: every one of them is sized on every \
+            body pass, and the body re-runs on each keystroke.
+            """
+        )
+        XCTAssertTrue(
+            model.snapshot.mayHaveEarlier,
+            "1,950 messages are still behind the window, and the way back must be offered"
+        )
+    }
+
+    @MainActor
+    func testShouldNotWidenTheWindowWithoutBeingAsked() async throws {
+        // The defect, stated as a property. `loadEarlier()` was driven from an
+        // `onAppear` on a row inside the `LazyVStack`, and every widening reassigned the
+        // snapshot, which rebuilt the subtree, which re-created that row, which fired
+        // `onAppear` again. The loop stopped only when the ENTIRE conversation was
+        // resident. No finger touched the screen.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+
+        // Everything the view does to the model when the transcript is rebuilt.
+        await model.refresh()
+        await model.apply(.message(message(id: id(2_001), seq: 2_001)))
+        await model.refresh()
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page,
+            "a rebuild is not a request for more history"
+        )
+    }
+
+    @MainActor
+    func testShouldNotWidenTheWindowTwiceForOneTrigger() async throws {
+        // A fast flick to the top used to queue several overlapping reads that each
+        // widened the window again, so one arrival cost four pages instead of one.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+
+        async let first: Void = model.loadEarlier()
+        async let second: Void = model.loadEarlier()
+        _ = await (first, second)
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page * 2,
+            "two overlapping triggers, one page of history"
+        )
+        XCTAssertFalse(model.isLoadingEarlier)
+    }
+
     // MARK: - The parse cache (T040)
 
     func testShouldParseAMessageOnceAndReuseIt() {
@@ -717,17 +799,32 @@ final class ChatViewModelTests: XCTestCase {
 
     // MARK: - Harness
 
+    /// - Parameter limit: `nil` builds the model **exactly as `AppDelegate` does**, with
+    ///   no window argument at all. That is the only shape in which a test can say
+    ///   anything about the page size the Commander's phone actually uses; a harness
+    ///   that always passes a limit can never disagree with the production default,
+    ///   which is how a 200 sat opposite the server's 50 unnoticed.
     @MainActor
     private func makeModel(
         sendOverSocket: @escaping @Sendable (String, String, String) async throws -> Void = { _, _, _ in },
         flush: @escaping @Sendable () async -> Void = {},
         makeClientId: @escaping @Sendable () -> String = { UUID().uuidString },
         now: @escaping @Sendable () -> Date = { try! Instant.parse("2026-08-09T06:59:48.220Z") },
-        limit: Int = 200
+        limit: Int? = nil
     ) -> ChatViewModel {
-        ChatViewModel(
+        if let limit {
+            return ChatViewModel(
+                store: store,
+                limit: limit,
+                sendOverSocket: sendOverSocket,
+                flush: flush,
+                now: now,
+                makeClientId: makeClientId,
+                makeIdempotencyKey: { UUID().uuidString }
+            )
+        }
+        return ChatViewModel(
             store: store,
-            limit: limit,
             sendOverSocket: sendOverSocket,
             flush: flush,
             now: now,
@@ -786,6 +883,16 @@ final class ChatViewModelTests: XCTestCase {
                 .addingTimeInterval(Double(seq) * (MessageGrouping.maximumGap + 1)),
             seq: seq
         )
+    }
+
+    /// A transcript far longer than any window that should ever be opened on it.
+    ///
+    /// Two thousand, because the assertion worth making is about the window and not
+    /// about the fixture: at 2,000 the count is wrong by a factor of forty if the read
+    /// is unbounded, and no page size anyone might reasonably choose can make an
+    /// unbounded read look bounded.
+    private func longConversation(_ count: Int = 2_000) -> [Message] {
+        (1...count).map { message(id: id($0), seq: $0) }
     }
 
     /// A distinct, well-formed message id for an index.
