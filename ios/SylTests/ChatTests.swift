@@ -658,6 +658,65 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertFalse(model.isLoadingEarlier)
     }
 
+    // MARK: - One arrival at the top, one page (syl-025.1.3)
+
+    @MainActor
+    func testShouldLoadOnlyOnePageHoweverOftenTheTopIsReported() async throws {
+        // The runaway, at the seam where it lived. Each widening reassigned the snapshot,
+        // which rebuilt the transcript subtree, which re-created the row at the top,
+        // which reported the top again — and `isLoadingEarlier` was already cleared by
+        // then. Five reports of the same arrival must still be one page.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+
+        for _ in 1...5 {
+            await model.reachedTheTopOfTheWindow()
+        }
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page * 2,
+            "one arrival at the top is one page, however many times the view says so"
+        )
+    }
+
+    @MainActor
+    func testShouldLoadAnotherPageOnceHeHasLeftTheTopAndComeBack() async throws {
+        // The other half, and the reason the latch is a latch rather than a one-shot:
+        // reaching back through a long history must not cost a tap per page after the
+        // first.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+
+        await model.reachedTheTopOfTheWindow()
+        model.leftTheTopOfTheWindow()
+        await model.reachedTheTopOfTheWindow()
+
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, Self.page * 3)
+    }
+
+    @MainActor
+    func testShouldAlwaysHonourATapEvenWhenTheAutomaticTriggerIsSpent() async throws {
+        // The control exists because an automatic trigger that misfires must never leave
+        // him with no way back. A latch that also swallowed his taps would take the
+        // fallback away exactly when it is needed.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+        await model.reachedTheTopOfTheWindow()
+
+        await model.loadEarlier()
+        await model.loadEarlier()
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page * 4,
+            "he asked twice, on top of the automatic page; he gets both"
+        )
+    }
+
     // MARK: - The parse cache (T040)
 
     func testShouldParseAMessageOnceAndReuseIt() {

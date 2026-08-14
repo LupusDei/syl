@@ -122,13 +122,26 @@ struct ChatView: View {
             }
 
             if model.snapshot.mayHaveEarlier {
-                // Automatic on reaching the top, with a visible control as the fallback
-                // — an `onAppear` that misfires would otherwise leave no way back at
-                // all, which is the state this replaces.
+                // **No `onAppear` here, and it is not an omission.**
+                //
+                // This row used to carry `.onAppear { loadEarlier() }`. Inside a
+                // `LazyVStack`, `onAppear` means "this view was instantiated", not
+                // "this view became visible" — it is true for rows nowhere near the
+                // screen whenever something forces the stack to size its whole content
+                // (`.defaultScrollAnchor(.bottom)` does exactly that), and it is true
+                // again on every subtree rebuild. Loading reassigns the snapshot, which
+                // rebuilds this subtree, which re-creates this row, which fired it
+                // again; `isLoadingEarlier` was cleared by `defer` long before the next
+                // appearance. The loop ended when the WHOLE CONVERSATION was resident.
+                //
+                // The trigger now belongs to the model, which is the only place a latch
+                // survives the rebuild the load itself causes
+                // (`reachedTheTopOfTheWindow()`). The scroll-proximity half is wired in
+                // `syl-025.3.2`; until then this control is the way back, and a control
+                // he taps is a correct state to ship.
                 EarlierMessages(isLoading: model.isLoadingEarlier) {
                     Task { await model.loadEarlier() }
                 }
-                .onAppear { Task { await model.loadEarlier() } }
             }
 
             ForEach(model.snapshot.rows) { row in

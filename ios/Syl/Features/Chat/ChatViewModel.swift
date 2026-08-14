@@ -60,6 +60,12 @@ final class ChatViewModel: ObservableObject {
     private let makeClientId: @Sendable () -> String
     private let makeIdempotencyKey: @Sendable () -> String
 
+    /// Whether the automatic trigger has already spent itself on this arrival at the top.
+    ///
+    /// Model state, not view state, and that is the entire point — see
+    /// ``reachedTheTopOfTheWindow()``.
+    private var automaticLoadIsSpent = false
+
     /// The presence ladder. Frames go in, a decayed state comes out.
     private var timeline = PresenceTimeline()
 
@@ -149,18 +155,64 @@ final class ChatViewModel: ObservableObject {
         self.snapshot = snapshot
     }
 
+    /// **He asked.** One tap, one page, every time.
+    ///
+    /// Deliberately unlatched. The automatic trigger below can misfire, and when it does
+    /// this control is the only way back — that is the stated reason it was built, and a
+    /// latch that also swallowed his second tap would take the fallback away exactly
+    /// when it is needed.
+    func loadEarlier() async {
+        await widenTheWindow()
+    }
+
+    /// The top of the window came into view. **At most one page per arrival.**
+    ///
+    /// ## The runaway this replaces
+    ///
+    /// `loadEarlier()` used to be driven from an `onAppear` on the `EarlierMessages` row
+    /// inside the `LazyVStack`. Widening reassigns the whole snapshot, which rebuilds
+    /// that subtree, which re-creates the row, which fires `onAppear` again — and
+    /// `defer` had already cleared `isLoadingEarlier` before the next appearance. The
+    /// loop terminated on `mayHaveEarlier == false`, which is to say **when the entire
+    /// conversation was resident in memory.** No finger touched the screen. The page
+    /// size was never a cap; it was a step size.
+    ///
+    /// `onAppear` inside a `LazyVStack` does not mean "became visible". It means "was
+    /// instantiated", which is true for rows nowhere near the screen whenever something
+    /// forces the stack to size its whole content, and true again on every subtree
+    /// rebuild. Neither is "he scrolled to the top", so anything using it as a scroll
+    /// trigger is wrong by construction.
+    ///
+    /// The latch lives **here, on the model**, and that placement is the fix. View state
+    /// is destroyed and recreated by the very rebuild the load causes, so a latch in the
+    /// view would be reset by the thing it exists to stop.
+    func reachedTheTopOfTheWindow() async {
+        guard !automaticLoadIsSpent else { return }
+        automaticLoadIsSpent = true
+        await widenTheWindow()
+    }
+
+    /// The top of the window is behind him again. Re-arms the automatic trigger.
+    ///
+    /// Without this the automatic load would fire once per session rather than once per
+    /// arrival, and reaching back through a long history would mean tapping for every
+    /// page after the first.
+    func leftTheTopOfTheWindow() {
+        automaticLoadIsSpent = false
+    }
+
     /// Widen the window and read again.
     ///
-    /// The transcript was hard-capped at 200 messages with no way to reach anything
-    /// older — a conversation that has run for a month simply had no beginning. This is
-    /// the whole of the fix: the window grows, the loader re-reads, and the markdown
-    /// cache keeps every message it has already parsed, so reaching further back costs
-    /// only the new page.
+    /// The transcript was hard-capped with no way to reach anything older — a
+    /// conversation that has run for a month simply had no beginning. The window grows,
+    /// the loader re-reads, and the markdown cache keeps every message it has already
+    /// parsed, so reaching further back costs only the new page.
     ///
-    /// Guarded on `isLoadingEarlier` because the affordance fires from an `onAppear`,
-    /// and a fast flick to the top would otherwise queue several overlapping reads that
-    /// each widen the window again.
-    func loadEarlier() async {
+    /// `isLoadingEarlier` makes this one-at-a-time rather than one-per-trigger: a fast
+    /// flick would otherwise start several overlapping reads that each widen again.
+    /// **It was never sufficient on its own** — it is cleared before the next appearance
+    /// of a row that re-fires — which is what the latch above is for.
+    private func widenTheWindow() async {
         guard snapshot.mayHaveEarlier, !isLoadingEarlier else { return }
 
         isLoadingEarlier = true
