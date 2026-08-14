@@ -2100,3 +2100,69 @@ place, and the place is the part nobody verifies.
 The correction cost one message because somebody checked. Uncaught, the next
 agent branches from `origin/main`, does not find the work, and rebuilds it —
 which is how the same feature gets written twice and the second one wins.
+
+### A cap chosen without a stopwatch, and the two seconds that were not in the database (2026-08-14)
+
+`how_has_he_been` took **8.675 seconds** on his real store — 61,030 samples,
+fourteen types — for a verb Syl calls *mid-conversation*. `SUMMARY_SERIES_LIMIT`
+had been set to 20,000 rows per type without anyone timing what honouring it
+cost, and the diagnosis everybody reached for followed from the number in the
+code: too many rows, so read fewer.
+
+**The rows were not the problem, and measuring said so in one line.** Against a
+corpus his size:
+
+    store.series()   77ms   for 36,485 rows
+    derive()       3,034ms
+      of which dayOf() alone   2,442ms
+
+`dayOf` constructs an `Intl.DateTimeFormat` — which resolves a locale and loads
+the zone's transition table — **once per sample**. Nothing at the call site
+suggests it costs anything; it reads as a formatting call. Caching the formatter
+per zone took the whole path from 3,255ms to ~150ms, and the database was never
+involved.
+
+The architectural fix (bucket the days in SQL, hand `derive()` ~37 rows per type
+instead of 20,000) is still right and still landed — it takes it to ~72ms and,
+more to the point, makes the cost scale with the **window** rather than with his
+history, so it does not come back in year three. But it is worth being exact
+about which half did what, because "we made it read fewer rows" would have been
+a true sentence attached to a false explanation, and the same `Intl` call sits
+on the nightly review's path too.
+
+**Two lessons, and the second is the one that generalises.** A load-bearing
+constant needs a stopwatch — that is the one the epic was written around. The
+other is that a profile disagreed with every plausible story about the code, and
+the profile was right: the cost was in a call that looks free, not in the one
+that looks expensive.
+
+### SQLite's `sum()` is not `+=`, and two doors into one derivation have to agree (2026-08-14)
+
+Moving the day bucketing into SQL created a second way to compute the same
+figures, and the hard part was never speed. A baseline that shifted when the
+read path changed would make Syl's conclusions change for reasons nothing
+recorded.
+
+They did not agree, and the reason is not one anybody would guess: **SQLite's
+`sum()` is Kahan-Babuska-Neumaier compensated summation** and a plain `+=` in
+JavaScript is not. Over 5,000 values of mixed magnitude:
+
+    sqlite  sum()   21716791915707.2929688
+    js      `+=`    21716791915707.2968750
+    js      KBN     21716791915707.2929688   <- identical to sqlite
+
+`derive.ts` now sums the same way, so the two doors are equal by construction
+rather than to a tolerance — a tolerance would have been a decision about how
+much silent drift is acceptable, and there is no such quantity.
+
+Three things had to be carried, not one, and each is a way the two could quietly
+stop agreeing: the summation above; `dailyStatOf`, so `total`-versus-`mean` is
+decided in exactly one function; and `percentileRank`, exported rather than
+restated in SQL, because the day's quiet floor is the one figure the summary
+uses that genuinely IS finer than a day.
+
+**The test that pins the summation had to be built to expose it.** KBN and naive
+agree on values of one magnitude, so 400 heart-rate readings between 48 and 120
+do *not* separate them — a test written against his real shape would have passed
+whichever summation was in place, and gone on passing after they diverged. The
+fixture mixes magnitudes on purpose and says so.

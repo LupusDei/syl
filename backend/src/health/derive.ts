@@ -86,6 +86,39 @@ import {
  * his own variability, and a run says how many days in a row it has been on one
  * side. Neither is ever compared against a constant here, and there is
  * deliberately no constant to compare them against.
+ *
+ *
+ * ## TWO WAYS IN, AND THEY MUST AGREE TO THE LAST BIT
+ *
+ * `syl-8ys9.2.1`. {@link DeriveInput} accepts either raw {@link Measurement}s,
+ * which this file buckets into days itself, or {@link DailyStat}s already
+ * bucketed by whoever read them — which is what `samples.ts`'s `daily()` does
+ * in SQL, and what makes the summary verb cost a number of DAYS rather than a
+ * number of SAMPLES. Measured on a corpus his size: 3,255ms against 62ms.
+ *
+ * **Nothing this file computes is finer than a day**, which is what makes the
+ * second door sound: every figure is a daily mean or total, a baseline over
+ * days, or a run of days. The one exception is {@link DailyStat.low}, the day's
+ * quiet floor, which IS a within-day percentile — so it is carried on the
+ * aggregate rather than recomputed, and `daily()` computes it with the same
+ * nearest rank ({@link percentileRank}) this file uses.
+ *
+ * The two doors are held together by three things and it is worth naming all
+ * three, because each of them is a way they could quietly stop agreeing:
+ *
+ * 1. **{@link dailyStatOf} is the only place a day's `figure` is decided.**
+ *    Both paths build their `DailyStat` through it, so `total` versus `mean`
+ *    cannot be answered differently on either side of the seam.
+ * 2. **Summation is compensated, because SQLite's is.** `sum()` in SQLite is
+ *    Kahan-Babuska-Neumaier and a naive `+=` in JavaScript is not; over a day
+ *    of 464 heart-rate readings the two disagree in the last bits, so a
+ *    baseline would shift depending on which door the data came through. See
+ *    {@link sum}.
+ * 3. **{@link percentileRank} is exported** rather than restated in SQL.
+ *
+ * A baseline that moved because the read path changed would make her
+ * conclusions change for reasons nothing recorded, which is worse than a slow
+ * verb.
  */
 
 // ---------------------------------------------------------------------------
@@ -112,8 +145,29 @@ export type Series = Readonly<Partial<Record<HealthType, readonly Measurement[]>
 /** What the phone last said about each type, if it has said anything. */
 export type Authorisation = Readonly<Partial<Record<HealthType, AuthorisationState>>>;
 
+/**
+ * Days already bucketed by whoever read them. The fast door.
+ *
+ * `syl-8ys9.2.1`. A type present here is NOT re-derived from {@link Series},
+ * and an empty array is a real answer — "this type has no days" — rather than a
+ * request to look in `series` instead. See {@link DeriveInput}.
+ */
+export type DailySeries = Readonly<Partial<Record<HealthType, readonly DailyStat[]>>>;
+
+/**
+ * Either raw measurements or days already reduced. Per type, and both are
+ * allowed in one call.
+ *
+ * A type appearing in `days` takes the aggregate path and its entry in `series`
+ * is ignored. That is not a fallback chain to be clever about: it is what lets
+ * the summary hand over fourteen SQL aggregates while the nightly review keeps
+ * handing over raw rows, through one function, with the arithmetic written once.
+ */
 export interface DeriveInput {
-  readonly series: Series;
+  /** Raw measurements, bucketed into his days here. */
+  readonly series?: Series;
+  /** Days already bucketed — by SQL, by a fixture, by anything. Wins over `series`. */
+  readonly days?: DailySeries;
   readonly authorisation?: Authorisation;
   /** The instant the review is being run at. An argument; this module has no clock. */
   readonly now: number;
@@ -309,6 +363,40 @@ export interface Derivations {
 const DAY_MS = 24 * 60 * 60_000;
 
 /**
+ * Formatters, kept, because CONSTRUCTING ONE COST 2.4 SECONDS PER SUMMARY.
+ *
+ * `syl-8ys9.2.3`. `dayOf` is called once per sample, and building an
+ * `Intl.DateTimeFormat` is expensive in a way nothing about the call site
+ * suggests: it resolves a locale and loads the zone's transition table every
+ * time. Measured against his corpus — 36,485 samples inside the window —
+ * `dayOf` alone accounted for **2,442ms of the 3,034ms** `derive()` took, and
+ * the store read it was blamed on was 77ms.
+ *
+ * The instance is immutable and depends only on the zone, so one per zone is
+ * the whole fix. A `Map` rather than a single slot because the review, the
+ * summary and the fold can all be in flight for different zones in principle,
+ * and a one-entry cache that thrashes is a cache that reads as working.
+ *
+ * The aggregate path in `samples.ts` means this is no longer on the summary's
+ * hot path at all — but it is still on the nightly review's, which reads raw
+ * rows on purpose, and this was a real defect independent of either.
+ */
+const DAY_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
+function dayFormatter(tz: string): Intl.DateTimeFormat {
+  const held = DAY_FORMATTERS.get(tz);
+  if (held !== undefined) return held;
+  const made = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  DAY_FORMATTERS.set(tz, made);
+  return made;
+}
+
+/**
  * The local calendar day an instant falls on.
  *
  * `en-CA` gives `YYYY-MM-DD` directly, which sorts and compares exactly as the
@@ -316,12 +404,7 @@ const DAY_MS = 24 * 60 * 60_000;
  * same reason, as `nightOf` in `memory/dream/log.ts`.
  */
 export function dayOf(epochMs: number, tz: string): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(epochMs));
+  return dayFormatter(tz).format(new Date(epochMs));
 }
 
 /** `YYYY-MM-DD` plus a whole number of days, by calendar rather than by clock. */
@@ -372,10 +455,42 @@ export function describeWindow(window: DerivationWindow): string {
 // Arithmetic
 // ---------------------------------------------------------------------------
 
-function mean(values: readonly number[]): number {
+/**
+ * Compensated summation — Kahan-Babuska-Neumaier — BECAUSE SQLITE'S `sum()` IS.
+ *
+ * `syl-8ys9.2.1`, and the one arithmetic difference that stops a day's figures
+ * being the same figures whichever door the data came through. A day's total
+ * can be computed here, over raw measurements, or by SQLite over the same rows
+ * (`samples.ts`'s `daily()`). SQLite's `sum()` carries a running compensation
+ * term; a plain `+=` in JavaScript does not. Over 5,000 values of mixed
+ * magnitude the two answers differ:
+ *
+ *     sqlite sum()  21716791915707.2929688
+ *     js  `+=`      21716791915707.2968750
+ *     js  KBN       21716791915707.2929688   <- identical to sqlite
+ *
+ * That is small, and it is exactly the size of difference that would make a
+ * baseline shift the day the read path changed — a conclusion of hers changing
+ * for a reason nothing recorded. Naming a tolerance instead would be choosing
+ * how much silent drift is acceptable, which is not a thing to choose.
+ *
+ * It is also strictly the more accurate answer, so this is not a compromise
+ * made to match a database. Matching it is the reason it was noticed.
+ */
+function sum(values: readonly number[]): number {
   let total = 0;
-  for (const value of values) total += value;
-  return total / values.length;
+  let compensation = 0;
+  for (const value of values) {
+    const next = total + value;
+    compensation +=
+      Math.abs(total) >= Math.abs(value) ? total - next + value : value - next + total;
+    total = next;
+  }
+  return total + compensation;
+}
+
+function mean(values: readonly number[]): number {
+  return sum(values) / values.length;
 }
 
 /**
@@ -391,21 +506,79 @@ function mean(values: readonly number[]): number {
 function standardDeviation(values: readonly number[]): number | null {
   if (values.length < 2) return null;
   const centre = mean(values);
-  let sum = 0;
-  for (const value of values) sum += (value - centre) ** 2;
-  return Math.sqrt(sum / (values.length - 1));
+  return Math.sqrt(sum(values.map((value) => (value - centre) ** 2)) / (values.length - 1));
+}
+
+/**
+ * WHICH reading of a day is its quiet floor — the 1-based nearest rank.
+ *
+ * Exported because `samples.ts` has to pick the same one out of SQL, and the
+ * only way two implementations of `ceil` on a float agree in every case is for
+ * there to be one implementation. The store reads the day's `count`, calls
+ * this, and asks SQLite for that row by `row_number()`.
+ *
+ * `Math.max(1, …)` rather than a floor of zero: a day with a single reading has
+ * that reading as its floor, and rank 0 does not exist.
+ */
+export function percentileRank(count: number, fraction: number = RESTING_PERCENTILE): number {
+  return Math.max(1, Math.ceil(fraction * count));
 }
 
 /** The nearest-rank percentile of a sorted-in-place copy. */
 function percentile(values: readonly number[], fraction: number): number {
   const sorted = [...values].sort((a, b) => a - b);
-  const rank = Math.max(1, Math.ceil(fraction * sorted.length));
-  return sorted[rank - 1] ?? sorted[0] ?? 0;
+  return sorted[percentileRank(sorted.length, fraction) - 1] ?? sorted[0] ?? 0;
 }
 
 // ---------------------------------------------------------------------------
 // Derivation
 // ---------------------------------------------------------------------------
+
+/**
+ * What a day's readings came to, before it is known how to READ them.
+ *
+ * The five facts a day's rows carry, in the form both doors can produce: this
+ * file counts and sums an array, `samples.ts` asks SQLite for `count`, `sum`,
+ * `min`, `max` and the {@link percentileRank} row. Split out so
+ * {@link dailyStatOf} can be the one place `total` versus `mean` is decided.
+ */
+export interface DailyTally {
+  /** `YYYY-MM-DD` in his zone. */
+  readonly day: string;
+  readonly count: number;
+  readonly total: number;
+  readonly min: number;
+  readonly max: number;
+  /** The {@link RESTING_PERCENTILE} percentile of the day. The quiet floor. */
+  readonly low: number;
+}
+
+/**
+ * THE ONE PLACE A DAY'S FIGURE IS DECIDED.
+ *
+ * `figure` is what every span, deviation and run is computed from, and reading
+ * a `total` type as a `mean` produces a number confidently wrong by three
+ * orders of magnitude. There are now two paths that build a `DailyStat` — this
+ * file from raw measurements, `samples.ts` from a SQL aggregate — and if each
+ * decided that for itself the summary and the nightly review could disagree
+ * about his step count without anything failing.
+ *
+ * `mean` is derived from `total` and `count` rather than taken from SQLite's
+ * `avg()`, for the same reason: one division, written once.
+ */
+export function dailyStatOf(tally: DailyTally, summary: DailySummary): DailyStat {
+  const average = tally.total / tally.count;
+  return {
+    day: tally.day,
+    count: tally.count,
+    figure: summary === "total" ? tally.total : average,
+    total: tally.total,
+    mean: average,
+    min: tally.min,
+    max: tally.max,
+    low: tally.low,
+  };
+}
 
 /** Bucket one type's measurements into local days, oldest first. */
 function dailyStats(
@@ -432,25 +605,25 @@ function dailyStats(
   const days: DailyStat[] = [];
   for (const day of [...buckets.keys()].sort()) {
     const values = buckets.get(day) ?? [];
-    let total = 0;
     let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
     for (const value of values) {
-      total += value;
       if (value < min) min = value;
       if (value > max) max = value;
     }
-    const average = total / values.length;
-    days.push({
-      day,
-      count: values.length,
-      figure: summary === "total" ? total : average,
-      total,
-      mean: average,
-      min,
-      max,
-      low: percentile(values, RESTING_PERCENTILE),
-    });
+    days.push(
+      dailyStatOf(
+        {
+          day,
+          count: values.length,
+          total: sum(values),
+          min,
+          max,
+          low: percentile(values, RESTING_PERCENTILE),
+        },
+        summary,
+      ),
+    );
   }
   return days;
 }
@@ -534,6 +707,63 @@ const EMPTY_SPAN = (from: string, to: string): Span => ({
   sd: null,
 });
 
+/** The four calendar edges a derivation is cut at. All `YYYY-MM-DD`, his zone. */
+export interface DerivationSpan {
+  /** The newest day looked at — his today. */
+  readonly today: string;
+  /** First day of "lately". */
+  readonly recentFrom: string;
+  /** Last day of the baseline, which is the day before {@link recentFrom}. */
+  readonly baselineTo: string;
+  /** Oldest day looked at. */
+  readonly baselineFrom: string;
+  readonly recentDays: number;
+  readonly baselineDays: number;
+}
+
+/**
+ * Which days a derivation will actually look at, WITHOUT deriving anything.
+ *
+ * Exported so a caller reading aggregates can ask the store for exactly the
+ * days `derive` is about to keep, rather than computing a lookback of its own
+ * and hoping the two line up. They did not: `summarise.ts` and `review.ts` each
+ * carried `recent + baseline + 2` with a comment explaining the two, and a
+ * window computed twice is a window that eventually disagrees — silently, in
+ * the direction that truncates a baseline.
+ */
+export function derivationSpan(
+  input: Pick<DeriveInput, "now" | "tz" | "recentDays" | "baselineDays">,
+): DerivationSpan {
+  const recentDays = input.recentDays ?? DEFAULT_RECENT_DAYS;
+  const baselineDays = input.baselineDays ?? DEFAULT_BASELINE_DAYS;
+  const today = dayOf(input.now, input.tz);
+  const recentFrom = shiftDay(today, -(recentDays - 1));
+  const baselineTo = shiftDay(recentFrom, -1);
+  return {
+    today,
+    recentFrom,
+    baselineTo,
+    baselineFrom: shiftDay(baselineTo, -(baselineDays - 1)),
+    recentDays,
+    baselineDays,
+  };
+}
+
+/**
+ * Keep only the days inside the window, oldest first.
+ *
+ * The caller's window is the authority for pre-bucketed days exactly as it is
+ * for raw ones: a store that answered with a day either side must not put a
+ * partial day at the edge of a baseline. Sorted rather than trusted, because
+ * `runOf` walks backwards expecting consecutive calendar days and would report
+ * a one-day run over a fortnight of data if the order were wrong.
+ */
+function bounded(days: readonly DailyStat[], from: string, to: string): DailyStat[] {
+  return days
+    .filter((day) => day.day >= from && day.day <= to)
+    .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+}
+
 /**
  * Everything one review turn gets to reason over.
  *
@@ -543,25 +773,17 @@ const EMPTY_SPAN = (from: string, to: string): Span => ({
  * without a database.
  */
 export function derive(input: DeriveInput): Derivations {
-  const recentDays = input.recentDays ?? DEFAULT_RECENT_DAYS;
-  const baselineDays = input.baselineDays ?? DEFAULT_BASELINE_DAYS;
-
-  const today = dayOf(input.now, input.tz);
-  const recentFrom = shiftDay(today, -(recentDays - 1));
-  const baselineTo = shiftDay(recentFrom, -1);
-  const baselineFrom = shiftDay(baselineTo, -(baselineDays - 1));
+  const { today, recentFrom, baselineTo, baselineFrom, recentDays, baselineDays } =
+    derivationSpan(input);
 
   const measuredDays = new Map<HealthType, DailyStat[]>();
   for (const type of HEALTH_TYPES) {
+    const aggregated = input.days?.[type];
     measuredDays.set(
       type,
-      dailyStats(
-        input.series[type] ?? [],
-        DAILY_SUMMARY[type],
-        input.tz,
-        baselineFrom,
-        today,
-      ),
+      aggregated === undefined
+        ? dailyStats(input.series?.[type] ?? [], DAILY_SUMMARY[type], input.tz, baselineFrom, today)
+        : bounded(aggregated, baselineFrom, today),
     );
   }
 

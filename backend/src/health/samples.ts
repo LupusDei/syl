@@ -1,3 +1,4 @@
+import { startOfLocalDay } from "../harness/schedule.js";
 import { instant, systemClock, type Clock } from "../services/clock.js";
 import type { Database } from "../services/sqlite.js";
 import {
@@ -8,6 +9,13 @@ import {
   type HealthSampleInput,
   type HealthType,
 } from "./contract.js";
+import {
+  DAILY_SUMMARY,
+  dailyStatOf,
+  percentileRank,
+  shiftDay,
+  type DailyStat,
+} from "./derive.js";
 
 /**
  * The observation store: measurements in, a series out, and a watermark per
@@ -108,6 +116,27 @@ export interface AppendOutcome {
   readonly watermarks: Watermarks;
 }
 
+/**
+ * Several types, reduced to HIS days, without any of them reaching JavaScript
+ * as rows.
+ *
+ * `syl-8ys9.2.1`. Many types in one call rather than one, because the local-day
+ * boundaries are the expensive part — `startOfLocalDay` resolves a zone per day
+ * — and fourteen types share exactly the same 37 of them.
+ */
+export interface DailyQuery {
+  readonly types: readonly HealthType[];
+  /** `YYYY-MM-DD` in `tz`, inclusive. The oldest day wanted. */
+  readonly from: string;
+  /** `YYYY-MM-DD` in `tz`, inclusive. The newest day wanted. */
+  readonly to: string;
+  /** IANA, never a fixed offset. Days are HIS days. Constraint 5. */
+  readonly tz: string;
+}
+
+/** Days with data, oldest first, per type. A type with none is absent. */
+export type DailyByType = Readonly<Partial<Record<HealthType, readonly DailyStat[]>>>;
+
 /** One type, over a window. */
 export interface SeriesQuery {
   readonly type: HealthType;
@@ -189,6 +218,48 @@ interface AuthorisationRow {
   readonly type: string;
   readonly state: string;
   readonly reported_at: string;
+}
+
+/** One of HIS days as a half-open range of instants. */
+interface DayBucket {
+  /** `YYYY-MM-DD`. */
+  readonly label: string;
+  /** Inclusive. Local midnight, as an instant. */
+  readonly opens: string;
+  /** Exclusive. The next local midnight — 23 or 25 hours later at a DST edge. */
+  readonly closes: string;
+}
+
+interface TallyRow {
+  readonly label: string;
+  readonly n: number;
+  readonly total: number;
+  readonly lowest: number;
+  readonly highest: number;
+}
+
+/**
+ * Every local day from `from` to `to` inclusive, as instant ranges.
+ *
+ * Each day's close is the next day's open, computed once and reused, so a
+ * range can never overlap its neighbour or leave a gap between them — which is
+ * how a sample near midnight would otherwise be counted twice or not at all.
+ *
+ * `startOfLocalDay` is the same function the downsample folds by, so a day is
+ * the same day to both jobs.
+ */
+function dayBuckets(from: string, to: string, tz: string): DayBucket[] {
+  const buckets: DayBucket[] = [];
+  let label = from;
+  let opens = instant(startOfLocalDay(label, tz).getTime());
+  while (label <= to) {
+    const next = shiftDay(label, 1);
+    const closes = instant(startOfLocalDay(next, tz).getTime());
+    buckets.push({ label, opens, closes });
+    label = next;
+    opens = closes;
+  }
+  return buckets;
 }
 
 const SAMPLE_COLUMNS = "type, started_at, ended_at, value, source, recorded_at";
@@ -456,6 +527,139 @@ export class HealthSamples {
       .all(...bindings);
 
     return rows.map((row) => toSample(row as unknown as SampleRow));
+  }
+
+  /**
+   * The same series, reduced to one row per local day, INSIDE SQLITE.
+   *
+   * `syl-8ys9.2.1`, and the whole of why `how_has_he_been` stopped taking nine
+   * seconds. Nothing the summary computes is finer than a day, so loading
+   * 36,485 rows to produce 111 of them was work done and thrown away — and it
+   * was work whose cost grows with his history rather than with the window,
+   * which is the part that does not come back.
+   *
+   *
+   * ## Days are HIS days, so the buckets are built in JavaScript and the
+   * ## arithmetic is done in SQL
+   *
+   * SQLite has no IANA zone table, so there is no expression that turns
+   * `started_at` into his calendar day. But there are only ~37 days in a
+   * derivation window, so their boundary instants are resolved here — once for
+   * every type, since they share them — and handed to the query as a CTE of
+   * half-open ranges. Each range is an index seek on
+   * `health_samples_series_idx (type, started_at)`.
+   *
+   * That also keeps the DST boundary honest for free: `startOfLocalDay` already
+   * knows how to resolve a local midnight that is ambiguous or does not exist,
+   * so a 23-hour day and a 25-hour day are ranges of the right length rather
+   * than a fixed offset applied to both.
+   *
+   *
+   * ## The quiet floor needs a second query, and that is not an oversight
+   *
+   * Everything except {@link DailyStat.low} is an ordinary aggregate.
+   * {@link RESTING_PERCENTILE} is a nearest-RANK percentile, so it needs the
+   * day's readings ordered — and which rank depends on the day's count, which
+   * only the first query knows. So the counts come back, {@link percentileRank}
+   * picks the rank for each day in JavaScript with exactly the arithmetic the
+   * raw path uses, and the second query asks for that row by `row_number()`.
+   *
+   * Computing the rank in SQL instead would mean a second implementation of
+   * `ceil` on a float agreeing with the first in every case, which is not a
+   * thing to rely on. Measured, the pair costs ~62ms against his corpus.
+   *
+   * A day whose rows exist only as a `syl:daily` aggregate — outside the 60-day
+   * retention window — needs no special case here and gets none: it is one row,
+   * so `count` is 1 and `min`, `max` and the floor are all that row's value.
+   * That is the same answer the raw path gives over the same table, which is
+   * what makes the two agree across the seam rather than only on one side of it.
+   */
+  daily(query: DailyQuery): DailyByType {
+    for (const type of query.types) {
+      if (!isHealthType(type)) {
+        throw new HealthSampleError(
+          "bad_type",
+          "types",
+          `${String(type)} is not a health type. Expected one of ${HEALTH_TYPES.join(", ")}.`,
+        );
+      }
+    }
+    if (query.types.length === 0 || query.to < query.from) return {};
+
+    const buckets = dayBuckets(query.from, query.to, query.tz);
+    if (buckets.length === 0) return {};
+
+    const tallies = this.#db.prepare(
+      `WITH day(label, opens, closes) AS (VALUES ${buckets.map(() => "(?,?,?)").join(",")})
+         SELECT day.label AS label,
+                count(*)        AS n,
+                sum(s.value)    AS total,
+                min(s.value)    AS lowest,
+                max(s.value)    AS highest
+           FROM day JOIN health_samples s
+             ON s.type = ? AND s.started_at >= day.opens AND s.started_at < day.closes
+          GROUP BY day.label
+          ORDER BY day.label`,
+    );
+    const bounds: (string | number)[] = [];
+    for (const bucket of buckets) bounds.push(bucket.label, bucket.opens, bucket.closes);
+
+    const out: Partial<Record<HealthType, readonly DailyStat[]>> = {};
+    for (const type of query.types) {
+      const rows = tallies.all(...bounds, type) as unknown as TallyRow[];
+      if (rows.length === 0) continue;
+
+      const floors = this.#floors(type, buckets, rows);
+      out[type] = rows.map((row) =>
+        dailyStatOf(
+          {
+            day: row.label,
+            count: Number(row.n),
+            total: row.total,
+            min: row.lowest,
+            max: row.highest,
+            // A day that answered a count must have a row at its rank. The
+            // fallback is the minimum, which is the rank-1 answer.
+            low: floors.get(row.label) ?? row.lowest,
+          },
+          DAILY_SUMMARY[type],
+        ),
+      );
+    }
+    return out;
+  }
+
+  /** The {@link RESTING_PERCENTILE} reading of each day, by nearest rank. */
+  #floors(
+    type: HealthType,
+    buckets: readonly DayBucket[],
+    rows: readonly TallyRow[],
+  ): Map<string, number> {
+    const opens = new Map(buckets.map((bucket) => [bucket.label, bucket]));
+    const wanted: (string | number)[] = [];
+    let days = 0;
+    for (const row of rows) {
+      const bucket = opens.get(row.label);
+      if (bucket === undefined) continue;
+      wanted.push(row.label, bucket.opens, bucket.closes, percentileRank(Number(row.n)));
+      days += 1;
+    }
+    if (days === 0) return new Map();
+
+    const found = this.#db
+      .prepare(
+        `WITH day(label, opens, closes, rank) AS (VALUES ${Array.from({ length: days }, () => "(?,?,?,?)").join(",")}),
+              ordered AS (
+                SELECT day.label AS label, s.value AS value, day.rank AS rank,
+                       row_number() OVER (PARTITION BY day.label ORDER BY s.value ASC) AS position
+                  FROM day JOIN health_samples s
+                    ON s.type = ? AND s.started_at >= day.opens AND s.started_at < day.closes
+              )
+         SELECT label, value FROM ordered WHERE position = rank`,
+      )
+      .all(...wanted, type) as unknown as { label: string; value: number }[];
+
+    return new Map(found.map((row) => [row.label, row.value]));
   }
 
   /** Where each type got to. A type with nothing held is absent, not empty-string. */
