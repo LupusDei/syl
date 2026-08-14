@@ -123,7 +123,10 @@ final class MarkdownCache: @unchecked Sendable {
 struct ChatSnapshotLoader: Sendable {
     let store: LocalStore
     let conversationId: SylID
-    var limit: Int = 200
+    /// The same page as `ChatViewModel`'s, from the same place. `LocalStore.messages`
+    /// keeps its own default for its other callers; this read always passes one
+    /// explicitly.
+    var limit: Int = ChatPaging.pageSize
     var markdown = MarkdownCache()
 
     func load() throws -> ChatSnapshot {

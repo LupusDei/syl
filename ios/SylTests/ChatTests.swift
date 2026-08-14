@@ -101,6 +101,47 @@ final class MessageGroupingTests: XCTestCase {
     }
 }
 
+/// One page, named once (`syl-025.1.2`).
+///
+/// Both assertions matter and they are different assertions. The first pins the constant
+/// to the requirement — 50 is what the Commander asked for and what the server gives you
+/// when you ask for nothing. The second drives the **loader's own default** through the
+/// real read path against a store far larger than the window, which is the only thing
+/// that can catch the loader drifting away from the view model again. They were two
+/// hand-written 200s, and no test could see the disagreement because neither had a name.
+final class ChatPagingTests: XCTestCase {
+    func testShouldReadFiftyAtATime() {
+        XCTAssertEqual(ChatPaging.pageSize, 50)
+    }
+
+    func testShouldOpenTheLoaderOnExactlyOnePageWhenNoLimitIsGiven() throws {
+        let database = try SylDatabase.inMemory()
+        let store = LocalStore(database: database)
+        let base = try Instant.parse("2026-08-09T07:00:03.114Z")
+        try store.upsert(
+            (1...500).map { seq in
+                Message(
+                    id: "syl:message:0198f2c0-0001-7000-8000-\(String(format: "%012d", seq))",
+                    conversationId: SylIDs.interactiveConversation,
+                    clientId: nil,
+                    role: .assistant,
+                    text: "Done.",
+                    createdAt: base.addingTimeInterval(Double(seq) * (MessageGrouping.maximumGap + 1)),
+                    seq: seq
+                )
+            }
+        )
+
+        let snapshot = try ChatSnapshotLoader(
+            store: store,
+            conversationId: SylIDs.interactiveConversation
+        ).load()
+
+        XCTAssertEqual(snapshot.groups.flatMap(\.messages).count, ChatPaging.pageSize)
+        XCTAssertTrue(snapshot.mayHaveEarlier)
+    }
+}
+
 /// The chat screen's state, driven against a real in-memory store.
 ///
 /// The class is not `@MainActor` — XCTest's `setUpWithError` and `tearDown` are

@@ -93,7 +93,10 @@ final class ChatViewModel: ObservableObject {
     init(
         store: LocalStore,
         conversationId: SylID = SylIDs.interactiveConversation,
-        limit: Int = 200,
+        /// One page. Named in `ChatPaging` rather than written here, because the last
+        /// time this number lived in two places they drifted apart by a factor of four
+        /// and no test could see it.
+        limit: Int = ChatPaging.pageSize,
         /// Sends over the live socket. Throws when it is not up, which is the cue to
         /// leave the intent in the outbox for the sync engine.
         sendOverSocket: @escaping @Sendable (String, String, String) async throws -> Void = { _, _, _ in
