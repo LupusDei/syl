@@ -2278,7 +2278,29 @@ group id can keep its identity while its *membership* changes, and caching on th
 without a membership key is a stale transcript, which is a worse bug than a slow one.
 Making them incremental means teaching `load()` a delta instead of handing it a window.
 
-#### Two gate lessons, both of which had already been learned here
+**And typing rebuilt the transcript.** Measured on the same iPhone 17 / iOS 26.2, a
+2,000-message transcript, nine keystrokes: **20 rows rebuilt per keystroke, now 0.**
+
+SwiftUI invalidates a view when **any** published property of an object it observes
+changes — not only the ones the view reads. `draft` was `@Published` on `ChatViewModel`,
+and `ChatView` observes that model for the transcript, the presence ribbon and the
+connection banner. So every character invalidated `ChatView.body` and the whole
+`LazyVStack` beneath it: twenty to thirty message rows rebuilt to discover that a letter
+had gone into a text field.
+
+The fix is a whole observable object for one string (`ChatDraft`), and it is structural
+rather than stylistic — the view model holds it as a plain `let`, and **reading a `let`
+creates no subscription**, so `ChatView` can hand it to the composer without ever hearing
+from it. `@State` inside `ChatComposer` was the smaller change and the worse one: the send
+path needs the text and lives on the view model, so the draft would have to be handed back
+through a closure per keystroke, and it would put the one piece of state a probe must
+drive somewhere no test can reach. The isolation is a property of the type graph, not of
+anyone remembering to be careful.
+
+`ChatView` still re-runs its body on a presence frame and on an arriving message. Those
+are about the transcript; a keystroke is not.
+
+#### Three gate lessons, all of which had already been learned here
 
 The `-scheme Syl` note three sections above — *every "the suite is green" in this session
 counted 795 of 1094 tests* — recurred twice on 2026-08-14 in two different subsystems.
@@ -2298,6 +2320,33 @@ two thirds of the suite had not run while that spec was being executed. Read the
 banners and the test counts, not the exit status — and when a run is green, ask what it
 counted.
 
+**The third is the general case of the other two, and it is the strongest lesson of the
+epic: which tree was under the instrument?** Three instances in one repository, and the
+last of them is the most instructive because of who made it.
+
+1. **2026-08-10.** Nine failures appeared in the sealed reader path — the
+   injection-containment tests among them — from one uncommitted line in a shared
+   checkout. Nothing was broken. It was nearly reported as a security regression.
+2. **2026-08-14, upstream.** *"three stale `height` assertions CI caught and my local
+   build did not"* — a local tree that compiled because it was not the tree CI had.
+3. **2026-08-14, this epic.** A reviewer refused to record the `20 → 0` result on the
+   grounds that the suite contradicted it, having run the suite on a branch cut at
+   `4abaea3` — which predates the commit that produced the result. The test was red
+   because the fix was absent, not because the claim was false. The reviewer then
+   compared against "the branch point" and got an identical number, which felt like
+   corroboration and was two measurements of the same missing fix.
+
+The reflex was right and is worth keeping: *do not write a number into the permanent
+record that the suite currently contradicts.* The error was one question short. **Ask
+whose suite, on which commit, before concluding a claim is unsupported** — a red test on a
+branch that lacks the fix is evidence about the branch, not about the claim. `git
+merge-base --is-ancestor <commit> HEAD` is the whole check, and it costs nothing.
+
+A scheme that runs 795 of 1094, a gate that dies in phase one, and a branch that lacks the
+fix are the same mistake wearing three faces: **confident measurement of the wrong
+thing.** Every green in this file is a claim about a specific tree, and the tree is the
+part nobody writes down.
+
 #### The habit that found all of it
 
 Every correction in this section came from the same move: **distrust your own green.**
@@ -2305,9 +2354,16 @@ The row census was written because a parse counter reported a cache working perf
 it rewrote two thousand entries around the avoided parse. The copy-on-write trap was found
 because a cache that gets cheaper with nothing else changing usually means the cost moved
 rather than left. The runaway was retired because someone hosted a real window and watched
-it for two seconds instead of reasoning from a comment. And the two remaining red tests in
-the app target were confirmed pre-existing by building a throwaway worktree at the branch
-point and reproducing the identical numbers, rather than by assuming.
+it for two seconds instead of reasoning from a comment.
 
-Three theories died tonight — the spec's, the reviewer's, and the intermediate one written
-into a bead. Every one of them was plausible, and every one was replaced by a number.
+**And the habit has a blind spot, which the same night also demonstrated.** The two red
+tests in the app target were checked by building a throwaway worktree at the branch point
+and reproducing the identical numbers rather than assuming — careful, and *wrong for one
+of them*, because both trees compared lacked the fix. Distrusting your own green does
+nothing if you never ask which tree produced it. Rigour applied to the wrong artefact is
+still confident and still wrong; it simply arrives with better evidence attached.
+
+Four theories died tonight — the spec's, the reviewer's, the intermediate one written into
+a bead, and the reviewer's second, that a result was unsupported when it was merely absent
+from his branch. Every one was plausible. Every one was replaced by a number, and the last
+one only after somebody asked *which tree did you measure?*
