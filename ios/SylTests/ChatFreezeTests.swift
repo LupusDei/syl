@@ -511,3 +511,88 @@ final class ChatFirstPaintPlacementTests: ChatHostedTranscriptCase {
         )
     }
 }
+
+/// Does the transcript widen its own window when nobody touches it? (`syl-025.1.3`)
+///
+/// **This is the seam that did not exist**, and its absence was the honest caveat on the
+/// whole of Phase 1: every other test of the runaway drives model methods by hand, in an
+/// order a real rebuild does not follow, so none of them can catch the defect coming back.
+/// The defect lives in the SwiftUI lifecycle, and only a hosted view has one.
+///
+/// It asserts the property directly — a transcript that is presented and then left alone
+/// holds the window it opened with — rather than any theory about why a row's `onAppear`
+/// fires. That matters, because the theory has now been wrong twice: it is not "was
+/// instantiated" (a rebuild), it is realised-or-derealised, which is **geometry**. Which
+/// makes position in the stack the discriminator: `EarlierMessages` sits directly above
+/// where older messages are inserted, so every load moves it relative to the viewport,
+/// while the foot sentinel is the last element and nothing is ever inserted below it. Same
+/// two lines of code, opposite verdicts.
+///
+/// A property this test asserts survives being wrong about all of that.
+///
+/// **Measured during the wait, not after it.** A settle loop that samples only at the end
+/// smooths away a load that fired, widened, and completed — which is the most likely
+/// surviving form of the bug and precisely what the assertion needs to see.
+final class ChatUnattendedGrowthTests: ChatHostedTranscriptCase {
+    func testShouldHoldTheWindowItOpenedWithWhenNobodyTouchesTheScreen() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+
+        // Two seconds of nothing happening, watched throughout.
+        var widest = model.snapshot.groups.flatMap(\.messages).count
+        for _ in 0..<100 {
+            try? await Task.sleep(for: .milliseconds(20))
+            window.layoutIfNeeded()
+            widest = max(widest, model.snapshot.groups.flatMap(\.messages).count)
+        }
+
+        print("SYL_UNATTENDED widest window over 2s of idle: \(widest) messages")
+        XCTAssertEqual(
+            widest,
+            ChatPaging.pageSize,
+            """
+            The transcript grew to \(widest) messages with nobody touching the screen. \
+            A load reassigns the snapshot, which rebuilds the stack, which moves the \
+            "earlier" row relative to the viewport, which loads again — and it stops only \
+            when the entire conversation is resident.
+            """
+        )
+    }
+
+    /// The scenario the first-paint test cannot reach: he actually goes to the top.
+    ///
+    /// At first paint the "earlier" row is nowhere near the viewport and is never realised,
+    /// so nothing fires. The question the epic turns on is what happens once it IS realised
+    /// — one load per arrival, or a load that re-fires itself on the rebuild it caused.
+    func testShouldLoadOneWindowWorthWhenHeReachesTheTopAndWaits() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window)
+
+        let scroll = try XCTUnwrap(transcriptScrollView(in: window))
+
+        // Two seconds parked at the top of the loaded range, watched throughout. Each
+        // pass re-pins to the top, because a load that inserts above would otherwise
+        // carry him away from it and end the scenario early.
+        var widest = model.snapshot.groups.flatMap(\.messages).count
+        for _ in 0..<100 {
+            scroll.setContentOffset(CGPoint(x: 0, y: 0), animated: false)
+            try? await Task.sleep(for: .milliseconds(20))
+            window.layoutIfNeeded()
+            widest = max(widest, model.snapshot.groups.flatMap(\.messages).count)
+        }
+
+        print("SYL_AT_TOP widest window after 2s parked at the top: \(widest) messages")
+        XCTAssertLessThanOrEqual(
+            widest,
+            ChatPaging.pageSize * 2,
+            """
+            Parked at the top, the window reached \(widest) messages. One arrival at the \
+            top is one page. Anything more is a load that re-triggered itself on the \
+            rebuild it caused, and it stops only when the whole conversation is resident.
+            """
+        )
+    }
+}
