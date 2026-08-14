@@ -34,6 +34,23 @@ struct ChatView: View {
     /// as a blank frame exactly as its comment predicts.
     var scrolls: Bool = true
 
+    /// Restores the pre-`syl-025.1.3` trigger. **Reproduction apparatus, not a feature.**
+    ///
+    /// This epic removed an `.onAppear { loadEarlier() }` from the `EarlierMessages` row
+    /// on the strength of a diagnosis — a load that re-fires on the rebuild it caused,
+    /// walking the window to the whole conversation — and that diagnosis turned out to be
+    /// **wrong**. The experiment that showed it was wrong was a local edit that no longer
+    /// existed ten minutes later, which left the measurement that reversed the epic's
+    /// stated cause resting on an apparatus nobody else could run.
+    ///
+    /// `CLAUDE.md` asks for a version stamp *and* a re-run on any load-bearing
+    /// measurement against someone else's binary. A re-run needs the apparatus to still be
+    /// here, so here it is: set it and you get the exact pre-fix shape back.
+    ///
+    /// Defaults to false, and `testShouldNeverShipWithTheLegacyTriggerOn` fails if that
+    /// ever changes — the flag is only safe while nothing can flip it quietly.
+    var reproducesTheLegacyTopTrigger = false
+
     /// The id of the sentinel at the foot of the transcript.
     private static let footAnchor = "transcript-foot"
 
@@ -133,24 +150,38 @@ struct ChatView: View {
             }
 
             if model.snapshot.mayHaveEarlier {
-                // **No `onAppear` here, and it is not an omission.**
+                // **No live `onAppear` here — and the reason is not the one this comment
+                // used to give.**
                 //
-                // This row used to carry `.onAppear { loadEarlier() }`. Inside a
-                // `LazyVStack`, `onAppear` means "this view was instantiated", not
-                // "this view became visible" — it is true for rows nowhere near the
-                // screen whenever something forces the stack to size its whole content
-                // (`.defaultScrollAnchor(.bottom)` does exactly that), and it is true
-                // again on every subtree rebuild. Loading reassigns the snapshot, which
-                // rebuilds this subtree, which re-creates this row, which fired it
-                // again; `isLoadingEarlier` was cleared by `defer` long before the next
-                // appearance. The loop ended when the WHOLE CONVERSATION was resident.
+                // It said `onAppear` in a `LazyVStack` means "was instantiated" rather
+                // than "became visible", so a subtree rebuild re-fires it, so the load
+                // re-triggered itself until the whole conversation was resident. That
+                // was measured and it is **false** (`syl-025.1.3`, iOS 26.2, 2026-08-14).
+                // Restoring the old trigger and parking the view at the top for two
+                // seconds loads exactly one page and stops.
                 //
-                // The trigger now belongs to the model, which is the only place a latch
-                // survives the rebuild the load itself causes
-                // (`reachedTheTopOfTheWindow()`). The scroll-proximity half is wired in
-                // `syl-025.3.2`; until then this control is the way back, and a control
-                // he taps is a correct state to ship.
+                // **`onAppear` is realisation, and realisation is geometry.** A rebuild
+                // that keeps a view's identity updates it rather than recreating it, so
+                // it does not re-fire. This row keeps its identity across a widen —
+                // `mayHaveEarlier` stays true throughout — and it stays the first element
+                // at offset zero, because older messages insert *below* it. It never
+                // derealises, so it never fires twice.
+                //
+                // It is gone anyway, because it is the **wrong signal**: it answers "is
+                // this row realised", and the built region extends well past the viewport,
+                // so that is not "he scrolled to the top". The real trigger is scroll
+                // geometry, below, and the latch it needs lives on the model — the only
+                // place that survives the rebuild the load itself causes.
+                //
+                // The tap stays, unlatched, because an automatic trigger that misfires
+                // must never leave him with no way back.
                 EarlierMessages(isLoading: model.isLoadingEarlier) {
+                    Task { await model.loadEarlier() }
+                }
+                .onAppear {
+                    // Inert. See `reproducesTheLegacyTopTrigger` — this exists so the
+                    // measurement above can be re-run by someone who was not in the room.
+                    guard reproducesTheLegacyTopTrigger else { return }
                     Task { await model.loadEarlier() }
                 }
             }
@@ -193,6 +224,18 @@ struct ChatView: View {
             // A zero-height sentinel. Its visibility *is* the answer to "is he at the
             // bottom", which no SwiftUI API gives directly on every version this app
             // supports.
+            //
+            // **This is the same two lines that were removed from the row above, and here
+            // they are correct** — not by luck, but structurally. `onAppear` fires on
+            // realisation, so what matters is whether anything can move this row relative
+            // to the viewport other than him scrolling. Nothing can: it is the **last**
+            // element, and every insertion happens at the other end. So it realises when
+            // he arrives at the foot and derealises when he leaves, which is exactly the
+            // question `isAtBottom` asks.
+            //
+            // The row above sits directly where history is inserted. Position in the stack
+            // relative to the insertion point is the whole discriminator, and it is why
+            // the same code deserves opposite verdicts eight lines apart.
             Color.clear
                 .frame(height: 1)
                 .id(Self.footAnchor)

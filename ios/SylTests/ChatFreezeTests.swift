@@ -560,6 +560,57 @@ final class ChatUnattendedGrowthTests: ChatHostedTranscriptCase {
         )
     }
 
+    /// **The reproduction, committed so it can be run again.**
+    ///
+    /// This epic removed a trigger on the strength of a diagnosis, and the experiment that
+    /// showed the diagnosis was wrong was a local edit that no longer existed ten minutes
+    /// later. `CLAUDE.md` asks for a version stamp AND a re-run on a load-bearing
+    /// measurement; a re-run needs the apparatus to exist. `ChatView` carries the pre-fix
+    /// shape behind a flag, and this is what drives it.
+    ///
+    /// It is a **characterisation** test, deliberately. It does not assert that the old
+    /// code was fine — it records what the old code actually did on the OS it was measured
+    /// on, so that "the runaway does not reproduce" is a claim someone can check in a year
+    /// rather than a sentence in a commit message.
+    func testShouldNotRunAwayEvenWithTheLegacyTriggerRestored() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model, reproducesTheLegacyTopTrigger: true))
+        defer { dismiss(window) }
+        await settle(window)
+
+        let scroll = try XCTUnwrap(transcriptScrollView(in: window))
+
+        var widest = model.snapshot.groups.flatMap(\.messages).count
+        for _ in 0..<100 {
+            scroll.setContentOffset(CGPoint(x: 0, y: 0), animated: false)
+            try? await Task.sleep(for: .milliseconds(20))
+            window.layoutIfNeeded()
+            widest = max(widest, model.snapshot.groups.flatMap(\.messages).count)
+        }
+
+        print("SYL_LEGACY widest window with the pre-fix onAppear, 2s at the top: \(widest)")
+        XCTAssertEqual(
+            widest,
+            ChatPaging.pageSize * 2,
+            """
+            With the pre-fix `.onAppear` restored the window reached \(widest). It loads one \
+            page per arrival at the top and stops — `onAppear` is realisation, and this row \
+            keeps its identity and its position at offset zero across a widen, so it never \
+            derealises and never fires twice. A four-figure number here would mean the \
+            runaway this epic was planned around is real after all.
+            """
+        )
+    }
+
+    /// The flag is reproduction apparatus and must never be on in a shipped build.
+    func testShouldNeverShipWithTheLegacyTriggerOn() {
+        XCTAssertFalse(
+            ChatView(model: ChatViewModel(store: LocalStore(database: try! .inMemory())))
+                .reproducesTheLegacyTopTrigger,
+            "the pre-fix runaway trigger is on by default"
+        )
+    }
+
     /// The scenario the first-paint test cannot reach: he actually goes to the top.
     ///
     /// At first paint the "earlier" row is nowhere near the viewport and is never realised,
@@ -585,13 +636,19 @@ final class ChatUnattendedGrowthTests: ChatHostedTranscriptCase {
         }
 
         print("SYL_AT_TOP widest window after 2s parked at the top: \(widest) messages")
-        XCTAssertLessThanOrEqual(
+        // **Exact, not a ceiling.** `<= pageSize * 2` is satisfied by 100 and equally by
+        // 50 — and 50 is what a run where the re-pin never reached the top would report,
+        // so the ceiling alone cannot tell "he arrived and one page loaded" from "he never
+        // arrived at all". A bound with no floor passes hardest when the scenario did not
+        // happen, which is the same failure the write-census floors exist to catch.
+        XCTAssertEqual(
             widest,
             ChatPaging.pageSize * 2,
             """
-            Parked at the top, the window reached \(widest) messages. One arrival at the \
-            top is one page. Anything more is a load that re-triggered itself on the \
-            rebuild it caused, and it stops only when the whole conversation is resident.
+            Parked at the top, the window reached \(widest) messages where one page on top \
+            of the opening page is \(ChatPaging.pageSize * 2). Below that and he never got \
+            to the top, so nothing was tested; above it and a load re-triggered itself on \
+            the rebuild it caused.
             """
         )
     }
@@ -679,6 +736,13 @@ final class ChatReachingBackTests: ChatHostedTranscriptCase {
             window.layoutIfNeeded()
         }
 
+        // Without this the test passes when the scroll never took: an unmoved viewport
+        // loads nothing either, for reasons that have nothing to do with the requirement.
+        XCTAssertGreaterThan(
+            scroll.contentOffset.y,
+            0,
+            "the transcript never scrolled, so resting short of the top was never tested"
+        )
         XCTAssertEqual(
             model.snapshot.groups.flatMap(\.messages).count,
             opened,
