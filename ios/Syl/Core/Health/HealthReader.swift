@@ -272,7 +272,6 @@ extension HealthType {
         case .bodyFatPercentage:
             return HKObjectType.quantityType(forIdentifier: .bodyFatPercentage)
         case .vo2Max: return HKObjectType.quantityType(forIdentifier: .vo2Max)
-        case .height: return HKObjectType.quantityType(forIdentifier: .height)
         case .leanBodyMass: return HKObjectType.quantityType(forIdentifier: .leanBodyMass)
         case .respiratoryRate: return HKObjectType.quantityType(forIdentifier: .respiratoryRate)
         }
@@ -312,38 +311,9 @@ extension HealthType {
             // typo would be a crash on his phone rather than a compile error here.
             return HKUnit.literUnit(with: .milli)
                 .unitDivided(by: HKUnit.gramUnit(with: .kilo).unitMultiplied(by: .minute()))
-        case .height:
-            return .meterUnit(with: .centi)
-        }
-    }
-
-    /// How many of the contract's units one ``healthKitUnit`` is worth.
-    ///
-    /// **One for every type but one, and the exception is the reason this property
-    /// exists rather than being folded into the call site.**
-    ///
-    /// `HealthUnitTests` compares `healthKitUnit.unitString` against the contract's
-    /// `unit` for every type, and that comparison is the whole defence against a number
-    /// that means something else with nothing to say so. It compares unit *names*, so it
-    /// cannot see a factor of a hundred hiding behind two identical ones — which is
-    /// exactly what `bodyFatPercentage` is: HealthKit's `%` is a fraction (an 18%
-    /// reading comes back from `doubleValue(for: .percent())` as `0.18`) and the
-    /// contract's `%` is percentage points. Both spell themselves `%`. The drift test
-    /// passes and the wire carries `0.18 %`.
-    ///
-    /// Storing the fraction and calling the unit `%` was the alternative and it is worse
-    /// than wrong, it is *plausible*: `0.18` is a number a body fat percentage could
-    /// never be, but a chart normalises it away and a baseline over it is internally
-    /// consistent. Nothing downstream would ever notice.
-    ///
-    /// So the correction is here, at the seam, named, and pinned by its own test. It is
-    /// deliberately not a second unit table: a scale that could be set per type by
-    /// anyone is a second place for the two halves to disagree about what `54` means.
-    var wireScale: Double {
-        switch self {
         case .bodyFatPercentage: return 100
         case .heartRate, .restingHeartRate, .heartRateVariability, .sleep, .steps,
-            .workout, .bodyMass, .activeEnergy, .basalEnergy, .vo2Max, .height,
+            .workout, .bodyMass, .activeEnergy, .basalEnergy, .vo2Max,
             .leanBodyMass, .respiratoryRate:
             // Spelled out rather than defaulted, so a type added later has to make this
             // decision instead of inheriting one.
@@ -565,7 +535,7 @@ final class HealthReader: HealthReading, @unchecked Sendable {
         // HealthKit stores it in instead of silently falling into this branch — sleep is
         // a category and workout is neither, and both would read as empty forever.
         case .heartRate, .restingHeartRate, .heartRateVariability, .steps, .bodyMass,
-            .activeEnergy, .basalEnergy, .bodyFatPercentage, .vo2Max, .height,
+            .activeEnergy, .basalEnergy, .bodyFatPercentage, .vo2Max,
             .leanBodyMass, .respiratoryRate:
             guard let quantityType = type.healthKitObjectType as? HKQuantityType else { return [] }
             let descriptor = HKSampleQueryDescriptor(

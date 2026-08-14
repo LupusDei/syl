@@ -45,7 +45,6 @@ public enum HealthType: String, Codable, Equatable, Hashable, Sendable, CaseIter
     case bodyFatPercentage
     /// Apple Health calls it **Cardio Fitness**.
     case vo2Max
-    case height
     case leanBodyMass
     case respiratoryRate
 }
@@ -90,7 +89,6 @@ extension HealthType {
         case .activeEnergy, .basalEnergy: return "kcal"
         case .bodyFatPercentage: return "%"
         case .vo2Max: return "mL/min·kg"
-        case .height: return "cm"
         }
     }
 }

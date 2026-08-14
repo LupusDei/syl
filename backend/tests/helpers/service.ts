@@ -17,6 +17,7 @@ import { HerOwnMemory } from "../../src/memory/remember.js";
 import type { Retriever } from "../../src/memory/retrieve.js";
 import { EdgeWeights } from "../../src/memory/weights.js";
 import { WorkingMemory } from "../../src/memory/working.js";
+import { HealthCharacteristics } from "../../src/health/characteristics.js";
 import { HealthSamples } from "../../src/health/samples.js";
 import { RenderVerdicts } from "../../src/render/verdicts.js";
 import { RenderService, type RenderRecord } from "../../src/render/render-service.js";
@@ -416,6 +417,7 @@ export function testDeps(db: SylDatabase): {
   readonly renders: RenderService;
   readonly renderVerdicts: RenderVerdicts;
   readonly health: HealthSamples;
+  readonly characteristics: HealthCharacteristics;
   readonly wardrobe: Wardrobe;
   readonly sendings: SendingStore;
   readonly composer: SendingService;
@@ -483,6 +485,10 @@ export function testDeps(db: SylDatabase): {
     renderVerdicts: new RenderVerdicts({ db: db.handle, clock }),
     // Real, against the same database. A plain table with no backend to reach.
     health: new HealthSamples({ db: db.handle, clock }),
+    // Over the SAME graph and the SAME `remember` verb the memory views were
+    // built on, exactly as `bootstrap` does it. A second `HerOwnMemory` here
+    // would let a route test pass against a wiring production does not have.
+    characteristics: new HealthCharacteristics({ graph: memory.graph, hers: memory.hers, clock }),
     // Over the SAME studio as `renders`, exactly as `bootstrap` builds them.
     // Two studios would mean the face a render anchors on and the face the
     // wardrobe route calls current are answered from two directories.

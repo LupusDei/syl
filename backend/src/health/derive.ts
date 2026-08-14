@@ -172,7 +172,6 @@ export const DAILY_SUMMARY: Readonly<Record<HealthType, DailySummary>> = {
   basalEnergy: "total",
   bodyFatPercentage: "mean",
   vo2Max: "mean",
-  height: "mean",
   leanBodyMass: "mean",
   respiratoryRate: "mean",
 };

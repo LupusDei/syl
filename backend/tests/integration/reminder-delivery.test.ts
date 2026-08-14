@@ -24,6 +24,7 @@ import { Outbox } from "../../src/services/outbox.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
 import { SendingService } from "../../src/services/sending-service.js";
 import { SendingStore } from "../../src/services/sending-store.js";
+import { HealthCharacteristics } from "../../src/health/characteristics.js";
 import { HealthSamples } from "../../src/health/samples.js";
 import { RenderVerdicts } from "../../src/render/verdicts.js";
 import { Wardrobe } from "../../src/render/wardrobe.js";
@@ -147,6 +148,9 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
     const studio = testStudio();
     const renders = testRenders(clock, studio);
     const chat = testChat(messages);
+    // Hoisted so the characteristics seam below is built over the SAME graph
+    // and the same `remember` verb, exactly as `bootstrap` builds them.
+    const memory = testMemory(db, clock);
 
     running = await startTestApp(
       createApp(testConfig(), {
@@ -166,7 +170,7 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         jobs,
         idempotency: new IdempotencyStore({ db: db.handle, clock }),
         intake: new ArticleIntake({ store: new IntakeStore({ db: db.handle, clock }), clock }),
-        memory: testMemory(db, clock),
+        memory,
         attachments,
         // Cannot render, cannot reach Runway, spends nothing. See `testRenders`.
         renders,
@@ -186,6 +190,7 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         renderWatches: new RenderWatchStore({ db: db.handle, clock }),
         renderVerdicts: new RenderVerdicts({ db: db.handle, clock }),
         health: new HealthSamples({ db: db.handle, clock }),
+        characteristics: new HealthCharacteristics({ graph: memory.graph, hers: memory.hers, clock }),
       }),
     );
     token = keys.pair(keys.issuePairingCode().code, "Commander's iPhone").token;

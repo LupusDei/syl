@@ -130,6 +130,14 @@ const UNDECLARED: readonly string[] = [
   // and it is the one unauthenticated route in the contract. Two files share the
   // prefix and nothing else.
   "POST /health/samples",
+  // `syl-8ys9.4` — his date of birth, his sex and his height. A WRITE, and one
+  // whose body deliberately looks nothing like `POST /health/samples`: no
+  // `startedAt`, no `endedAt`, no unit, because a characteristic is a fact and
+  // not a measurement. That difference is the whole of the phase, so it is the
+  // one a second client must not have to guess at — and the reply carries which
+  // source she is using per characteristic, which is the field a screen showing
+  // his birthday would have to respect.
+  "POST /health/characteristics",
   "GET /health/watermarks",
   "GET /health/series",
   // syl-t9tj.5.4 -- the only health route on HER credential, and the one most

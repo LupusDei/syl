@@ -76,6 +76,23 @@
  * A type inserted in the middle is a silent reordering of every one of those.
  * New types go on the end.
  */
+/**
+ * `height` is deliberately ABSENT (`syl-czku`).
+ *
+ * It arrived here with the other six quantity types and left again the same day,
+ * because it is not a measurement in the sense this list means. A name in
+ * `HEALTH_TYPES` gets a watermark, a series and a baseline — and a five-week
+ * window over one unchanging value has no trend, so every derivation over it is
+ * noise with a mean. The review turn is built to report deviations from his own
+ * baseline, which is precisely the machine that turns that noise into a sentence
+ * about his body.
+ *
+ * Worse than useless output: a name in BOTH lists gives him two answers to one
+ * question — a `memory` saying six foot two, and a series claiming a trend.
+ *
+ * It lives in `health/characteristics.ts` with date of birth and sex, and
+ * `health-characteristics.test.ts` asserts the two vocabularies stay disjoint.
+ */
 export const HEALTH_TYPES = [
   "heartRate",
   "restingHeartRate",
@@ -88,7 +105,6 @@ export const HEALTH_TYPES = [
   "basalEnergy",
   "bodyFatPercentage",
   "vo2Max",
-  "height",
   "leanBodyMass",
   "respiratoryRate",
 ] as const;
@@ -223,7 +239,6 @@ export const UNITS: Readonly<Record<HealthType, string>> = {
   basalEnergy: "kcal",
   bodyFatPercentage: "%",
   vo2Max: "mL/min·kg",
-  height: "cm",
   leanBodyMass: "lb",
   respiratoryRate: "count/min",
 };

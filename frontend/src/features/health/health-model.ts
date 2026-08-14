@@ -73,7 +73,6 @@ export const HEALTH_TYPES = [
   "basalEnergy",
   "bodyFatPercentage",
   "vo2Max",
-  "height",
   "leanBodyMass",
   "respiratoryRate",
 ] as const;
@@ -105,7 +104,6 @@ export const TYPE_LABELS: Readonly<Record<HealthType, string>> = {
   basalEnergy: "Resting energy",
   bodyFatPercentage: "Body fat",
   vo2Max: "Cardio fitness",
-  height: "Height",
   leanBodyMass: "Lean body mass",
   respiratoryRate: "Respiratory rate",
 };
