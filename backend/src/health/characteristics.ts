@@ -1,6 +1,6 @@
 import { findCommanderNode } from "../memory/entities.js";
 import type { MemoryGraph } from "../memory/graph.js";
-import { RememberError, type HerOwnMemory } from "../memory/remember.js";
+import type { HerOwnMemory } from "../memory/remember.js";
 import { crossingInstant } from "../memory/weights.js";
 import { systemClock, type Clock } from "../services/clock.js";
 
@@ -536,32 +536,23 @@ export class HealthCharacteristics {
     const because = this.#because(characteristic, report, hisWord, agrees);
 
     const him = hisWord === null ? null : this.#graph.getNode(hisWord.nodeId);
-    let nodeId = "";
-    let created = false;
-    let unknown: readonly string[] = [];
-    try {
-      const remembered = this.#hers.remember({
-        thought,
-        because,
-        // Resolved by label, never minted. When she has no person node for him
-        // the memory simply has no edges — which is why the reporter is named in
-        // the thought itself rather than only in the reasoning.
-        ...(him === null ? {} : { about: [him.label] }),
-      });
-      nodeId = remembered.nodeId;
-      created = remembered.created;
-      unknown = remembered.unknown;
-    } catch (error) {
-      // A blank thought or a blank reason is impossible from here — both are
-      // built above from validated values — so anything that reaches this is a
-      // real failure and is not swallowed.
-      if (error instanceof RememberError) throw error;
-      throw error;
-    }
+    // NOT wrapped in a try. `review.ts` swallows a `RememberError` because one
+    // conclusion of a night's several is worth losing to keep the rest; there is
+    // nothing to keep here. The thought and the reason are both built above from
+    // validated values, so neither can be blank — which means a refusal is a
+    // real failure and the caller is told rather than handed a silent success.
+    const remembered = this.#hers.remember({
+      thought,
+      because,
+      // Resolved by label, never minted. When she has no person node for him
+      // the memory simply has no edges — which is why the reporter is named in
+      // the thought itself rather than only in the reasoning.
+      ...(him === null ? {} : { about: [him.label] }),
+    });
 
     const contradicts =
       agrees === false && hisWord !== null
-        ? this.#contradict(nodeId, hisWord.nodeId, characteristic, reported, hisWord.value)
+        ? this.#contradict(remembered.nodeId, hisWord.nodeId, characteristic, reported, hisWord.value)
         : null;
 
     return {
@@ -572,10 +563,10 @@ export class HealthCharacteristics {
       hisWord,
       agrees,
       why: this.#why(characteristic, reported, hisWord, agrees),
-      nodeId,
-      created,
+      nodeId: remembered.nodeId,
+      created: remembered.created,
       contradicts,
-      unknown,
+      unknown: remembered.unknown,
     };
   }
 
