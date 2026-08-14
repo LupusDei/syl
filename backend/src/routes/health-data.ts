@@ -217,6 +217,20 @@ function authorisationOnTheWire(record: AuthorisationRecord | null): {
   };
 }
 
+/**
+ * Every health route that requires his credential.
+ *
+ * `GET /health` is deliberately absent: it is liveness, the one unauthenticated
+ * operation in the contract, and putting a bearer check in front of it would
+ * make the service unable to say it is alive to anything that has not paired.
+ */
+export const AUTHENTICATED_HEALTH_ROUTES: readonly string[] = [
+  "/health/samples",
+  "/health/watermarks",
+  "/health/series",
+  "/health/summary",
+];
+
 export interface HealthDataRouterOptions {
   readonly health: HealthSamples;
   readonly idempotency: IdempotencyStore;
@@ -234,9 +248,23 @@ export function createHealthDataRouter(options: HealthDataRouterOptions): Router
   // BY NAME, never `/health`. See the note at the top of this file: mounting on
   // the prefix would put a bearer check in front of the liveness endpoint, which
   // is the one route in the contract that must answer without a token.
-  router.use("/health/samples", authenticate);
-  router.use("/health/watermarks", authenticate);
-  router.use("/health/series", authenticate);
+  // EVERY DATA ROUTE, DERIVED FROM THE LIST RATHER THAN TYPED OUT BESIDE IT.
+  //
+  // Mounting by name protects liveness — `router.use("/health", ...)` would put
+  // a bearer check in front of `GET /health`, which must answer without one.
+  // But a hand-written list of names FAILS OPEN: a route added later and not
+  // added here is served to anyone who can reach the port, and nothing errors.
+  //
+  // That is not hypothetical. `GET /health/summary` shipped on 2026-08-14 and
+  // answered 200 with NO CREDENTIAL until this was changed — his heart rate,
+  // his sleep and his steps, readable by anything on the tailnet, because I
+  // added a route to this router and not to that list.
+  //
+  // So the list is now the source of truth for both, and a new route is
+  // authenticated by being IN it rather than by someone remembering a second
+  // line. `tests/unit/health-data-routes.test.ts` sweeps the router and refuses
+  // any path under `/health/` that answers without a token.
+  for (const path of AUTHENTICATED_HEALTH_ROUTES) router.use(path, authenticate);
 
   /**
    * The upload.

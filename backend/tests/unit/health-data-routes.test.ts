@@ -1,3 +1,5 @@
+import type { Express } from "express";
+
 import type { ApiError } from "@syl/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -9,6 +11,8 @@ import {
 } from "../../src/health/contract.js";
 import { createApp, type AppDependencies } from "../../src/index.js";
 import type { SylDatabase } from "../../src/services/database.js";
+import { AUTHENTICATED_HEALTH_ROUTES } from "../../src/routes/health-data.js";
+import { mountedRoutes } from "../helpers/contract.js";
 import { startTestApp, type RunningApp } from "../helpers/http.js";
 import { testConfig, testDatabase, testDeps } from "../helpers/service.js";
 
@@ -49,13 +53,15 @@ const A_READING = {
 let db: SylDatabase;
 let deps: AppDependencies;
 let running: RunningApp;
+let app: Express;
 let token: string;
 let keyCounter = 0;
 
 beforeEach(async () => {
   db = testDatabase();
   deps = testDeps(db);
-  running = await startTestApp(createApp(testConfig(), deps));
+  app = createApp(testConfig(), deps);
+  running = await startTestApp(app);
   token = deps.keys.pair(deps.keys.issuePairingCode().code, "Commander's iPhone").token;
   keyCounter = 0;
 });
@@ -273,5 +279,58 @@ describe("the liveness endpoint that shares this prefix", () => {
     const body = (await response.json()) as Envelope<{ status: string }>;
     expect(body.success).toBe(true);
     expect(body.data?.status).toBe("ok");
+  });
+});
+
+/**
+ * Every health data route refuses an anonymous caller (`syl-hzz1`).
+ *
+ * A shape test, and it exists because the hand-written version failed open.
+ *
+ * Authentication here is mounted BY NAME rather than on the `/health` prefix,
+ * and that is correct — `router.use("/health", authenticate)` would put a bearer
+ * check in front of `GET /health`, which is liveness and must answer without
+ * one. But a list of names typed beside the routes has the wrong failure mode:
+ * a route added later and not added to the list is **served to anyone who can
+ * reach the port, with nothing erroring**.
+ *
+ * That happened. `GET /health/summary` shipped and answered 200 with no
+ * credential — his heart rate, his sleep, his steps — until this test existed.
+ * It was found by curling the deployed service rather than by any test, which is
+ * the part worth fixing: the suite could not have caught it.
+ *
+ * So this sweeps the router itself. A new health route is covered without anyone
+ * remembering this file exists, which is the only kind of coverage that survives
+ * the person who wrote it.
+ */
+describe("every health data route", () => {
+  it("should refuse an anonymous caller, including routes nobody has written yet", async () => {
+    // SWEPT FROM THE ROUTER, never from the list that mounts the guard.
+    //
+    // Iterating `AUTHENTICATED_HEALTH_ROUTES` here would be theatre: a route
+    // added and forgotten is missing from the list, so it would be missing from
+    // the sweep too, and the test would pass precisely when it mattered. Asking
+    // the app what it actually serves is the only version that catches the
+    // failure that already happened.
+    const answered: string[] = [];
+    for (const route of mountedRoutes(app)) {
+      // "GET /health/series" -> method and path.
+      const [method = "", path = ""] = route.split(" ");
+      if (!path.startsWith("/health/")) continue;
+      const response = await fetch(`${running.baseUrl}/api/v1${path}`, { method });
+      if (response.status !== 401) {
+        answered.push(`${route} answered ${String(response.status)}`);
+      }
+    }
+
+    expect(answered).toEqual([]);
+  });
+
+  it("should still let liveness answer without a token, which is why the prefix is not used", async () => {
+    // The other half. If someone "fixes" the list by mounting the `/health`
+    // prefix, this fails — and the service becomes unable to say it is alive to
+    // anything that has not paired.
+    expect(AUTHENTICATED_HEALTH_ROUTES).not.toContain("/health");
+    expect(AUTHENTICATED_HEALTH_ROUTES.every((path) => path.startsWith("/health/"))).toBe(true);
   });
 });
