@@ -133,6 +133,10 @@ enum SkyFromMemory {
         case .source: return .source
         case .memory: return .memory
         case .fact: return .fact
+        case .place: return .place
+        case .instruction: return .instruction
+        case .self_: return .selfNode
+        case .unrecognised: return .unrecognised
         }
     }
 

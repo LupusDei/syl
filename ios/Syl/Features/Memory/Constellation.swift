@@ -354,6 +354,10 @@ struct Constellation: View {
         case .cool: return SylTheme.Colour.luminance
         case .warm: return SylTheme.Colour.warmth
         case .dim: return SylTheme.Colour.greyBlue
+        case .instruction: return Color(red: 0.62, green: 0.92, blue: 0.66)
+        case .place: return Color(red: 0.20, green: 0.38, blue: 0.78)
+        case .selfNode: return Color(red: 0.68, green: 0.50, blue: 0.94)
+        case .unrecognised: return Color(red: 0.92, green: 0.32, blue: 0.32)
         }
     }
 

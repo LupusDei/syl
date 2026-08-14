@@ -140,12 +140,25 @@ enum ConstellationKind: String, Equatable, Sendable, CaseIterable {
     case event
     case goal
     case decision
+    /// A place he has been or means to be (`syl-94vs`).
+    case place
+    /// Something he told her to do or not do.
+    case instruction
+    /// Her. The one node in the sky that is not about him.
+    case selfNode
+    /// A kind this build does not know, from a server newer than the app.
+    ///
+    /// **It must never render as something it is not.** A star that quietly
+    /// borrowed the nearest familiar kind would be a lie about what she knows,
+    /// and the whole sky is an argument that nothing is hidden.
+    case unrecognised
 
     /// People and goals hold the sky up. Everything else orbits one of them.
     var isAnchor: Bool {
         switch self {
         case .person, .goal: return true
         case .fact, .memory, .source, .event, .decision: return false
+        case .place, .instruction, .selfNode, .unrecognised: return false
         }
     }
 }

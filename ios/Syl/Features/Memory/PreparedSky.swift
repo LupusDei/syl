@@ -193,6 +193,27 @@ enum StarTint: Equatable, Sendable {
     case warm
     /// A spren dimming rather than a UI greying out. What `suppressed` looks like.
     case dim
+
+    // FOUR KINDS THAT DO CARRY THEIR OWN COLOUR — the Commander's call, 2026-08-14:
+    // "Instructions a light green. Places a deep blue. Self nodes can be purple.
+    // Unrecognized should be red."
+    //
+    // This is a DEPARTURE from the rule three cases above, and it is written down
+    // rather than smuggled in. That rule says a per-kind colour key is what gives a
+    // screen a legend, and it is right about the seven kinds it was written for:
+    // fact, memory, goal and the rest are all the same KIND of thing about him, so
+    // colouring them would be decoration pretending to be information.
+    //
+    // These four are not that. Three of them are categorically different — a place
+    // is not a claim, an instruction is his voice rather than her conclusion, and
+    // `self` is the one star in the sky that is not about him at all. The fourth is
+    // a warning. Colour here is not a key to be looked up; it is the difference
+    // being visible without one.
+    case instruction
+    case place
+    case selfNode
+    /// Red, and it should be alarming. See `ConstellationKind.unrecognised`.
+    case unrecognised
 }
 
 /// Builds a finished sky from a snapshot. `Sendable` and holding no view, no view model
@@ -386,7 +407,16 @@ struct SkyPreparer: Sendable {
     }
 
     private func tint(for node: ConstellationNode) -> StarTint {
+        // Suppressed still wins. A star he has put away is dim whatever it is,
+        // because "he set this aside" outranks "this is a place".
         if node.tier == .suppressed { return .dim }
-        return node.kind == .person ? .warm : .cool
+        switch node.kind {
+        case .person: return .warm
+        case .instruction: return .instruction
+        case .place: return .place
+        case .selfNode: return .selfNode
+        case .unrecognised: return .unrecognised
+        case .fact, .memory, .source, .event, .goal, .decision: return .cool
+        }
     }
 }

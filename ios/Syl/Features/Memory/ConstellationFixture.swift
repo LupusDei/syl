@@ -197,6 +197,10 @@ extension ConstellationSnapshot {
             case .decision: return "decided_for"
             case .source: return "documents"
             case .person, .goal: return "relates_to"
+            case .place: return "located_at"
+            case .instruction: return "instructed_by"
+            case .selfNode: return "concerns"
+            case .unrecognised: return "relates_to"
             }
         }
 

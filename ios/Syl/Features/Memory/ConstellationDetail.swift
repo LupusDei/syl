@@ -169,6 +169,13 @@ enum ConstellationWords {
         case .event: return "Event"
         case .goal: return "Goal"
         case .decision: return "Decision"
+        case .place: return "Place"
+        case .instruction: return "Instruction"
+        case .selfNode: return "Syl"
+        // Named for what it IS — a kind this build does not know — rather than
+        // guessed at. VoiceOver reads this aloud, and "Unknown" would be the
+        // spoken version of rendering it as something it is not.
+        case .unrecognised: return "Something newer than this app"
         }
     }
 
