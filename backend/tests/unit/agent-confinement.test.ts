@@ -421,6 +421,11 @@ describe("everything the agent scope cannot reach, swept from the router", () =>
     // back what crossed the gate are one act performed over two turns, because
     // the fetching happens between them.
     "/intake",
+    // `syl-t9tj.5.4`. The SUMMARY route and not `/health`, for the same reason
+    // `/memory/recall` is spelled out rather than `/memory`: writing the prefix
+    // here would make this sweep agree that the phone's upload endpoint is
+    // hers, and she has no business writing a measurement of his body.
+    "/health/summary",
   ];
 
   /**
@@ -659,8 +664,20 @@ describe("AGENT_SURFACE", () => {
     // and no memory, and crosses back as a schema-validated extract — the row's
     // own `title` is raw response bytes and `intake-view.ts` has nowhere to put
     // it. Read the note on `AGENT_SURFACES` before touching this line.
+    //
+    // `syl-t9tj.5.4` added `/health/summary`, and it is the first entry that
+    // reaches HIS BODY. It is the narrowest of four health routes on purpose:
+    // the phone's upload and the two raw reads all stay out of reach, because a
+    // verb that could pull 28,726 heart-rate rows into a turn would answer from
+    // whichever fortnight fitted rather than from his baseline. What she can
+    // reach returns derivations only — his own baseline, what moved against it,
+    // and how unusual that is — so there is no absolute-level dump available to
+    // be narrated. `/health` here rather than `/health/summary` would have
+    // handed her the write endpoint along with it, which is the same mistake
+    // `/memory` would have been two entries up.
     expect([...AGENT_SURFACE].sort()).toEqual([
       "/goals",
+      "/health/summary",
       "/intake",
       "/memory/recall",
       "/memory/remember",

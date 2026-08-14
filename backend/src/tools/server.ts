@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import type { Goal, HealthStatus, Reminder, ReminderOrigin, Sending, Todo } from "@syl/shared";
 
 import { AdjutantClient } from "../agents/adjutant-client.js";
+import { askBudget, newCorrelationId, refLine } from "../agents/answers.js";
 import { mayReach, notOnTheRoster } from "../agents/roster.js";
 
 import { verifyUrgency } from "../harness/urgency.js";
@@ -765,6 +766,15 @@ const dropTodo: ToolHandler = async (input, context) => {
  *    project keeps catching is a system claiming more than it did.
  * 3. **It never reaches someone off the roster**, and the refusal names who she
  *    can reach, because she has to turn it into a sentence for him.
+ * 4. **It never says a message went anywhere on the strength of a message id.**
+ *    `syl-5kdv`: the Commander held two ids she had reported as successful for
+ *    messages nobody ever received, because the tool underneath stored without
+ *    delivering and therefore could not fail. `AdjutantClient.ask` now decides
+ *    on `deliveredToSessions`, and a message that reached nobody arrives here
+ *    as a failure — recorded, not read, and said in those words.
+ *
+ * The fourth is the one this project keeps having to learn. A verb that cannot
+ * fail does not report success; it reports nothing, in the shape of success.
  */
 const askAgent: ToolHandler = async (input, context) => {
   const who = text(input, "who");
@@ -797,8 +807,140 @@ const askAgent: ToolHandler = async (input, context) => {
     };
   }
 
-  const sent = await context.fleet.ask(who, question);
+  // AN INBOUND MESSAGE MUST NEVER CAUSE AN UNBOUNDED CHAIN (`syl-014.3.5`).
+  //
+  // Another agent's reply now reaches her turn context (`syl-j8fa.5`), so a
+  // reply can cause a message, which causes a reply. Two agents holding a
+  // conversation on the Commander's subscription is CLAUDE.md constraint 1,
+  // the strongest constraint in the project.
+  //
+  // What is deliberately NOT done here is forbid the second question. "What
+  // does his insurance cost?" / "Which policy?" / "The auto one." is the verb
+  // working; a rule that killed it would deliver something that can hear and
+  // may not speak twice. So this bounds the exchange instead of preventing it.
+  //
+  // Counted from ADJUTANT'S OWN RECORD of what she has sent, not from anything
+  // in this process: the tool server is a fresh subprocess per turn and
+  // remembers nothing at all, so a counter here would reset on every turn and
+  // bound nothing. See `agents/answers.ts` for why a window beats a hop count.
+  const already = await context.fleet.sent();
+  if (!already.ok) {
+    // FAIL CLOSED. A spend guard that opens when its evidence is unavailable is
+    // not a guard, and the thing on the other side of it is his subscription.
+    return {
+      ok: false,
+      action: "ask_agent",
+      reason:
+        `I could not check how much I have already asked ${who}, so I have not asked again — ` +
+        already.failure.message,
+      retryable: true,
+    };
+  }
+
+  const spent = askBudget(who, already.data, Date.now());
+  if (spent !== null) {
+    return {
+      ok: false,
+      action: "ask_agent",
+      // SURFACED TO HIM, not swallowed. The refusal is what she has instead of
+      // another message, and it has to be a thing she can say out loud —
+      // otherwise hitting the ceiling looks to her like the verb being broken,
+      // and looks to him like nothing at all.
+      reason: spent,
+      // Not retryable: nothing the model does this turn changes the count, and
+      // a model that retried would spend the turn discovering that.
+      retryable: false,
+    };
+  }
+
+  // THE RETURN LEG STARTS HERE (`syl-j8fa.5`). A question that cannot be
+  // recognised when it is answered is a question asked into a void: she had
+  // never received a reply, because nothing tied one to what provoked it.
+  //
+  // The id goes in the TEXT as well as on the thread and in the metadata, and
+  // the text is the one that matters. Adjutant injects the message BODY into
+  // the recipient's session, so a thread id they never see is one they cannot
+  // echo — and the whole design rests on the recipient answering the ordinary
+  // way, with nothing required of them. `agents/answers.ts` has the argument.
+  const correlationId = newCorrelationId();
+  const sent = await context.fleet.ask(who, `${question}\n\n${refLine(correlationId)}`, {
+    threadId: correlationId,
+    metadata: { correlationId },
+  });
   if (!sent.ok) {
+    // RECORDED BUT NOT READ is its own outcome, and this handler writes its own
+    // sentence for it rather than passing the client's through (`syl-j8fa.4`).
+    //
+    // Two reasons, and the second is the load-bearing one. The wording she
+    // repeats to him is the deliverable of this verb, so it belongs to the verb
+    // rather than to whatever the transport happened to say. And a message id
+    // must not appear in it: `syl-5kdv` is the Commander holding two ids she
+    // had offered as proof of arrival for messages nobody received. An id is
+    // evidence that a row exists. Handing her one here is handing her something
+    // to point at, and she will point at it.
+    //
+    // THREE sentences, because there are three things he could do. `syl-j8fa.8`:
+    // `sessionsFound` splits a zero delivery into an agent that is not running
+    // and an agent that is running whose hand-off failed. One sentence for both
+    // would tell him to go and start an agent that is already up — confidently,
+    // and with nothing to reveal she was wrong. That is this bug again, moved
+    // one layer along, which is the direction it keeps travelling.
+    if (sent.failure.kind === "undelivered") {
+      const found = sent.failure.sessionsFound;
+
+      // Something is on record for them and would not take the message.
+      //
+      // Says NOTHING about whether the agent is up, and that restraint is the
+      // point: `registry.findByName` returns offline records too, so this is
+      // equally "up, and its session refused it" and "stopped, record not yet
+      // reaped". What it gives him instead is the next action — something is
+      // there to receive it, so another attempt is not futile.
+      if (found !== undefined && found > 0) {
+        return {
+          ok: false,
+          action: "ask_agent",
+          reason:
+            `Adjutant recorded the message for ${who} and holds ` +
+            `${found === 1 ? "one session" : `${String(found)} sessions`} on record for them, ` +
+            "but could not put it into any of them, so nobody has read it. A session on record " +
+            `does not mean anybody is at it, so that says nothing about whether ${who} is ` +
+            "there. Trying again may work.",
+          retryable: true,
+        };
+      }
+
+      // Nothing on record under that name — which is NOT the same as the agent
+      // being down: one managed outside Adjutant's session bridge is up and has
+      // no record. So this too reports the record and the next action, and the
+      // next action is what differs: retrying now cannot help.
+      if (found === 0) {
+        return {
+          ok: false,
+          action: "ask_agent",
+          reason:
+            `Adjutant recorded the message for ${who} but holds no session on record for ` +
+            "them, so there was nowhere to put it and nobody has read it. That says nothing " +
+            `about whether ${who} is there — an agent Adjutant does not track would look the ` +
+            "same. Trying again now will not help; something has to change first.",
+          retryable: false,
+        };
+      }
+
+      // An older Adjutant that does not report what it holds. Listing candidate
+      // explanations here would read as a diagnosis and silently exclude
+      // whatever was not on the list, so it reports the gap itself.
+      return {
+        ok: false,
+        action: "ask_agent",
+        reason:
+          `Adjutant recorded the message for ${who}, but nothing accepted it, and this ` +
+          `Adjutant does not report what it holds for ${who}, so I cannot tell whether ` +
+          `anything was there to receive it. Nobody has read it, I have not reached ${who}, ` +
+          "and I cannot say whether another attempt would help.",
+        retryable: false,
+      };
+    }
+
     return {
       ok: false,
       action: "ask_agent",
@@ -809,13 +951,35 @@ const askAgent: ToolHandler = async (input, context) => {
     };
   }
 
+  const reached = sent.data.deliveredToSessions;
   return {
     ok: true,
     action: "ask_agent",
     // Deliberately not `subject: the answer`. Nothing has been answered — most
     // agents are offline most of the time, and a verb that implied otherwise
     // would have her telling him the treasurer said something.
-    subject: { who, question, messageId: sent.data.messageId },
+    //
+    // Two additions that answer different questions, and both belong here.
+    //
+    // `outcome` is the sentence, and it says what is now known to be true: the
+    // text arrived in a session somebody is sitting in front of. That claim is
+    // only ever made from a count, never from an id.
+    //
+    // `correlationId` is here so the thing she says out loud and the thing the
+    // service matches on are the same string. Nothing is written down on this
+    // side: the question lives in Adjutant, which is where the answer is going
+    // to land, and this process has no database to write it to anyway.
+    subject: {
+      who,
+      question,
+      messageId: sent.data.messageId,
+      correlationId,
+      deliveredToSessions: reached,
+      outcome:
+        reached === 1
+          ? `It arrived in ${who}'s running session.`
+          : `It arrived in ${String(reached)} of ${who}'s running sessions.`,
+    },
     at: sent.data.at,
   };
 };
@@ -1004,6 +1168,38 @@ const remember: ToolHandler = async (input, context) => {
     subject: kept.data,
     at: kept.data.at,
   };
+};
+
+/**
+ * How he has been, in his own numbers.
+ *
+ * The verb that was missing (`syl-t9tj.5.4`). Two months of his health data sat
+ * on disk and she had no way to reach it mid-conversation, so when he asked she
+ * said she could not see it -- correctly, and that was the whole defect.
+ *
+ * Returns DERIVATIONS, never samples. 28,726 heart-rate rows do not fit in a
+ * turn, and an arbitrary slice is worse than none: she would answer confidently
+ * from whichever fortnight happened to fit.
+ *
+ * `silenceIsEvidence` rides on every type, and she must read it before saying a
+ * number is missing. `authorised` and empty means nothing happened -- "you took
+ * no steps this week". Anything else means WE NEVER LOOKED, and the honest
+ * sentence is "I have never been able to see your heart rate variability".
+ * Reporting the second as the first is a claim about his body drawn from a
+ * permission dialog.
+ */
+const howHasHeBeen: ToolHandler = async (input, context) => {
+  const asked = input["types"];
+  const types = (Array.isArray(asked) ? asked : [])
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value !== "");
+
+  const path = types.length === 0 ? "/health/summary" : `/health/summary?types=${encodeURIComponent(types.join(","))}`;
+  const looked = await context.client.get<unknown>(path);
+  if (!looked.ok) return refused("how_has_he_been", looked.failure);
+
+  return { ok: true, action: "how_has_he_been", subject: looked.data, at: null };
 };
 
 /** How much of each list she is shown. Enough to talk about, not a data dump. */
@@ -1942,6 +2138,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   ask_agent: askAgent,
   set_goal: setGoal,
   change_goal: changeGoal,
+  how_has_he_been: howHasHeBeen,
   recall,
   render_me: renderMe,
   this_is_me: thisIsMe,

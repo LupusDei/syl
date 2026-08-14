@@ -359,6 +359,26 @@ export const AGENT_SURFACES: readonly AgentSurface[] = [
   // `observed` is the species carrying `assertedBy`. Extraction's criterion 3
   // is untouched and she still cannot fabricate a fact about him.
   { path: "/memory/remember", says: "her own memory, to add what she works out" },
+  // HIS BODY, DERIVED AND NOTHING ELSE — `syl-t9tj.5.4`.
+  //
+  // The narrowest health route on purpose, and the other three stay out of
+  // reach. `/health/samples` is the phone's write and she has no business
+  // making one; `/health/series` and `/health/watermarks` are raw rows, and a
+  // verb that could pull 28,726 heart-rate readings into a turn would answer
+  // from whichever fortnight happened to fit rather than from his baseline.
+  //
+  // **The bound is the route, not her restraint.** `/health/summary` can only
+  // return derivations — his own baseline, what moved against it, and how
+  // unusual that is. There is no absolute-level dump and no weekday breakdown
+  // in the payload, so "he walks more at weekends" is not available to be said.
+  // Same argument as `HerOwnMemory` above: the shape of what she can reach is
+  // what holds, rather than a handler remembering to be careful.
+  //
+  // It carries `silenceIsEvidence` per type, which is the one field she must
+  // read before saying a number is missing: `authorised` and empty means nothing
+  // happened, anything else means WE NEVER LOOKED. Without it she would narrate
+  // a permission dialog as a fact about his body.
+  { path: "/health/summary", says: "his health" },
   { path: "/renders", says: "her own renders" },
   { path: "/sendings", says: "the things she has sent him" },
   // THE FIRST SURFACE THAT REACHES OFF THIS MACHINE — `syl-r1t`, and the entry

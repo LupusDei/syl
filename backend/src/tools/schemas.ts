@@ -54,6 +54,7 @@
  */
 
 import { ROSTER } from "../agents/roster.js";
+import { HEALTH_TYPES } from "../health/contract.js";
 import { MEMORY_NODE_KINDS } from "../memory/schema.js";
 import { framingGuidance, FRAMING_IDS } from "../render/framing.js";
 import { modelGuidance, MODEL_IDS } from "../render/models.js";
@@ -325,8 +326,14 @@ export const TOOLS: readonly ToolSchema[] = [
   },
   {
     name: "ask_agent",
+    // The failure mode is IN the description, because she reads this at session
+    // start and it is the only thing shaping what she says before an answer
+    // comes back. `syl-5kdv`: she told him two messages had gone when all that
+    // had happened was two rows being written, and nothing in the verb's own
+    // words had ever suggested that was possible. A verb whose failure mode is
+    // undocumented gets narrated as success.
     description:
-      "Put a question to the one whose subject it is, on his behalf. Tell him you have ASKED — never that you have an answer.",
+      "Put a question to the one whose subject it is, on his behalf. Tell him you have ASKED — never that you have an answer. Delivery is NOT guaranteed: agents are offline most of the time, and a message to one that is not running is only filed. You will be told which happened, so say which — never that it went through unless the answer says it reached them.",
     inputSchema: {
       type: "object",
       required: ["who", "question", "because"],
@@ -384,6 +391,25 @@ export const TOOLS: readonly ToolSchema[] = [
             "achieved when he has done it. abandoned when he has decided not to. dormant when it is set aside but not given up — the difference matters to him.",
         },
         because: BECAUSE,
+      },
+    },
+  },
+  {
+    name: "how_has_he_been",
+    description:
+      "Look at his body — sleep, heart rate, steps, weight — as it has been lately against his own baseline. Use it when he asks how he has been, when he mentions feeling tired or off, or when you are about to say something about his health and want to know whether it is true.",
+    inputSchema: {
+      type: "object",
+      // A read, so no `because`. See the BECAUSE block: a reason travels with an
+      // ACT, and looking is not one. `tool-surface-budget.test.ts` carries this
+      // name in its exemption list beside the other reads.
+      properties: {
+        types: {
+          type: "array",
+          items: { type: "string", enum: [...HEALTH_TYPES] },
+          description:
+            "Only these, if you want a narrow answer — 'how have I been sleeping' does not need his step count. Leave it out for everything.",
+        },
       },
     },
   },

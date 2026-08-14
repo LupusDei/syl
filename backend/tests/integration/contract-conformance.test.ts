@@ -132,6 +132,11 @@ const UNDECLARED: readonly string[] = [
   "POST /health/samples",
   "GET /health/watermarks",
   "GET /health/series",
+  // syl-t9tj.5.4 -- the only health route on HER credential, and the one most
+  // deserving of publication: it is what a phone screen showing his health would
+  // read, and its payload carries silenceIsEvidence, the field any client must
+  // respect before reporting a gap as a behaviour.
+  "GET /health/summary",
   // `syl-ate` — every face she has adopted and every opening she can choose.
   // Joins the render debt above rather than escaping it, and for the same
   // reason: her tool server is the only client, it lives in this repository,
