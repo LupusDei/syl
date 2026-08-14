@@ -22,13 +22,6 @@ struct ChatSnapshot: Equatable, Sendable {
     /// The highest conversation sequence held on disk. Not the frame-stream sequence.
     var highestSeq: Int = 0
 
-    /// Rendered markdown, keyed by message id.
-    ///
-    /// **Per message, never per group.** `MessageGroup.text` joins its messages with
-    /// `"\n\n"`, and parsing that join would merge blocks across message boundaries —
-    /// an unclosed fence in one message would swallow the next one whole.
-    var blocks: [SylID: [MarkdownBlock]] = [:]
-
     /// Whether older messages exist beyond the window.
     ///
     /// Exact, not a guess. The loader asks for one row more than it intends to show and
@@ -38,11 +31,18 @@ struct ChatSnapshot: Equatable, Sendable {
     /// kind of small lie this app spends its comments refusing to tell.
     var mayHaveEarlier: Bool = false
 
-    func blocks(for message: Message) -> [MarkdownBlock] {
-        blocks[message.id] ?? [.paragraph(message.text)]
-    }
-
-    /// The same parsed blocks, sliced per turn and in message order.
+    /// The parsed blocks, sliced per turn and in message order.
+    ///
+    /// **The only form the transcript is kept in.** The snapshot used to carry the
+    /// whole `[SylID: [MarkdownBlock]]` map beside this, with a `blocks(for:)` accessor
+    /// that no caller ever used — `ChatView` reads `blocks(forGroup:)` and nothing else.
+    ///
+    /// It was not merely dead weight. A Swift dictionary is copy-on-write, so a snapshot
+    /// holding the map kept `MarkdownCache`'s storage referenced twice, and the next
+    /// insert into the cache therefore had to copy the entire spine before it could
+    /// write one entry. Keeping it would have left the O(window) cost of `syl-025.2.5`
+    /// exactly where it was for the case that matters most — one message arriving —
+    /// while every count in `MarkdownCacheCostTests` reported success.
     ///
     /// **This exists because handing every row the whole dictionary is quadratic.**
     /// SwiftUI decides whether to re-render a row by comparing the values stored in it,
@@ -75,33 +75,102 @@ final class MarkdownCache: @unchecked Sendable {
     private let lock = NSLock()
     private var cache: [SylID: [MarkdownBlock]] = [:]
 
+    #if DEBUG
+        /// How many messages were handed to `MarkdownParser`.
+        private var _parses = 0
+        /// How many entries were WRITTEN into the cache's storage — inserts and
+        /// removals alike, since both mutate it.
+        ///
+        /// The quantity the defect is about, and it is deliberately not the same
+        /// question as `_parses`. The cache was already avoiding the re-parse and
+        /// still rebuilding the whole dictionary around it, so a parse counter alone
+        /// reported a cache working perfectly while it did N inserts per arriving
+        /// message. Counted at each place an entry is written, never as a bookkeeping
+        /// line beside the loop — a count derived from `messages.count` would agree
+        /// with any implementation, including a wrong one.
+        private var _entriesWritten = 0
+
+        var parses: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return _parses
+        }
+
+        var entriesWritten: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return _entriesWritten
+        }
+
+        func resetCensus() {
+            lock.lock()
+            defer { lock.unlock() }
+            _parses = 0
+            _entriesWritten = 0
+        }
+    #endif
+
     init() {}
 
     /// Blocks for every given message, parsing only the ones not already held.
     ///
     /// Entries for messages no longer in the window are dropped, so a long-running
     /// session does not accumulate the parse of every message ever seen.
+    ///
+    /// ## Why this mutates in place rather than building a result (`syl-025.2.5`)
+    ///
+    /// It used to allocate a fresh N-entry dictionary on every call, copy every hit
+    /// into it, and swap it in — so a window that had grown to two thousand paid two
+    /// thousand hashed inserts to add the one message that had just arrived. **Every
+    /// test it had was about the parse**, and the parse was already being avoided
+    /// correctly, so the cost was invisible to the only question anyone was asking.
+    /// `refresh()` drives this on every arriving message, every send, every foreground
+    /// and every return to the tab, which is what made it O(window) per event.
+    ///
+    /// Now the work is proportional to what actually CHANGED: a missing key is parsed
+    /// and inserted, a departed key is removed, and a window nobody touched writes
+    /// nothing at all. What remains linear is the membership scan — N dictionary
+    /// lookups to find the missing keys — and that is a hash per message against N
+    /// allocations plus N inserts before.
+    ///
+    /// **The lock is now held across the parse**, where it used to be released. That is
+    /// deliberate and it is affordable precisely because of the change: the critical
+    /// section used to contain the whole rebuild and now contains only the delta.
+    /// Concurrent loads happen — the socket refreshes while a widen is in flight — and
+    /// the old release-and-swap let both parse the same new message and then let one
+    /// clobber the other's cache wholesale.
     func blocks(for messages: [Message]) -> [SylID: [MarkdownBlock]] {
         lock.lock()
-        let known = cache
-        lock.unlock()
+        defer { lock.unlock() }
 
-        var result: [SylID: [MarkdownBlock]] = [:]
-        result.reserveCapacity(messages.count)
+        for message in messages where cache[message.id] == nil {
+            // The one write site for an arriving message.
+            cache[message.id] = MarkdownParser.parse(message.text)
+            #if DEBUG
+                _parses += 1
+                _entriesWritten += 1
+            #endif
+        }
 
-        for message in messages {
-            if let hit = known[message.id] {
-                result[message.id] = hit
-            } else {
-                result[message.id] = MarkdownParser.parse(message.text)
+        // Exact, not a heuristic: every id in `messages` is now present, so a cache
+        // larger than the window is larger by precisely the entries that have left it.
+        // When nothing has left — the overwhelmingly common case, since the window only
+        // ever grows — this costs one integer comparison and touches nothing.
+        if cache.count > messages.count {
+            var live = Set<SylID>(minimumCapacity: messages.count)
+            for message in messages { live.insert(message.id) }
+            // Collected before removing: mutating a dictionary while iterating its own
+            // `keys` view is not allowed.
+            let departed = cache.keys.filter { !live.contains($0) }
+            for key in departed {
+                cache.removeValue(forKey: key)
+                #if DEBUG
+                    _entriesWritten += 1
+                #endif
             }
         }
 
-        lock.lock()
-        cache = result
-        lock.unlock()
-
-        return result
+        return cache
     }
 }
 
@@ -155,7 +224,6 @@ struct ChatSnapshotLoader: Sendable {
             rows: TranscriptRhythm.rows(for: groups),
             pendingCount: messages.filter { pendingIds.contains($0.id) }.count,
             highestSeq: messages.map(\.seq).max() ?? 0,
-            blocks: parsed,
             mayHaveEarlier: mayHaveEarlier,
             blocksByGroup: byGroup
         )
