@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import type { Goal, HealthStatus, Reminder, ReminderOrigin, Sending, Todo } from "@syl/shared";
 
 import { AdjutantClient } from "../agents/adjutant-client.js";
+import { askBudget, newCorrelationId, refLine } from "../agents/answers.js";
 import { mayReach, notOnTheRoster } from "../agents/roster.js";
 
 import { verifyUrgency } from "../harness/urgency.js";
@@ -806,7 +807,66 @@ const askAgent: ToolHandler = async (input, context) => {
     };
   }
 
-  const sent = await context.fleet.ask(who, question);
+  // AN INBOUND MESSAGE MUST NEVER CAUSE AN UNBOUNDED CHAIN (`syl-014.3.5`).
+  //
+  // Another agent's reply now reaches her turn context (`syl-j8fa.5`), so a
+  // reply can cause a message, which causes a reply. Two agents holding a
+  // conversation on the Commander's subscription is CLAUDE.md constraint 1,
+  // the strongest constraint in the project.
+  //
+  // What is deliberately NOT done here is forbid the second question. "What
+  // does his insurance cost?" / "Which policy?" / "The auto one." is the verb
+  // working; a rule that killed it would deliver something that can hear and
+  // may not speak twice. So this bounds the exchange instead of preventing it.
+  //
+  // Counted from ADJUTANT'S OWN RECORD of what she has sent, not from anything
+  // in this process: the tool server is a fresh subprocess per turn and
+  // remembers nothing at all, so a counter here would reset on every turn and
+  // bound nothing. See `agents/answers.ts` for why a window beats a hop count.
+  const already = await context.fleet.sent();
+  if (!already.ok) {
+    // FAIL CLOSED. A spend guard that opens when its evidence is unavailable is
+    // not a guard, and the thing on the other side of it is his subscription.
+    return {
+      ok: false,
+      action: "ask_agent",
+      reason:
+        `I could not check how much I have already asked ${who}, so I have not asked again — ` +
+        already.failure.message,
+      retryable: true,
+    };
+  }
+
+  const spent = askBudget(who, already.data, Date.now());
+  if (spent !== null) {
+    return {
+      ok: false,
+      action: "ask_agent",
+      // SURFACED TO HIM, not swallowed. The refusal is what she has instead of
+      // another message, and it has to be a thing she can say out loud —
+      // otherwise hitting the ceiling looks to her like the verb being broken,
+      // and looks to him like nothing at all.
+      reason: spent,
+      // Not retryable: nothing the model does this turn changes the count, and
+      // a model that retried would spend the turn discovering that.
+      retryable: false,
+    };
+  }
+
+  // THE RETURN LEG STARTS HERE (`syl-j8fa.5`). A question that cannot be
+  // recognised when it is answered is a question asked into a void: she had
+  // never received a reply, because nothing tied one to what provoked it.
+  //
+  // The id goes in the TEXT as well as on the thread and in the metadata, and
+  // the text is the one that matters. Adjutant injects the message BODY into
+  // the recipient's session, so a thread id they never see is one they cannot
+  // echo — and the whole design rests on the recipient answering the ordinary
+  // way, with nothing required of them. `agents/answers.ts` has the argument.
+  const correlationId = newCorrelationId();
+  const sent = await context.fleet.ask(who, `${question}\n\n${refLine(correlationId)}`, {
+    threadId: correlationId,
+    metadata: { correlationId },
+  });
   if (!sent.ok) {
     // RECORDED BUT NOT READ is its own outcome, and this handler writes its own
     // sentence for it rather than passing the client's through (`syl-j8fa.4`).
@@ -899,13 +959,21 @@ const askAgent: ToolHandler = async (input, context) => {
     // agents are offline most of the time, and a verb that implied otherwise
     // would have her telling him the treasurer said something.
     //
+    // Two additions that answer different questions, and both belong here.
+    //
     // `outcome` is the sentence, and it says what is now known to be true: the
     // text arrived in a session somebody is sitting in front of. That claim is
     // only ever made from a count, never from an id.
+    //
+    // `correlationId` is here so the thing she says out loud and the thing the
+    // service matches on are the same string. Nothing is written down on this
+    // side: the question lives in Adjutant, which is where the answer is going
+    // to land, and this process has no database to write it to anyway.
     subject: {
       who,
       question,
       messageId: sent.data.messageId,
+      correlationId,
       deliveredToSessions: reached,
       outcome:
         reached === 1

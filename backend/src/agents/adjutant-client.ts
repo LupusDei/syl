@@ -221,6 +221,57 @@ export interface InboundMessage {
   readonly body: string;
   /** When Adjutant recorded it, as an ISO-8601 instant. */
   readonly at: string;
+  /**
+   * The thread the sender replied on, when they set one.
+   *
+   * Carried through UNPARSED and absent far more often than not: an agent
+   * answering the ordinary way — `send_message` to her name — sets no thread at
+   * all, and requiring one would be a protocol only she implements. It is here
+   * because it costs nothing and is the *certain* carrier when it is present.
+   * `agents/answers.ts` decides what a correlation id means.
+   */
+  readonly threadId?: string;
+  /** Whatever the sender attached. Same story as `threadId`. */
+  readonly metadata?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * One message SHE sent, read back out of Adjutant.
+ *
+ * This is how the register of outstanding questions is derived rather than
+ * stored (`syl-j8fa.5`). `ask_agent` runs in the tool subprocess, which has no
+ * database handle and reaches Syl's service only over HTTP — so a local table
+ * of questions would need a route, a migration and a second copy of something
+ * Adjutant already holds. It holds it because the answer is going to land in
+ * the same store: what she asked and what came back are one conversation, and
+ * splitting them across two databases is how they drift.
+ *
+ * The consequence worth stating: losing Syl's own database loses which answers
+ * she has been SHOWN, and loses nothing about what she ASKED.
+ */
+export interface OutboundMessage {
+  readonly messageId: string;
+  /** Who she addressed it to. Adjutant calls this field `recipient`. */
+  readonly to: string;
+  readonly body: string;
+  /** When Adjutant recorded it, as an ISO-8601 instant. */
+  readonly at: string;
+  readonly threadId?: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+}
+
+/** What may ride along with a message she sends. */
+export interface SendOptions {
+  /**
+   * The thread this message belongs to.
+   *
+   * Set by `ask_agent` to the question's correlation id, so an answer that
+   * comes back on the same thread is tied to the question that provoked it
+   * rather than floating loose in a list of DMs.
+   */
+  readonly threadId?: string;
+  /** Structured detail Adjutant stores verbatim. */
+  readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
 /** How wide a read window to ask for. */
@@ -297,6 +348,27 @@ interface MessageRow {
   readonly recipient?: unknown;
   readonly body?: unknown;
   readonly createdAt?: unknown;
+  readonly threadId?: unknown;
+  readonly metadata?: unknown;
+}
+
+/**
+ * The two optional carriers, present only when Adjutant actually has them.
+ *
+ * Spread into the result rather than defaulted, because `exactOptionalProperty`
+ * distinguishes "absent" from "explicitly undefined" and a matcher that had to
+ * handle both would have two ways to say the same nothing.
+ */
+function carriers(row: MessageRow): {
+  threadId?: string;
+  metadata?: Readonly<Record<string, unknown>>;
+} {
+  return {
+    ...(typeof row.threadId === "string" && row.threadId !== "" ? { threadId: row.threadId } : {}),
+    ...(typeof row.metadata === "object" && row.metadata !== null && !Array.isArray(row.metadata)
+      ? { metadata: row.metadata as Readonly<Record<string, unknown>> }
+      : {}),
+  };
 }
 
 function failure(
@@ -507,7 +579,11 @@ export class AdjutantClient {
    * a name to reply to — the reply path (`syl-j8fa.5`) depends on it, this
    * method does not.
    */
-  async ask(who: string, body: string): Promise<AdjutantResult<SentMessage>> {
+  async ask(
+    who: string,
+    body: string,
+    options: SendOptions = {},
+  ): Promise<AdjutantResult<SentMessage>> {
     const operation = `ask ${who}`;
     if (!mayReach(who)) {
       return failure("refused", operation, notOnTheRoster(who), false);
@@ -516,7 +592,21 @@ export class AdjutantClient {
     // No `from`, no `role`, no sender of any kind: there is nothing here to be
     // wrong about. Adjutant reads the sender off the session established by
     // `#handshake`, and that session carries `X-Agent-Id: syl`.
-    const called = await this.#callTool("direct_message", { to: who, body }, operation);
+    // `direct_message`, never `send_message`: only the former injects into the
+    // recipient's live session and reports how many injections actually landed.
+    // The optional `threadId`/`metadata` carry the correlation id, which is what
+    // lets an answer be matched back to the question that provoked it — so the
+    // delivering tool and the correlated one have to be the same call.
+    const called = await this.#callTool(
+      "direct_message",
+      {
+        to: who,
+        body,
+        ...(options.threadId === undefined ? {} : { threadId: options.threadId }),
+        ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
+      },
+      operation,
+    );
     if (!called.ok) return called;
 
     const payload = called.data;
@@ -649,10 +739,86 @@ export class AdjutantClient {
       // poll.
       if (typeof createdAt !== "string") continue;
 
-      replies.push({ messageId: id, from: agentId, body, at: adjutantTimeToIso(createdAt) });
+      replies.push({
+        messageId: id,
+        from: agentId,
+        body,
+        at: adjutantTimeToIso(createdAt),
+        ...carriers(item),
+      });
     }
 
     return { ok: true, data: replies };
+  }
+
+  /**
+   * What SHE has said to the fleet — the register of questions she is owed
+   * answers to, derived rather than kept.
+   *
+   * `?agentId=<her>` is the one query where the filter Adjutant actually runs
+   * — `agent_id = ? OR (role = 'user' AND recipient = ?)` — works in our
+   * favour: the first branch is everything she sent. The second branch drags in
+   * what the Commander said to her, which is his conversation and not this, so
+   * rows she did not write are dropped here.
+   *
+   * See {@link OutboundMessage} for why the register lives in Adjutant at all.
+   * The window is the same clamp as {@link repliesFrom} and is the only bound
+   * on how far back a question can be recognised — she asks rarely, so 200 of
+   * her own messages is a long memory, and a question that has fallen out of it
+   * is one nobody is waiting on.
+   */
+  async sent(options: ReadOptions = {}): Promise<AdjutantResult<readonly OutboundMessage[]>> {
+    const operation = "read what she has asked";
+    const limit = Math.min(Math.max(options.limit ?? READ_LIMIT_MAX, 1), READ_LIMIT_MAX);
+    const query = new URLSearchParams({ agentId: this.#agentId, limit: String(limit) });
+
+    const answered = await this.#send(
+      `${this.#baseUrl}${MESSAGES_PATH}?${query.toString()}`,
+      { method: "GET", headers: { accept: "application/json" } },
+      operation,
+    );
+    if (!answered.ok) return answered;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(answered.data.text);
+    } catch {
+      parsed = null;
+    }
+
+    const items = (parsed as { data?: { items?: unknown } } | null)?.data?.items;
+    if (!Array.isArray(items)) {
+      return failure(
+        "malformed",
+        operation,
+        `Adjutant answered on ${this.#origin} with something that is not its message envelope. ` +
+          "Something that is not Adjutant is listening there.",
+        false,
+      );
+    }
+
+    const outgoing: OutboundMessage[] = [];
+    for (const item of items as readonly MessageRow[]) {
+      // Written by her, and addressed to somebody. Anything else in this page
+      // is the Commander's half of her own conversation.
+      if (item.agentId !== this.#agentId) continue;
+
+      const { id, recipient, body, createdAt } = item;
+      if (typeof id !== "string" || typeof recipient !== "string" || typeof body !== "string") {
+        continue;
+      }
+      if (recipient === "" || typeof createdAt !== "string") continue;
+
+      outgoing.push({
+        messageId: id,
+        to: recipient,
+        body,
+        at: adjutantTimeToIso(createdAt),
+        ...carriers(item),
+      });
+    }
+
+    return { ok: true, data: outgoing };
   }
 
   /**

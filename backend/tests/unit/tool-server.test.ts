@@ -2061,6 +2061,11 @@ describe("ask_agent — putting a question to someone who knows more", () => {
           asked.push({ who, body });
           return result;
         },
+        // She has asked nobody anything yet. `ask_agent` reads this before it
+        // sends, to bound how much of an exchange it can become without the
+        // Commander (`syl-014.3.5`); the ceiling has its own tests in
+        // `no-auto-reply.test.ts`.
+        sent: async () => ({ ok: true as const, data: [] }),
       } as unknown as AdjutantClient,
     };
   };
@@ -2087,9 +2092,13 @@ describe("ask_agent — putting a question to someone who knows more", () => {
     );
 
     expect(envelope).toMatchObject({ ok: true, action: "ask_agent" });
-    expect(asked).toEqual([
-      { who: "treasurer", body: "What is he paying for health insurance?" },
-    ]);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.who).toBe("treasurer");
+    // `toContain`, not `toEqual`: the body also carries the correlation id the
+    // return leg matches an answer on (`syl-j8fa.5`, `agents/answers.ts`), and
+    // what this test is about is that she asked the right person the right
+    // thing. The stamping has its own tests in `adjutant-replies.test.ts`.
+    expect(asked[0]?.body).toContain("What is he paying for health insurance?");
     if (envelope.ok) {
       const subject = envelope.subject as Record<string, unknown>;
       expect(subject["who"]).toBe("treasurer");
@@ -2172,7 +2181,17 @@ describe("ask_agent — the difference between reaching someone and filing a mes
   const fleet = (
     result: Awaited<ReturnType<AdjutantClient["ask"]>>,
   ): AdjutantClient =>
-    ({ ask: async () => result }) as unknown as AdjutantClient;
+    // `sent` as well as `ask`, because the send-rate budget consults the record
+    // of what already left BEFORE the send happens. A fake missing it does not
+    // fail as a budget refusal — every case in this block collapses into the
+    // generic internal-error sentence, which is indistinguishable from the
+    // undelivered wording these tests exist to pin. An empty record is the
+    // right default here: these cases are about what she says when a message
+    // does or does not arrive, not about the hourly ceiling.
+    ({
+      ask: async () => result,
+      sent: async () => ({ ok: true as const, data: [] }),
+    }) as unknown as AdjutantClient;
 
   const askTreasurer = async (client: AdjutantClient | null): Promise<ToolEnvelope> =>
     (

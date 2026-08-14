@@ -90,6 +90,25 @@ function omissionNote(count: number): string {
 }
 
 /**
+ * A contribution that also says WHICH answers went into it.
+ *
+ * `kept` is additive on purpose — every existing caller reads `id`, `kind` and
+ * `text` and is unaffected — and it exists because of a defect that is
+ * invisible without it. The caller records what it showed her so it is never
+ * shown twice; if it records the whole batch while this function dropped half
+ * of it for room, the dropped half is marked seen and never arrives. That is
+ * the omission note ("nothing has been lost") becoming a lie, and it is the
+ * same silent-drop failure class as the bug `syl-j8fa` exists to fix.
+ *
+ * So the fitting decision and the record of what was surfaced come from ONE
+ * place: this one. `agents/answers.ts` records `kept`, and nothing else.
+ */
+export type ReplyContribution<T extends AgentReply = AgentReply> = Contributor & {
+  /** Exactly the answers that appear in `text`, in the order they appear. */
+  readonly kept: readonly T[];
+};
+
+/**
  * Compose the answers she should see this turn, or nothing at all.
  *
  * @param replies oldest first — the order the exchange happened in, which is
@@ -99,7 +118,9 @@ function omissionNote(count: number): string {
  * section that is present and empty reads to her as one that failed to load,
  * and `composeTurnContext` would drop it anyway.
  */
-export function replyContributor(replies: readonly AgentReply[]): Contributor | undefined {
+export function replyContributor<T extends AgentReply>(
+  replies: readonly T[],
+): ReplyContribution<T> | undefined {
   if (replies.length === 0) return undefined;
 
   const kept = fit(replies);
@@ -108,7 +129,7 @@ export function replyContributor(replies: readonly AgentReply[]): Contributor | 
   const fenced = fenceReplies(kept);
   const text = dropped === 0 ? fenced : `${fenced}\n\n${omissionNote(dropped)}`;
 
-  return { id: AGENT_REPLIES_CONTRIBUTOR_ID, kind: "reports", text };
+  return { id: AGENT_REPLIES_CONTRIBUTOR_ID, kind: "reports", text, kept };
 }
 
 /**
@@ -127,8 +148,8 @@ export function replyContributor(replies: readonly AgentReply[]): Contributor | 
  * the floor asserted in the tests holds — rather than showing her an omission
  * note where the answer should be.
  */
-function fit(replies: readonly AgentReply[]): readonly AgentReply[] {
-  let kept: readonly AgentReply[] = replies.slice(-1);
+function fit<T extends AgentReply>(replies: readonly T[]): readonly T[] {
+  let kept: readonly T[] = replies.slice(-1);
 
   for (let start = replies.length - 2; start >= 0; start -= 1) {
     const candidate = replies.slice(start);
