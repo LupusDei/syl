@@ -1,6 +1,6 @@
 import { HEALTH_TYPES, silenceIsEvidence, type AuthorisationState, type HealthType } from "./contract.js";
-import { derive, type SeriesDerivation } from "./derive.js";
-import type { HealthSample, HealthSamples } from "./samples.js";
+import { derivationSpan, derive, type SeriesDerivation } from "./derive.js";
+import type { HealthSamples } from "./samples.js";
 
 /**
  * His health, small enough to put in front of her mid-conversation.
@@ -38,6 +38,35 @@ import type { HealthSample, HealthSamples } from "./samples.js";
  * permission dialog. That is the failure this whole feature was built around, so
  * the flag rides on every entry rather than being something she is trusted to
  * remember.
+ *
+ *
+ * ## IT ANSWERS MID-CONVERSATION, SO ITS COST IS BOUNDED BY DAYS AND NOT SAMPLES
+ *
+ * `syl-8ys9.2.2`, closing `syl-6ig6`. This file shipped reading up to 20,000
+ * raw rows per type through `series()` and handing them to `derive()` to
+ * bucket. The cap was a number chosen without a stopwatch, which is the entire
+ * defect: against a fixture it was instant, and against his real store —
+ * 61,030 samples, fourteen types — the verb took **8.675 seconds**. Nine
+ * seconds of silence before she can answer *"how have I been sleeping"* is not
+ * a slow endpoint, it is her appearing to hang, and the tool timeout is the
+ * next thing it meets.
+ *
+ * So the summary asks the store for `daily()` — the same rows, reduced to one
+ * per local day inside SQLite — and hands those to `derive()`. Nothing this
+ * file reports is finer than a day, so nothing is lost, and the read is now
+ * ~37 rows per type instead of up to 20,000. Measured on a corpus his size:
+ * 3,255ms to 62ms of query time.
+ *
+ * **There is no row limit here any more, and its absence is the fix.** A cap
+ * exists to stop an unbounded read; this read is bounded by the WINDOW, which
+ * is 35 days whatever his history is. A limit would now be a way to truncate a
+ * baseline silently, which is the failure the old one was quietly causing —
+ * 20,000 heart-rate rows is a fortnight of his data, not the five weeks the
+ * baseline claims to cover.
+ *
+ * The nightly review still reads raw rows (`review.ts`), on purpose: it runs at
+ * 03:00 on the consolidation lane, where eight seconds costs nothing, and it is
+ * the path that would notice if the two ever stopped agreeing.
  */
 
 /** One type, as she is shown it. */
@@ -87,52 +116,54 @@ export interface SummariseInput {
   readonly types?: readonly HealthType[];
   readonly recentDays?: number;
   readonly baselineDays?: number;
-  /** Rows read per type before deriving. A bound, not a page. */
-  readonly limit?: number;
 }
-
-/** How many rows one type contributes to a derivation. */
-export const SUMMARY_SERIES_LIMIT = 20_000;
 
 export function summariseHealth(input: SummariseInput): HealthSummary {
   const recentDays = input.recentDays;
   const baselineDays = input.baselineDays;
+  const window = {
+    now: input.now,
+    tz: input.tz,
+    ...(recentDays === undefined ? {} : { recentDays }),
+    ...(baselineDays === undefined ? {} : { baselineDays }),
+  };
 
-  // A day either side of the nominal window, because a UTC range does not line
-  // up with a local one — the same reasoning `HealthReview` uses, and the same
-  // asymmetry: over-reading is discarded by `derive`, under-reading truncates a
-  // baseline silently.
-  const lookback = (recentDays ?? 7) + (baselineDays ?? 28) + 2;
-  const from = new Date(input.now - lookback * 24 * 60 * 60_000).toISOString();
+  // Ask `derive` which days it is going to keep, rather than computing a
+  // lookback beside it. The old code here had its own `recent + baseline + 2`
+  // with a comment explaining the two spare days, and so did `review.ts`; a
+  // window written down twice is a window that eventually disagrees, in the
+  // direction that truncates a baseline without saying so.
+  const span = derivationSpan(window);
 
   const wanted =
     input.types === undefined || input.types.length === 0
       ? HEALTH_TYPES
       : HEALTH_TYPES.filter((type) => input.types?.includes(type));
 
-  const series: Partial<Record<HealthType, readonly HealthSample[]>> = {};
+  // Read only what was asked for. Deriving the other thirteen to throw them
+  // away is the kind of waste that stops being free at sixty thousand rows.
+  const days = input.samples.daily({
+    types: wanted,
+    from: span.baselineFrom,
+    to: span.today,
+    tz: input.tz,
+  });
+
   const authorisation: Partial<Record<HealthType, AuthorisationState>> = {};
   const reported = input.samples.authorisation();
-
-  // Read only what was asked for. Deriving the other six to throw them away is
-  // the kind of waste that stops being free at fifty thousand rows.
   for (const type of wanted) {
-    series[type] = input.samples.series({
-      type,
-      from,
-      limit: input.limit ?? SUMMARY_SERIES_LIMIT,
-    });
     const record = reported[type];
     if (record !== undefined) authorisation[type] = record.state;
   }
 
   const derived = derive({
-    series,
+    // Every requested type is named, including the ones with nothing, so
+    // `derive` never falls back to looking for raw rows that were not read.
+    // An absent key means "no aggregate given"; an empty array means "no days",
+    // and only the second is true here.
+    days: Object.fromEntries(wanted.map((type) => [type, days[type] ?? []])),
     authorisation,
-    now: input.now,
-    tz: input.tz,
-    ...(recentDays === undefined ? {} : { recentDays }),
-    ...(baselineDays === undefined ? {} : { baselineDays }),
+    ...window,
   });
 
   const chosen = new Set<HealthType>(wanted);
