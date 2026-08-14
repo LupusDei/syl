@@ -1580,6 +1580,14 @@ height, so the `LazyVStack` sizes **every** row in the 200-message window rather
 than the visible ones; and an arriving reply invalidates the lot. A main thread
 that stops answering long enough is a watchdog kill, which is what he saw.
 
+> **The middle clause is version-stale and was measured false on 2026-08-14.**
+> On iOS 26.2 the bottom anchor builds a *bounded* region of about forty rows
+> regardless of window size — it does not size every row. The claim was very
+> likely true when written and is not true now. It sat here for three days and
+> was repeated into a spec and to the Commander before anyone re-ran it. Left in
+> place rather than edited away, because the interesting part is that it was
+> plausible, load-bearing and wrong. See *"The runaway that wasn't"* below.
+
 **The two previous fixes to this same symptom both guessed wrong** —
 `ChatSnapshotLoader` moved *block* scanning off the main actor, and `blocksByGroup`
 killed a quadratic compare. Inline parsing was in neither, and the file went on
@@ -2166,3 +2174,140 @@ agree on values of one magnitude, so 400 heart-rate readings between 48 and 120
 do *not* separate them — a test written against his real shape would have passed
 whichever summation was in place, and gone on passing after they diverged. The
 fixture mixes magnitudes on purpose and says so.
+
+### The runaway that wasn't — `syl-025`, 2026-08-14
+
+The epic was planned on a mechanism that turned out not to exist, and measurement
+corrected it three times in one night. The chat transcript was genuinely loading the
+whole conversation and genuinely getting slower the longer he used it; both were real,
+and **neither had the cause the spec gave.** What follows is worth more written down
+than a spec that had been right first time.
+
+#### What the spec said, and what was actually true
+
+The spec named three defects that "conspire to defeat the paging that is there". The
+load-bearing one, Defect A, was a self-retriggering load: `.onAppear` on the
+`EarlierMessages` row fires when the row is *instantiated*, a rebuild re-instantiates it,
+so each load triggered the next until the entire conversation was resident with nobody
+touching the phone. Defect C was the anchor cancelling laziness, and the spec said A and
+C **multiply**.
+
+Measured, hosted in a real `UIWindow`, iOS 26.2 / Xcode 26.2, iPhone 17 simulator:
+
+| rows built at first paint | window 50 | window 400 |
+| --- | --- | --- |
+| with `.defaultScrollAnchor(.bottom)` | 40 | 40 |
+| without it | 6 | 6 |
+
+The anchor costs a **fixed** 6.7x that does not scale with the window. It cannot multiply
+with anything. And with the pre-fix `.onAppear` restored, on a 2,000-message transcript at
+a page size of 50, watched throughout rather than sampled at the end:
+
+    first paint, 2s idle           50 messages — no growth
+    parked at the top for 2s      100 messages — exactly one page
+
+**The runaway does not reproduce.** The spec's stated cause is dead. What almost certainly
+happened is the mundane reading nobody proposed: he reached the top perhaps ten times over
+some weeks, at 200 messages a step, and two thousand messages became resident. His
+sentence — *"it looks like it loads and contains all of the previous messages"* — is
+exactly as accurate under that reading, and needs no bug beyond the step size.
+
+#### The rule that replaces it
+
+`onAppear` on a lazy child means **realised**, and realisation is geometry. It is not
+"became visible", it is not "was instantiated", and — this is the half that took three
+tries — **a rebuild does not re-fire it.** A row whose identity survives a snapshot
+reassignment is *updated*, not destroyed and recreated, so the load that rebuilds the
+stack cannot re-trigger the row that started it.
+
+That is why parking at the top for two seconds loads one page and stops. The row is
+realised when he arrives at the top; the widen inserts older rows *below* it, so it is
+still the first element and still realised; nothing derealises it; `onAppear` does not
+fire again. **One arrival, one page** — which is the intended behaviour, and was all
+along.
+
+An intermediate version of this rule, arrived at during review and written into the bead,
+said the discriminator was *position in the stack relative to the insertion point* — that
+`EarlierMessages` sits above where rows are inserted and is therefore re-realised by every
+widen. **That is wrong in its mechanism and the measurement above is what says so**: if
+every widen re-realised the row, parking at the top would have looped, and it did not.
+Position in the stack is a real corollary about *when* a row's realisation changes, but it
+is not the load-bearing half. The load-bearing half is realisation versus rebuild.
+
+The corollary still settles the case it was invented for. The foot sentinel at the end of
+the same `LazyVStack` carries the identical two lines — `onAppear` sets `isAtBottom`,
+`onDisappear` clears it — and it is **correct**, structurally rather than by luck: nothing
+is ever inserted below the last element, so it changes distance from the viewport only
+when he actually scrolls, which is precisely what `isAtBottom` means. Same two lines, and
+the verdict differs.
+
+#### What actually explains "worse the longer he uses her"
+
+Two things compose, and neither is the runaway.
+
+**The window has exactly one write in the entire tree.** `loader.limit += pageSize`, in
+`ChatViewModel.widenTheWindow()`. There is no decrement, no reset, no assignment anywhere
+else — grep it. `ChatViewModel` is constructed once, inside `openStore()`, which is called
+from one place in `didFinishLaunching`; the view is an `@ObservedObject` observer that a
+tab switch destroys and recreates while the model outlives it. So the window is monotonic
+for the life of the **process**, and nothing short of killing the app brings it down.
+
+**And `refresh()` was O(window) per event.** `MarkdownCache.blocks(for:)` allocated a fresh
+N-entry dictionary on every call, copied every hit into it, and swapped it in — every entry
+a cache hit, N hashed inserts anyway. `refresh()` runs on every arriving message, every
+send, every foreground and every return to the tab. At a window that had grown to two
+thousand, **one arriving message cost 2,001 dictionary writes.** It is now 1. An unchanged
+reload went from 2,000 writes to 0; a reconciliation costs 2, one insert and one removal.
+
+A monotonic window times an O(window) per-message cost is a symptom that gets monotonically
+worse with use, which is what he reported. A fixed 6.7x cannot do that.
+
+**The trap in fixing it is worth the paragraph.** `ChatSnapshot` carried the whole
+`[SylID: [MarkdownBlock]]` map beside `blocksByGroup`, with a `blocks(for:)` accessor no
+caller ever used. Swift dictionaries are copy-on-write, so a snapshot holding that map kept
+the cache's storage referenced twice — and the next insert would have had to copy the entire
+spine before writing one entry. Fixing the cache and leaving the retention would have left
+the O(window) cost exactly where it was **for the one case that matters most, a message
+arriving**, while every new counter reported success. A green probe measuring the wrong
+storage is this repository's oldest failure mode wearing yet another hat.
+
+What remains O(window) per refresh is the rest of `load()`: the read and decode, the
+grouping, the row rhythm, and the per-group slice. Those cannot be memoised the way the
+parse can — `MessageGrouping` merges adjacent same-role messages within a time gap, so a
+group id can keep its identity while its *membership* changes, and caching on that id
+without a membership key is a stale transcript, which is a worse bug than a slow one.
+Making them incremental means teaching `load()` a delta instead of handing it a window.
+
+#### Two gate lessons, both of which had already been learned here
+
+The `-scheme Syl` note three sections above — *every "the suite is green" in this session
+counted 795 of 1094 tests* — recurred twice on 2026-08-14 in two different subsystems.
+
+`ios/scripts/test.sh` runs three phases and is `set -e`. A merge on an epic branch removed
+`height` from `HealthType` and left three assertions referencing it, so **the SylKit test
+target did not compile** — and phases 2 and 3 were therefore never reached by anyone
+working on that branch, for an entire evening. The only symptom was a compile error in a
+health-metrics test that looks like somebody else's problem. The upstream fix's own commit
+message names the shape exactly: *"three stale `height` assertions CI caught and my local
+build did not."*
+
+**A gate that stops early is not a gate that passed.** The rule at the top of `CLAUDE.md`
+is about measurements needing a version stamp and a re-run; this is its sibling, and the
+two met tonight: a stale measurement decided a spec, and a stalled gate hid the fact that
+two thirds of the suite had not run while that spec was being executed. Read the phase
+banners and the test counts, not the exit status — and when a run is green, ask what it
+counted.
+
+#### The habit that found all of it
+
+Every correction in this section came from the same move: **distrust your own green.**
+The row census was written because a parse counter reported a cache working perfectly while
+it rewrote two thousand entries around the avoided parse. The copy-on-write trap was found
+because a cache that gets cheaper with nothing else changing usually means the cost moved
+rather than left. The runaway was retired because someone hosted a real window and watched
+it for two seconds instead of reasoning from a comment. And the two remaining red tests in
+the app target were confirmed pre-existing by building a throwaway worktree at the branch
+point and reproducing the identical numbers, rather than by assuming.
+
+Three theories died tonight — the spec's, the reviewer's, and the intermediate one written
+into a bead. Every one of them was plausible, and every one was replaced by a number.
