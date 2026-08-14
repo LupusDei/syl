@@ -311,6 +311,18 @@ extension HealthType {
             // typo would be a crash on his phone rather than a compile error here.
             return HKUnit.literUnit(with: .milli)
                 .unitDivided(by: HKUnit.gramUnit(with: .kilo).unitMultiplied(by: .minute()))
+        }
+    }
+
+    /// How the wire value differs from HealthKit's number.
+    ///
+    /// 100 for body fat and 1 for everything else, and the reason is that
+    /// HealthKit's `%` is a FRACTION: an 18% reading arrives as `0.18`. Both
+    /// spell themselves `%`, so a unit-drift check compares two identical
+    /// strings and passes while the wire carries a number a hundred times too
+    /// small — correct-looking in every chart and every baseline.
+    var wireScale: Double {
+        switch self {
         case .bodyFatPercentage: return 100
         case .heartRate, .restingHeartRate, .heartRateVariability, .sleep, .steps,
             .workout, .bodyMass, .activeEnergy, .basalEnergy, .vo2Max,

@@ -256,8 +256,10 @@ final class HealthReaderTests: XCTestCase {
             accuracy: 1e-4
         )
 
-        let twoMetres = HKQuantity(unit: .meter(), doubleValue: 1.8)
-        XCTAssertEqual(HealthType.height.wireValue(of: twoMetres), 180, accuracy: 1e-9)
+        // `height` was here and is deliberately gone: it left HEALTH_TYPES for
+        // `characteristics.ts` (`syl-czku`), because a name in both lists gives
+        // him two answers to one question — a memory saying six foot two, and a
+        // series claiming a trend over an unchanging value.
     }
 
     // MARK: - Where a read starts
