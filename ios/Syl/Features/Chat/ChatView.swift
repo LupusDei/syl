@@ -60,7 +60,7 @@ struct ChatView: View {
                 transcript
 
                 ChatComposer(
-                    draft: $model.draft,
+                    draft: model.draft,
                     isFocused: $composerFocused,
                     send: { Task { await model.send() } }
                 )

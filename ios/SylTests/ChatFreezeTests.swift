@@ -233,6 +233,111 @@ final class ChatInlineRenderCostTests: XCTestCase {
     }
 }
 
+/// The shared harness for probes that host the real transcript in a real window.
+///
+/// `ImageRenderer` cannot serve here: it lays out nothing inside a `ScrollView` — an
+/// offscreen host never gives the scroll view a content size — and the scroll view's
+/// geometry is the entire question. Only a hosted `UIWindow` has a viewport at all.
+///
+/// Carries no tests of its own.
+@MainActor
+class ChatHostedTranscriptCase: XCTestCase {
+    /// iPhone 17 logical size — the screen the Commander actually holds.
+    fileprivate static let screen = CGSize(width: 393, height: 852)
+
+    // MARK: - Harness
+
+    /// A model over a transcript far longer than the window, holding the real prose.
+    fileprivate func longConversationModel() async throws -> ChatViewModel {
+        let model = ChatViewModel(
+            store: try longConversationStore(),
+            now: { try! Instant.parse("2026-08-09T07:00:03.114Z") }
+        )
+        await model.refresh()
+        return model
+    }
+
+    /// Presents one window size and reports how many rows first paint built.
+    fileprivate func present(store: LocalStore, window size: Int) async throws -> Int {
+        let model = ChatViewModel(
+            store: store,
+            limit: size,
+            now: { try! Instant.parse("2026-08-09T07:00:03.114Z") }
+        )
+        await model.refresh()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window)
+        return ChatRowCensus.rowsBuilt
+    }
+
+    /// Two thousand turns of the prose that froze the app.
+    fileprivate func longConversationStore() throws -> LocalStore {
+        let database = try SylDatabase.inMemory()
+        let store = LocalStore(database: database)
+        let base = try Instant.parse("2026-08-09T07:00:03.114Z")
+        try store.upsert(
+            (1...2_000).map { seq in
+                Message(
+                    id: "syl:message:0198f2c0-0001-7000-8000-\(String(format: "%012d", seq))",
+                    conversationId: SylIDs.interactiveConversation,
+                    clientId: nil,
+                    role: seq.isMultiple(of: 2) ? .assistant : .user,
+                    text: ChatFreezeFixture.paragraphs[seq % ChatFreezeFixture.paragraphs.count],
+                    createdAt: base.addingTimeInterval(
+                        Double(seq) * (MessageGrouping.maximumGap + 1)
+                    ),
+                    seq: seq
+                )
+            }
+        )
+        return store
+    }
+
+    /// Hosts the view in a real window.
+    ///
+    /// `ImageRenderer` cannot be used for this: it lays out nothing inside a `ScrollView`
+    /// — an offscreen host never gives the scroll view a content size — which is exactly
+    /// the geometry under measurement. Only a hosted window has a viewport at all.
+    fileprivate func present(_ view: ChatView) -> UIWindow {
+        ChatRowCensus.reset()
+        let window = UIWindow(frame: CGRect(origin: .zero, size: Self.screen))
+        window.rootViewController = UIHostingController(rootView: view)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        return window
+    }
+
+    fileprivate func dismiss(_ window: UIWindow) {
+        window.isHidden = true
+        window.rootViewController = nil
+    }
+
+    /// Lets SwiftUI do the work it was asked to do.
+    ///
+    /// A layout pass is not synchronous with a state change, so an assertion made
+    /// immediately after one measures the frame before it — which is a probe that reads
+    /// zero no matter what the view does, and it would have made the keystroke test pass
+    /// on the unfixed code.
+    fileprivate func settle(_ window: UIWindow) async {
+        for _ in 0..<6 {
+            try? await Task.sleep(for: .milliseconds(20))
+            window.layoutIfNeeded()
+        }
+    }
+    /// The one scroll view in the transcript, found by walking the hosted hierarchy.
+    fileprivate func transcriptScrollView(in window: UIWindow) -> UIScrollView? {
+        func search(_ view: UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView { return scroll }
+            for child in view.subviews {
+                if let found = search(child) { return found }
+            }
+            return nil
+        }
+        return window.rootViewController.flatMap { search($0.view) }
+    }
+}
+
 /// What first paint costs, in rows (`syl-025.2.1`).
 ///
 /// The other half of the freeze, and the half no test has ever asserted.
@@ -257,10 +362,7 @@ final class ChatInlineRenderCostTests: XCTestCase {
 /// The same trap this file already documents, in a new costume: a probe that cannot fail
 /// for the reason you care about is a probe that agrees with whatever it is handed. Both
 /// tests below are proven against a mutation.
-@MainActor
-final class ChatRowLayoutCostTests: XCTestCase {
-    /// iPhone 17 logical size — the screen the Commander actually holds.
-    private static let screen = CGSize(width: 393, height: 852)
+final class ChatRowLayoutCostTests: ChatHostedTranscriptCase {
 
     func testShouldBuildOnlyTheRowsNearTheViewport() async throws {
         let model = try await longConversationModel()
@@ -324,7 +426,7 @@ final class ChatRowLayoutCostTests: XCTestCase {
         ChatRowCensus.reset()
         // Ten characters, the way SC-002 states it.
         for character in "Remind me" {
-            model.draft.append(character)
+            model.draft.text.append(character)
             await settle(window)
         }
 
@@ -340,84 +442,72 @@ final class ChatRowLayoutCostTests: XCTestCase {
         )
     }
 
-    // MARK: - Harness
+}
 
-    /// A model over a transcript far longer than the window, holding the real prose.
-    private func longConversationModel() async throws -> ChatViewModel {
-        let model = ChatViewModel(
-            store: try longConversationStore(),
-            now: { try! Instant.parse("2026-08-09T07:00:03.114Z") }
-        )
-        await model.refresh()
-        return model
-    }
-
-    /// Presents one window size and reports how many rows first paint built.
-    private func present(store: LocalStore, window size: Int) async throws -> Int {
-        let model = ChatViewModel(
-            store: store,
-            limit: size,
-            now: { try! Instant.parse("2026-08-09T07:00:03.114Z") }
-        )
-        await model.refresh()
-        let window = present(ChatView(model: model))
-        defer { dismiss(window) }
-        await settle(window)
-        return ChatRowCensus.rowsBuilt
-    }
-
-    /// Two thousand turns of the prose that froze the app.
-    private func longConversationStore() throws -> LocalStore {
-        let database = try SylDatabase.inMemory()
-        let store = LocalStore(database: database)
-        let base = try Instant.parse("2026-08-09T07:00:03.114Z")
-        try store.upsert(
-            (1...2_000).map { seq in
-                Message(
-                    id: "syl:message:0198f2c0-0001-7000-8000-\(String(format: "%012d", seq))",
-                    conversationId: SylIDs.interactiveConversation,
-                    clientId: nil,
-                    role: seq.isMultiple(of: 2) ? .assistant : .user,
-                    text: ChatFreezeFixture.paragraphs[seq % ChatFreezeFixture.paragraphs.count],
-                    createdAt: base.addingTimeInterval(
-                        Double(seq) * (MessageGrouping.maximumGap + 1)
-                    ),
-                    seq: seq
-                )
-            }
-        )
-        return store
-    }
-
-    /// Hosts the view in a real window.
+/// Where first paint LANDS (`syl-025.2.2`, FR-006).
+///
+/// The other half of the anchor question, and the half that cannot be traded away.
+/// `.defaultScrollAnchor(.bottom)` is expensive — `ChatRowLayoutCostTests` measures how
+/// expensive — but it was added for a real reason, recorded in `ChatView` itself: an
+/// `onChange`-only scroll to the foot **intermittently fails on long transcripts**.
+/// Opening the chat somewhere in the middle of last week is worse than the defect this
+/// epic started from, because it happens on every launch and there is nothing to do about
+/// it but scroll.
+///
+/// So this asserts the property the anchor exists to guarantee, independently of how it is
+/// achieved: after first paint on a 2,000-message transcript, the viewport is at the
+/// newest message.
+///
+/// **Ten presentations, not one.** The failure on record is intermittent, and a single
+/// green pass is exactly the evidence that produced that comment in the first place. A
+/// candidate that lands nine times out of ten has not replaced the anchor; it has moved
+/// the bug somewhere harder to see.
+final class ChatFirstPaintPlacementTests: ChatHostedTranscriptCase {
+    /// How far from the foot still counts as "at the newest message", in points.
     ///
-    /// `ImageRenderer` cannot be used for this: it lays out nothing inside a `ScrollView`
-    /// — an offscreen host never gives the scroll view a content size — which is exactly
-    /// the geometry under measurement. Only a hosted window has a viewport at all.
-    private func present(_ view: ChatView) -> UIWindow {
-        ChatRowCensus.reset()
-        let window = UIWindow(frame: CGRect(origin: .zero, size: Self.screen))
-        window.rootViewController = UIHostingController(rootView: view)
-        window.makeKeyAndVisible()
-        window.layoutIfNeeded()
-        return window
-    }
+    /// Not zero: the transcript carries vertical padding and a one-point sentinel, and
+    /// insisting on an exact match would make this a test about rounding.
+    private static let tolerance: CGFloat = 12
 
-    private func dismiss(_ window: UIWindow) {
-        window.isHidden = true
-        window.rootViewController = nil
-    }
+    func testShouldOpenAtTheNewestMessageEveryTimeOnALongTranscript() async throws {
+        var shortfalls: [CGFloat] = []
 
-    /// Lets SwiftUI do the work it was asked to do.
-    ///
-    /// A layout pass is not synchronous with a state change, so an assertion made
-    /// immediately after one measures the frame before it — which is a probe that reads
-    /// zero no matter what the view does, and it would have made the keystroke test pass
-    /// on the unfixed code.
-    private func settle(_ window: UIWindow) async {
-        for _ in 0..<6 {
-            try? await Task.sleep(for: .milliseconds(20))
-            window.layoutIfNeeded()
+        for attempt in 1...10 {
+            let model = try await longConversationModel()
+            let window = present(ChatView(model: model))
+            await settle(window)
+
+            let scroll = try XCTUnwrap(
+                transcriptScrollView(in: window),
+                "attempt \(attempt): no scroll view was hosted, so nothing was measured"
+            )
+            // Without this the test passes on a transcript that never laid out: a content
+            // size no taller than the viewport is trivially "at the bottom".
+            XCTAssertGreaterThan(
+                scroll.contentSize.height,
+                scroll.bounds.height,
+                "attempt \(attempt): the transcript is not taller than the screen, so placement means nothing"
+            )
+
+            shortfalls.append(
+                scroll.contentSize.height - (scroll.contentOffset.y + scroll.bounds.height)
+            )
+            dismiss(window)
         }
+
+        print("SYL_FIRST_PAINT shortfall from foot, 10 attempts: \(shortfalls.map { Int($0) })")
+
+        let worst = shortfalls.max() ?? 0
+        XCTAssertLessThanOrEqual(
+            worst,
+            Self.tolerance,
+            """
+            First paint came to rest \(Int(worst)) points above the newest message on at \
+            least one of ten attempts (all: \(shortfalls.map { Int($0) })). He opens the \
+            chat and is somewhere in the middle of his own history. FR-006 is the property \
+            `.defaultScrollAnchor(.bottom)` was added to guarantee, and it is not \
+            negotiable against the cost of guaranteeing it.
+            """
+        )
     }
 }

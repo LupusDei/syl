@@ -29,7 +29,19 @@ final class ChatViewModel: ObservableObject {
     /// state to design, not an error to report — but a message that cannot be sent is
     /// worth saying out loud.
     @Published private(set) var notice: String?
-    @Published var draft = ""
+
+    /// What he is typing.
+    ///
+    /// **A separate observable, and that separation is the fix.** This was
+    /// `@Published var draft` on this object — the same object the transcript observes —
+    /// so every character invalidated `ChatView.body` and everything under it. Nothing he
+    /// types is about the transcript, and it was rebuilding twenty to thirty rows per
+    /// keystroke to find that out.
+    ///
+    /// Held as a plain `let`. Reading a `let` does not subscribe, so `ChatView` can hand
+    /// this to the composer without hearing about it; only `ChatComposer` observes it, and
+    /// only the composer redraws.
+    let draft = ChatDraft()
 
     /// True while an older page is being read. Kept so the affordance can say it is
     /// working and so a fast scroll cannot queue five overlapping loads.
@@ -252,7 +264,7 @@ final class ChatViewModel: ObservableObject {
     /// deliver the words without the picture. Parked is neither: it is a durable,
     /// visible "not yet".
     func send(staging: [StagedAttachment] = []) async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         // A message must say something. A picture says something.
         //
         // The contract required non-empty text until `syl-008.8`, which made "send a
@@ -290,7 +302,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        draft = ""
+        draft.text = ""
         notice = nil
         // He has asked for something, and from here until she answers the screen owes him
         // an account of it. Armed before the send rather than after, because a send that

@@ -193,7 +193,7 @@ final class ChatViewModelTests: XCTestCase {
     @MainActor
     func testShouldShowTheBubbleImmediatelyAndQueueTheIntent() async throws {
         let model = makeModel()
-        model.draft = "Remind me to call the pharmacy at 4 today."
+        model.draft.text = "Remind me to call the pharmacy at 4 today."
 
         await model.send()
 
@@ -206,22 +206,22 @@ final class ChatViewModelTests: XCTestCase {
     @MainActor
     func testShouldClearTheDraftOnceTheMessageIsQueued() async {
         let model = makeModel()
-        model.draft = "Hello."
+        model.draft.text = "Hello."
 
         await model.send()
 
-        XCTAssertEqual(model.draft, "")
+        XCTAssertEqual(model.draft.text, "")
     }
 
     @MainActor
     func testShouldIgnoreAnEmptyOrWhitespaceOnlyDraft() async throws {
         let model = makeModel()
-        model.draft = "   \n "
+        model.draft.text = "   \n "
 
         await model.send()
 
         XCTAssertEqual(try Outbox(database: database).count(), 0)
-        XCTAssertEqual(model.draft, "   \n ")
+        XCTAssertEqual(model.draft.text, "   \n ")
     }
 
     @MainActor
@@ -233,7 +233,7 @@ final class ChatViewModelTests: XCTestCase {
             sendOverSocket: { _, _, _ in throw WebSocketClient.NotConnected() },
             flush: { await flushed.raise() }
         )
-        model.draft = "Hello."
+        model.draft.text = "Hello."
 
         await model.send()
 
@@ -254,7 +254,7 @@ final class ChatViewModelTests: XCTestCase {
                 await observed.set((try? store.pendingMessages().count) ?? 0)
             }
         )
-        model.draft = "Hello."
+        model.draft.text = "Hello."
 
         await model.send()
 
@@ -267,7 +267,7 @@ final class ChatViewModelTests: XCTestCase {
     @MainActor
     func testShouldReplaceThePendingBubbleWhenTheSocketConfirms() async throws {
         let model = makeModel(makeClientId: { "c8f41d02-6b1e-4a77-9f30-2ab5c9d10e44" })
-        model.draft = "Remind me to call the pharmacy at 4 today."
+        model.draft.text = "Remind me to call the pharmacy at 4 today."
         await model.send()
 
         let changed = await model.apply(.deliveryConfirmation(confirmation()))
@@ -354,7 +354,7 @@ final class ChatViewModelTests: XCTestCase {
     func testShouldSayHowManyMessagesAreWaitingWhenOffline() async {
         // An assistant that silently fails to sync is worse than one that says so.
         let model = makeModel(sendOverSocket: { _, _, _ in throw WebSocketClient.NotConnected() })
-        model.draft = "Hello."
+        model.draft.text = "Hello."
         await model.send()
 
         await model.apply(.connectionState(.offline))
@@ -776,7 +776,7 @@ final class ChatViewModelTests: XCTestCase {
         // transcript is empty. That can only happen if the pending message reaches
         // `pendingCount` without reaching `rows`.
         let model = makeModel()
-        model.draft = "Can you create a reminder for me in 1 minute?"
+        model.draft.text = "Can you create a reminder for me in 1 minute?"
 
         await model.send()
 
@@ -863,7 +863,7 @@ final class ChatViewModelTests: XCTestCase {
     @MainActor
     func testShouldCallAQueuedTurnStalledOnceTheSocketIsDown() async throws {
         let model = makeModel()
-        model.draft = "Remind me at six."
+        model.draft.text = "Remind me at six."
         await model.send()
         await model.apply(.connectionState(.offline))
 
@@ -877,7 +877,7 @@ final class ChatViewModelTests: XCTestCase {
         // A tailnet handoff is not a failure, and telling him to retry during one
         // trains him to ignore the warning that matters.
         let model = makeModel()
-        model.draft = "Remind me at six."
+        model.draft.text = "Remind me at six."
         await model.send()
         await model.apply(.connectionState(.reconnecting(attempt: 1)))
 
