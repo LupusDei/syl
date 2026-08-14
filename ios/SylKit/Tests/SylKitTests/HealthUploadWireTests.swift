@@ -80,9 +80,9 @@ final class HealthUploadWireTests: XCTestCase {
         XCTAssertNil(decoded.watermarks[.sleep], "partial, so an absent type stays absent")
     }
 
-    // MARK: - The fourteen types
+    // MARK: - The thirteen types
 
-    func testShouldCarryExactlyTheFourteenTypesTheContractPinsInItsOrder() {
+    func testShouldCarryExactlyTheThirteenTypesTheContractPinsInItsOrder() {
         // Copied character for character from HEALTH_TYPES in
         // backend/src/health/contract.ts, INCLUDING THE ORDER. Both halves matter and
         // they fail differently: a spelling this client gets wrong is a 400 on a phone
@@ -97,7 +97,7 @@ final class HealthUploadWireTests: XCTestCase {
                 "heartRate", "restingHeartRate", "heartRateVariability",
                 "sleep", "steps", "workout", "bodyMass",
                 "activeEnergy", "basalEnergy", "bodyFatPercentage",
-                "vo2Max", "height", "leanBodyMass", "respiratoryRate",
+                "vo2Max", "leanBodyMass", "respiratoryRate",
             ]
         )
     }
@@ -118,13 +118,12 @@ final class HealthUploadWireTests: XCTestCase {
         // HealthKit's own unitString, checked against a running simulator. NOT
         // `ml/kg/min` and not `ml/kg·min`; every spelling normalises to this one.
         XCTAssertEqual(HealthType.vo2Max.unit, "mL/min·kg")
-        XCTAssertEqual(HealthType.height.unit, "cm")
         XCTAssertEqual(HealthType.leanBodyMass.unit, "lb")
         XCTAssertEqual(HealthType.respiratoryRate.unit, "count/min")
     }
 
     func testShouldGiveEveryTypeAUnitAndNeverAnEmptyOne() {
-        // The property behind the fourteen assertions above, so a case added later
+        // The property behind the thirteen assertions above, so a case added later
         // without a unit fails here rather than uploading a bare number. `unit` is
         // exhaustive by the compiler; this catches the other way of getting it wrong.
         for type in HealthType.allCases {
@@ -159,7 +158,7 @@ final class HealthUploadWireTests: XCTestCase {
     }
 
     func testShouldDecodeTheTwoStatesTheContractGainedAfterThisClientShipped() throws {
-        // All fourteen, spelled out. A report that omits one is refused by the server,
+        // All thirteen, spelled out. A report that omits one is refused by the server,
         // so a fixture that omits one is a fixture the server would never see.
         let wire = """
             {
@@ -169,7 +168,7 @@ final class HealthUploadWireTests: XCTestCase {
                 "steps": "notDetermined", "workout": "undisclosed",
                 "bodyMass": "undisclosed", "activeEnergy": "authorised",
                 "basalEnergy": "authorised", "bodyFatPercentage": "undisclosed",
-                "vo2Max": "authorised", "height": "undisclosed",
+                "vo2Max": "authorised",
                 "leanBodyMass": "undisclosed", "respiratoryRate": "authorised"
               },
               "samples": []
