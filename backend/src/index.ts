@@ -78,6 +78,7 @@ import { tailnetCertProbe } from "./ops/tailnet-cert.js";
 import { RenderService } from "./render/render-service.js";
 import { downsampleHealth } from "./health/downsample.js";
 import { HealthReview } from "./health/review.js";
+import { HealthCharacteristics } from "./health/characteristics.js";
 import { HealthSamples } from "./health/samples.js";
 import { RenderVerdicts } from "./render/verdicts.js";
 import { Wardrobe } from "./render/wardrobe.js";
@@ -349,6 +350,16 @@ export interface AppDependencies {
    */
   readonly health: HealthSamples;
   /**
+   * His date of birth, his sex and his height — `syl-8ys9.4`.
+   *
+   * Beside `health` rather than inside it, because they are not measurements
+   * and must never acquire the things a measurement has: a fabricated
+   * `startedAt`, a watermark, a baseline computed from one row. They reach the
+   * memory graph through `remember()` and they cannot reach `health_samples` —
+   * this object holds no sample store, which is the enforcement.
+   */
+  readonly characteristics: HealthCharacteristics;
+  /**
    * Every face she has adopted and every opening she can choose (`syl-ate`).
    *
    * In her home beside the pictures rather than in the database, because the
@@ -454,6 +465,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     renders,
     renderVerdicts,
     health,
+    characteristics,
     wardrobe,
     sendings,
     composer,
@@ -526,6 +538,8 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   api.use(
     createHealthDataRouter({
       health,
+      // The three that are facts, on their own seam. See `AppDependencies`.
+      characteristics,
       idempotency,
       authenticate,
       // The SAME clock every store above was built on. A second one here is two
@@ -1472,6 +1486,10 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
         }),
   });
 
+  // Hoisted out of the object below because TWO surfaces write through it and
+  // they must be the same object: her own `remember` verb, and the health
+  // characteristics that reach the graph by exactly that door and no other.
+  const herOwnMemory = new HerOwnMemory({ db: database.handle, graph: memoryGraph, clock });
   const memory: MemoryViews = {
     graph: memoryGraph,
     weights: new EdgeWeights({ graph: memoryGraph, clock }),
@@ -1493,7 +1511,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     // `vec0` and no model, and a machine that cannot SEARCH memory must still
     // let her keep a thought — losing search is bad, losing the thought is what
     // she was already working around by hiding insights in goals.
-    hers: new HerOwnMemory({ db: database.handle, graph: memoryGraph, clock }),
+    hers: herOwnMemory,
     // Read-only by construction: a thunk over the one method, so this surface
     // cannot reach the write path that files an extraction.
     provenance: (nodeId: string) => extractionStore.provenanceFor(nodeId),
@@ -1565,6 +1583,15 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // the likeness. Isolated so that it drops in one migration when it does.
   const renderVerdicts = new RenderVerdicts({ db: database.handle, clock });
   const health = new HealthSamples({ db: database.handle, clock });
+  // His date of birth, his sex and his height. Built from the GRAPH and her own
+  // write verb, and from no sample store at all — that absence is what makes
+  // "a characteristic never lands in `health_samples`" a property of the wiring
+  // rather than a rule somebody has to keep. See `health/characteristics.ts`.
+  const characteristics = new HealthCharacteristics({
+    graph: memoryGraph,
+    hers: herOwnMemory,
+    clock,
+  });
   // Every face she has adopted and every opening she can choose (`syl-ate`).
   // One instance, shared with the render service, so the picture a render is
   // anchored on and the picture the wardrobe route calls current are answered
@@ -1662,6 +1689,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       renders,
       renderVerdicts,
       health,
+      characteristics,
       wardrobe,
       sendings,
       composer,

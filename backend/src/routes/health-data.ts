@@ -12,6 +12,11 @@ import {
   type HealthType,
 } from "../health/contract.js";
 import {
+  CharacteristicError,
+  type CharacteristicReport,
+  type HealthCharacteristics,
+} from "../health/characteristics.js";
+import {
   HealthSampleError,
   type AuthorisationRecord,
   type HealthSamples,
@@ -217,8 +222,67 @@ function authorisationOnTheWire(record: AuthorisationRecord | null): {
   };
 }
 
+/**
+ * The characteristics array, shape-checked only — the service validates each.
+ *
+ * **Deliberately not `samplesOf` with a different name.** A characteristic has
+ * no `startedAt`, no `endedAt` and no unit, because it is not a measurement;
+ * writing one reader for both would be the first place the distinction started
+ * to blur, and the distinction is the whole of `syl-8ys9.4`.
+ */
+function characteristicsOf(body: Record<string, unknown>): readonly CharacteristicReport[] {
+  const raw = body["characteristics"];
+  if (!Array.isArray(raw)) {
+    throw new ApiFailure(
+      "VALIDATION_FAILED",
+      "characteristics must be an array of { characteristic, value, readAt }.",
+      { details: { field: "characteristics", reason: raw === undefined ? "missing" : "not an array" } },
+    );
+  }
+  return raw.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null) {
+      throw new ApiFailure("VALIDATION_FAILED", `characteristics[${String(index)}] must be an object.`, {
+        details: { field: `characteristics[${String(index)}]`, reason: "not an object" },
+      });
+    }
+    const record = entry as Record<string, unknown>;
+    for (const field of ["characteristic", "value", "readAt"] as const) {
+      if (typeof record[field] !== "string" || record[field] === "") {
+        throw new ApiFailure(
+          "VALIDATION_FAILED",
+          `characteristics[${String(index)}].${field} must be a non-empty string.`,
+          { details: { field: `characteristics[${String(index)}].${field}`, reason: "missing" } },
+        );
+      }
+    }
+    // Safe assertion: the three fields are proved to be strings above, and the
+    // service re-tests the name and the value before anything is written.
+    return record as unknown as CharacteristicReport;
+  });
+}
+
+/** Turn a characteristics refusal into the right contract failure. */
+function asCharacteristicFailure(error: unknown): never {
+  if (error instanceof CharacteristicError) {
+    throw new ApiFailure("VALIDATION_FAILED", error.message, {
+      details: { field: error.field, reason: error.kind },
+    });
+  }
+  throw error;
+}
+
 export interface HealthDataRouterOptions {
   readonly health: HealthSamples;
+  /**
+   * Date of birth, sex and height — and the reason this is a SECOND seam rather
+   * than a method on `health`.
+   *
+   * These are facts, not measurements. They reach the memory graph through
+   * `remember()` and they never reach `health_samples`; handing this router one
+   * object that could do both would put the two paths one typo apart. See
+   * `health/characteristics.ts`.
+   */
+  readonly characteristics: HealthCharacteristics;
   readonly idempotency: IdempotencyStore;
   readonly authenticate: RequestHandler;
   /** The service's clock. Never a second one — see `AppDependencies.clock`. */
@@ -228,13 +292,14 @@ export interface HealthDataRouterOptions {
 }
 
 export function createHealthDataRouter(options: HealthDataRouterOptions): Router {
-  const { health, idempotency, authenticate, clock, tz } = options;
+  const { health, characteristics, idempotency, authenticate, clock, tz } = options;
   const router = Router();
 
   // BY NAME, never `/health`. See the note at the top of this file: mounting on
   // the prefix would put a bearer check in front of the liveness endpoint, which
   // is the one route in the contract that must answer without a token.
   router.use("/health/samples", authenticate);
+  router.use("/health/characteristics", authenticate);
   router.use("/health/watermarks", authenticate);
   router.use("/health/series", authenticate);
 
@@ -263,6 +328,35 @@ export function createHealthDataRouter(options: HealthDataRouterOptions): Router
           return { status: 200, data: outcome };
         } catch (error) {
           asHealthFailure(error);
+        }
+      }),
+    );
+  });
+
+  /**
+   * Date of birth, sex and height — the three that are not measurements.
+   *
+   * A separate route from `POST /health/samples`, and the separation is the
+   * feature rather than a tidiness preference. There is no watermark to advance
+   * and nothing to resume from, so a phone sends these once and again whenever
+   * they change; the reply says, per characteristic, **which source she is
+   * using** and why, because *"your birthday is X"* said confidently from the
+   * wrong one is exactly the small wrongness that costs trust in everything
+   * else.
+   *
+   * `Idempotency-Key` guards the HTTP call. The memory itself is idempotent by
+   * its own text — `remember()` reuses a conclusion she has already reached — so
+   * a phone that re-sends on every launch accumulates nothing.
+   */
+  router.post("/health/characteristics", (request, response) => {
+    sendIdempotent(
+      response,
+      runIdempotent(idempotency, request, () => {
+        const reports = characteristicsOf(bodyOf(request));
+        try {
+          return { status: 200, data: characteristics.record(reports) };
+        } catch (error) {
+          asCharacteristicFailure(error);
         }
       }),
     );
