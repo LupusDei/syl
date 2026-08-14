@@ -75,7 +75,16 @@ export type IdType =
   // Telemetry, not memory. A dream session is a row in the dream log
   // (`0013_dream_log.sql`) and never a node in the graph — see the header of
   // that migration for why the two must not touch.
-  | "dream_session";
+  | "dream_session"
+  // A question she put to another agent, and the thing an answer is matched
+  // against (`agents/answers.ts`, `syl-j8fa.5`). It addresses NO ROW IN ANY
+  // TABLE HERE, which is the unusual part and is deliberate: the question lives
+  // in Adjutant's message store, because that is where the answer lives too.
+  // Minting it as an ordinary id anyway buys the thing a bare token would not —
+  // it is self-describing in a log line, it cannot be confused with a reminder
+  // or a goal id that happened to be quoted back, and `isId(value,
+  // "agent_question")` is the whole of the matcher's validation.
+  | "agent_question";
 
 /**
  * `syl:<type>:<uuid>`, matching the contract's `Id` pattern exactly.

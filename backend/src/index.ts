@@ -43,6 +43,8 @@ import {
 } from "./jobs/unattended-contributor.js";
 import { createDeliveryRuntime, describeRuntime, type DeliveryRuntime } from "./jobs/runtime.js";
 import { AdjutantClient } from "./agents/adjutant-client.js";
+import { AgentAnswers } from "./agents/answers.js";
+import { RepliesSeen } from "./agents/replies-seen.js";
 import { loadConfig, type SylConfig } from "./config.js";
 import {
   createContentIngestionHandler,
@@ -1187,6 +1189,15 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       return runner(prompt, turnOptions);
     };
 
+  /**
+   * The return leg for `ask_agent` (`syl-j8fa.5`), assigned further down.
+   *
+   * Declared here because the contributor below closes over it and the fleet
+   * client it needs is built after the agent. `undefined` on every machine with
+   * no Adjutant, which is the ordinary case.
+   */
+  let answers: AgentAnswers | undefined;
+
   const agent = new SylAgent({
     store: sessionStoreFor(config),
     // Read fresh on every turn, not captured here: the projection is rebuilt
@@ -1256,7 +1267,35 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
         jobs.listRuns({ kinds: UNATTENDED_KINDS, limit: UNATTENDED_RUN_DEPTH }).items,
         { now: clock(), tz: config.quietHours.tz },
       );
-      return record === undefined ? [] : [record];
+
+      /**
+       * WHAT THE FLEET SAID BACK — `syl-j8fa.5`, the return leg.
+       *
+       * Two calls in two directions and the order between them is the design.
+       *
+       * `surface()` SHOWS what a previous poll already staged, and records
+       * exactly that much as seen. It touches no network, so composing a prompt
+       * cannot be made slow — or made to fail — by Adjutant being unwell.
+       *
+       * `refresh()` READS, and is deliberately **not awaited**. She must never
+       * block waiting for an answer: her turns are subprocess-bounded and an
+       * answer may take hours, so what this poll finds lands on the NEXT turn.
+       * That is not a compromise, it is the shape of the thing — and it is why
+       * the poll runs on every turn including the hourly one, so an answer
+       * arriving while the Commander is asleep is waiting when he wakes up
+       * rather than waiting for him to speak first.
+       *
+       * `refresh` de-duplicates its own in-flight poll and never rejects, so
+       * this is a fire-and-forget that cannot pile up and cannot take a turn
+       * down with it.
+       */
+      const fromTheFleet = answers?.surface();
+      void answers?.refresh();
+
+      return [
+        ...(record === undefined ? [] : [record]),
+        ...(fromTheFleet === undefined ? [] : [fromTheFleet]),
+      ];
     },
     // Both halves are load-bearing and neither survives alone: `onEvent` is how
     // the service observes a turn at all, and the index wrapper is what makes a
@@ -1533,6 +1572,33 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
           ...(config.adjutant.projectRoot === undefined
             ? {}
             : { projectRoot: config.adjutant.projectRoot }),
+        });
+
+  // The return leg. `ask_agent` could speak and could not hear: she sent
+  // questions and, in her own words, had never received an answer, because
+  // nothing tied a reply to the question that provoked it.
+  //
+  // Assigned rather than declared, because the contributor above closes over
+  // it. `undefined` without a fleet — she cannot be answered by agents she
+  // cannot reach, and the contributor simply contributes nothing.
+  answers =
+    adjutant === undefined
+      ? undefined
+      : new AgentAnswers({
+          fleet: adjutant,
+          // The exactly-once ledger, and the ONLY durable state the return leg
+          // has. What she asked lives in Adjutant, beside the answers; what she
+          // has already been shown is the one fact Adjutant does not know.
+          seen: new RepliesSeen({ db: database.handle, clock }),
+          clock,
+          ...(log === undefined
+            ? {}
+            : {
+                log: (line: string, error?: unknown) => {
+                  if (error === undefined) log.info("fleet", { message: line });
+                  else log.error("fleet", { message: line, error: String(error) });
+                },
+              }),
         });
 
   // Her renders. The secret is read once, here, and lives nowhere else in the
