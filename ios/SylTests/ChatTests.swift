@@ -1247,6 +1247,127 @@ final class ChatViewModelTests: XCTestCase {
         )
     }
 
+    // MARK: - Every state the head of the transcript can be in (syl-025.4.4)
+    //
+    // **These exist because the control was correct and connected to nothing.** The state
+    // reached `ChatView` as `isLoading: Bool`, and a Bool expresses two of the four — so
+    // `beginning` and `unreachable` were unreachable in the shipped app however carefully
+    // the control was written and tested. A type can be entirely right and wired to
+    // nowhere, and nothing in the gate notices. So each state is asserted here at the
+    // seam that actually feeds the view.
+
+    @MainActor
+    func testShouldOfferTheWayBackWhileThereIsMoreOnDisk() async throws {
+        try store.upsert(longConversation(120))
+        let model = makeModel()
+        await model.refresh()
+
+        XCTAssertEqual(model.earlierMessagesState, .idle)
+    }
+
+    @MainActor
+    func testShouldSayItIsWorkingWhileAPageIsInFlight() async throws {
+        try store.upsert(longConversation(120))
+        let model = makeModel()
+        await model.refresh()
+
+        let load = Task { await model.loadEarlier() }
+        var spins = 0
+        while !model.isLoadingEarlier && spins < 1_000 {
+            await Task.yield()
+            spins += 1
+        }
+        XCTAssertEqual(model.earlierMessagesState, .loading)
+        await load.value
+    }
+
+    @MainActor
+    func testShouldSayTheConversationBeginsWhenTheServerConfirmsIt() async throws {
+        let server = StubHistory(total: 60)
+        try store.upsert(server.messages(from: 51, through: 60))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+
+        await model.loadEarlier()
+
+        XCTAssertEqual(
+            model.earlierMessagesState,
+            .beginning,
+            "he has arrived at the first thing either of them said, and can be told so"
+        )
+    }
+
+    @MainActor
+    func testShouldSayOlderHistoryIsUnreachableRatherThanEnded() async throws {
+        // The distinction the Bool could not carry: a network that failed is not a
+        // conversation that began. One is retryable and the other is terminal, and showing
+        // an ending over a failure tells him his history is gone.
+        let server = StubHistory(total: 500, failing: true)
+        try store.upsert(server.messages(from: 401, through: 500))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+        await model.loadEarlier()
+
+        await model.loadEarlier()
+
+        XCTAssertEqual(model.earlierMessagesState, .unreachable)
+    }
+
+    @MainActor
+    func testShouldStopApologisingOnceAReachSucceeds() async throws {
+        // `unreachable` is a report about the last attempt, not a property of the
+        // conversation. A retry that works must clear it, or he is told his history is
+        // unreachable while looking at it.
+        let flaky = FlakyHistory(total: 500)
+        try store.upsert(flaky.messages(from: 401, through: 500))
+        let model = makeModel(fetchOlderMessages: flaky.fetch)
+        await model.refresh()
+        await model.loadEarlier()
+        await model.loadEarlier()
+        XCTAssertEqual(model.earlierMessagesState, .unreachable)
+
+        await flaky.recover()
+        await model.loadEarlier()
+
+        XCTAssertEqual(model.earlierMessagesState, .idle)
+        XCTAssertNil(model.notice)
+    }
+
+    @MainActor
+    func testShouldSayNothingWhenThereIsNothingToSay() async throws {
+        // A conversation shorter than a page, on a device with no way to ask the server.
+        // An ending is a claim, and nothing has confirmed one -- so the head of the
+        // transcript shows no control at all, which is what it did before any of this.
+        try store.upsert((1...3).map { message(id: id($0), seq: $0) })
+        let model = makeModel()
+        await model.refresh()
+
+        XCTAssertNil(model.earlierMessagesState)
+    }
+
+    /// A server that fails until told otherwise.
+    actor FlakyHistory {
+        private let inner: StubHistory
+        private var healthy = false
+
+        init(total: Int) { inner = StubHistory(total: total) }
+
+        nonisolated func messages(from first: Int, through last: Int) -> [Message] {
+            inner.messages(from: first, through: last)
+        }
+
+        func recover() { healthy = true }
+
+        private func page(cursor: String?, limit: Int) async throws -> MessagePage {
+            guard healthy else { throw AttachmentFetchError.offline }
+            return try await inner.page(cursor: cursor, limit: limit)
+        }
+
+        nonisolated var fetch: @Sendable (SylID, String?, Int) async throws -> MessagePage {
+            { [self] _, cursor, limit in try await page(cursor: cursor, limit: limit) }
+        }
+    }
+
     // MARK: - The parse cache (T040)
 
     func testShouldParseAMessageOnceAndReuseIt() {

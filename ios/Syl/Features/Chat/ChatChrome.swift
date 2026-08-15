@@ -313,22 +313,6 @@ struct EarlierMessages: View {
     }
 }
 
-extension EarlierMessages {
-    /// The pre-`syl-025.4.4` shape, kept so `ChatView` keeps compiling.
-    ///
-    /// **A seam, not an API.** `ChatView` is Track A's file and still constructs this
-    /// control with a bare `isLoading`; removing this initialiser would red the build for
-    /// a change that has nothing to do with them. `syl-025.4.3` switches that call site to
-    /// the state and deletes this.
-    ///
-    /// It can only ever produce two of the four states, which is the whole reason the
-    /// state exists: `beginning` and `unreachable` are not expressible as a Bool, and
-    /// that Bool is why the control could previously only spin or offer.
-    init(isLoading: Bool, action: @escaping () -> Void) {
-        self.init(state: isLoading ? .loading : .idle, action: action)
-    }
-}
-
 /// "Syl replied" — the pill that appears when something arrives while he is reading
 /// history.
 ///

@@ -155,15 +155,4 @@ final class EarlierMessagesStateTests: XCTestCase {
         )
     }
 
-    // MARK: - The seam Track A still compiles against
-
-    @MainActor
-    func testShouldKeepTheBooleanInitialiserWorkingUntilTheCallSiteMoves() {
-        // `ChatView` still constructs this with a bare `isLoading`, and that file belongs
-        // to another track. The compatibility initialiser can only reach two of the four
-        // states — which is the whole reason the state type exists, since `beginning` and
-        // `unreachable` are not expressible as a Bool.
-        XCTAssertEqual(EarlierMessages(isLoading: true, action: {}).state, .loading)
-        XCTAssertEqual(EarlierMessages(isLoading: false, action: {}).state, .idle)
-    }
 }

@@ -156,11 +156,16 @@ struct ChatView: View {
                 EmptyConversation()
             }
 
-            // `mayReachFurtherBack`, not `snapshot.mayHaveEarlier`. The second answers
-            // "is there more on this device", so the control vanished the moment local
-            // history ran out — which looked exactly like the beginning of the
-            // conversation and was not one.
-            if model.mayReachFurtherBack {
+            // **The whole state, not a Bool.** This read `isLoading:` until
+            // `syl-025.4.4`, and a Bool can carry two of the four — so `beginning` and
+            // `unreachable` were unreachable in the shipped app however carefully the
+            // control was written. He could not be told he had arrived at the start of his
+            // own history, nor tell that from the network being down.
+            //
+            // `nil` means the head of the transcript has nothing to say: a conversation
+            // shorter than a page, or a device with no way to ask the server whether more
+            // exists. An ending is a claim, and only a confirmed floor can make it.
+            if let earlier = model.earlierMessagesState {
                 // **No live `onAppear` here — and the reason is not the one this comment
                 // used to give.**
                 //
@@ -186,7 +191,7 @@ struct ChatView: View {
                 //
                 // The tap stays, unlatched, because an automatic trigger that misfires
                 // must never leave him with no way back.
-                EarlierMessages(isLoading: model.isLoadingEarlier) {
+                EarlierMessages(state: earlier) {
                     Task { await model.loadEarlier() }
                 }
                 .onAppear {

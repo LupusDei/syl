@@ -64,6 +64,28 @@ final class ChatViewModel: ObservableObject {
         return !((try? store.hasWholeHistory(conversationId: conversationId)) ?? false)
     }
 
+    /// What the head of the transcript should say, or nil when it should say nothing.
+    ///
+    /// **The three-way distinction survives to the view.** It used to reach `ChatView` as
+    /// `isLoading: Bool`, and a Bool can express two of these four — so `beginning` and
+    /// `unreachable` were unreachable in the shipped app no matter how carefully the
+    /// control was written. He could not be told he had arrived at the start of his own
+    /// history, and could not tell that from the network being down.
+    ///
+    /// `nil` is its own answer and not a fifth state: a conversation shorter than one page,
+    /// or one on a device with no way to reach the server, has nothing to offer and nothing
+    /// to report. Drawing an ending there would be claiming a beginning nobody confirmed.
+    var earlierMessagesState: EarlierMessagesState? {
+        if isLoadingEarlier { return .loading }
+        if historyIsUnreachable { return .unreachable }
+        if snapshot.mayHaveEarlier { return .idle }
+        // Nothing on disk beyond the window. Whether that is an ending is the server's to
+        // say, and only if there is a way to ask.
+        guard fetchOlderMessages != nil else { return nil }
+        if (try? store.hasWholeHistory(conversationId: conversationId)) == true { return .beginning }
+        return .idle
+    }
+
     /// How many messages the window currently reaches back over.
     ///
     /// Exposed because three separate requirements are statements about it -- it must not
@@ -73,6 +95,13 @@ final class ChatViewModel: ObservableObject {
     /// window that did not move from one that moved and was not drawn, which is exactly
     /// the difference `syl-025.1.3.1` is about.
     var windowSize: Int { loader.limit }
+
+    /// Whether the last reach for older history failed.
+    ///
+    /// Distinct from "there is nothing older", and the distinction is the point: one is an
+    /// ending and the other is a thing to try again. Cleared by any read that lands, so a
+    /// retry that works stops apologising.
+    @Published private(set) var historyIsUnreachable = false
 
     /// True while an older page is being read. Kept so the affordance can say it is
     /// working and so a fast scroll cannot queue five overlapping loads.
@@ -228,8 +257,17 @@ final class ChatViewModel: ObservableObject {
     /// said a hundred. Stamping each read and dropping any result that is no longer the
     /// newest makes the last read to *start* the one that wins, which is the only ordering
     /// that matches what he last asked for.
+    /// What became of a read. **Three outcomes, and collapsing them to a Bool loses the
+    /// one that matters**: a superseded read did not fail, and treating it as a failure
+    /// would tell him his history is unreachable because he scrolled twice quickly.
+    private enum ReadOutcome {
+        case applied
+        case superseded
+        case failed
+    }
+
     @discardableResult
-    private func read(with window: ChatSnapshotLoader) async -> Bool {
+    private func read(with window: ChatSnapshotLoader) async -> ReadOutcome {
         generation &+= 1
         let stamp = generation
 
@@ -239,14 +277,14 @@ final class ChatViewModel: ObservableObject {
 
         // Superseded. Not a failure — the newer read speaks for him — but this result
         // must not be applied and its window must not be committed.
-        guard stamp == generation else { return false }
+        guard stamp == generation else { return .superseded }
 
         guard let snapshot else {
             notice = "Could not read the conversation from this device."
-            return false
+            return .failed
         }
         self.snapshot = snapshot
-        return true
+        return .applied
     }
 
     /// **He asked.** One tap, one page, every time.
@@ -333,8 +371,16 @@ final class ChatViewModel: ObservableObject {
             // than the screen and the next unrelated refresh paid for it.
             var widened = loader
             widened.limit += pageSize
-            guard await read(with: widened) else { return }
-            loader = widened
+            switch await read(with: widened) {
+            case .applied:
+                loader = widened
+                historyIsUnreachable = false
+            case .superseded:
+                break
+            case .failed:
+                // Disk failed, which is not an ending — it is a thing to try again.
+                historyIsUnreachable = true
+            }
             return
         }
 
@@ -378,12 +424,14 @@ final class ChatViewModel: ObservableObject {
             // fails the window stays where it was, for the same reason as above.
             var widened = loader
             widened.limit += pageSize
-            if await read(with: widened) { loader = widened }
+            if await read(with: widened) == .applied { loader = widened }
             notice = nil
+            historyIsUnreachable = false
         } catch {
             // Not a spinner, and not a silent stop. The local transcript is untouched and
             // still his to read; the only thing that failed is reaching further back.
             notice = "Older messages are not reachable right now."
+            historyIsUnreachable = true
         }
     }
 
@@ -409,7 +457,7 @@ final class ChatViewModel: ObservableObject {
 
         var collapsed = loader
         collapsed.limit = pageSize
-        guard await read(with: collapsed) else { return }
+        guard await read(with: collapsed) == .applied else { return }
         loader = collapsed
         // A fresh window means the top of it is somewhere he has not been. Re-arm.
         automaticLoadIsSpent = false
