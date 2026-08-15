@@ -666,21 +666,6 @@ struct LocalStore: Sendable {
         }
     }
 
-    /// How many sendings are held, as opposed to how many a window returned (`syl-o319`).
-    ///
-    /// **This table grows without bound and that is not obvious from its writer.**
-    /// `replaceSendings` is named for what it was meant to do and upserts instead — it
-    /// never deletes — so every sending the device has ever seen accumulates. The 200 in
-    /// `sendings(limit:)` is therefore reachable by ordinary use rather than theoretical,
-    /// and once past it the OLDEST rows fall off a `createdAt DESC` read silently. For a
-    /// daily assistant that is a few months before things she sent him start
-    /// disappearing with nothing said.
-    func sendingCount() throws -> Int {
-        try database.queue.read { db in
-            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM sending") ?? 0
-        }
-    }
-
     /// The ids of every sending still waiting on its video.
     ///
     /// The video lands minutes after the words, and no frame arrives to say so — the

@@ -2367,3 +2367,65 @@ Four theories died tonight — the spec's, the reviewer's, the intermediate one 
 a bead, and the reviewer's second, that a result was unsupported when it was merely absent
 from his branch. Every one was plausible. Every one was replaced by a number, and the last
 one only after somebody asked *which tree did you measure?*
+
+#### The rule is not the defence. Running the check is.
+
+Every failure in `syl-025` has one shape, and it is not ignorance. In each case the
+person **had the correct rule available and did not apply it to themselves**:
+
+- The spec repeated a mechanism because it was written down, and the note was three days
+  stale.
+- A reviewer concluded a result was unsupported after running the suite on a branch that
+  lacked the fix — then built a throwaway worktree, got the same wrong answer, and read
+  the *agreement* as corroboration.
+- The lead read a diff of a tree that had moved underneath him.
+- The feature was reported complete off a green suite while two of its four states were
+  reachable from no call site.
+- And the closing example, which is the useful one: **a reviewer who had spent the night
+  cataloguing "declared and ignored" defects added `LocalStore.sendingCount()` with no
+  caller — in the same commit where he wrote that a `hasMore` nobody draws is the same
+  defect as no `hasMore` at all.** He had named the pattern hours earlier, in writing,
+  twice. It was caught by running a search, not by knowing better.
+
+*Knowing the pattern did not stop anyone producing it. The only thing that caught it was
+running the check rather than reasoning about whether the check was needed.*
+
+So the checks are written here as procedures, not as advice.
+
+**Which tree did you measure?** Before reporting that a claim is unsupported because a
+test is red:
+
+    git merge-base --is-ancestor <the-commit-that-produced-the-claim> HEAD
+
+A red test on a branch that lacks the fix is evidence about the branch. Reproducing the
+same number at the branch point is not corroboration — it is the same missing fix,
+measured twice.
+
+**Is it wired to anything?** Before reporting a feature complete, on any epic:
+
+    # every declaration the epic added to production code
+    git diff origin/main..HEAD --unified=0 -- <production-dir> \
+      | grep -E '^\+' \
+      | grep -oE '(struct|enum|final class|class) [A-Z][A-Za-z]+|func [a-z][A-Za-z]*\('
+
+    # then, for each name, count references in PRODUCTION code only
+    grep -rn "<name>" <production-dir>
+
+Anything whose only production reference is its own definition is a candidate. Three
+categories come out, and only the first is a defect:
+
+- **Dead** — no consumer anywhere, tests included. `sendingCount()` was this.
+- **A test seam** — no production consumer, test consumers, and a doc comment saying so.
+  A decision, not an omission.
+- **Internal** — consumed a line away inside its own type. Not dead.
+
+Distinguishing the three is what makes the search trustworthy; reporting only its
+conclusion is what makes it look like an opinion. Run it and paste the categories.
+
+**What did the gate actually count?** A green suite is a claim about a specific tree and
+a specific set of tests. `ios/scripts/test.sh` is `set -e` across three phases, so a
+failure in phase one means phases two and three did not run at all — and the exit status
+looks identical to a phase that ran and passed. Read the phase banners and the counts.
+
+The general form, which is the whole of it: **every green is a claim about something.
+Ask what.**
