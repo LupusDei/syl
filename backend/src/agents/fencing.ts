@@ -77,22 +77,40 @@ export const FORGED_FENCE_MARKER = "[a fence marker they wrote, which is not one
  * crowded out her memory of him would be an injection by volume alone — no
  * hostile content required, just length.
  *
- * **Halved from 4,000 to 2,000 when `ask_agent` landed, and on character
- * grounds rather than budget.** At 4,000 another agent's text could occupy half
- * as much of her turn as everything she knows about the Commander (the working
- * memory cap is 4,000, and `SOUL.md` is ~8,400). That is too much of somebody
- * else's voice in her head for a thing she is going to relay in a sentence.
+ * It was halved from 4,000 to 2,000 when `ask_agent` landed, on the argument
+ * that another agent's text should not occupy half as much of her turn as
+ * everything she knows about the Commander, and that 2,000 bytes — roughly
+ * three hundred words — is "an answer about his insurance, not a document".
  *
- * The budget fell out of it — the surface stopped fitting and the honest levers
- * were "raise the ceiling a second time in one day" or "ask whether the biggest
- * reservation is right". Raising a tripwire twice is how it becomes a number
- * people edit, so this asks the second question. 2,000 bytes is roughly three
- * hundred words: an answer about his insurance, not a document.
+ * **THAT ARGUMENT WAS TESTED BY A REAL QUESTION AND LOST.** The first research
+ * request anybody sent through this path asked which restaurants are safe for
+ * his five-year-old, who has coeliac disease. The answer is unavoidably a
+ * document: every venue needs its cross-contamination basis, and the
+ * corrections — that the strongest recommendation appeared to have closed, that
+ * two others could not be verified — are the part that keeps her from passing
+ * on something dangerous. It arrived cut at 2,000 bytes. **The cut kept the
+ * recommendations and removed the corrections**, because corrections come last.
  *
- * A longer answer is not lost — it is cut, and she is TOLD it was cut, so she
- * can ask again for the part she needs.
+ * So the cap is now sized for the answers actually being asked for, on the
+ * Commander's instruction (2026-08-15): give her the whole message. 16,000
+ * bytes is a full research brief with its caveats intact.
+ *
+ * The original worry is not dismissed, it is answered differently: what
+ * protects her from another agent's voice is the FENCE — the markers, the
+ * attribution, the defanging — not the brevity. A short quotation from someone
+ * else is still someone else talking; a long one that is clearly marked as
+ * theirs is still clearly theirs. Length was never what made it safe.
+ *
+ * What the length DID protect was the context ceiling, and that is checked
+ * where it belongs: `tests/unit/tool-surface-budget.test.ts` proves the sum
+ * over the real constants, and `tests/unit/budget-prose-matches-code.test.ts`
+ * proves this number is the one the budget table claims.
+ *
+ * A longer answer is still not lost — it is cut, and she is TOLD it was cut, so
+ * she can ask again for the part she needs. She did exactly that, which is the
+ * only reason the truncation was caught.
  */
-export const MAX_REPLY_BYTES = 2_000;
+export const MAX_REPLY_BYTES = 16_000;
 
 /**
  * How much of the question is repeated back beside the answer.

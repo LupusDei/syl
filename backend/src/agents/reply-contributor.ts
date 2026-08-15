@@ -49,23 +49,35 @@ import { fenceReplies, MAX_REPLY_BYTES, type AgentReply } from "./fencing.js";
  * The most this contributor will ever emit.
  *
  * Sized to hold **one answer at the per-reply cap, fenced, with the omission
- * note**. Derived from `MAX_REPLY_BYTES`, which halved to 2,000 when
- * `ask_agent` landed — on character grounds rather than budget, so that another
- * agent's voice cannot occupy half the room her memory of him gets. That is the floor: below it, a single long answer fits
- * nowhere and she is shown an omission note instead of the thing she asked
- * for. `tests/unit/reply-contributor.test.ts` asserts the floor still holds, so
- * a preamble that grows in `fencing.ts` fails there rather than in a turn.
+ * note**. That is the floor: below it, a single long answer fits nowhere and
+ * she is shown an omission note instead of the thing she asked for.
+ * `tests/unit/reply-contributor.test.ts` asserts the floor still holds, so a
+ * preamble that grows in `fencing.ts` fails there rather than in a turn.
  *
- * It is also close to the ceiling of what is available: `SOUL.md` (~8,400),
- * working memory (4,000) and the tool schemas (~6,500) leave about 5,100 of
- * `DEFAULT_CONTEXT_BUDGET_BYTES` unclaimed. This takes 4,800 of it. The whole
- * turn is then within a few hundred bytes of its ceiling, which
- * `tests/unit/tool-surface-budget.test.ts` now proves over the real constants —
- * and which the next verb added to the tool surface will trip. That is the
- * budget working: a loud failure in the test run of whoever adds the verb, not
- * a quiet one in a reply the Commander does not like.
+ * **Raised from 2,800 on 2026-08-15, on the Commander's instruction, after the
+ * floor turned out to be the ceiling in practice.** A research answer about
+ * which restaurants are safe for his coeliac five-year-old was truncated to fit
+ * — and the cut kept the recommendations while removing the corrections,
+ * because corrections come last. One of those corrections was that the top
+ * recommendation appeared to have closed. See `MAX_REPLY_BYTES` in
+ * `fencing.ts` for the full account.
+ *
+ * The docstring this replaces claimed "this takes 4,800 of it" directly above
+ * `= 2_800`, and the budget table in `turn-context.ts` repeated the 4,800.
+ * Nothing compared them, because the existing guard asks only whether the sum
+ * FITS — and 2,800 fits exactly as well as 4,800 does. Fitting is not agreeing.
+ * `tests/unit/budget-prose-matches-code.test.ts` now asserts the narrower
+ * thing, so the next edit to either number fails in the test run of whoever
+ * makes it.
+ *
+ * There is room: the declared contributors come to roughly 30,500 against a
+ * `DEFAULT_CONTEXT_BUDGET_BYTES` of 100,000, so this reservation is affordable
+ * several times over. `tests/unit/tool-surface-budget.test.ts` proves the sum
+ * over the real constants and states what the ceiling would have to become —
+ * a loud failure in the test run of whoever adds the next verb, rather than a
+ * quiet one in a reply the Commander does not like.
  */
-export const AGENT_REPLIES_MAX_BYTES = 2_800;
+export const AGENT_REPLIES_MAX_BYTES = 20_000;
 
 /** The id this track answers to in every budget report. */
 export const AGENT_REPLIES_CONTRIBUTOR_ID = "agent-replies";

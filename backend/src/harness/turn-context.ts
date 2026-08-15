@@ -292,6 +292,34 @@ export const MEMORY_FENCE_END = "--- END OF WHAT YOU REMEMBER ---";
  * | tool schemas | 9,562 | 10,583 | `show_him` — the sending verb |
  * | her own unattended work | 0 | 1,200 | she could not account for a reminder she filed at 07:04 |
  *
+ * ## Agent replies, 2026-08-15: the row above was never true
+ *
+ * The `agent replies` row in the first table claimed 4,800. The constant
+ * enforced 2,800, and had done since it was written — its own docstring said
+ * "this takes 4,800 of it" one line above `= 2_800`. Every guard passed
+ * throughout, because they all ask whether the declared sum FITS and 2,800 fits
+ * better than 4,800 does. **Fitting is not agreeing**, and this file's whole
+ * subject is the difference.
+ *
+ * It surfaced the way these things do: a research answer about which
+ * restaurants are safe for the Commander's coeliac five-year-old was cut at the
+ * enforced number, and the cut kept the recommendations while dropping the
+ * corrections that followed them.
+ *
+ * | contributor | before | after | why |
+ * |---|---|---|---|
+ * | agent replies | 2,800 | 20,000 | a whole answer, caveats included, on the Commander's instruction |
+ *
+ * The `before` column is the number that was ENFORCED, not the 4,800 the old
+ * row claimed — a history that records what was documented rather than what
+ * ran would be the same defect again, one layer down.
+ *
+ * `tests/unit/budget-prose-matches-code.test.ts` now reads this table as text
+ * and compares it to the constants, so the next number that moves in one place
+ * fails there. It parses BY COLUMN — its first version read `syl-014` in a why
+ * column as a budget of 14, which would have been mistaken for the very drift
+ * it exists to catch.
+ *
  * The fifth contributor is the case this file already names as grounds for
  * raising: an INTENDED one that does not fit. It is also the smallest of them
  * by a wide margin, and it is what makes constraint 4's spirit hold inwards —
