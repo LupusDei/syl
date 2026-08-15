@@ -142,6 +142,37 @@ final class ChatPagingTests: XCTestCase {
     }
 }
 
+/// The one place this app builds a cursor the server calls opaque (`syl-025.4.3`).
+///
+/// Pinned to the exact bytes because that is the only thing standing between a server-side
+/// encoding change and a feature that fails silently in his hand: a cursor the service
+/// refuses comes back as "older messages are not reachable right now", which is
+/// indistinguishable from being offline. If `encodeCursor` in
+/// `backend/src/services/message-store.ts` ever changes, this test is where it should
+/// hurt.
+final class MessageCursorTests: XCTestCase {
+    func testShouldEncodeTheCursorExactlyAsTheServiceDoes() throws {
+        // base64 of {"seq":401} — the literal the backend produces for the same input.
+        let cursor = try XCTUnwrap(MessageCursor.before(seq: 401))
+        XCTAssertEqual(cursor, "eyJzZXEiOjQwMX0=")
+
+        // And it round-trips through the service's own decode shape.
+        let data = try XCTUnwrap(Data(base64Encoded: cursor))
+        let decoded = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(decoded["seq"] as? Int, 401)
+    }
+
+    func testShouldRefuseACursorTheServiceWouldRefuse() {
+        // `decodeCursor` requires a positive integer. An optimistic row carries seq 0, and
+        // sending one would spend a round trip to be told it is not a cursor — worse, the
+        // refusal would read as "your history is unreachable".
+        XCTAssertNil(MessageCursor.before(seq: 0))
+        XCTAssertNil(MessageCursor.before(seq: -1))
+    }
+}
+
 /// The chat screen's state, driven against a real in-memory store.
 ///
 /// The class is not `@MainActor` — XCTest's `setUpWithError` and `tearDown` are
@@ -914,6 +945,197 @@ final class ChatViewModelTests: XCTestCase {
         )
     }
 
+    // MARK: - History older than this device (syl-025.4.1)
+    //
+    // Until now `loadEarlier()` only ever widened a LOCAL window. If a message was not on
+    // the phone, nothing in the chat UI could fetch it -- only the forward-only `/sync`
+    // cursor, which never walks backwards. So the transcript had a hard floor that looked
+    // exactly like the beginning of the conversation, and scrolled far enough back she
+    // appeared to have no memory of him before a certain date.
+
+    @MainActor
+    func testShouldFetchFromTheServerWhenTheDeviceRunsOutOfHistory() async throws {
+        // 100 on the device, 500 on the server -- the shape the story names.
+        let server = StubHistory(total: 500)
+        try store.upsert(server.messages(from: 401, through: 500))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+
+        // Walk the local window to its floor. Nothing here touches the network.
+        await model.loadEarlier()
+        let localOnly = await server.requestCount
+        XCTAssertEqual(localOnly, 0, "local history must be read from disk")
+        XCTAssertFalse(model.snapshot.mayHaveEarlier, "the device is exhausted")
+        XCTAssertTrue(model.mayReachFurtherBack, "but the conversation is not")
+
+        await model.loadEarlier()
+
+        let cursors = await server.cursors
+        XCTAssertEqual(cursors.count, 1, "one request, for one page")
+        XCTAssertEqual(
+            cursors.first,
+            MessageCursor.before(seq: 401),
+            "the page before the oldest message on the device"
+        )
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page * 3,
+            "the fetched page is on screen"
+        )
+        XCTAssertNil(model.notice)
+    }
+
+    @MainActor
+    func testShouldNotFetchTheSamePageTwice() async throws {
+        // The point of writing the page to disk: the second pass is a local read.
+        let server = StubHistory(total: 500)
+        try store.upsert(server.messages(from: 401, through: 500))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+        await model.loadEarlier()
+        await model.loadEarlier()
+        let afterFirstFetch = await server.requestCount
+
+        // A fresh model over the same store -- a relaunch, in effect.
+        let second = makeModel(fetchOlderMessages: server.fetch)
+        await second.refresh()
+        await second.loadEarlier()
+        await second.loadEarlier()
+
+        let afterRelaunch = await server.requestCount
+        XCTAssertEqual(
+            afterRelaunch,
+            afterFirstFetch,
+            "the page it already wrote to disk was read from disk"
+        )
+        XCTAssertEqual(second.snapshot.groups.flatMap(\.messages).count, Self.page * 3)
+    }
+
+    @MainActor
+    func testShouldTellHimWhenOlderHistoryIsUnreachable() async throws {
+        // Offline is a state to design, not an error to report -- but a transcript that
+        // silently stops is a lie about where the conversation begins.
+        let server = StubHistory(total: 500, failing: true)
+        try store.upsert(server.messages(from: 401, through: 500))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+        await model.loadEarlier()
+        let onScreen = model.snapshot.groups.flatMap(\.messages).count
+
+        await model.loadEarlier()
+
+        XCTAssertNotNil(model.notice, "he is told, rather than left on a spinner")
+        XCTAssertFalse(model.isLoadingEarlier, "and the control is not stuck loading")
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            onScreen,
+            "the local transcript is untouched and still usable"
+        )
+        XCTAssertTrue(model.mayReachFurtherBack, "a failed reach is not an ending")
+    }
+
+    @MainActor
+    func testShouldResolveToAnEndingAtTheTrueBeginning() async throws {
+        // The last page reports `hasMore: false`. That is the ONLY thing that can say
+        // where the conversation begins, and it must be written down -- otherwise every
+        // relaunch re-walks the whole history to rediscover it.
+        let server = StubHistory(total: 60)
+        try store.upsert(server.messages(from: 51, through: 60))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+        XCTAssertFalse(model.snapshot.mayHaveEarlier, "ten messages, one page: disk is done")
+
+        await model.loadEarlier()
+
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, 60, "all of it")
+        XCTAssertFalse(
+            model.mayReachFurtherBack,
+            "the server said there is nothing older, so the control resolves to an ending"
+        )
+
+        await model.loadEarlier()
+        let asked = await server.requestCount
+        XCTAssertEqual(asked, 1, "an ending is not asked again")
+    }
+
+    @MainActor
+    func testShouldNotReachPastTheDeviceWithNoClientWired() async throws {
+        // A model with no way to reach the server behaves exactly as it did before this
+        // task: the transcript ends where the device's history ends, and it says nothing,
+        // because nothing failed.
+        try store.upsert((1...60).map { message(id: id($0), seq: $0) })
+        let model = makeModel()
+        await model.refresh()
+
+        await model.loadEarlier()
+
+        XCTAssertFalse(model.mayReachFurtherBack)
+        XCTAssertNil(model.notice)
+    }
+
+    /// A server holding more of the conversation than the device does.
+    ///
+    /// An actor because the assertions are about **what was asked of it** -- how many
+    /// requests, carrying which cursor -- and those are read from the main actor while the
+    /// fetch closure runs off it.
+    actor StubHistory {
+        private let total: Int
+        private let failing: Bool
+        private(set) var cursors: [String?] = []
+        var requestCount: Int { cursors.count }
+
+        init(total: Int, failing: Bool = false) {
+            self.total = total
+            self.failing = failing
+        }
+
+        nonisolated func messages(from first: Int, through last: Int) -> [Message] {
+            (first...last).map { seq in
+                Message(
+                    id: "syl:message:0198f2c0-0001-7000-8000-\(String(format: "%012d", seq))",
+                    conversationId: SylIDs.interactiveConversation,
+                    clientId: nil,
+                    role: .assistant,
+                    text: "Done.",
+                    createdAt: try! Instant.parse("2026-08-09T07:00:03.114Z")
+                        .addingTimeInterval(Double(seq) * (MessageGrouping.maximumGap + 1)),
+                    seq: seq
+                )
+            }
+        }
+
+        /// Decodes the cursor the way the service does, so the test exercises the encoding
+        /// rather than trusting it.
+        private func seq(from cursor: String?) -> Int {
+            guard
+                let cursor,
+                let data = Data(base64Encoded: cursor),
+                let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let seq = decoded["seq"] as? Int
+            else { return total + 1 }
+            return seq
+        }
+
+        func page(cursor: String?, limit: Int) throws -> MessagePage {
+            cursors.append(cursor)
+            if failing { throw AttachmentFetchError.offline }
+
+            let before = seq(from: cursor)
+            let last = before - 1
+            guard last >= 1 else { return MessagePage(items: [], nextCursor: nil, hasMore: false) }
+            let first = max(1, last - limit + 1)
+            return MessagePage(
+                items: messages(from: first, through: last),
+                nextCursor: nil,
+                hasMore: first > 1
+            )
+        }
+
+        nonisolated var fetch: @Sendable (SylID, String?, Int) async throws -> MessagePage {
+            { [self] _, cursor, limit in try await page(cursor: cursor, limit: limit) }
+        }
+    }
+
     // MARK: - The parse cache (T040)
 
     func testShouldParseAMessageOnceAndReuseIt() {
@@ -1106,6 +1328,7 @@ final class ChatViewModelTests: XCTestCase {
         store: LocalStore? = nil,
         sendOverSocket: @escaping @Sendable (String, String, String) async throws -> Void = { _, _, _ in },
         flush: @escaping @Sendable () async -> Void = {},
+        fetchOlderMessages: (@Sendable (SylID, String?, Int) async throws -> MessagePage)? = nil,
         makeClientId: @escaping @Sendable () -> String = { UUID().uuidString },
         now: @escaping @Sendable () -> Date = { try! Instant.parse("2026-08-09T06:59:48.220Z") },
         limit: Int? = nil
@@ -1117,6 +1340,7 @@ final class ChatViewModelTests: XCTestCase {
                 limit: limit,
                 sendOverSocket: sendOverSocket,
                 flush: flush,
+                fetchOlderMessages: fetchOlderMessages,
                 now: now,
                 makeClientId: makeClientId,
                 makeIdempotencyKey: { UUID().uuidString }
@@ -1126,6 +1350,7 @@ final class ChatViewModelTests: XCTestCase {
             store: store,
             sendOverSocket: sendOverSocket,
             flush: flush,
+            fetchOlderMessages: fetchOlderMessages,
             now: now,
             makeClientId: makeClientId,
             makeIdempotencyKey: { UUID().uuidString }

@@ -156,7 +156,11 @@ struct ChatView: View {
                 EmptyConversation()
             }
 
-            if model.snapshot.mayHaveEarlier {
+            // `mayReachFurtherBack`, not `snapshot.mayHaveEarlier`. The second answers
+            // "is there more on this device", so the control vanished the moment local
+            // history ran out — which looked exactly like the beginning of the
+            // conversation and was not one.
+            if model.mayReachFurtherBack {
                 // **No live `onAppear` here — and the reason is not the one this comment
                 // used to give.**
                 //
