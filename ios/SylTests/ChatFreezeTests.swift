@@ -777,3 +777,168 @@ final class ChatReachingBackTests: ChatHostedTranscriptCase {
     }
 }
 
+
+/// Photographs of the real transcript, for a human to look at (`syl-025.2.7`).
+///
+/// **Every claim in this epic is backed by a counter and none by anyone having seen the
+/// screen.** That gap is what let a four-state control ship wired to a Bool: the states
+/// were correct, tested, mutation-proven, and two of them could not occur.
+///
+/// This is not the shipped app end-to-end — the pairing gate needs a Keychain token, and
+/// the only live service is the Commander's own. It IS the production `ChatView`, hosted
+/// in a real `UIWindow`, laid out by real geometry, scrolled through a real `UIScrollView`,
+/// rendering the real four states. What it cannot show is a finger.
+///
+/// Opt-in, like `ChatSnapshotRendering`, and it only ever produces images.
+@MainActor
+final class ChatScreenPhotographs: ChatHostedTranscriptCase {
+    private var enabled: Bool {
+        ProcessInfo.processInfo.environment["SYL_RENDER_SNAPSHOTS"] != nil
+    }
+
+    func testPhotographTheAcceptanceWalk() async throws {
+        try XCTSkipUnless(enabled, "set SYL_RENDER_SNAPSHOTS=1 to produce screen images")
+        let directory = try XCTUnwrap(
+            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        ).appendingPathComponent("chat-screens", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        print("SYL_SCREENS_AT \(directory.path)")
+
+        // US1 — opening the chat on a long conversation.
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window, passes: 25)
+        try shoot(window, "01-first-paint", into: directory)
+
+        let scroll = try XCTUnwrap(transcriptScrollView(in: window))
+
+        // US2 — at the top of the loaded range, before the page arrives.
+        scrollToTheTop(scroll)
+        await settle(window, passes: 3)
+        try shoot(window, "02-at-the-top-before", into: directory)
+
+        // …and after. The pair is the jump, or the absence of one.
+        await settle(window, passes: 60)
+        try shoot(window, "03-at-the-top-after-a-page", into: directory)
+
+        // US3 — the true beginning, which nobody has ever seen.
+        let short = StubHistory(total: 60)
+        let beginningModel = try await modelOver(short, holding: 51...60)
+        let beginningWindow = present(ChatView(model: beginningModel))
+        defer { dismiss(beginningWindow) }
+        await settle(beginningWindow, passes: 25)
+        await beginningModel.loadEarlier()
+        await settle(beginningWindow, passes: 40)
+        let atTop = try XCTUnwrap(transcriptScrollView(in: beginningWindow))
+        scrollToTheTop(atTop)
+        await settle(beginningWindow, passes: 10)
+        XCTAssertEqual(beginningModel.earlierMessagesState, .beginning)
+        try shoot(beginningWindow, "04-the-beginning", into: directory)
+        // The same frame with the scroll view's top-fade mask out of the path, to tell a
+        // control that draws nothing from one the mask is hiding.
+        if let content = atTop.subviews.first {
+            let unmasked = UIGraphicsImageRenderer(bounds: CGRect(x: 0, y: 0, width: 393, height: 300)).image { context in
+                content.layer.render(in: context.cgContext)
+            }
+            try XCTUnwrap(unmasked.pngData())
+                .write(to: directory.appendingPathComponent("04b-beginning-unmasked.png"))
+        }
+
+        // US3 — offline, which must be tellable from the beginning at a glance.
+        let offline = StubHistory(total: 500, failing: true)
+        let offlineModel = try await modelOver(offline, holding: 451...500)
+        let offlineWindow = present(ChatView(model: offlineModel))
+        defer { dismiss(offlineWindow) }
+        await settle(offlineWindow, passes: 25)
+        await offlineModel.loadEarlier()
+        await offlineModel.loadEarlier()
+        await settle(offlineWindow, passes: 20)
+        let offlineScroll = try XCTUnwrap(transcriptScrollView(in: offlineWindow))
+        scrollToTheTop(offlineScroll)
+        await settle(offlineWindow, passes: 10)
+        XCTAssertEqual(offlineModel.earlierMessagesState, .unreachable)
+        try shoot(offlineWindow, "05-unreachable", into: directory)
+    }
+
+    /// The four states side by side, isolated from the transcript.
+    ///
+    /// The acceptance walk shows where the control sits; this shows what it IS. Question
+    /// four of the walk -- can `beginning` be told from `unreachable` AT A GLANCE -- is a
+    /// question about the control alone, and photographing it inside a scroll view mixes
+    /// it up with masks, offsets and whatever happens to be above it.
+    func testPhotographTheFourStates() throws {
+        try XCTSkipUnless(enabled, "set SYL_RENDER_SNAPSHOTS=1 to produce screen images")
+        let directory = try XCTUnwrap(
+            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        ).appendingPathComponent("chat-screens", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let stack = VStack(spacing: 24) {
+            ForEach(EarlierMessagesState.allCases, id: \.self) { state in
+                VStack(spacing: 4) {
+                    Text(String(describing: state))
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.red)
+                    EarlierMessages(state: state) {}
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 393)
+        .background(SylTheme.Colour.veil)
+
+        let controller = UIHostingController(rootView: stack)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 560))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { context in
+            window.layer.render(in: context.cgContext)
+        }
+        try XCTUnwrap(image.pngData()).write(to: directory.appendingPathComponent("06-four-states.png"))
+        window.isHidden = true
+        window.rootViewController = nil
+    }
+
+    /// The true top of the content, which is NOT offset zero.
+    ///
+    /// The scroll view carries a top inset, so `setContentOffset(.zero)` comes to rest a
+    /// full inset BELOW the first row -- and the head of the transcript sits in the gap,
+    /// off-screen. The first version of these photographs did exactly that and produced a
+    /// blank band where the divider should have been, which reads as a missing control.
+    private func scrollToTheTop(_ scroll: UIScrollView) {
+        scroll.setContentOffset(CGPoint(x: 0, y: -scroll.adjustedContentInset.top), animated: false)
+    }
+
+    private func modelOver(
+        _ server: StubHistory,
+        holding range: ClosedRange<Int>
+    ) async throws -> ChatViewModel {
+        let database = try SylDatabase.inMemory()
+        let store = LocalStore(database: database)
+        try store.upsert(server.messages(from: range.lowerBound, through: range.upperBound))
+        let model = ChatViewModel(
+            store: store,
+            fetchOlderMessages: server.fetch,
+            now: { try! Instant.parse("2026-08-09T07:00:03.114Z") }
+        )
+        await model.refresh()
+        return model
+    }
+
+    private func shoot(_ window: UIWindow, _ name: String, into directory: URL) throws {
+        // `drawHierarchy(afterScreenUpdates:)` needs the window to be part of an on-screen
+        // render pass and comes back white from a test host. The layer tree is present
+        // either way.
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { context in
+            window.layer.render(in: context.cgContext)
+        }
+        let data = try XCTUnwrap(image.pngData())
+        try data.write(to: directory.appendingPathComponent("\(name).png"))
+    }
+}
+
+/// The stub server, shared with `ChatViewModelTests`.
+typealias StubHistory = ChatViewModelTests.StubHistory
