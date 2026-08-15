@@ -33,16 +33,25 @@ enum MarkdownInline {
     ///
     /// Every call site is inside a SwiftUI `body` — `MarkdownView` renders paragraphs,
     /// headings, list rows (twice, the second time for the VoiceOver label) and table
-    /// cells — and `ChatView.body` re-runs on **every keystroke** and on **every presence
-    /// frame**, because `draft`, `presence` and `intensity` all publish from the same
-    /// object. Worse, `.defaultScrollAnchor(.bottom)` has to know the transcript's total
-    /// height, so the `LazyVStack` sizes every row in the window rather than the visible
-    /// ones.
+    /// cells — and `ChatView.body` re-runs on every presence frame.
     ///
-    /// Unmemoised, that makes one body pass a full parse of the entire transcript, on the
-    /// main thread. Two hundred messages of ordinary prose is enough to stop the main
-    /// thread answering, and a main thread that stops answering long enough is a watchdog
-    /// termination rather than a slow screen — which is exactly what the Commander
+    /// **Two multipliers this comment used to name are gone, and both were measured
+    /// rather than argued** (`syl-025`, iOS 26.2, 2026-08-14):
+    ///
+    /// - *"every keystroke"* was true until `syl-025.2.3`. The draft now lives on its own
+    ///   observable (`ChatDraft`), held by the view model as a plain `let`, so typing
+    ///   invalidates the composer and nothing else. Measured at twenty transcript rows
+    ///   rebuilt per nine keystrokes, then zero.
+    /// - *"sizes every row in the window"* was never re-measured after it was written, and
+    ///   on this OS it is false. `.defaultScrollAnchor(.bottom)` builds a bounded region of
+    ///   about forty rows whether the window holds fifty or four hundred. Still worth
+    ///   memoising — forty rows where six are visible is 6.7x, re-paid per body pass — but
+    ///   it is a fixed multiplier, not one that grows as he reaches back.
+    ///
+    /// Unmemoised, that makes one body pass a full parse of everything built, on the main
+    /// thread. Enough of it is enough to stop the main thread answering, and a main thread
+    /// that stops answering long enough is a watchdog termination rather than a slow
+    /// screen — which is exactly what the Commander
     /// reported, three times.
     ///
     /// **The two earlier fixes were real and were not this one.** `ChatSnapshotLoader`
@@ -72,8 +81,8 @@ enum MarkdownInline {
 
     /// How many rendered runs are kept.
     ///
-    /// Comfortably more than one window of `ChatSnapshotLoader`'s 200 messages, so an
-    /// ordinary transcript never evicts anything it is about to be asked for again, and
+    /// Comfortably more than one window of `ChatPaging.pageSize`, so an ordinary
+    /// transcript never evicts anything it is about to be asked for again, and
     /// bounded so a session that reaches back through months of history cannot grow one.
     /// A cache that only ever grows is a leak with a good reputation — and the key here is
     /// message text, which is the largest thing this app holds.

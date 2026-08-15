@@ -501,7 +501,7 @@ final class AttachmentSendTests: XCTestCase {
             )
             throw AttachmentFetchError.offline
         })
-        model.draft = "Here is the shelf, after."
+        model.draft.text = "Here is the shelf, after."
 
         await model.send(staging: [staged])
 
@@ -515,7 +515,7 @@ final class AttachmentSendTests: XCTestCase {
     func testShouldRenderTheJustSentPictureWithNoRoundTrip() async throws {
         let staged = staging()
         let model = makeModel(upload: { _, _ in throw AttachmentFetchError.offline })
-        model.draft = "Here is the shelf, after."
+        model.draft.text = "Here is the shelf, after."
 
         await model.send(staging: [staged])
 
@@ -538,7 +538,7 @@ final class AttachmentSendTests: XCTestCase {
             upload: { _, _ in throw AttachmentFetchError.offline },
             sendOverSocket: { _, _, _ in await sent.raise() }
         )
-        model.draft = "Here is the shelf, after."
+        model.draft.text = "Here is the shelf, after."
 
         await model.send(staging: [staging()])
 
@@ -558,7 +558,7 @@ final class AttachmentSendTests: XCTestCase {
         let staged = staging()
         let serverId: SylID = "syl:attachment:019feb2f-e654-7000-ac0e-3f825d6a318c"
         let model = makeModel(upload: { _, _ in Self.uploaded(id: serverId) })
-        model.draft = "Here is the shelf, after."
+        model.draft.text = "Here is the shelf, after."
 
         await model.send(staging: [staged])
 
@@ -580,7 +580,7 @@ final class AttachmentSendTests: XCTestCase {
     @MainActor
     func testShouldLeaveATextOnlySendExactlyAsItWas() async throws {
         let model = makeModel(upload: { _, _ in XCTFail("no attachments, no upload"); throw AttachmentFetchError.offline })
-        model.draft = "No picture here."
+        model.draft.text = "No picture here."
 
         await model.send()
 

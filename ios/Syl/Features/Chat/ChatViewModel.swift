@@ -29,7 +29,50 @@ final class ChatViewModel: ObservableObject {
     /// state to design, not an error to report — but a message that cannot be sent is
     /// worth saying out loud.
     @Published private(set) var notice: String?
-    @Published var draft = ""
+
+    /// What he is typing.
+    ///
+    /// **A separate observable, and that separation is the fix.** This was
+    /// `@Published var draft` on this object — the same object the transcript observes —
+    /// so every character invalidated `ChatView.body` and everything under it. Nothing he
+    /// types is about the transcript, and it was rebuilding twenty to thirty rows per
+    /// keystroke to find that out.
+    ///
+    /// Held as a plain `let`. Reading a `let` does not subscribe, so `ChatView` can hand
+    /// this to the composer without hearing about it; only `ChatComposer` observes it, and
+    /// only the composer redraws.
+    let draft = ChatDraft()
+
+    /// Whether there is anything older to reach for — on the device **or** on the server.
+    ///
+    /// The control and the automatic trigger both hang off this rather than off
+    /// `snapshot.mayHaveEarlier`, and the difference is the whole of `syl-025.4`.
+    /// `mayHaveEarlier` answers "is there more on this device", so the moment local history
+    /// runs out it goes false — and before this task that was indistinguishable from the
+    /// beginning of the conversation. The transcript simply stopped, and no action in the
+    /// chat UI could get past it, because only the forward-only `/sync` cursor ever walked
+    /// history and it never walks backwards.
+    ///
+    /// Three states, and they are genuinely different: more on disk; nothing on disk but
+    /// the server has not been asked; and the server has confirmed there is nothing older,
+    /// which is the only one that is an ending.
+    var mayReachFurtherBack: Bool {
+        if snapshot.mayHaveEarlier { return true }
+        guard fetchOlderMessages != nil else { return false }
+        // A store that cannot be read is not an ending. Offering the way back and failing
+        // out loud beats silently drawing a beginning that may not be one.
+        return !((try? store.hasWholeHistory(conversationId: conversationId)) ?? false)
+    }
+
+    /// How many messages the window currently reaches back over.
+    ///
+    /// Exposed because three separate requirements are statements about it -- it must not
+    /// grow on a read that failed, it must come back down at the foot, and it must never
+    /// disagree with what is on screen -- and none of them could be observed at all while
+    /// it was buried in the loader. A test that can only see the snapshot cannot tell a
+    /// window that did not move from one that moved and was not drawn, which is exactly
+    /// the difference `syl-025.1.3.1` is about.
+    var windowSize: Int { loader.limit }
 
     /// True while an older page is being read. Kept so the affordance can say it is
     /// working and so a fast scroll cannot queue five overlapping loads.
@@ -55,10 +98,26 @@ final class ChatViewModel: ObservableObject {
     /// be tested — including the case where the upload fails partway — without a server
     /// and without a network stub.
     private let uploadAttachment: @Sendable (CreateAttachmentRequest, String) async throws -> Attachment
+    /// Fetches one page of history older than a cursor, over HTTP.
+    ///
+    /// **Optional, and nil means local-only.** A `ChatViewModel` built without one behaves
+    /// exactly as it did before this task: the transcript ends where the device's history
+    /// ends. That is the honest default for a preview or a test that never meant to reach
+    /// the network, and it is why the remote leg is silent rather than apologetic when
+    /// nothing is wired.
+    ///
+    /// Injected as a closure rather than as an `APIClient` for the same reason every other
+    /// seam here is: the ordering rules below have to be testable without a server, and a
+    /// page that fails, hangs or comes back empty are three different behaviours that each
+    /// need asserting.
+    private let fetchOlderMessages: (@Sendable (SylID, String?, Int) async throws -> MessagePage)?
     private let flush: @Sendable () async -> Void
     private let now: @Sendable () -> Date
     private let makeClientId: @Sendable () -> String
     private let makeIdempotencyKey: @Sendable () -> String
+
+    /// Stamps each read so a superseded one cannot assign its result. See ``read(with:)``.
+    private var generation = 0
 
     /// Whether the automatic trigger has already spent itself on this arrival at the top.
     ///
@@ -117,6 +176,8 @@ final class ChatViewModel: ObservableObject {
         /// Runs the outbox. Called after a send so a queued message leaves promptly
         /// rather than waiting for the next scheduled sync.
         flush: @escaping @Sendable () async -> Void = {},
+        /// Reaches past the device for older history. Nil is local-only.
+        fetchOlderMessages: (@Sendable (SylID, String?, Int) async throws -> MessagePage)? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
         makeClientId: @escaping @Sendable () -> String = { UUID().uuidString },
         makeIdempotencyKey: @escaping @Sendable () -> String = { IdempotencyKey.generate() },
@@ -130,6 +191,7 @@ final class ChatViewModel: ObservableObject {
         self.sendOverSocket = sendOverSocket
         self.uploadAttachment = uploadAttachment
         self.flush = flush
+        self.fetchOlderMessages = fetchOlderMessages
         self.now = now
         self.makeClientId = makeClientId
         self.makeIdempotencyKey = makeIdempotencyKey
@@ -143,16 +205,48 @@ final class ChatViewModel: ObservableObject {
     /// happens here. On a long history that is the difference between a smooth scroll
     /// and a visible stutter every time a message arrives.
     func refresh() async {
-        let loader = loader
+        await read(with: loader)
+    }
+
+    /// Reads with a given window and applies the result, reporting whether it landed.
+    ///
+    /// ## Why the window is a parameter rather than the stored one
+    ///
+    /// So a widen can be **proposed** and only committed if the read behind it worked.
+    /// `loadEarlier()` used to advance `loader.limit` and *then* refresh, and the failure
+    /// path returns leaving the snapshot untouched — so a store that throws three times
+    /// left the limit at 200 while the screen still showed 50, and the next successful
+    /// read, triggered by an arriving message he had nothing to do with, painted all 200
+    /// at once. A window that grew on a read that failed is worse than a failed read.
+    ///
+    /// ## Why the generation stamp
+    ///
+    /// Three callers refresh independently — the view's `task`, an arriving socket
+    /// message, and background sync — and this suspends in the middle. A sync-driven read
+    /// captured at fifty could resolve *after* his tap-driven read at a hundred and assign
+    /// the narrower snapshot, collapsing his history under him while `loader.limit` still
+    /// said a hundred. Stamping each read and dropping any result that is no longer the
+    /// newest makes the last read to *start* the one that wins, which is the only ordering
+    /// that matches what he last asked for.
+    @discardableResult
+    private func read(with window: ChatSnapshotLoader) async -> Bool {
+        generation &+= 1
+        let stamp = generation
+
         let snapshot = await Task.detached(priority: .userInitiated) {
-            try? loader.load()
+            try? window.load()
         }.value
+
+        // Superseded. Not a failure — the newer read speaks for him — but this result
+        // must not be applied and its window must not be committed.
+        guard stamp == generation else { return false }
 
         guard let snapshot else {
             notice = "Could not read the conversation from this device."
-            return
+            return false
         }
         self.snapshot = snapshot
+        return true
     }
 
     /// **He asked.** One tap, one page, every time.
@@ -187,7 +281,20 @@ final class ChatViewModel: ObservableObject {
     /// is destroyed and recreated by the very rebuild the load causes, so a latch in the
     /// view would be reset by the thing it exists to stop.
     func reachedTheTopOfTheWindow() async {
-        guard !automaticLoadIsSpent else { return }
+        // **Every condition is checked, and the latch is set, before the first `await`.**
+        // Two wrong shapes, both of which look right:
+        //
+        // - Spending the latch and *then* calling `widenTheWindow()` consumes the arrival
+        //   even when the widen early-returns — a tap already in flight, or nothing older
+        //   to read — so the trigger is gone and no page arrived. It degrades to "tap to
+        //   continue", which is the safe direction, and it is still wrong.
+        // - Spending it *after* the widen returns reopens the runaway outright, because
+        //   the widen suspends: further reports of the top re-enter across the await with
+        //   the latch still false.
+        //
+        // Synchronous guard, synchronous set, then suspend. Actor reentrancy cannot get
+        // between them.
+        guard !automaticLoadIsSpent, mayReachFurtherBack, !isLoadingEarlier else { return }
         automaticLoadIsSpent = true
         await widenTheWindow()
     }
@@ -213,13 +320,99 @@ final class ChatViewModel: ObservableObject {
     /// **It was never sufficient on its own** — it is cleared before the next appearance
     /// of a row that re-fires — which is what the latch above is for.
     private func widenTheWindow() async {
-        guard snapshot.mayHaveEarlier, !isLoadingEarlier else { return }
+        guard mayReachFurtherBack, !isLoadingEarlier else { return }
 
         isLoadingEarlier = true
         defer { isLoadingEarlier = false }
 
-        loader.limit += pageSize
-        await refresh()
+        // **Local first, always.** Disk is the fast path and the one that works offline;
+        // the network is only for the case disk cannot answer.
+        if snapshot.mayHaveEarlier {
+            // Proposed, then committed only if the read behind it landed. The old shape
+            // advanced the stored limit first, so a read that threw left the window wider
+            // than the screen and the next unrelated refresh paid for it.
+            var widened = loader
+            widened.limit += pageSize
+            guard await read(with: widened) else { return }
+            loader = widened
+            return
+        }
+
+        await reachPastTheDevice()
+    }
+
+    /// Fetch the page before the oldest message this device holds, and write it down.
+    ///
+    /// **The store stays the single source of truth.** This writes to disk and then lets
+    /// the ordinary read path rebuild, exactly as the socket's `.message` handler does.
+    /// Appending the fetched page to an array beside the snapshot would be fewer lines and
+    /// would create two orderings of one conversation — and the one on screen would be the
+    /// one nothing else agrees with.
+    private func reachPastTheDevice() async {
+        // Nothing wired: this model was never given a way to reach the server, and saying
+        // so with a notice would be apologising for a decision its owner made.
+        guard let fetchOlderMessages else { return }
+        guard
+            let oldest = try? store.oldestMessageSeq(conversationId: conversationId),
+            let cursor = MessageCursor.before(seq: oldest)
+        else { return }
+
+        do {
+            let page = try await fetchOlderMessages(conversationId, cursor, pageSize)
+
+            if !page.items.isEmpty {
+                try store.upsert(page.items)
+            }
+
+            // **`hasMore == false` is the server saying where the beginning is**, and it is
+            // the only thing that can say so. Recorded before the re-read, so a relaunch
+            // does not walk the whole history again to rediscover it.
+            if !page.hasMore {
+                try? store.confirmHistoryBegins(
+                    at: page.items.map(\.seq).min() ?? oldest,
+                    conversationId: conversationId
+                )
+            }
+
+            // Widen by a page so what just arrived is actually on screen. If the read
+            // fails the window stays where it was, for the same reason as above.
+            var widened = loader
+            widened.limit += pageSize
+            if await read(with: widened) { loader = widened }
+            notice = nil
+        } catch {
+            // Not a spinner, and not a silent stop. The local transcript is untouched and
+            // still his to read; the only thing that failed is reaching further back.
+            notice = "Older messages are not reachable right now."
+        }
+    }
+
+    /// Let the window fall back to one page.
+    ///
+    /// **The window only ever grew.** There was exactly one write to it in the whole app,
+    /// `+= pageSize`, and `ChatViewModel` is built once at launch and outlives the screen —
+    /// so a browse back through history was permanent for the life of the process.
+    /// Navigating away did not clear it, backgrounding did not clear it, and returning to
+    /// the tab re-read and rebuilt the whole grown window because the view is recreated
+    /// even though the model is not. Only killing the app brought it down.
+    ///
+    /// That is very likely the whole of what the Commander reported: a bounded,
+    /// legitimate, user-initiated action with an unbounded and permanent cost.
+    ///
+    /// **A pending row cannot be lost here.** The window is anchored at the newest end and
+    /// an optimistic bubble is by definition the newest thing in it, so collapsing to the
+    /// newest page always keeps it. Asserted rather than guarded, because a guard on
+    /// `pendingCount` would quietly stop collapsing for anyone whose outbox is backed up —
+    /// which is exactly when the window most needs to come down.
+    func collapseTheWindow() async {
+        guard loader.limit > pageSize, !isLoadingEarlier, !isAwaitingReply else { return }
+
+        var collapsed = loader
+        collapsed.limit = pageSize
+        guard await read(with: collapsed) else { return }
+        loader = collapsed
+        // A fresh window means the top of it is somewhere he has not been. Re-arm.
+        automaticLoadIsSpent = false
     }
 
     // MARK: - Sending
@@ -252,7 +445,7 @@ final class ChatViewModel: ObservableObject {
     /// deliver the words without the picture. Parked is neither: it is a durable,
     /// visible "not yet".
     func send(staging: [StagedAttachment] = []) async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         // A message must say something. A picture says something.
         //
         // The contract required non-empty text until `syl-008.8`, which made "send a
@@ -290,7 +483,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        draft = ""
+        draft.text = ""
         notice = nil
         // He has asked for something, and from here until she answers the screen owes him
         // an account of it. Armed before the send rather than after, because a send that
@@ -590,6 +783,29 @@ final class ChatViewModel: ObservableObject {
             return false
         case .idle, .offline, .unauthenticated:
             return true
+        }
+    }
+
+    /// The real thing, over HTTP. **The chat screen's first network call of its own.**
+    ///
+    /// `SylAPI.messages(conversationId:cursor:limit:direction:)` has been implemented and
+    /// unit-tested since the client was written and had **zero production callers** — the
+    /// endpoint existed, the client spoke it, and nothing ever asked. This is the caller.
+    ///
+    /// Shaped exactly like `DeliveryReconciler.liveFetch(backend:)`, which is the existing
+    /// pattern for handing a view model one live capability without handing it the client.
+    static func liveOlderMessages(
+        backend: SylBackend
+    ) -> @Sendable (SylID, String?, Int) async throws -> MessagePage {
+        { conversationId, cursor, limit in
+            try await backend.client().send(
+                SylAPI.messages(
+                    conversationId: conversationId,
+                    cursor: cursor,
+                    limit: limit,
+                    direction: .backward
+                )
+            )
         }
     }
 

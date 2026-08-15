@@ -10,14 +10,17 @@ import SwiftUI
 /// `Metric.minimumTouchTarget`, which this repo already defines**. That last one is a
 /// defect, not a preference.
 struct ChatComposer: View {
-    @Binding var draft: String
+    /// Observed here and **nowhere else**. `ChatView` holds it as a plain `let` and passes
+    /// it down without subscribing, so a keystroke redraws this bar and not the
+    /// transcript. See `ChatDraft`.
+    @ObservedObject var draft: ChatDraft
     var isFocused: FocusState<Bool>.Binding
     let send: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -45,7 +48,7 @@ struct ChatComposer: View {
     private var field: some View {
         TextField(
             "",
-            text: $draft,
+            text: $draft.text,
             prompt: Text("Message").foregroundStyle(SylTheme.Colour.inkFaint),
             axis: .vertical
         )
