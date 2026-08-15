@@ -751,6 +751,169 @@ final class ChatViewModelTests: XCTestCase {
         )
     }
 
+    // MARK: - The window comes back down (syl-025.6.1)
+
+    @MainActor
+    func testShouldCollapseTheWindowWhenHeReturnsToTheFoot() async throws {
+        // The window had exactly one write in the whole app -- `+= pageSize` -- and the
+        // view model outlives the screen, so a browse through history was permanent for
+        // the life of the process. Only killing the app brought it down.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+        await model.loadEarlier()
+        await model.loadEarlier()
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, Self.page * 3)
+
+        await model.collapseTheWindow()
+
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, Self.page)
+        XCTAssertTrue(model.snapshot.mayHaveEarlier, "the way back is still offered")
+    }
+
+    @MainActor
+    func testShouldKeepAPendingMessageWhenTheWindowCollapses() async throws {
+        // The window is anchored at the newest end and an optimistic bubble is by
+        // definition the newest thing in it, so collapsing keeps it. Asserted rather than
+        // guarded: a guard on `pendingCount` would stop collapsing for anyone whose outbox
+        // is backed up, which is exactly when the window most needs to come down.
+        try store.upsert(longConversation())
+        // A clock AFTER the fixture, which is what a real one is. The default test clock
+        // predates every seeded message, so the optimistic row sorted as the OLDEST thing
+        // in the conversation and fell out of a newest-anchored window -- the exact edge
+        // case the spec names for a pending row, reproduced here by accident. Filed as its
+        // own bug rather than papered over; this test is about the collapse.
+        let model = makeModel(
+            sendOverSocket: { _, _, _ in throw WebSocketClient.NotConnected() },
+            now: { try! Instant.parse("2026-09-01T00:00:00.000Z") }
+        )
+        await model.refresh()
+        await model.loadEarlier()
+        model.draft.text = "Remind me at six."
+        await model.send()
+        // A send arms the turn watch, and a conversation mid-turn does not collapse.
+        await model.apply(.message(message(id: id(2_001), seq: 2_001)))
+
+        await model.collapseTheWindow()
+
+        XCTAssertEqual(model.snapshot.pendingCount, 1, "his unsent message survived the collapse")
+        XCTAssertTrue(
+            model.snapshot.groups.contains { $0.isPending },
+            "and it is still a row on screen"
+        )
+    }
+
+    @MainActor
+    func testShouldNotCollapseWhileSheIsStillAnswering() async throws {
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+        await model.loadEarlier()
+        model.draft.text = "Remind me at six."
+        await model.send()
+
+        await model.collapseTheWindow()
+
+        XCTAssertGreaterThan(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page,
+            "a turn is outstanding; rebuilding the transcript under him is not the moment"
+        )
+    }
+
+    @MainActor
+    func testShouldLetHimReachBackAgainAfterACollapse() async throws {
+        // The collapse re-arms the automatic trigger. Without that, the top of the fresh
+        // window is somewhere he has never been and arriving there would load nothing.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+        await model.reachedTheTopOfTheWindow()
+        await model.collapseTheWindow()
+
+        await model.reachedTheTopOfTheWindow()
+
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, Self.page * 2)
+    }
+
+    // MARK: - A stale read must not assign its result (syl-025.1.3.2)
+
+    @MainActor
+    func testShouldNotLetAStaleReadOverwriteANewerOne() async throws {
+        // Three callers refresh independently -- the view's task, an arriving socket
+        // message, and background sync -- and a read suspends in the middle. One captured
+        // at the old window could resolve AFTER a newer one and assign the stale snapshot,
+        // so his history collapses under him while `loader.limit` still says otherwise:
+        // the window and the screen then disagree about where the next page begins.
+        //
+        // Staged so the older read is the SLOWER one, which is the only interleaving that
+        // exposes it: a wide read is started first and left in flight, then a collapse
+        // reads a narrower window, stamps later, and lands ahead of it. The wide result
+        // then arrives last with nothing to say.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+        await model.loadEarlier()
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, Self.page * 2)
+
+        // The yield is load-bearing: it lets the wide read run up to its first suspension,
+        // which is where it takes its stamp. Without it the collapse stamps FIRST and the
+        // refresh is the newer request, which is a different (and correct) interleaving
+        // that proves nothing -- the first draft of this test asserted against exactly
+        // that and failed for a reason the requirement does not care about.
+        let stale = Task { await model.refresh() }
+        await Task.yield()
+        await model.collapseTheWindow()
+        await stale.value
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page,
+            """
+            The collapse was the newest thing asked for, so it is what must be on screen. \
+            A read captured before it must not land on top of it.
+            """
+        )
+    }
+
+    // MARK: - A window that grew on a read that failed (syl-025.1.3.1)
+
+    @MainActor
+    func testShouldNotWidenTheWindowWhenTheReadFails() async throws {
+        // The limit used to advance BEFORE the read. A store that throws left it wider
+        // than the screen, and the next successful refresh -- triggered by an arriving
+        // message he had nothing to do with -- painted the whole widened window at once.
+        //
+        // The failure is produced by closing the database underneath the model, which is
+        // what a locked or corrupt store looks like from here: the read throws, `load()`
+        // returns nil, and the model reports it.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+        XCTAssertEqual(model.windowSize, Self.page)
+        try database.queue.close()
+
+        await model.loadEarlier()
+
+        XCTAssertNotNil(model.notice, "a read that failed must say so")
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page,
+            "the screen still shows one page, which is the easy half"
+        )
+        // **The half that matters, and it is why the window is observable at all.**
+        // Asserting the snapshot alone cannot tell a window that did not move from one
+        // that moved and was simply not drawn -- and the second is the defect: the next
+        // successful read, on a path he did not initiate, would pay for a widen he never
+        // got. Proven by mutation: restoring the old "advance then read" order leaves this
+        // at 100 while every other assertion here still passes.
+        XCTAssertEqual(
+            model.windowSize,
+            Self.page,
+            "the window moved on a read that never landed"
+        )
+    }
+
     // MARK: - The parse cache (T040)
 
     func testShouldParseAMessageOnceAndReuseIt() {
@@ -940,12 +1103,14 @@ final class ChatViewModelTests: XCTestCase {
     ///   which is how a 200 sat opposite the server's 50 unnoticed.
     @MainActor
     private func makeModel(
+        store: LocalStore? = nil,
         sendOverSocket: @escaping @Sendable (String, String, String) async throws -> Void = { _, _, _ in },
         flush: @escaping @Sendable () async -> Void = {},
         makeClientId: @escaping @Sendable () -> String = { UUID().uuidString },
         now: @escaping @Sendable () -> Date = { try! Instant.parse("2026-08-09T06:59:48.220Z") },
         limit: Int? = nil
     ) -> ChatViewModel {
+        let store = store ?? self.store!
         if let limit {
             return ChatViewModel(
                 store: store,

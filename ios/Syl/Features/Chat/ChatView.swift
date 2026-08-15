@@ -120,6 +120,13 @@ struct ChatView: View {
         // most visible seam between this screen and home.
         .toolbarBackground(.hidden, for: .navigationBar)
         .task { await model.refresh() }
+        // A window that survives a trip to another tab is the same defect wearing a hat.
+        // `ChatViewModel` is built once at launch and outlives this view, so leaving the
+        // screen does not reset anything — and `.task` above re-reads the whole grown
+        // window every time he comes back, because the view is recreated while the model
+        // is not. He loses his scroll position on a tab switch either way; this only makes
+        // coming back cheap.
+        .onDisappear { Task { await model.collapseTheWindow() } }
     }
 
     /// The transcript, which is also the keyboard's dismiss target.
@@ -242,6 +249,13 @@ struct ChatView: View {
                 .onAppear {
                     isAtBottom = true
                     hasUnseenTurn = false
+                    // He is back at the newest message, so the history he reached for is
+                    // behind him and the window can come down. Safe to drive from this
+                    // row's lifecycle for the reason above — nothing is ever inserted
+                    // below it, so it realises when he arrives and not otherwise — and
+                    // safe to fire repeatedly regardless, because the collapse is a no-op
+                    // once the window is already one page.
+                    Task { await model.collapseTheWindow() }
                 }
                 .onDisappear { isAtBottom = false }
         }

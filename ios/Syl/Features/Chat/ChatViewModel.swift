@@ -43,6 +43,16 @@ final class ChatViewModel: ObservableObject {
     /// only the composer redraws.
     let draft = ChatDraft()
 
+    /// How many messages the window currently reaches back over.
+    ///
+    /// Exposed because three separate requirements are statements about it -- it must not
+    /// grow on a read that failed, it must come back down at the foot, and it must never
+    /// disagree with what is on screen -- and none of them could be observed at all while
+    /// it was buried in the loader. A test that can only see the snapshot cannot tell a
+    /// window that did not move from one that moved and was not drawn, which is exactly
+    /// the difference `syl-025.1.3.1` is about.
+    var windowSize: Int { loader.limit }
+
     /// True while an older page is being read. Kept so the affordance can say it is
     /// working and so a fast scroll cannot queue five overlapping loads.
     @Published private(set) var isLoadingEarlier = false
@@ -71,6 +81,9 @@ final class ChatViewModel: ObservableObject {
     private let now: @Sendable () -> Date
     private let makeClientId: @Sendable () -> String
     private let makeIdempotencyKey: @Sendable () -> String
+
+    /// Stamps each read so a superseded one cannot assign its result. See ``read(with:)``.
+    private var generation = 0
 
     /// Whether the automatic trigger has already spent itself on this arrival at the top.
     ///
@@ -155,16 +168,48 @@ final class ChatViewModel: ObservableObject {
     /// happens here. On a long history that is the difference between a smooth scroll
     /// and a visible stutter every time a message arrives.
     func refresh() async {
-        let loader = loader
+        await read(with: loader)
+    }
+
+    /// Reads with a given window and applies the result, reporting whether it landed.
+    ///
+    /// ## Why the window is a parameter rather than the stored one
+    ///
+    /// So a widen can be **proposed** and only committed if the read behind it worked.
+    /// `loadEarlier()` used to advance `loader.limit` and *then* refresh, and the failure
+    /// path returns leaving the snapshot untouched — so a store that throws three times
+    /// left the limit at 200 while the screen still showed 50, and the next successful
+    /// read, triggered by an arriving message he had nothing to do with, painted all 200
+    /// at once. A window that grew on a read that failed is worse than a failed read.
+    ///
+    /// ## Why the generation stamp
+    ///
+    /// Three callers refresh independently — the view's `task`, an arriving socket
+    /// message, and background sync — and this suspends in the middle. A sync-driven read
+    /// captured at fifty could resolve *after* his tap-driven read at a hundred and assign
+    /// the narrower snapshot, collapsing his history under him while `loader.limit` still
+    /// said a hundred. Stamping each read and dropping any result that is no longer the
+    /// newest makes the last read to *start* the one that wins, which is the only ordering
+    /// that matches what he last asked for.
+    @discardableResult
+    private func read(with window: ChatSnapshotLoader) async -> Bool {
+        generation &+= 1
+        let stamp = generation
+
         let snapshot = await Task.detached(priority: .userInitiated) {
-            try? loader.load()
+            try? window.load()
         }.value
+
+        // Superseded. Not a failure — the newer read speaks for him — but this result
+        // must not be applied and its window must not be committed.
+        guard stamp == generation else { return false }
 
         guard let snapshot else {
             notice = "Could not read the conversation from this device."
-            return
+            return false
         }
         self.snapshot = snapshot
+        return true
     }
 
     /// **He asked.** One tap, one page, every time.
@@ -243,8 +288,41 @@ final class ChatViewModel: ObservableObject {
         isLoadingEarlier = true
         defer { isLoadingEarlier = false }
 
-        loader.limit += pageSize
-        await refresh()
+        // Proposed, then committed only if the read behind it landed. The old shape
+        // advanced the stored limit first, so a read that threw left the window wider
+        // than the screen and the next unrelated refresh paid for it.
+        var widened = loader
+        widened.limit += pageSize
+        guard await read(with: widened) else { return }
+        loader = widened
+    }
+
+    /// Let the window fall back to one page.
+    ///
+    /// **The window only ever grew.** There was exactly one write to it in the whole app,
+    /// `+= pageSize`, and `ChatViewModel` is built once at launch and outlives the screen —
+    /// so a browse back through history was permanent for the life of the process.
+    /// Navigating away did not clear it, backgrounding did not clear it, and returning to
+    /// the tab re-read and rebuilt the whole grown window because the view is recreated
+    /// even though the model is not. Only killing the app brought it down.
+    ///
+    /// That is very likely the whole of what the Commander reported: a bounded,
+    /// legitimate, user-initiated action with an unbounded and permanent cost.
+    ///
+    /// **A pending row cannot be lost here.** The window is anchored at the newest end and
+    /// an optimistic bubble is by definition the newest thing in it, so collapsing to the
+    /// newest page always keeps it. Asserted rather than guarded, because a guard on
+    /// `pendingCount` would quietly stop collapsing for anyone whose outbox is backed up —
+    /// which is exactly when the window most needs to come down.
+    func collapseTheWindow() async {
+        guard loader.limit > pageSize, !isLoadingEarlier, !isAwaitingReply else { return }
+
+        var collapsed = loader
+        collapsed.limit = pageSize
+        guard await read(with: collapsed) else { return }
+        loader = collapsed
+        // A fresh window means the top of it is somewhere he has not been. Re-arm.
+        automaticLoadIsSpent = false
     }
 
     // MARK: - Sending
