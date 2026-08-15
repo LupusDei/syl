@@ -134,6 +134,15 @@ struct GoalDetailSnapshot: Identifiable, Equatable, Sendable {
 struct GoalListSnapshot: Equatable, Sendable {
     var sections: [Section] = []
 
+    /// How many goals exist, which is not how many this snapshot carries.
+    var goalCount: Int = 0
+
+    /// Whether the window stopped short of the whole set (`syl-o319`).
+    ///
+    /// Surfaced rather than merely recorded. A `hasMore` nobody draws is the same defect
+    /// as no `hasMore` at all, wearing a field name — see `GoalListView`.
+    var hasMore: Bool = false
+
     var isEmpty: Bool { sections.isEmpty }
 
     /// A run of goals in the same state.
@@ -192,8 +201,28 @@ struct GoalSnapshotLoader: Sendable {
     /// How much evidence a screen intends to show at once.
     var window: Int = 8
 
+    /// How many goals the screen carries at once (`syl-o319`).
+    ///
+    /// Named here rather than left to `LocalStore.goals(limit:)`'s default, because a
+    /// default is a number nobody chose for this screen and nothing can report reaching.
+    /// Two hundred is generous for a person's goals and the point is that going past it
+    /// is now *said* rather than silently absorbed.
+    var limit: Int = 200
+
     func load() throws -> GoalListSnapshot {
-        let goals = try store.goals()
+        // One more than we intend to show, the same trick `openTodos` uses, and its
+        // existence is the exact answer to "is there more" (`syl-o319`).
+        //
+        // This read used to take the default 200 and say nothing on reaching it, which
+        // was two defects rather than one. The visible half is a list that stops with no
+        // indication. **The invisible half is worse**: these same rows build the
+        // parent/child index below, so a child whose parent sorted past the window lost
+        // its parent link — a goal quietly orphaned in the UI while its row was on disk
+        // the whole time, which reads as corrupted data rather than as a cap.
+        // Named `page` rather than `window`, which is already this type's evidence count.
+        let page = try store.goals(limit: limit + 1)
+        let hasMore = page.count > limit
+        let goals = hasMore ? Array(page.prefix(limit)) : page
 
         // Case-insensitive keys throughout. The contract permits either hex case and the
         // service accepts both, so two spellings of one parent id must not orphan a child.
@@ -209,6 +238,20 @@ struct GoalSnapshotLoader: Sendable {
         }
 
         let snapshots = try goals.map { goal -> GoalDetailSnapshot in
+            // **The one cap in `syl-o319` that is left as a cap, with its reason.**
+            //
+            // `LocalStore.todos(goalId:)` orders `dueAt IS NULL, dueAt, pinned DESC,
+            // updatedAt DESC` and `GoalEvidence.project` takes `window` (8) from the
+            // FRONT of that order. So the rows a 200-cap can drop are the tail, and the
+            // tail is never what evidence shows — the eight are identical whether the
+            // read stops at 200 or returns two thousand.
+            //
+            // Disclosure here would therefore be reporting a truncation with no visible
+            // consequence, which is its own small dishonesty: a note that says "there is
+            // more" beside a projection that was never trying to show it. If evidence
+            // ever counts, samples, or reaches past the front of this order, this line
+            // stops being safe and needs the `limit + 1` treatment the goals read above
+            // now has.
             let todos = try store.todos(goalId: goal.id)
             let evidence = GoalEvidence.project(goal: goal, todos: todos, window: window)
             let risk = GoalRisk.project(
@@ -247,6 +290,13 @@ struct GoalSnapshotLoader: Sendable {
             )
         }
 
-        return GoalListSnapshot(sections: sections)
+        return GoalListSnapshot(
+            sections: sections,
+            // A real `COUNT(*)`, not the window's size, for the same reason
+            // `TodoListSnapshot` gives: a number derived from a window stops being true
+            // exactly when it starts mattering.
+            goalCount: try store.goalCount(),
+            hasMore: hasMore
+        )
     }
 }

@@ -1580,6 +1580,14 @@ height, so the `LazyVStack` sizes **every** row in the 200-message window rather
 than the visible ones; and an arriving reply invalidates the lot. A main thread
 that stops answering long enough is a watchdog kill, which is what he saw.
 
+> **The middle clause is version-stale and was measured false on 2026-08-14.**
+> On iOS 26.2 the bottom anchor builds a *bounded* region of about forty rows
+> regardless of window size — it does not size every row. The claim was very
+> likely true when written and is not true now. It sat here for three days and
+> was repeated into a spec and to the Commander before anyone re-ran it. Left in
+> place rather than edited away, because the interesting part is that it was
+> plausible, load-bearing and wrong. See *"The runaway that wasn't"* below.
+
 **The two previous fixes to this same symptom both guessed wrong** —
 `ChatSnapshotLoader` moved *block* scanning off the main actor, and `blocksByGroup`
 killed a quadratic compare. Inline parsing was in neither, and the file went on
@@ -2166,3 +2174,258 @@ agree on values of one magnitude, so 400 heart-rate readings between 48 and 120
 do *not* separate them — a test written against his real shape would have passed
 whichever summation was in place, and gone on passing after they diverged. The
 fixture mixes magnitudes on purpose and says so.
+
+### The runaway that wasn't — `syl-025`, 2026-08-14
+
+The epic was planned on a mechanism that turned out not to exist, and measurement
+corrected it three times in one night. The chat transcript was genuinely loading the
+whole conversation and genuinely getting slower the longer he used it; both were real,
+and **neither had the cause the spec gave.** What follows is worth more written down
+than a spec that had been right first time.
+
+#### What the spec said, and what was actually true
+
+The spec named three defects that "conspire to defeat the paging that is there". The
+load-bearing one, Defect A, was a self-retriggering load: `.onAppear` on the
+`EarlierMessages` row fires when the row is *instantiated*, a rebuild re-instantiates it,
+so each load triggered the next until the entire conversation was resident with nobody
+touching the phone. Defect C was the anchor cancelling laziness, and the spec said A and
+C **multiply**.
+
+Measured, hosted in a real `UIWindow`, iOS 26.2 / Xcode 26.2, iPhone 17 simulator:
+
+| rows built at first paint | window 50 | window 400 |
+| --- | --- | --- |
+| with `.defaultScrollAnchor(.bottom)` | 40 | 40 |
+| without it | 6 | 6 |
+
+The anchor costs a **fixed** 6.7x that does not scale with the window. It cannot multiply
+with anything. And with the pre-fix `.onAppear` restored, on a 2,000-message transcript at
+a page size of 50, watched throughout rather than sampled at the end:
+
+    first paint, 2s idle           50 messages — no growth
+    parked at the top for 2s      100 messages — exactly one page
+
+**The runaway does not reproduce.** The spec's stated cause is dead. What almost certainly
+happened is the mundane reading nobody proposed: he reached the top perhaps ten times over
+some weeks, at 200 messages a step, and two thousand messages became resident. His
+sentence — *"it looks like it loads and contains all of the previous messages"* — is
+exactly as accurate under that reading, and needs no bug beyond the step size.
+
+#### The rule that replaces it
+
+`onAppear` on a lazy child means **realised**, and realisation is geometry. It is not
+"became visible", it is not "was instantiated", and — this is the half that took three
+tries — **a rebuild does not re-fire it.** A row whose identity survives a snapshot
+reassignment is *updated*, not destroyed and recreated, so the load that rebuilds the
+stack cannot re-trigger the row that started it.
+
+That is why parking at the top for two seconds loads one page and stops. The row is
+realised when he arrives at the top; the widen inserts older rows *below* it, so it is
+still the first element and still realised; nothing derealises it; `onAppear` does not
+fire again. **One arrival, one page** — which is the intended behaviour, and was all
+along.
+
+An intermediate version of this rule, arrived at during review and written into the bead,
+said the discriminator was *position in the stack relative to the insertion point* — that
+`EarlierMessages` sits above where rows are inserted and is therefore re-realised by every
+widen. **That is wrong in its mechanism and the measurement above is what says so**: if
+every widen re-realised the row, parking at the top would have looped, and it did not.
+Position in the stack is a real corollary about *when* a row's realisation changes, but it
+is not the load-bearing half. The load-bearing half is realisation versus rebuild.
+
+The corollary still settles the case it was invented for. The foot sentinel at the end of
+the same `LazyVStack` carries the identical two lines — `onAppear` sets `isAtBottom`,
+`onDisappear` clears it — and it is **correct**, structurally rather than by luck: nothing
+is ever inserted below the last element, so it changes distance from the viewport only
+when he actually scrolls, which is precisely what `isAtBottom` means. Same two lines, and
+the verdict differs.
+
+#### What actually explains "worse the longer he uses her"
+
+Two things compose, and neither is the runaway.
+
+**The window has exactly one write in the entire tree.** `loader.limit += pageSize`, in
+`ChatViewModel.widenTheWindow()`. There is no decrement, no reset, no assignment anywhere
+else — grep it. `ChatViewModel` is constructed once, inside `openStore()`, which is called
+from one place in `didFinishLaunching`; the view is an `@ObservedObject` observer that a
+tab switch destroys and recreates while the model outlives it. So the window is monotonic
+for the life of the **process**, and nothing short of killing the app brings it down.
+
+**And `refresh()` was O(window) per event.** `MarkdownCache.blocks(for:)` allocated a fresh
+N-entry dictionary on every call, copied every hit into it, and swapped it in — every entry
+a cache hit, N hashed inserts anyway. `refresh()` runs on every arriving message, every
+send, every foreground and every return to the tab. At a window that had grown to two
+thousand, **one arriving message cost 2,001 dictionary writes.** It is now 1. An unchanged
+reload went from 2,000 writes to 0; a reconciliation costs 2, one insert and one removal.
+
+A monotonic window times an O(window) per-message cost is a symptom that gets monotonically
+worse with use, which is what he reported. A fixed 6.7x cannot do that.
+
+**The trap in fixing it is worth the paragraph.** `ChatSnapshot` carried the whole
+`[SylID: [MarkdownBlock]]` map beside `blocksByGroup`, with a `blocks(for:)` accessor no
+caller ever used. Swift dictionaries are copy-on-write, so a snapshot holding that map kept
+the cache's storage referenced twice — and the next insert would have had to copy the entire
+spine before writing one entry. Fixing the cache and leaving the retention would have left
+the O(window) cost exactly where it was **for the one case that matters most, a message
+arriving**, while every new counter reported success. A green probe measuring the wrong
+storage is this repository's oldest failure mode wearing yet another hat.
+
+What remains O(window) per refresh is the rest of `load()`: the read and decode, the
+grouping, the row rhythm, and the per-group slice. Those cannot be memoised the way the
+parse can — `MessageGrouping` merges adjacent same-role messages within a time gap, so a
+group id can keep its identity while its *membership* changes, and caching on that id
+without a membership key is a stale transcript, which is a worse bug than a slow one.
+Making them incremental means teaching `load()` a delta instead of handing it a window.
+
+**And typing rebuilt the transcript.** Measured on the same iPhone 17 / iOS 26.2, a
+2,000-message transcript, nine keystrokes: **20 rows rebuilt per keystroke, now 0.**
+
+SwiftUI invalidates a view when **any** published property of an object it observes
+changes — not only the ones the view reads. `draft` was `@Published` on `ChatViewModel`,
+and `ChatView` observes that model for the transcript, the presence ribbon and the
+connection banner. So every character invalidated `ChatView.body` and the whole
+`LazyVStack` beneath it: twenty to thirty message rows rebuilt to discover that a letter
+had gone into a text field.
+
+The fix is a whole observable object for one string (`ChatDraft`), and it is structural
+rather than stylistic — the view model holds it as a plain `let`, and **reading a `let`
+creates no subscription**, so `ChatView` can hand it to the composer without ever hearing
+from it. `@State` inside `ChatComposer` was the smaller change and the worse one: the send
+path needs the text and lives on the view model, so the draft would have to be handed back
+through a closure per keystroke, and it would put the one piece of state a probe must
+drive somewhere no test can reach. The isolation is a property of the type graph, not of
+anyone remembering to be careful.
+
+`ChatView` still re-runs its body on a presence frame and on an arriving message. Those
+are about the transcript; a keystroke is not.
+
+#### Three gate lessons, all of which had already been learned here
+
+The `-scheme Syl` note three sections above — *every "the suite is green" in this session
+counted 795 of 1094 tests* — recurred twice on 2026-08-14 in two different subsystems.
+
+`ios/scripts/test.sh` runs three phases and is `set -e`. A merge on an epic branch removed
+`height` from `HealthType` and left three assertions referencing it, so **the SylKit test
+target did not compile** — and phases 2 and 3 were therefore never reached by anyone
+working on that branch, for an entire evening. The only symptom was a compile error in a
+health-metrics test that looks like somebody else's problem. The upstream fix's own commit
+message names the shape exactly: *"three stale `height` assertions CI caught and my local
+build did not."*
+
+**A gate that stops early is not a gate that passed.** The rule at the top of `CLAUDE.md`
+is about measurements needing a version stamp and a re-run; this is its sibling, and the
+two met tonight: a stale measurement decided a spec, and a stalled gate hid the fact that
+two thirds of the suite had not run while that spec was being executed. Read the phase
+banners and the test counts, not the exit status — and when a run is green, ask what it
+counted.
+
+**The third is the general case of the other two, and it is the strongest lesson of the
+epic: which tree was under the instrument?** Three instances in one repository, and the
+last of them is the most instructive because of who made it.
+
+1. **2026-08-10.** Nine failures appeared in the sealed reader path — the
+   injection-containment tests among them — from one uncommitted line in a shared
+   checkout. Nothing was broken. It was nearly reported as a security regression.
+2. **2026-08-14, upstream.** *"three stale `height` assertions CI caught and my local
+   build did not"* — a local tree that compiled because it was not the tree CI had.
+3. **2026-08-14, this epic.** A reviewer refused to record the `20 → 0` result on the
+   grounds that the suite contradicted it, having run the suite on a branch cut at
+   `4abaea3` — which predates the commit that produced the result. The test was red
+   because the fix was absent, not because the claim was false. The reviewer then
+   compared against "the branch point" and got an identical number, which felt like
+   corroboration and was two measurements of the same missing fix.
+
+The reflex was right and is worth keeping: *do not write a number into the permanent
+record that the suite currently contradicts.* The error was one question short. **Ask
+whose suite, on which commit, before concluding a claim is unsupported** — a red test on a
+branch that lacks the fix is evidence about the branch, not about the claim. `git
+merge-base --is-ancestor <commit> HEAD` is the whole check, and it costs nothing.
+
+A scheme that runs 795 of 1094, a gate that dies in phase one, and a branch that lacks the
+fix are the same mistake wearing three faces: **confident measurement of the wrong
+thing.** Every green in this file is a claim about a specific tree, and the tree is the
+part nobody writes down.
+
+#### The habit that found all of it
+
+Every correction in this section came from the same move: **distrust your own green.**
+The row census was written because a parse counter reported a cache working perfectly while
+it rewrote two thousand entries around the avoided parse. The copy-on-write trap was found
+because a cache that gets cheaper with nothing else changing usually means the cost moved
+rather than left. The runaway was retired because someone hosted a real window and watched
+it for two seconds instead of reasoning from a comment.
+
+**And the habit has a blind spot, which the same night also demonstrated.** The two red
+tests in the app target were checked by building a throwaway worktree at the branch point
+and reproducing the identical numbers rather than assuming — careful, and *wrong for one
+of them*, because both trees compared lacked the fix. Distrusting your own green does
+nothing if you never ask which tree produced it. Rigour applied to the wrong artefact is
+still confident and still wrong; it simply arrives with better evidence attached.
+
+Four theories died tonight — the spec's, the reviewer's, the intermediate one written into
+a bead, and the reviewer's second, that a result was unsupported when it was merely absent
+from his branch. Every one was plausible. Every one was replaced by a number, and the last
+one only after somebody asked *which tree did you measure?*
+
+#### The rule is not the defence. Running the check is.
+
+Every failure in `syl-025` has one shape, and it is not ignorance. In each case the
+person **had the correct rule available and did not apply it to themselves**:
+
+- The spec repeated a mechanism because it was written down, and the note was three days
+  stale.
+- A reviewer concluded a result was unsupported after running the suite on a branch that
+  lacked the fix — then built a throwaway worktree, got the same wrong answer, and read
+  the *agreement* as corroboration.
+- The lead read a diff of a tree that had moved underneath him.
+- The feature was reported complete off a green suite while two of its four states were
+  reachable from no call site.
+- And the closing example, which is the useful one: **a reviewer who had spent the night
+  cataloguing "declared and ignored" defects added `LocalStore.sendingCount()` with no
+  caller — in the same commit where he wrote that a `hasMore` nobody draws is the same
+  defect as no `hasMore` at all.** He had named the pattern hours earlier, in writing,
+  twice. It was caught by running a search, not by knowing better.
+
+*Knowing the pattern did not stop anyone producing it. The only thing that caught it was
+running the check rather than reasoning about whether the check was needed.*
+
+So the checks are written here as procedures, not as advice.
+
+**Which tree did you measure?** Before reporting that a claim is unsupported because a
+test is red:
+
+    git merge-base --is-ancestor <the-commit-that-produced-the-claim> HEAD
+
+A red test on a branch that lacks the fix is evidence about the branch. Reproducing the
+same number at the branch point is not corroboration — it is the same missing fix,
+measured twice.
+
+**Is it wired to anything?** Before reporting a feature complete, on any epic:
+
+    # every declaration the epic added to production code
+    git diff origin/main..HEAD --unified=0 -- <production-dir> \
+      | grep -E '^\+' \
+      | grep -oE '(struct|enum|final class|class) [A-Z][A-Za-z]+|func [a-z][A-Za-z]*\('
+
+    # then, for each name, count references in PRODUCTION code only
+    grep -rn "<name>" <production-dir>
+
+Anything whose only production reference is its own definition is a candidate. Three
+categories come out, and only the first is a defect:
+
+- **Dead** — no consumer anywhere, tests included. `sendingCount()` was this.
+- **A test seam** — no production consumer, test consumers, and a doc comment saying so.
+  A decision, not an omission.
+- **Internal** — consumed a line away inside its own type. Not dead.
+
+Distinguishing the three is what makes the search trustworthy; reporting only its
+conclusion is what makes it look like an opinion. Run it and paste the categories.
+
+**What did the gate actually count?** A green suite is a claim about a specific tree and
+a specific set of tests. `ios/scripts/test.sh` is `set -e` across three phases, so a
+failure in phase one means phases two and three did not run at all — and the exit status
+looks identical to a phase that ran and passed. Read the phase banners and the counts.
+
+The general form, which is the whole of it: **every green is a claim about something.
+Ask what.**

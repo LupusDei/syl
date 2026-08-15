@@ -98,6 +98,32 @@ struct LocalStore: Sendable {
         }
     }
 
+    /// Confirmed messages that have arrived since `seq`, oldest-first (`syl-025.2.6`).
+    ///
+    /// The mirror of ``messages(conversationId:olderThan:limit:)`` and the read that lets
+    /// a refresh stop re-decoding a window it already holds. `ChatSnapshotLoader` was
+    /// reading and JSON-decoding the entire window on every arriving message — measured
+    /// at **93ms of a 127ms load at a window of two thousand, three quarters of the
+    /// whole cost** — to learn about one new row.
+    ///
+    /// `seq > 0` for the same reason the backward read has it: an optimistic row has no
+    /// position yet, so it is newer than nothing and older than nothing. Pending rows are
+    /// read wholesale by ``pendingMessages()`` on every load instead, which is what makes
+    /// reconciliation safe here **by construction rather than by care** — a row that
+    /// changes from a local id to a server id is a new id at a new seq, so it arrives
+    /// through this read, while its predecessor leaves through the pending set.
+    func messages(conversationId: SylID, newerThan seq: Int, limit: Int) throws -> [Message] {
+        try database.queue.read { db in
+            try MessageRecord
+                .filter(Column("conversationId") == conversationId)
+                .filter(Column("seq") > max(seq, 0))
+                .order(Column("seq").asc)
+                .limit(limit)
+                .fetchAll(db)
+                .map { try $0.model() }
+        }
+    }
+
     /// The lowest CONFIRMED seq held for a thread, or `nil` when it holds none.
     ///
     /// The cursor `messages(conversationId:olderThan:)` is asked for. Pending rows are
@@ -550,6 +576,16 @@ struct LocalStore: Sendable {
                 .limit(limit)
                 .fetchAll(db)
                 .map { try $0.model() }
+        }
+    }
+
+    /// How many goals there are, as opposed to how many a window held (`syl-o319`).
+    ///
+    /// Same argument as ``openTodoCount()``, which this deliberately mirrors: a count
+    /// derived from a windowed read stops being true exactly when it starts mattering.
+    func goalCount() throws -> Int {
+        try database.queue.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM goal") ?? 0
         }
     }
 

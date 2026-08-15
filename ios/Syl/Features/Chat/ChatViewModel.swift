@@ -233,8 +233,15 @@ final class ChatViewModel: ObservableObject {
     /// The read and the grouping happen off the main actor; only the assignment
     /// happens here. On a long history that is the difference between a smooth scroll
     /// and a visible stutter every time a message arrives.
+    /// The one caller that may reuse what is already decoded (`syl-025.2.6`).
+    ///
+    /// `refresh()` reads the window that is already on screen, so the rows behind it are
+    /// the rows it is about to read again — which at a grown window was 93ms of JSON
+    /// decoding per arriving message to learn about one new row. Every other caller here
+    /// changes the window deliberately and passes nothing, because a snapshot taken at a
+    /// different width cannot vouch for a prefix of this one.
     func refresh() async {
-        await read(with: loader)
+        await read(with: loader, reusing: snapshot)
     }
 
     /// Reads with a given window and applies the result, reporting whether it landed.
@@ -267,12 +274,15 @@ final class ChatViewModel: ObservableObject {
     }
 
     @discardableResult
-    private func read(with window: ChatSnapshotLoader) async -> ReadOutcome {
+    private func read(
+        with window: ChatSnapshotLoader,
+        reusing previous: ChatSnapshot? = nil
+    ) async -> ReadOutcome {
         generation &+= 1
         let stamp = generation
 
         let snapshot = await Task.detached(priority: .userInitiated) {
-            try? window.load()
+            try? window.load(reusing: previous)
         }.value
 
         // Superseded. Not a failure — the newer read speaks for him — but this result

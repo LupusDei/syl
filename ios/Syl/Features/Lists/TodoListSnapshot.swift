@@ -193,7 +193,16 @@ struct TodoListLoader: Sendable {
 
         return TodoListSnapshot.build(
             todos: hasMore ? Array(window.prefix(limit)) : window,
-            goals: try store.goals(),
+            // **A LOOKUP, not a list** (`syl-o319`). These resolve the goal each to-do
+            // belongs to; nothing here draws a list of goals. So a windowed read does not
+            // truncate something he can see — it silently strips the goal from whichever
+            // to-dos happen to belong to goals sorting past the window, which reads as a
+            // data bug rather than as a cap and cannot be reported by a `hasMore`
+            // attached to the wrong collection.
+            //
+            // Bounded by the count rather than by a constant, so it is complete by
+            // construction and can never quietly return less than the join needs.
+            goals: try store.goals(limit: store.goalCount()),
             now: now,
             calendar: calendar,
             // A real `COUNT(*)`, not the window's size. "247 open" that quietly means
