@@ -93,12 +93,29 @@ struct GoalListView: View {
                     ForEach(snapshot.sections) { section in
                         GoalSection(section: section)
                     }
+                    if snapshot.hasMore {
+                        truncationNote(for: snapshot)
+                    }
                 }
                 .padding(.horizontal, SylTheme.Metric.gutter)
                 .padding(.top, SylTheme.Metric.step)
                 .padding(.bottom, SylTheme.Metric.chapter)
             }
         }
+    }
+
+    /// Says so when the screen is not showing everything (`syl-o319`).
+    ///
+    /// Deliberately the same sentence shape as `TodoListView`'s, because it is the same
+    /// promise: the number is a real count, and a list that quietly stopped at its limit
+    /// is the kind of small lie this app spends its comments refusing to tell.
+    private func truncationNote(for snapshot: GoalListSnapshot) -> some View {
+        let shown = snapshot.sections.reduce(0) { $0 + $1.rows.count }
+        return Text("Showing the first \(shown) of \(snapshot.goalCount).")
+            .font(SylTheme.Typeface.numeral)
+            .foregroundStyle(SylTheme.Colour.inkSoft)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, SylTheme.Metric.snug)
     }
 
     /// No goals at all. The same voice as the clear day and the empty conversation: a

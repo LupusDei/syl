@@ -553,6 +553,16 @@ struct LocalStore: Sendable {
         }
     }
 
+    /// How many goals there are, as opposed to how many a window held (`syl-o319`).
+    ///
+    /// Same argument as ``openTodoCount()``, which this deliberately mirrors: a count
+    /// derived from a windowed read stops being true exactly when it starts mattering.
+    func goalCount() throws -> Int {
+        try database.queue.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM goal") ?? 0
+        }
+    }
+
     func goal(id: SylID) throws -> Goal? {
         try database.queue.read { db in
             try GoalRecord.fetchOne(db, key: id)?.model()
@@ -627,6 +637,21 @@ struct LocalStore: Sendable {
                 .limit(limit)
                 .fetchAll(db)
                 .map { try $0.model() }
+        }
+    }
+
+    /// How many sendings are held, as opposed to how many a window returned (`syl-o319`).
+    ///
+    /// **This table grows without bound and that is not obvious from its writer.**
+    /// `replaceSendings` is named for what it was meant to do and upserts instead — it
+    /// never deletes — so every sending the device has ever seen accumulates. The 200 in
+    /// `sendings(limit:)` is therefore reachable by ordinary use rather than theoretical,
+    /// and once past it the OLDEST rows fall off a `createdAt DESC` read silently. For a
+    /// daily assistant that is a few months before things she sent him start
+    /// disappearing with nothing said.
+    func sendingCount() throws -> Int {
+        try database.queue.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM sending") ?? 0
         }
     }
 
