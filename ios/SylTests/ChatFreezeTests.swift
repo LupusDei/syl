@@ -814,7 +814,7 @@ final class ChatScreenPhotographs: ChatHostedTranscriptCase {
         let scroll = try XCTUnwrap(transcriptScrollView(in: window))
 
         // US2 — at the top of the loaded range, before the page arrives.
-        scrollToTheTop(scroll)
+        await walkToTheTop(scroll, window)
         await settle(window, passes: 3)
         try shoot(window, "02-at-the-top-before", into: directory)
 
@@ -831,7 +831,7 @@ final class ChatScreenPhotographs: ChatHostedTranscriptCase {
         await beginningModel.loadEarlier()
         await settle(beginningWindow, passes: 40)
         let atTop = try XCTUnwrap(transcriptScrollView(in: beginningWindow))
-        scrollToTheTop(atTop)
+        await walkToTheTop(atTop, beginningWindow)
         await settle(beginningWindow, passes: 10)
         XCTAssertEqual(beginningModel.earlierMessagesState, .beginning)
         try shoot(beginningWindow, "04-the-beginning", into: directory)
@@ -855,7 +855,7 @@ final class ChatScreenPhotographs: ChatHostedTranscriptCase {
         await offlineModel.loadEarlier()
         await settle(offlineWindow, passes: 20)
         let offlineScroll = try XCTUnwrap(transcriptScrollView(in: offlineWindow))
-        scrollToTheTop(offlineScroll)
+        await walkToTheTop(offlineScroll, offlineWindow)
         await settle(offlineWindow, passes: 10)
         XCTAssertEqual(offlineModel.earlierMessagesState, .unreachable)
         try shoot(offlineWindow, "05-unreachable", into: directory)
@@ -910,6 +910,42 @@ final class ChatScreenPhotographs: ChatHostedTranscriptCase {
     /// blank band where the divider should have been, which reads as a missing control.
     private func scrollToTheTop(_ scroll: UIScrollView) {
         scroll.setContentOffset(CGPoint(x: 0, y: -scroll.adjustedContentInset.top), animated: false)
+    }
+
+    /// Walk to the top the way a finger does, rather than teleporting.
+    ///
+    /// **A `LazyVStack` does not have a content height; it has the height of what it has
+    /// built.** On a sixty-message conversation the scroll view reported 862 points
+    /// against a 696-point viewport — a scrollable range of 166 — because only about ten
+    /// rows existed in the layout at all. So a single large step clamps to the top
+    /// immediately and the walk is a teleport wearing a disguise, which is exactly the
+    /// mistake this helper replaced.
+    ///
+    /// Reaching the beginning therefore means going up a little, letting rows come into
+    /// being, and going again — because each realisation is what creates the space above
+    /// to scroll into. The loop stops when neither the offset nor the content will move.
+    private func walkToTheTop(_ scroll: UIScrollView, _ window: UIWindow, step: CGFloat = 120) async {
+        var lastContent: CGFloat = -1
+        var guardRail = 0
+        while guardRail < 400 {
+            let floor = -scroll.adjustedContentInset.top
+            let settled = scroll.contentOffset.y <= floor + 0.5
+                && scroll.contentSize.height == lastContent
+            if settled { return }
+            lastContent = scroll.contentSize.height
+            scroll.setContentOffset(
+                CGPoint(x: 0, y: max(floor, scroll.contentOffset.y - step)),
+                animated: false
+            )
+            window.layoutIfNeeded()
+            try? await Task.sleep(for: .milliseconds(10))
+            guardRail += 1
+        }
+    }
+
+    /// What the scroll view thinks it holds, for a report that needs numbers.
+    fileprivate func geometry(_ scroll: UIScrollView) -> String {
+        "offset=\(Int(scroll.contentOffset.y)) content=\(Int(scroll.contentSize.height)) bounds=\(Int(scroll.bounds.height))"
     }
 
     private func modelOver(
