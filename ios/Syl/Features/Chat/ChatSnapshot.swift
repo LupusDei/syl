@@ -198,14 +198,129 @@ struct ChatSnapshotLoader: Sendable {
     var limit: Int = ChatPaging.pageSize
     var markdown = MarkdownCache()
 
-    func load() throws -> ChatSnapshot {
+    /// Rebuild the screen's state, reusing what a previous snapshot already decoded.
+    ///
+    /// ## Why this exists, with the number that decided it (`syl-025.2.6`)
+    ///
+    /// Measured on iPhone 17 / iOS 26.2 at a window of 2,000, warm cache, one arriving
+    /// message — `LoadPassCostMeasurement`:
+    ///
+    ///     read+decode    93.25ms   73%
+    ///     rows           21.21ms   17%
+    ///     group           6.23ms    5%
+    ///     byGroup         4.31ms    3%
+    ///     parse-lookup    2.00ms    2%
+    ///
+    /// The SQL read and the per-row JSON payload decode were three quarters of the cost
+    /// of learning about ONE new message, and `refresh()` runs on every arriving message,
+    /// every send, every foreground and every return to the tab. The other four passes
+    /// were the obvious target and are worth 27% between them; this is the 73%.
+    ///
+    /// **`reusing` is opt-in by the caller, and only the caller can know it is safe.**
+    /// The window has to be the same one that produced `previous` — so `refresh()` passes
+    /// the current snapshot, while `loadEarlier` and `collapseTheWindow`, which change the
+    /// window on purpose, pass nothing and get the full read they need.
+    ///
+    /// ## What makes it exact rather than nearly right
+    ///
+    /// Confirmed rows are reused **without re-reading them**, which rests on the same
+    /// assumption the markdown cache already rests on and which `ChatTests` already pins:
+    /// a message's text is immutable once written, so its id is a safe key. This adds no
+    /// second assumption of its own.
+    ///
+    /// Pending rows are never reused. They are re-read wholesale every load, exactly as
+    /// before, because an optimistic row is the one thing here that DOES change identity:
+    /// reconciliation gives it a server id and a real seq. So it leaves through the
+    /// pending set and returns through the arrivals read, and the two halves cannot
+    /// disagree about it.
+    ///
+    /// Any answer this cannot give exactly, it declines to give: more arrivals than a
+    /// whole window means the window turned over, and it falls back to the full read
+    /// rather than reasoning about a prefix it can no longer vouch for.
+    func load(reusing previous: ChatSnapshot? = nil) throws -> ChatSnapshot {
+        if let previous, let reused = try incremental(from: previous) { return reused }
+        return try full()
+    }
+
+    /// The delta path. `nil` when it cannot answer exactly, which is never an error.
+    private func incremental(from previous: ChatSnapshot) throws -> ChatSnapshot? {
+        let held = previous.groups.flatMap(\.messages)
+        // Nothing to build on, and a first load has nothing to save anyway.
+        guard !held.isEmpty else { return nil }
+
+        // **The snapshot has to have come from THIS window.**
+        //
+        // A previous snapshot that was trimmed held exactly its own limit, so if that
+        // count is not this limit it was taken at a different width and its prefix says
+        // nothing about what belongs here. Reusing one taken narrower would hand back a
+        // short window — a widen that silently did not widen — which is what the caller
+        // contract is meant to prevent and what this catches when it does not.
+        //
+        // A snapshot that was NOT trimmed held everything there was, so there is nothing
+        // older for a wider window to add and it is safe at any limit.
+        guard !previous.mayHaveEarlier || held.count == limit else { return nil }
+
+        // Confirmed rows only. The pending ones are re-read below, because they are the
+        // rows whose identity can change underneath this.
+        let settled = held.filter { $0.seq > 0 }
+        guard let mark = settled.last?.seq else { return nil }
+
+        // One more than a whole window: past that the window has turned over and there is
+        // no prefix left worth reusing.
+        let arrived = try store.messages(
+            conversationId: conversationId, newerThan: mark, limit: limit + 1
+        )
+        guard arrived.count <= limit else { return nil }
+
+        let pending = try store.pendingMessages()
+
+        // **Sorted, rather than assumed to be in order.**
+        //
+        // The first version of this concatenated the three and relied on an optimistic
+        // row being the newest thing in the transcript because it is created locally,
+        // now. That is true of the app and was not true of a test fixture that timestamped
+        // a send mid-transcript — and the delta silently disagreed with the full read,
+        // which is exactly the shape of bug this whole path must not have. The store
+        // orders `createdAt` then `seq`; matching it explicitly costs one sort of an
+        // already-decoded array against the ninety-three milliseconds of decoding this
+        // avoids, and it removes an unstated assumption rather than adding one.
+        let joined = (settled + arrived + pending).sorted {
+            ($0.createdAt, $0.seq) < ($1.createdAt, $1.seq)
+        }
+
+        // Trimming can only ever reveal that there is more, never that there is less.
+        let overflowed = joined.count > limit
+        let messages = overflowed ? Array(joined.suffix(limit)) : joined
+
+        return try assemble(
+            messages: messages,
+            pending: pending,
+            mayHaveEarlier: previous.mayHaveEarlier || overflowed
+        )
+    }
+
+    private func full() throws -> ChatSnapshot {
         // One more than we intend to show. Its existence is the exact answer to "is
         // there older history", and it is discarded immediately.
         let window = try store.messages(conversationId: conversationId, limit: limit + 1)
         let mayHaveEarlier = window.count > limit
         let messages = mayHaveEarlier ? Array(window.dropFirst()) : window
 
-        let pendingIds = Set(try store.pendingMessages().map(\.id))
+        return try assemble(
+            messages: messages,
+            pending: try store.pendingMessages(),
+            mayHaveEarlier: mayHaveEarlier
+        )
+    }
+
+    /// Everything downstream of "which messages", shared by both paths so they cannot
+    /// drift into producing differently-shaped snapshots from the same rows.
+    private func assemble(
+        messages: [Message],
+        pending: [Message],
+        mayHaveEarlier: Bool
+    ) throws -> ChatSnapshot {
+        let pendingIds = Set(pending.map(\.id))
         let groups = MessageGrouping.group(messages, pendingIds: pendingIds)
         let parsed = markdown.blocks(for: messages)
 

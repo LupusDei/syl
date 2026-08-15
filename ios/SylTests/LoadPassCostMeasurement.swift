@@ -95,4 +95,67 @@ final class LoadPassCostMeasurement: XCTestCase {
 
         XCTAssertGreaterThan(total, 0, "the measurement must have measured something")
     }
+
+    /// What one arriving message costs before and after the delta, end to end.
+    func testMeasureOneArrivingMessageThroughTheWholeLoad() throws {
+        let database = try SylDatabase.inMemory()
+        let store = LocalStore(database: database)
+        try seed(store, count: Self.window)
+
+        let loader = ChatSnapshotLoader(
+            store: store, conversationId: SylIDs.interactiveConversation, limit: Self.window
+        )
+        var snapshot = try loader.load()
+
+        var fullTotal = 0.0
+        var deltaTotal = 0.0
+        let runs = 5
+        for run in 0..<runs {
+            // A message arrives, and the screen refreshes. Both paths are asked the same
+            // question about the same store, one after the other.
+            try seed(store, count: 1, startingAt: Self.window + 1 + run)
+
+            let a = DispatchTime.now().uptimeNanoseconds
+            let viaFull = try loader.load()
+            let b = DispatchTime.now().uptimeNanoseconds
+            let viaDelta = try loader.load(reusing: snapshot)
+            let c = DispatchTime.now().uptimeNanoseconds
+
+            XCTAssertEqual(viaFull, viaDelta, "the fast path must be the same answer")
+            fullTotal += Double(b - a) / 1_000_000
+            deltaTotal += Double(c - b) / 1_000_000
+            snapshot = viaDelta
+        }
+
+        let full = fullTotal / Double(runs)
+        let delta = deltaTotal / Double(runs)
+        print("""
+            SYL_ARRIVAL_COST window \(Self.window), mean of \(runs) runs, milliseconds
+              full read    \(String(format: "%7.2f", full))
+              delta        \(String(format: "%7.2f", delta))
+              saved        \(String(format: "%7.2f", full - delta)) \
+            (\(String(format: "%.0f", (1 - delta / full) * 100))%)
+            """)
+
+        XCTAssertLessThan(delta, full, "the delta path has to actually be cheaper")
+    }
+
+    private func seed(_ store: LocalStore, count: Int, startingAt first: Int = 1) throws {
+        let base = try Instant.parse("2026-08-09T07:00:03.114Z")
+        try store.upsert(
+            (first..<(first + count)).map { seq in
+                Message(
+                    id: "syl:message:0198f2c0-0001-7000-8000-\(String(format: "%012d", seq))",
+                    conversationId: SylIDs.interactiveConversation,
+                    clientId: nil,
+                    role: seq.isMultiple(of: 2) ? .assistant : .user,
+                    text: ChatFreezeFixture.paragraphs[seq % ChatFreezeFixture.paragraphs.count],
+                    createdAt: base.addingTimeInterval(
+                        Double(seq) * (MessageGrouping.maximumGap + 1)
+                    ),
+                    seq: seq
+                )
+            }
+        )
+    }
 }
