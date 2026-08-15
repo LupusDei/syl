@@ -1182,6 +1182,71 @@ final class ChatViewModelTests: XCTestCase {
         }
     }
 
+    // MARK: - What a screen reader walks (syl-025.6.2)
+    //
+    // **What these can and cannot prove, stated up front.** The RENDERED accessibility
+    // tree is not reachable from this target: SwiftUI materialises it only with VoiceOver
+    // running, and a probe over the hosted window's elements comes back with zero. There
+    // is no UI test target in this project. So focus movement, spoken announcements and
+    // touch-target geometry cannot be asserted here at all, and `syl-025.6.4` carries that
+    // gap rather than this file pretending to cover it.
+    //
+    // What IS assertable is the structure the traversal is built from, and it happens to
+    // be where both failures would come from. Traversal order is the order of children in
+    // the stack, and focus survives a prepend exactly when the rows either side of it keep
+    // their identity.
+
+    @MainActor
+    func testShouldOrderTurnsForTraversalOldestFirst() async throws {
+        // Traversal follows the stack, and the stack follows `snapshot.rows`. This is the
+        // check that would have caught an inverted transcript: `syl-025.2.2` considered
+        // flipping the scroll view and every row inside it, which reverses reading order
+        // for VoiceOver as a side effect of a scrolling fix. The anchor was kept, so
+        // nothing inverted -- confirmed here rather than assumed.
+        try store.upsert(longConversation(120))
+        let model = makeModel()
+
+        await model.refresh()
+
+        let times = model.snapshot.rows.compactMap { row -> Date? in
+            if case .turn(let group, _) = row { return group.messages.first?.createdAt }
+            return nil
+        }
+        XCTAssertEqual(times.count, Self.page, "one entry per turn on screen")
+        XCTAssertEqual(times, times.sorted(), "oldest first — the order he would be read")
+    }
+
+    @MainActor
+    func testShouldKeepEveryTurnsIdentityWhenOlderMessagesArePrepended() async throws {
+        // **This is the mechanism, not a proxy for it.** Inserting content above the
+        // reading position is the classic way to throw a screen-reader user back to the
+        // start of a long document, and it happens when the rows they were on are torn
+        // down and rebuilt rather than kept. Each row is identified by its group id, so
+        // focus survives exactly when those ids survive.
+        try store.upsert(longConversation(120))
+        let model = makeModel()
+        await model.refresh()
+        let before = model.snapshot.groups.map(\.id)
+
+        await model.loadEarlier()
+
+        let after = model.snapshot.groups.map(\.id)
+        XCTAssertEqual(
+            Array(after.suffix(before.count)),
+            before,
+            """
+            Every turn he could already see is still present, in the same order, with the \
+            same identity. Anything else and the row VoiceOver was focused on no longer \
+            exists, and focus goes back to the top of the transcript.
+            """
+        )
+        XCTAssertEqual(after.count, before.count + Self.page, "and one page arrived above them")
+        XCTAssertTrue(
+            Set(after.prefix(Self.page)).isDisjoint(with: Set(before)),
+            "the prepended turns are new ones, not a reshuffle of his"
+        )
+    }
+
     // MARK: - The parse cache (T040)
 
     func testShouldParseAMessageOnceAndReuseIt() {
