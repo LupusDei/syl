@@ -5,6 +5,44 @@ import XCTest
 
 @testable import Syl
 
+/// The prose that froze the app.
+///
+/// Built from the Commander's actual conversation rather than from `String(repeating:)`
+/// — the message that froze the app was 604 characters of ordinary prose with no code
+/// fences, no tables and no bullets, and a synthetic fixture of repeated characters would
+/// parse in a fraction of the time and quietly prove nothing.
+///
+/// Hoisted out of `ChatInlineRenderCostTests` so the row-layout probe below measures the
+/// **same** transcript. Two copies of a fixture is two fixtures, and they drift.
+enum ChatFreezeFixture {
+    static let paragraphs: [String] = [
+        """
+        You built the emanation in — the clip now opens on a bare ribbon of light with \
+        no figure, gathers into me, and unravels back into the ribbon at the end. That's \
+        exactly the arriving-by-gathering I asked for last night, and it's a much truer \
+        thing than a fade.
+        """,
+        """
+        Not for certain. I know they exist only because the spend counter says ten \
+        renders and I've asked for four. My best guess is they're **yours** from \
+        overnight — you were fixing the pipeline and rewriting the template, and testing \
+        that would produce exactly this.
+        """,
+        """
+        **Illinois** is where both sets of your parents live — yours in Libertyville, \
+        Ela's in Crystal Lake. It's where you were born and where Ela was born. It's the \
+        state you are trying to avoid because of its decline, and the one she wants an \
+        apartment in.
+        """,
+        """
+        Still rendering. It's been a few minutes; the earlier ones took two or three, so \
+        it's running long. Meanwhile — you're in the car around now. The insurance call \
+        is the thing, and the member ID is the part that wastes the call if it's sitting \
+        on the kitchen counter.
+        """,
+    ]
+}
+
 /// The freeze in chat, and the two things that have to be true for it not to happen
 /// again.
 ///
@@ -40,42 +78,13 @@ import XCTest
 final class ChatInlineRenderCostTests: XCTestCase {
 
     /// A transcript the size of the one that froze: the real window, real prose.
-    ///
-    /// Built from the Commander's actual conversation rather than from `String(repeating:)`
-    /// — the message that froze the app was 604 characters of ordinary prose with no code
-    /// fences, no tables and no bullets, and a synthetic fixture of repeated characters
-    /// would parse in a fraction of the time and quietly prove nothing.
-    private static let paragraphs: [String] = [
-        """
-        You built the emanation in — the clip now opens on a bare ribbon of light with \
-        no figure, gathers into me, and unravels back into the ribbon at the end. That's \
-        exactly the arriving-by-gathering I asked for last night, and it's a much truer \
-        thing than a fade.
-        """,
-        """
-        Not for certain. I know they exist only because the spend counter says ten \
-        renders and I've asked for four. My best guess is they're **yours** from \
-        overnight — you were fixing the pipeline and rewriting the template, and testing \
-        that would produce exactly this.
-        """,
-        """
-        **Illinois** is where both sets of your parents live — yours in Libertyville, \
-        Ela's in Crystal Lake. It's where you were born and where Ela was born. It's the \
-        state you are trying to avoid because of its decline, and the one she wants an \
-        apartment in.
-        """,
-        """
-        Still rendering. It's been a few minutes; the earlier ones took two or three, so \
-        it's running long. Meanwhile — you're in the car around now. The insurance call \
-        is the thing, and the member ID is the part that wastes the call if it's sitting \
-        on the kitchen counter.
-        """,
-    ]
+    private static let paragraphs = ChatFreezeFixture.paragraphs
 
     /// One full window's worth of inline runs, the way the view asks for them.
     private static func window(_ count: Int = 200) -> [String] {
         (0..<count).map { paragraphs[$0 % paragraphs.count] }
     }
+
 
     /// Rendering a transcript a second time must not cost a second parse.
     ///
@@ -223,3 +232,548 @@ final class ChatInlineRenderCostTests: XCTestCase {
         return Date().timeIntervalSince(start)
     }
 }
+
+/// The shared harness for probes that host the real transcript in a real window.
+///
+/// `ImageRenderer` cannot serve here: it lays out nothing inside a `ScrollView` — an
+/// offscreen host never gives the scroll view a content size — and the scroll view's
+/// geometry is the entire question. Only a hosted `UIWindow` has a viewport at all.
+///
+/// Carries no tests of its own.
+@MainActor
+class ChatHostedTranscriptCase: XCTestCase {
+    /// iPhone 17 logical size — the screen the Commander actually holds.
+    fileprivate static let screen = CGSize(width: 393, height: 852)
+
+    // MARK: - Harness
+
+    /// A model over a transcript far longer than the window, holding the real prose.
+    fileprivate func longConversationModel() async throws -> ChatViewModel {
+        let model = ChatViewModel(
+            store: try longConversationStore(),
+            now: { try! Instant.parse("2026-08-09T07:00:03.114Z") }
+        )
+        await model.refresh()
+        return model
+    }
+
+    /// Presents one window size and reports how many rows first paint built.
+    fileprivate func present(store: LocalStore, window size: Int) async throws -> Int {
+        let model = ChatViewModel(
+            store: store,
+            limit: size,
+            now: { try! Instant.parse("2026-08-09T07:00:03.114Z") }
+        )
+        await model.refresh()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window)
+        return ChatRowCensus.rowsBuilt
+    }
+
+    /// Two thousand turns of the prose that froze the app.
+    fileprivate func longConversationStore() throws -> LocalStore {
+        let database = try SylDatabase.inMemory()
+        let store = LocalStore(database: database)
+        let base = try Instant.parse("2026-08-09T07:00:03.114Z")
+        try store.upsert(
+            (1...2_000).map { seq in
+                Message(
+                    id: "syl:message:0198f2c0-0001-7000-8000-\(String(format: "%012d", seq))",
+                    conversationId: SylIDs.interactiveConversation,
+                    clientId: nil,
+                    role: seq.isMultiple(of: 2) ? .assistant : .user,
+                    text: ChatFreezeFixture.paragraphs[seq % ChatFreezeFixture.paragraphs.count],
+                    createdAt: base.addingTimeInterval(
+                        Double(seq) * (MessageGrouping.maximumGap + 1)
+                    ),
+                    seq: seq
+                )
+            }
+        )
+        return store
+    }
+
+    /// Hosts the view in a real window.
+    ///
+    /// `ImageRenderer` cannot be used for this: it lays out nothing inside a `ScrollView`
+    /// — an offscreen host never gives the scroll view a content size — which is exactly
+    /// the geometry under measurement. Only a hosted window has a viewport at all.
+    fileprivate func present(_ view: ChatView) -> UIWindow {
+        ChatRowCensus.reset()
+        let window = UIWindow(frame: CGRect(origin: .zero, size: Self.screen))
+        window.rootViewController = UIHostingController(rootView: view)
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        return window
+    }
+
+    fileprivate func dismiss(_ window: UIWindow) {
+        window.isHidden = true
+        window.rootViewController = nil
+    }
+
+    /// Lets SwiftUI do the work it was asked to do.
+    ///
+    /// A layout pass is not synchronous with a state change, so an assertion made
+    /// immediately after one measures the frame before it — which is a probe that reads
+    /// zero no matter what the view does, and it would have made the keystroke test pass
+    /// on the unfixed code.
+    fileprivate func settle(_ window: UIWindow, passes: Int = 6) async {
+        for _ in 0..<passes {
+            try? await Task.sleep(for: .milliseconds(20))
+            window.layoutIfNeeded()
+        }
+    }
+    /// The one scroll view in the transcript, found by walking the hosted hierarchy.
+    fileprivate func transcriptScrollView(in window: UIWindow) -> UIScrollView? {
+        func search(_ view: UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView { return scroll }
+            for child in view.subviews {
+                if let found = search(child) { return found }
+            }
+            return nil
+        }
+        return window.rootViewController.flatMap { search($0.view) }
+    }
+}
+
+/// What first paint costs, in rows (`syl-025.2.1`).
+///
+/// The other half of the freeze, and the half no test has ever asserted.
+/// `ChatInlineRenderCostTests` above proves a row is not re-parsed. This proves how many
+/// rows there are to parse — which is the multiplier that turned a survivable
+/// per-visible-row cost into a watchdog kill.
+///
+/// `.defaultScrollAnchor(.bottom)` has to know the transcript's total height to place the
+/// viewport at the foot, so the `LazyVStack` sizes **every** row in the window rather than
+/// the visible ones. `ChatView.body` then re-runs on every keystroke and every presence
+/// frame, and each re-run re-measures the lot.
+///
+/// ## Why these assertions are shaped the way they are
+///
+/// A bound of "≤ 2× the page size" is what the spec asks for and it would be **useless
+/// here**: the window is now one page of 50, so 100 is satisfied by an entirely
+/// unlazy render and the test would pass while measuring nothing. The bound that
+/// distinguishes lazy from not is *strictly fewer rows than the window holds* — a screen
+/// 852 points tall cannot show fifty turns of the Commander's real prose, so anything
+/// approaching fifty is total-height measurement.
+///
+/// The same trap this file already documents, in a new costume: a probe that cannot fail
+/// for the reason you care about is a probe that agrees with whatever it is handed. Both
+/// tests below are proven against a mutation.
+final class ChatRowLayoutCostTests: ChatHostedTranscriptCase {
+
+    func testShouldBuildOnlyTheRowsNearTheViewport() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window)
+
+        let built = ChatRowCensus.rowsBuilt
+        // **A probe that can read zero passes when the view renders nothing at all**,
+        // which is precisely how `ImageRenderer` behaves on a `ScrollView`. The floor is
+        // not decoration; without it this test would go green on an empty screen.
+        XCTAssertGreaterThan(built, 0, "no transcript row was built — the probe is measuring nothing")
+        XCTAssertLessThanOrEqual(
+            built,
+            ChatPaging.pageSize / 2,
+            """
+            First paint built \(built) transcript rows. A screen \(Int(Self.screen.height)) \
+            points tall shows perhaps six turns of this prose, so half a window is already \
+            far more than "at or near the viewport" (FR-005) — and every one of them is \
+            re-measured on each `ChatView.body` pass.
+            """
+        )
+    }
+
+    /// The property that no screen size, row height or prefetch policy can fake.
+    ///
+    /// An absolute bound is a guess about how many rows fit and how far ahead SwiftUI
+    /// reads. **This one is not a guess**: if the transcript is genuinely lazy, widening
+    /// the window from one page to eight changes what is reachable by scrolling and
+    /// changes nothing about what is built for the first frame. If total content height is
+    /// required — which is what a bottom scroll anchor asks for — the count tracks the
+    /// window, and the ratio is the defect.
+    func testShouldNotBuildMoreRowsJustBecauseTheWindowIsWider() async throws {
+        let store = try longConversationStore()
+
+        let narrow = try await present(store: store, window: ChatPaging.pageSize)
+        let wide = try await present(store: store, window: ChatPaging.pageSize * 8)
+        // Printed, not merely asserted. This pair is the measurement `syl-025.2.2` picks
+        // its anchor against, and a number that only appears when a test fails is a
+        // number nobody can compare across a change.
+        print("SYL_ROW_CENSUS window \(ChatPaging.pageSize) -> \(narrow) rows; window \(ChatPaging.pageSize * 8) -> \(wide) rows")
+
+        XCTAssertLessThanOrEqual(
+            wide,
+            narrow + 5,
+            """
+            A window of \(ChatPaging.pageSize * 8) built \(wide) rows where a window of \
+            \(ChatPaging.pageSize) built \(narrow). First paint costs what the window holds \
+            rather than what the screen shows, so the transcript is not lazy at all and \
+            every message he scrolls back to makes opening the chat more expensive.
+            """
+        )
+    }
+
+    func testShouldNotRebuildTheTranscriptWhenHeTypes() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window)
+
+        ChatRowCensus.reset()
+        // Ten characters, the way SC-002 states it.
+        for character in "Remind me" {
+            model.draft.text.append(character)
+            await settle(window)
+        }
+
+        XCTAssertEqual(
+            ChatRowCensus.rowsBuilt,
+            0,
+            """
+            Typing rebuilt \(ChatRowCensus.rowsBuilt) transcript rows. `draft` publishes \
+            from the same object the transcript observes, so every keystroke invalidates \
+            `ChatView.body` and everything under it. Nothing he types is about the \
+            transcript.
+            """
+        )
+    }
+
+}
+
+/// Where first paint LANDS (`syl-025.2.2`, FR-006).
+///
+/// The other half of the anchor question, and the half that cannot be traded away.
+/// `.defaultScrollAnchor(.bottom)` is expensive — `ChatRowLayoutCostTests` measures how
+/// expensive — but it was added for a real reason, recorded in `ChatView` itself: an
+/// `onChange`-only scroll to the foot **intermittently fails on long transcripts**.
+/// Opening the chat somewhere in the middle of last week is worse than the defect this
+/// epic started from, because it happens on every launch and there is nothing to do about
+/// it but scroll.
+///
+/// So this asserts the property the anchor exists to guarantee, independently of how it is
+/// achieved: after first paint on a 2,000-message transcript, the viewport is at the
+/// newest message.
+///
+/// **Ten presentations, not one.** The failure on record is intermittent, and a single
+/// green pass is exactly the evidence that produced that comment in the first place. A
+/// candidate that lands nine times out of ten has not replaced the anchor; it has moved
+/// the bug somewhere harder to see.
+final class ChatFirstPaintPlacementTests: ChatHostedTranscriptCase {
+    /// How far from the foot still counts as "at the newest message", in points.
+    ///
+    /// Not zero: the transcript carries vertical padding and a one-point sentinel, and
+    /// insisting on an exact match would make this a test about rounding.
+    private static let tolerance: CGFloat = 12
+
+    func testShouldOpenAtTheNewestMessageEveryTimeOnALongTranscript() async throws {
+        var shortfalls: [CGFloat] = []
+
+        for attempt in 1...10 {
+            let model = try await longConversationModel()
+            let window = present(ChatView(model: model))
+            await settle(window)
+
+            let scroll = try XCTUnwrap(
+                transcriptScrollView(in: window),
+                "attempt \(attempt): no scroll view was hosted, so nothing was measured"
+            )
+            // Without this the test passes on a transcript that never laid out: a content
+            // size no taller than the viewport is trivially "at the bottom".
+            XCTAssertGreaterThan(
+                scroll.contentSize.height,
+                scroll.bounds.height,
+                "attempt \(attempt): the transcript is not taller than the screen, so placement means nothing"
+            )
+
+            shortfalls.append(
+                scroll.contentSize.height - (scroll.contentOffset.y + scroll.bounds.height)
+            )
+            dismiss(window)
+        }
+
+        print("SYL_FIRST_PAINT shortfall from foot, 10 attempts: \(shortfalls.map { Int($0) })")
+
+        let worst = shortfalls.max() ?? 0
+        XCTAssertLessThanOrEqual(
+            worst,
+            Self.tolerance,
+            """
+            First paint came to rest \(Int(worst)) points above the newest message on at \
+            least one of ten attempts (all: \(shortfalls.map { Int($0) })). He opens the \
+            chat and is somewhere in the middle of his own history. FR-006 is the property \
+            `.defaultScrollAnchor(.bottom)` was added to guarantee, and it is not \
+            negotiable against the cost of guaranteeing it.
+            """
+        )
+    }
+}
+
+/// Does the transcript widen its own window when nobody touches it? (`syl-025.1.3`)
+///
+/// **This is the seam that did not exist**, and its absence was the honest caveat on the
+/// whole of Phase 1: every other test of the runaway drives model methods by hand, in an
+/// order a real rebuild does not follow, so none of them can catch the defect coming back.
+/// The defect lives in the SwiftUI lifecycle, and only a hosted view has one.
+///
+/// It asserts the property directly — a transcript that is presented and then left alone
+/// holds the window it opened with — rather than any theory about why a row's `onAppear`
+/// fires. That matters, because the theory has now been wrong twice: it is not "was
+/// instantiated" (a rebuild), it is realised-or-derealised, which is **geometry**. Which
+/// makes position in the stack the discriminator: `EarlierMessages` sits directly above
+/// where older messages are inserted, so every load moves it relative to the viewport,
+/// while the foot sentinel is the last element and nothing is ever inserted below it. Same
+/// two lines of code, opposite verdicts.
+///
+/// A property this test asserts survives being wrong about all of that.
+///
+/// **Measured during the wait, not after it.** A settle loop that samples only at the end
+/// smooths away a load that fired, widened, and completed — which is the most likely
+/// surviving form of the bug and precisely what the assertion needs to see.
+final class ChatUnattendedGrowthTests: ChatHostedTranscriptCase {
+    func testShouldHoldTheWindowItOpenedWithWhenNobodyTouchesTheScreen() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+
+        // Two seconds of nothing happening, watched throughout.
+        var widest = model.snapshot.groups.flatMap(\.messages).count
+        for _ in 0..<100 {
+            try? await Task.sleep(for: .milliseconds(20))
+            window.layoutIfNeeded()
+            widest = max(widest, model.snapshot.groups.flatMap(\.messages).count)
+        }
+
+        print("SYL_UNATTENDED widest window over 2s of idle: \(widest) messages")
+        XCTAssertEqual(
+            widest,
+            ChatPaging.pageSize,
+            """
+            The transcript grew to \(widest) messages with nobody touching the screen. \
+            A load reassigns the snapshot, which rebuilds the stack, which moves the \
+            "earlier" row relative to the viewport, which loads again — and it stops only \
+            when the entire conversation is resident.
+            """
+        )
+    }
+
+    /// **The reproduction, committed so it can be run again.**
+    ///
+    /// This epic removed a trigger on the strength of a diagnosis, and the experiment that
+    /// showed the diagnosis was wrong was a local edit that no longer existed ten minutes
+    /// later. `CLAUDE.md` asks for a version stamp AND a re-run on a load-bearing
+    /// measurement; a re-run needs the apparatus to exist. `ChatView` carries the pre-fix
+    /// shape behind a flag, and this is what drives it.
+    ///
+    /// It is a **characterisation** test, deliberately. It does not assert that the old
+    /// code was fine — it records what the old code actually did on the OS it was measured
+    /// on, so that "the runaway does not reproduce" is a claim someone can check in a year
+    /// rather than a sentence in a commit message.
+    func testShouldNotRunAwayEvenWithTheLegacyTriggerRestored() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model, reproducesTheLegacyTopTrigger: true))
+        defer { dismiss(window) }
+        await settle(window)
+
+        let scroll = try XCTUnwrap(transcriptScrollView(in: window))
+
+        var widest = model.snapshot.groups.flatMap(\.messages).count
+        for _ in 0..<100 {
+            scroll.setContentOffset(CGPoint(x: 0, y: 0), animated: false)
+            try? await Task.sleep(for: .milliseconds(20))
+            window.layoutIfNeeded()
+            widest = max(widest, model.snapshot.groups.flatMap(\.messages).count)
+        }
+
+        print("SYL_LEGACY widest window with the pre-fix onAppear, 2s at the top: \(widest)")
+        XCTAssertEqual(
+            widest,
+            ChatPaging.pageSize * 2,
+            """
+            With the pre-fix `.onAppear` restored the window reached \(widest). It loads one \
+            page per arrival at the top and stops — `onAppear` is realisation, and this row \
+            keeps its identity and its position at offset zero across a widen, so it never \
+            derealises and never fires twice. A four-figure number here would mean the \
+            runaway this epic was planned around is real after all.
+            """
+        )
+    }
+
+    /// The flag is reproduction apparatus and must never be on in a shipped build.
+    func testShouldNeverShipWithTheLegacyTriggerOn() {
+        XCTAssertFalse(
+            ChatView(model: ChatViewModel(store: LocalStore(database: try! .inMemory())))
+                .reproducesTheLegacyTopTrigger,
+            "the pre-fix runaway trigger is on by default"
+        )
+    }
+
+    /// The scenario the first-paint test cannot reach: he actually goes to the top.
+    ///
+    /// At first paint the "earlier" row is nowhere near the viewport and is never realised,
+    /// so nothing fires. The question the epic turns on is what happens once it IS realised
+    /// — one load per arrival, or a load that re-fires itself on the rebuild it caused.
+    func testShouldLoadOneWindowWorthWhenHeReachesTheTopAndWaits() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window)
+
+        let scroll = try XCTUnwrap(transcriptScrollView(in: window))
+
+        // Two seconds parked at the top of the loaded range, watched throughout. Each
+        // pass re-pins to the top, because a load that inserts above would otherwise
+        // carry him away from it and end the scenario early.
+        var widest = model.snapshot.groups.flatMap(\.messages).count
+        for _ in 0..<100 {
+            scroll.setContentOffset(CGPoint(x: 0, y: 0), animated: false)
+            try? await Task.sleep(for: .milliseconds(20))
+            window.layoutIfNeeded()
+            widest = max(widest, model.snapshot.groups.flatMap(\.messages).count)
+        }
+
+        print("SYL_AT_TOP widest window after 2s parked at the top: \(widest) messages")
+        // **Exact, not a ceiling.** `<= pageSize * 2` is satisfied by 100 and equally by
+        // 50 — and 50 is what a run where the re-pin never reached the top would report,
+        // so the ceiling alone cannot tell "he arrived and one page loaded" from "he never
+        // arrived at all". A bound with no floor passes hardest when the scenario did not
+        // happen, which is the same failure the write-census floors exist to catch.
+        XCTAssertEqual(
+            widest,
+            ChatPaging.pageSize * 2,
+            """
+            Parked at the top, the window reached \(widest) messages where one page on top \
+            of the opening page is \(ChatPaging.pageSize * 2). Below that and he never got \
+            to the top, so nothing was tested; above it and a load re-triggered itself on \
+            the rebuild it caused.
+            """
+        )
+    }
+}
+
+/// Reaching back through history, at the seam where it actually happens (`syl-025.3.1`).
+///
+/// All three assertions are made against **scroll geometry** rather than against model
+/// calls, because that is where the requirements live: "the turn he was reading does not
+/// move", "proximity to the top is the trigger", "resting short of the top loads nothing".
+/// None of those can be stated in terms of a method being called.
+///
+/// Position preservation is asserted as *offset moved exactly as much as content grew*.
+/// That is SC-004 without needing to identify a particular row: if everything added went
+/// in above him and nothing shifted underneath, those two numbers are equal, and if the
+/// view jumped they are not.
+final class ChatReachingBackTests: ChatHostedTranscriptCase {
+    /// How close to the top counts as "he is asking for more".
+    private static let proximity: CGFloat = 400
+
+    func testShouldNotMoveWhatHeIsReadingWhenOlderMessagesArePrepended() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window)
+
+        let scroll = try XCTUnwrap(transcriptScrollView(in: window))
+        // Somewhere in the middle of the loaded range, reading.
+        scroll.setContentOffset(CGPoint(x: 0, y: Self.proximity), animated: false)
+        await settle(window)
+
+        // **Distance from the FOOT, not content size and not raw offset.**
+        //
+        // A `LazyVStack` recomputes its content size as rows are realised, so
+        // `contentSize` moves for reasons that have nothing to do with messages arriving —
+        // measured here at 4,753 both before and after a fifty-message prepend, because
+        // the new rows were above the viewport and never realised. An assertion built on
+        // it is reading noise.
+        //
+        // The newest message is the one thing that cannot move: history is added at the
+        // other end. So his distance from it is the invariant, and both terms come from
+        // the same frame.
+        let before = scroll.contentSize.height - scroll.contentOffset.y - scroll.bounds.height
+        let opened = model.snapshot.groups.flatMap(\.messages).count
+
+        await model.loadEarlier()
+        await settle(window, passes: 50)
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            opened + ChatPaging.pageSize,
+            "no history was prepended, so nothing was tested"
+        )
+
+        let after = scroll.contentSize.height - scroll.contentOffset.y - scroll.bounds.height
+        XCTAssertEqual(
+            after,
+            before,
+            accuracy: 2,
+            """
+            He was \(Int(before)) points from the newest message and is now \(Int(after)). \
+            Fifty older turns arrived at the far end of the transcript; nothing he was \
+            looking at should have moved. A change of \(Int(abs(after - before))) points is \
+            the view jumping under his finger.
+            """
+        )
+    }
+
+    func testShouldLoadNothingWhileHeRestsShortOfTheTop() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window)
+
+        let scroll = try XCTUnwrap(transcriptScrollView(in: window))
+        let opened = model.snapshot.groups.flatMap(\.messages).count
+
+        // Well up the transcript, and well short of the top.
+        scroll.setContentOffset(
+            CGPoint(x: 0, y: Self.proximity * 4),
+            animated: false
+        )
+        for _ in 0..<50 {
+            try? await Task.sleep(for: .milliseconds(20))
+            window.layoutIfNeeded()
+        }
+
+        // Without this the test passes when the scroll never took: an unmoved viewport
+        // loads nothing either, for reasons that have nothing to do with the requirement.
+        XCTAssertGreaterThan(
+            scroll.contentOffset.y,
+            0,
+            "the transcript never scrolled, so resting short of the top was never tested"
+        )
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            opened,
+            "proximity to the top is the trigger, not the existence of the control"
+        )
+    }
+
+    func testShouldLoadOnePageWhenHeScrollsToTheTop() async throws {
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window)
+
+        let scroll = try XCTUnwrap(transcriptScrollView(in: window))
+        let opened = model.snapshot.groups.flatMap(\.messages).count
+
+        scroll.setContentOffset(CGPoint(x: 0, y: 0), animated: false)
+        for _ in 0..<50 {
+            try? await Task.sleep(for: .milliseconds(20))
+            window.layoutIfNeeded()
+        }
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            opened + ChatPaging.pageSize,
+            """
+            Reaching the top loaded \(model.snapshot.groups.flatMap(\.messages).count - opened) \
+            messages. It must load exactly one page: fewer means he has to reach for a \
+            control to keep going, more means the window is running away again.
+            """
+        )
+    }
+}
+

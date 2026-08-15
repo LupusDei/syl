@@ -512,6 +512,233 @@ final class LocalStoreTests: XCTestCase {
         )
     }
 
+    // MARK: - Reaching past the device (syl-025.4.2)
+    //
+    // Every fixture here is LARGER than the page it is read with. A bounded read tested
+    // only with unbounded data is untested — under a fixture that fits, taking the page
+    // from the wrong end returns the identical result, which is precisely how the head
+    // read shipped ascending and froze the transcript on the first messages ever
+    // exchanged. The same mistake is available one query along and this is the shape
+    // that catches it.
+
+    /// A conversation of `count` confirmed messages, seq 1...count, a minute apart.
+    private func history(_ count: Int) throws {
+        try store.upsert(
+            (1...count).map {
+                message(
+                    id: "syl:message:0198f2c0-0001-7000-8000-\(String(format: "%012d", $0))",
+                    seq: $0,
+                    offset: Double($0) * 60
+                )
+            }
+        )
+    }
+
+    func testShouldTakeTheOlderPageFromTheEndNEARESTTheCursorNotTheStartOfHistory() throws {
+        // The whole question. The page wanted is the one adjacent to the cursor. Taking
+        // it ascending returns the oldest rows in the conversation instead — identical
+        // under a short history, and past it every "load earlier" hands back the same
+        // first page forever.
+        try history(30)
+
+        let page = try store.messages(
+            conversationId: SylIDs.interactiveConversation,
+            olderThan: 20,
+            limit: 5
+        )
+
+        XCTAssertEqual(
+            page.map(\.seq),
+            [15, 16, 17, 18, 19],
+            "the five immediately before the cursor, still oldest-first — not seq 1...5"
+        )
+    }
+
+    func testShouldWalkTheWholeHistoryExactlyOncePageByPage() throws {
+        try history(30)
+
+        var seen: [Int] = []
+        var cursor = 31
+        for _ in 0..<20 {
+            let page = try store.messages(
+                conversationId: SylIDs.interactiveConversation,
+                olderThan: cursor,
+                limit: 7
+            )
+            guard let oldest = page.first?.seq else { break }
+            seen.insert(contentsOf: page.map(\.seq), at: 0)
+            cursor = oldest
+        }
+
+        XCTAssertEqual(seen, Array(1...30), "every message once, in order, no gaps and no repeats")
+    }
+
+    func testShouldNotDragThePendingBubbleOntoTheBeginningOfHistory() throws {
+        // An optimistic row carries seq 0, so it is older than EVERY cursor. Without the
+        // guard the message he just typed is dragged in as the oldest thing in the
+        // conversation, while still sitting at the foot of the transcript — the same
+        // bubble rendered twice, once where he sent it and once before the first message
+        // ever exchanged.
+        //
+        // **The cursor has to be low enough that the page is not full**, and getting
+        // that wrong is how this test first failed to test anything. At `olderThan: 10`
+        // with a page of 5, `ORDER BY seq DESC` takes seqs 9 down to 5 and the seq 0 row
+        // sorts below all of them — the limit hides it, and removing the guard changes
+        // nothing. It bites only where fewer than a full page lies below the cursor,
+        // which is the LAST page he loads: the one that reveals the true beginning, and
+        // the one the terminal state of the earlier control is read from.
+        try history(30)
+        _ = try store.enqueueSend(
+            conversationId: SylIDs.interactiveConversation,
+            clientId: "c8f41d02-6b1e-4a77-9f30-2ab5c9d10e44",
+            idempotencyKey: "9f2c41d8-b7e0-4a6f-8c1d-3e5a7b9c0d2e",
+            text: "Remind me to call the pharmacy at 4 today.",
+            now: instant("2026-08-09T09:00:00.000Z")
+        )
+
+        let page = try store.messages(
+            conversationId: SylIDs.interactiveConversation,
+            olderThan: 4,
+            limit: 5
+        )
+
+        XCTAssertEqual(page.map(\.seq), [1, 2, 3], "the beginning, and only the beginning")
+        XCTAssertFalse(page.contains { $0.seq == 0 }, "seq 0 is no position, not the oldest one")
+    }
+
+    func testShouldReportNothingOlderThanTheFirstMessageEvenWhileASendIsPending() throws {
+        // The same guard at the boundary that matters most: `olderThan: 1` with a
+        // pending row present. Without the guard this answers "there is one more, and it
+        // is the message you are currently sending" — which would put his own unsent
+        // words before the first thing either of them ever said.
+        try history(30)
+        _ = try store.enqueueSend(
+            conversationId: SylIDs.interactiveConversation,
+            clientId: "c8f41d02-6b1e-4a77-9f30-2ab5c9d10e44",
+            idempotencyKey: "9f2c41d8-b7e0-4a6f-8c1d-3e5a7b9c0d2e",
+            text: "Remind me to call the pharmacy at 4 today.",
+            now: instant("2026-08-09T09:00:00.000Z")
+        )
+
+        XCTAssertTrue(
+            try store.messages(
+                conversationId: SylIDs.interactiveConversation,
+                olderThan: 1,
+                limit: 5
+            ).isEmpty,
+            "nothing precedes the first message, least of all one he has not sent yet"
+        )
+    }
+
+    func testShouldReportNoOlderPageAtTheBeginningRatherThanWrappingAround() throws {
+        try history(30)
+
+        XCTAssertTrue(
+            try store.messages(
+                conversationId: SylIDs.interactiveConversation,
+                olderThan: 1,
+                limit: 5
+            ).isEmpty,
+            "nothing precedes the first message"
+        )
+    }
+
+    func testShouldIgnoreThePendingRowWhenReportingTheOldestSeqItHolds() throws {
+        try history(30)
+        _ = try store.enqueueSend(
+            conversationId: SylIDs.interactiveConversation,
+            clientId: "c8f41d02-6b1e-4a77-9f30-2ab5c9d10e44",
+            idempotencyKey: "9f2c41d8-b7e0-4a6f-8c1d-3e5a7b9c0d2e",
+            text: "Remind me to call the pharmacy at 4 today.",
+            now: instant("2026-08-09T09:00:00.000Z")
+        )
+
+        XCTAssertEqual(
+            try store.oldestMessageSeq(conversationId: SylIDs.interactiveConversation),
+            1,
+            "a cursor of 0 would ask the server for everything before the message he is sending"
+        )
+    }
+
+    func testShouldTellNeverAskedApartFromNothingIsOlder() throws {
+        // The distinction the whole marker exists for. Both present as "the local window
+        // has run out"; one means ask the server, the other means show him an ending.
+        try history(30)
+
+        XCTAssertNil(
+            try store.historyFloor(conversationId: SylIDs.interactiveConversation),
+            "nobody has asked yet"
+        )
+        XCTAssertFalse(try store.hasWholeHistory(conversationId: SylIDs.interactiveConversation))
+
+        try store.confirmHistoryBegins(at: 1, conversationId: SylIDs.interactiveConversation)
+
+        XCTAssertEqual(try store.historyFloor(conversationId: SylIDs.interactiveConversation), 1)
+        XCTAssertTrue(try store.hasWholeHistory(conversationId: SylIDs.interactiveConversation))
+    }
+
+    func testShouldNotClaimTheWholeHistoryWhileRowsBelowTheFloorAreStillMissing() throws {
+        // A confirmation says where the beginning IS, not that the device has reached
+        // it. Both halves are load-bearing, and this is the half a Bool would lose.
+        try store.upsert([
+            message(id: "syl:message:0198f2c0-0001-7000-8000-000000000020", seq: 20, offset: 60),
+            message(id: "syl:message:0198f2c0-0001-7000-8000-000000000021", seq: 21, offset: 120),
+        ])
+
+        try store.confirmHistoryBegins(at: 1, conversationId: SylIDs.interactiveConversation)
+
+        XCTAssertEqual(try store.historyFloor(conversationId: SylIDs.interactiveConversation), 1)
+        XCTAssertFalse(
+            try store.hasWholeHistory(conversationId: SylIDs.interactiveConversation),
+            "history begins at 1 and the oldest row held is 20 — there is more to fetch"
+        )
+    }
+
+    func testShouldSurviveTheMarkerOutlivingTheMessagesItDescribes() throws {
+        // The device is cleared but the marker stands. Answering "yes, whole history"
+        // for an empty conversation would show an ending over nothing at all.
+        try store.confirmHistoryBegins(at: 1, conversationId: SylIDs.interactiveConversation)
+
+        XCTAssertFalse(try store.hasWholeHistory(conversationId: SylIDs.interactiveConversation))
+    }
+
+    func testShouldKeepTheDeepestFloorAnyoneHasEverConfirmed() throws {
+        // Two runs can confirm different depths. A later, shallower answer that won
+        // would claim history had been lost — the system does not get to quietly
+        // discard things.
+        try history(30)
+
+        try store.confirmHistoryBegins(at: 1, conversationId: SylIDs.interactiveConversation)
+        try store.confirmHistoryBegins(at: 12, conversationId: SylIDs.interactiveConversation)
+
+        XCTAssertEqual(
+            try store.historyFloor(conversationId: SylIDs.interactiveConversation),
+            1,
+            "the deepest answer anyone has had, not the most recent one"
+        )
+    }
+
+    func testShouldRefuseToRecordAPendingRowsSeqAsTheBeginningOfAConversation() throws {
+        try history(30)
+
+        try store.confirmHistoryBegins(at: 0, conversationId: SylIDs.interactiveConversation)
+
+        XCTAssertNil(
+            try store.historyFloor(conversationId: SylIDs.interactiveConversation),
+            "seq 0 is the absence of a position; it can never be where history begins"
+        )
+    }
+
+    func testShouldKeepEachConversationsFloorToItself() throws {
+        let other: SylID = "syl:conversation:0198f2c0-0009-7000-8000-00000000c001"
+        try history(30)
+
+        try store.confirmHistoryBegins(at: 1, conversationId: SylIDs.interactiveConversation)
+
+        XCTAssertNil(try store.historyFloor(conversationId: other))
+        XCTAssertFalse(try store.hasWholeHistory(conversationId: other))
+    }
+
     private func instant(_ text: String) -> Date {
         // A literal from the contract; a failure here is a broken fixture, not a
         // runtime condition.

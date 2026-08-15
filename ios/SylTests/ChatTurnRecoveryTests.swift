@@ -60,7 +60,7 @@ final class ChatTurnRecoveryTests: XCTestCase {
         let clock = MutableClock(Self.instant("2026-08-09T07:00:00.000Z"))
         let model = makeModel(now: { clock.now })
 
-        model.draft = "Send me a new video of yourself."
+        model.draft.text = "Send me a new video of yourself."
         await model.send()
         await model.apply(.presence(Self.thinking(at: clock.now, ttlMs: 100)))
         XCTAssertNil(model.notice, "nothing is wrong while she is still working")
@@ -99,7 +99,7 @@ final class ChatTurnRecoveryTests: XCTestCase {
             now: { clock.now }
         )
 
-        model.draft = "Send me a new video of yourself."
+        model.draft.text = "Send me a new video of yourself."
         await model.send()
         await model.apply(.presence(Self.thinking(at: clock.now, ttlMs: 100)))
 
@@ -132,7 +132,7 @@ final class ChatTurnRecoveryTests: XCTestCase {
         let clock = MutableClock(Self.instant("2026-08-09T07:00:00.000Z"))
         let model = makeModel(now: { clock.now })
 
-        model.draft = "Send me a new video of yourself."
+        model.draft.text = "Send me a new video of yourself."
         await model.send()
         // No presence frame. Ever.
         try await Self.settle()
@@ -160,7 +160,7 @@ final class ChatTurnRecoveryTests: XCTestCase {
         let clock = MutableClock(Self.instant("2026-08-09T07:00:00.000Z"))
         let model = makeModel(now: { clock.now })
 
-        model.draft = "Do the long thing."
+        model.draft.text = "Do the long thing."
         await model.send()
         await model.apply(.presence(Self.thinking(at: clock.now, ttlMs: 15_000)))
 
@@ -178,7 +178,7 @@ final class ChatTurnRecoveryTests: XCTestCase {
         let clock = MutableClock(Self.instant("2026-08-09T07:00:00.000Z"))
         let model = makeModel(now: { clock.now })
 
-        model.draft = "Check now"
+        model.draft.text = "Check now"
         await model.send()
         await model.apply(.presence(Self.thinking(at: clock.now, ttlMs: 100)))
 
@@ -218,7 +218,7 @@ final class ChatTurnRecoveryTests: XCTestCase {
         let clock = MutableClock(Self.instant("2026-08-09T07:00:00.000Z"))
         let model = makeModel(now: { clock.now })
 
-        model.draft = "Send me a new video of yourself."
+        model.draft.text = "Send me a new video of yourself."
         await model.send()
         await model.apply(.presence(Self.thinking(at: clock.now, ttlMs: 15_000)))
 

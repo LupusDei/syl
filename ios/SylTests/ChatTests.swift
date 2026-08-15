@@ -101,6 +101,78 @@ final class MessageGroupingTests: XCTestCase {
     }
 }
 
+/// One page, named once (`syl-025.1.2`).
+///
+/// Both assertions matter and they are different assertions. The first pins the constant
+/// to the requirement — 50 is what the Commander asked for and what the server gives you
+/// when you ask for nothing. The second drives the **loader's own default** through the
+/// real read path against a store far larger than the window, which is the only thing
+/// that can catch the loader drifting away from the view model again. They were two
+/// hand-written 200s, and no test could see the disagreement because neither had a name.
+final class ChatPagingTests: XCTestCase {
+    func testShouldReadFiftyAtATime() {
+        XCTAssertEqual(ChatPaging.pageSize, 50)
+    }
+
+    func testShouldOpenTheLoaderOnExactlyOnePageWhenNoLimitIsGiven() throws {
+        let database = try SylDatabase.inMemory()
+        let store = LocalStore(database: database)
+        let base = try Instant.parse("2026-08-09T07:00:03.114Z")
+        try store.upsert(
+            (1...500).map { seq in
+                Message(
+                    id: "syl:message:0198f2c0-0001-7000-8000-\(String(format: "%012d", seq))",
+                    conversationId: SylIDs.interactiveConversation,
+                    clientId: nil,
+                    role: .assistant,
+                    text: "Done.",
+                    createdAt: base.addingTimeInterval(Double(seq) * (MessageGrouping.maximumGap + 1)),
+                    seq: seq
+                )
+            }
+        )
+
+        let snapshot = try ChatSnapshotLoader(
+            store: store,
+            conversationId: SylIDs.interactiveConversation
+        ).load()
+
+        XCTAssertEqual(snapshot.groups.flatMap(\.messages).count, ChatPaging.pageSize)
+        XCTAssertTrue(snapshot.mayHaveEarlier)
+    }
+}
+
+/// The one place this app builds a cursor the server calls opaque (`syl-025.4.3`).
+///
+/// Pinned to the exact bytes because that is the only thing standing between a server-side
+/// encoding change and a feature that fails silently in his hand: a cursor the service
+/// refuses comes back as "older messages are not reachable right now", which is
+/// indistinguishable from being offline. If `encodeCursor` in
+/// `backend/src/services/message-store.ts` ever changes, this test is where it should
+/// hurt.
+final class MessageCursorTests: XCTestCase {
+    func testShouldEncodeTheCursorExactlyAsTheServiceDoes() throws {
+        // base64 of {"seq":401} — the literal the backend produces for the same input.
+        let cursor = try XCTUnwrap(MessageCursor.before(seq: 401))
+        XCTAssertEqual(cursor, "eyJzZXEiOjQwMX0=")
+
+        // And it round-trips through the service's own decode shape.
+        let data = try XCTUnwrap(Data(base64Encoded: cursor))
+        let decoded = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(decoded["seq"] as? Int, 401)
+    }
+
+    func testShouldRefuseACursorTheServiceWouldRefuse() {
+        // `decodeCursor` requires a positive integer. An optimistic row carries seq 0, and
+        // sending one would spend a round trip to be told it is not a cursor — worse, the
+        // refusal would read as "your history is unreachable".
+        XCTAssertNil(MessageCursor.before(seq: 0))
+        XCTAssertNil(MessageCursor.before(seq: -1))
+    }
+}
+
 /// The chat screen's state, driven against a real in-memory store.
 ///
 /// The class is not `@MainActor` — XCTest's `setUpWithError` and `tearDown` are
@@ -152,7 +224,7 @@ final class ChatViewModelTests: XCTestCase {
     @MainActor
     func testShouldShowTheBubbleImmediatelyAndQueueTheIntent() async throws {
         let model = makeModel()
-        model.draft = "Remind me to call the pharmacy at 4 today."
+        model.draft.text = "Remind me to call the pharmacy at 4 today."
 
         await model.send()
 
@@ -165,22 +237,22 @@ final class ChatViewModelTests: XCTestCase {
     @MainActor
     func testShouldClearTheDraftOnceTheMessageIsQueued() async {
         let model = makeModel()
-        model.draft = "Hello."
+        model.draft.text = "Hello."
 
         await model.send()
 
-        XCTAssertEqual(model.draft, "")
+        XCTAssertEqual(model.draft.text, "")
     }
 
     @MainActor
     func testShouldIgnoreAnEmptyOrWhitespaceOnlyDraft() async throws {
         let model = makeModel()
-        model.draft = "   \n "
+        model.draft.text = "   \n "
 
         await model.send()
 
         XCTAssertEqual(try Outbox(database: database).count(), 0)
-        XCTAssertEqual(model.draft, "   \n ")
+        XCTAssertEqual(model.draft.text, "   \n ")
     }
 
     @MainActor
@@ -192,7 +264,7 @@ final class ChatViewModelTests: XCTestCase {
             sendOverSocket: { _, _, _ in throw WebSocketClient.NotConnected() },
             flush: { await flushed.raise() }
         )
-        model.draft = "Hello."
+        model.draft.text = "Hello."
 
         await model.send()
 
@@ -213,7 +285,7 @@ final class ChatViewModelTests: XCTestCase {
                 await observed.set((try? store.pendingMessages().count) ?? 0)
             }
         )
-        model.draft = "Hello."
+        model.draft.text = "Hello."
 
         await model.send()
 
@@ -226,7 +298,7 @@ final class ChatViewModelTests: XCTestCase {
     @MainActor
     func testShouldReplaceThePendingBubbleWhenTheSocketConfirms() async throws {
         let model = makeModel(makeClientId: { "c8f41d02-6b1e-4a77-9f30-2ab5c9d10e44" })
-        model.draft = "Remind me to call the pharmacy at 4 today."
+        model.draft.text = "Remind me to call the pharmacy at 4 today."
         await model.send()
 
         let changed = await model.apply(.deliveryConfirmation(confirmation()))
@@ -313,7 +385,7 @@ final class ChatViewModelTests: XCTestCase {
     func testShouldSayHowManyMessagesAreWaitingWhenOffline() async {
         // An assistant that silently fails to sync is worse than one that says so.
         let model = makeModel(sendOverSocket: { _, _, _ in throw WebSocketClient.NotConnected() })
-        model.draft = "Hello."
+        model.draft.text = "Hello."
         await model.send()
 
         await model.apply(.connectionState(.offline))
@@ -535,6 +607,771 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, 3)
     }
 
+    // MARK: - The window is one page, and it stays one page (syl-025.1.1)
+    //
+    // Every fixture above this line is SHORTER than the window, which is exactly the
+    // condition under which the defect these tests describe does not exist. That is why
+    // nothing caught it. The rule from `docs/CONTEXT.md` — *any query with a `LIMIT`
+    // needs a test where the limit actually bites* — is the whole reason the seed here
+    // is 2,000 and the assertions are counted against one page rather than against
+    // "did we get everything".
+
+    /// The page the Commander asked for, and the server's own default.
+    ///
+    /// Written as a literal on purpose: this is the requirement (FR-002), not a
+    /// restatement of whatever the code happens to hold. `ChatPagingTests` is where the
+    /// production constant is pinned to it.
+    private static let page = 50
+
+    @MainActor
+    func testShouldLoadOnlyOnePageWhenTheConversationIsLong() async throws {
+        try store.upsert(longConversation())
+        // No limit passed — the window the phone itself opens with.
+        let model = makeModel()
+
+        await model.refresh()
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page,
+            """
+            First paint read \(model.snapshot.groups.flatMap(\.messages).count) messages \
+            of 2,000. It must read exactly one page: every one of them is sized on every \
+            body pass, and the body re-runs on each keystroke.
+            """
+        )
+        XCTAssertTrue(
+            model.snapshot.mayHaveEarlier,
+            "1,950 messages are still behind the window, and the way back must be offered"
+        )
+    }
+
+    @MainActor
+    func testShouldNotWidenTheWindowWithoutBeingAsked() async throws {
+        // The defect, stated as a property. `loadEarlier()` was driven from an
+        // `onAppear` on a row inside the `LazyVStack`, and every widening reassigned the
+        // snapshot, which rebuilt the subtree, which re-created that row, which fired
+        // `onAppear` again. The loop stopped only when the ENTIRE conversation was
+        // resident. No finger touched the screen.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+
+        // Everything the view does to the model when the transcript is rebuilt.
+        await model.refresh()
+        await model.apply(.message(message(id: id(2_001), seq: 2_001)))
+        await model.refresh()
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page,
+            "a rebuild is not a request for more history"
+        )
+    }
+
+    @MainActor
+    func testShouldNotWidenTheWindowTwiceForOneTrigger() async throws {
+        // A fast flick to the top used to queue several overlapping reads that each
+        // widened the window again, so one arrival cost four pages instead of one.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+
+        async let first: Void = model.loadEarlier()
+        async let second: Void = model.loadEarlier()
+        _ = await (first, second)
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page * 2,
+            "two overlapping triggers, one page of history"
+        )
+        XCTAssertFalse(model.isLoadingEarlier)
+    }
+
+    // MARK: - One arrival at the top, one page (syl-025.1.3)
+
+    @MainActor
+    func testShouldLoadOnlyOnePageHoweverOftenTheTopIsReported() async throws {
+        // The runaway, at the seam where it lived. Each widening reassigned the snapshot,
+        // which rebuilt the transcript subtree, which re-created the row at the top,
+        // which reported the top again — and `isLoadingEarlier` was already cleared by
+        // then. Five reports of the same arrival must still be one page.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+
+        for _ in 1...5 {
+            await model.reachedTheTopOfTheWindow()
+        }
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page * 2,
+            "one arrival at the top is one page, however many times the view says so"
+        )
+    }
+
+    @MainActor
+    func testShouldLoadAnotherPageOnceHeHasLeftTheTopAndComeBack() async throws {
+        // The other half, and the reason the latch is a latch rather than a one-shot:
+        // reaching back through a long history must not cost a tap per page after the
+        // first.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+
+        await model.reachedTheTopOfTheWindow()
+        model.leftTheTopOfTheWindow()
+        await model.reachedTheTopOfTheWindow()
+
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, Self.page * 3)
+    }
+
+    @MainActor
+    func testShouldAlwaysHonourATapEvenWhenTheAutomaticTriggerIsSpent() async throws {
+        // The control exists because an automatic trigger that misfires must never leave
+        // him with no way back. A latch that also swallowed his taps would take the
+        // fallback away exactly when it is needed.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+        await model.reachedTheTopOfTheWindow()
+
+        await model.loadEarlier()
+        await model.loadEarlier()
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page * 4,
+            "he asked twice, on top of the automatic page; he gets both"
+        )
+    }
+
+    @MainActor
+    func testShouldNotSpendTheAutomaticTriggerOnALoadThatCouldNotHappen() async throws {
+        // The trigger is a licence to load one page, not a licence to have tried. If a tap
+        // is already in flight when he arrives at the top, the arrival must still be worth
+        // something once that tap finishes — otherwise the automatic trigger is consumed
+        // by a load it did not cause and he is back to tapping.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+
+        // `async let` will not do here: which of the two runs first is the runtime's
+        // choice, and the run where the ARRIVAL wins tests nothing. Waiting on the flag
+        // makes "the tap is genuinely in flight" a precondition rather than a hope.
+        let tap = Task { await model.loadEarlier() }
+        var spins = 0
+        while !model.isLoadingEarlier && spins < 1_000 {
+            await Task.yield()
+            spins += 1
+        }
+        XCTAssertTrue(model.isLoadingEarlier, "the tap never got in flight, so nothing was tested")
+
+        await model.reachedTheTopOfTheWindow()
+        await tap.value
+
+        // Nothing has moved him away from the top, so the arrival is still unspent.
+        await model.reachedTheTopOfTheWindow()
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page * 3,
+            "the tap's page, then the arrival's page — the arrival was not swallowed by the tap"
+        )
+    }
+
+    // MARK: - The window comes back down (syl-025.6.1)
+
+    @MainActor
+    func testShouldCollapseTheWindowWhenHeReturnsToTheFoot() async throws {
+        // The window had exactly one write in the whole app -- `+= pageSize` -- and the
+        // view model outlives the screen, so a browse through history was permanent for
+        // the life of the process. Only killing the app brought it down.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+        await model.loadEarlier()
+        await model.loadEarlier()
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, Self.page * 3)
+
+        await model.collapseTheWindow()
+
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, Self.page)
+        XCTAssertTrue(model.snapshot.mayHaveEarlier, "the way back is still offered")
+    }
+
+    @MainActor
+    func testShouldKeepAPendingMessageWhenTheWindowCollapses() async throws {
+        // The window is anchored at the newest end and an optimistic bubble is by
+        // definition the newest thing in it, so collapsing keeps it. Asserted rather than
+        // guarded: a guard on `pendingCount` would stop collapsing for anyone whose outbox
+        // is backed up, which is exactly when the window most needs to come down.
+        try store.upsert(longConversation())
+        // A clock AFTER the fixture, which is what a real one is. The default test clock
+        // predates every seeded message, so the optimistic row sorted as the OLDEST thing
+        // in the conversation and fell out of a newest-anchored window -- the exact edge
+        // case the spec names for a pending row, reproduced here by accident. Filed as its
+        // own bug rather than papered over; this test is about the collapse.
+        let model = makeModel(
+            sendOverSocket: { _, _, _ in throw WebSocketClient.NotConnected() },
+            now: { try! Instant.parse("2026-09-01T00:00:00.000Z") }
+        )
+        await model.refresh()
+        await model.loadEarlier()
+        model.draft.text = "Remind me at six."
+        await model.send()
+        // A send arms the turn watch, and a conversation mid-turn does not collapse.
+        await model.apply(.message(message(id: id(2_001), seq: 2_001)))
+
+        await model.collapseTheWindow()
+
+        XCTAssertEqual(model.snapshot.pendingCount, 1, "his unsent message survived the collapse")
+        XCTAssertTrue(
+            model.snapshot.groups.contains { $0.isPending },
+            "and it is still a row on screen"
+        )
+    }
+
+    @MainActor
+    func testShouldNotCollapseWhileSheIsStillAnswering() async throws {
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+        await model.loadEarlier()
+        model.draft.text = "Remind me at six."
+        await model.send()
+
+        await model.collapseTheWindow()
+
+        XCTAssertGreaterThan(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page,
+            "a turn is outstanding; rebuilding the transcript under him is not the moment"
+        )
+    }
+
+    @MainActor
+    func testShouldLetHimReachBackAgainAfterACollapse() async throws {
+        // The collapse re-arms the automatic trigger. Without that, the top of the fresh
+        // window is somewhere he has never been and arriving there would load nothing.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+        await model.reachedTheTopOfTheWindow()
+        await model.collapseTheWindow()
+
+        await model.reachedTheTopOfTheWindow()
+
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, Self.page * 2)
+    }
+
+    // MARK: - A stale read must not assign its result (syl-025.1.3.2)
+
+    @MainActor
+    func testShouldNotLetAStaleReadOverwriteANewerOne() async throws {
+        // Three callers refresh independently -- the view's task, an arriving socket
+        // message, and background sync -- and a read suspends in the middle. One captured
+        // at the old window could resolve AFTER a newer one and assign the stale snapshot,
+        // so his history collapses under him while `loader.limit` still says otherwise:
+        // the window and the screen then disagree about where the next page begins.
+        //
+        // Staged so the older read is the SLOWER one, which is the only interleaving that
+        // exposes it: a wide read is started first and left in flight, then a collapse
+        // reads a narrower window, stamps later, and lands ahead of it. The wide result
+        // then arrives last with nothing to say.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+        await model.loadEarlier()
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, Self.page * 2)
+
+        // The yield is load-bearing: it lets the wide read run up to its first suspension,
+        // which is where it takes its stamp. Without it the collapse stamps FIRST and the
+        // refresh is the newer request, which is a different (and correct) interleaving
+        // that proves nothing -- the first draft of this test asserted against exactly
+        // that and failed for a reason the requirement does not care about.
+        let stale = Task { await model.refresh() }
+        await Task.yield()
+        await model.collapseTheWindow()
+        await stale.value
+
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page,
+            """
+            The collapse was the newest thing asked for, so it is what must be on screen. \
+            A read captured before it must not land on top of it.
+            """
+        )
+    }
+
+    // MARK: - A window that grew on a read that failed (syl-025.1.3.1)
+
+    @MainActor
+    func testShouldNotWidenTheWindowWhenTheReadFails() async throws {
+        // The limit used to advance BEFORE the read. A store that throws left it wider
+        // than the screen, and the next successful refresh -- triggered by an arriving
+        // message he had nothing to do with -- painted the whole widened window at once.
+        //
+        // The failure is produced by closing the database underneath the model, which is
+        // what a locked or corrupt store looks like from here: the read throws, `load()`
+        // returns nil, and the model reports it.
+        try store.upsert(longConversation())
+        let model = makeModel()
+        await model.refresh()
+        XCTAssertEqual(model.windowSize, Self.page)
+        try database.queue.close()
+
+        await model.loadEarlier()
+
+        XCTAssertNotNil(model.notice, "a read that failed must say so")
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page,
+            "the screen still shows one page, which is the easy half"
+        )
+        // **The half that matters, and it is why the window is observable at all.**
+        // Asserting the snapshot alone cannot tell a window that did not move from one
+        // that moved and was simply not drawn -- and the second is the defect: the next
+        // successful read, on a path he did not initiate, would pay for a widen he never
+        // got. Proven by mutation: restoring the old "advance then read" order leaves this
+        // at 100 while every other assertion here still passes.
+        XCTAssertEqual(
+            model.windowSize,
+            Self.page,
+            "the window moved on a read that never landed"
+        )
+    }
+
+    // MARK: - History older than this device (syl-025.4.1)
+    //
+    // Until now `loadEarlier()` only ever widened a LOCAL window. If a message was not on
+    // the phone, nothing in the chat UI could fetch it -- only the forward-only `/sync`
+    // cursor, which never walks backwards. So the transcript had a hard floor that looked
+    // exactly like the beginning of the conversation, and scrolled far enough back she
+    // appeared to have no memory of him before a certain date.
+
+    @MainActor
+    func testShouldFetchFromTheServerWhenTheDeviceRunsOutOfHistory() async throws {
+        // 100 on the device, 500 on the server -- the shape the story names.
+        let server = StubHistory(total: 500)
+        try store.upsert(server.messages(from: 401, through: 500))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+
+        // Walk the local window to its floor. Nothing here touches the network.
+        await model.loadEarlier()
+        let localOnly = await server.requestCount
+        XCTAssertEqual(localOnly, 0, "local history must be read from disk")
+        XCTAssertFalse(model.snapshot.mayHaveEarlier, "the device is exhausted")
+        XCTAssertTrue(model.mayReachFurtherBack, "but the conversation is not")
+
+        await model.loadEarlier()
+
+        let cursors = await server.cursors
+        XCTAssertEqual(cursors.count, 1, "one request, for one page")
+        XCTAssertEqual(
+            cursors.first,
+            MessageCursor.before(seq: 401),
+            "the page before the oldest message on the device"
+        )
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            Self.page * 3,
+            "the fetched page is on screen"
+        )
+        XCTAssertNil(model.notice)
+    }
+
+    @MainActor
+    func testShouldNotFetchTheSamePageTwice() async throws {
+        // The point of writing the page to disk: the second pass is a local read.
+        let server = StubHistory(total: 500)
+        try store.upsert(server.messages(from: 401, through: 500))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+        await model.loadEarlier()
+        await model.loadEarlier()
+        let afterFirstFetch = await server.requestCount
+
+        // A fresh model over the same store -- a relaunch, in effect.
+        let second = makeModel(fetchOlderMessages: server.fetch)
+        await second.refresh()
+        await second.loadEarlier()
+        await second.loadEarlier()
+
+        let afterRelaunch = await server.requestCount
+        XCTAssertEqual(
+            afterRelaunch,
+            afterFirstFetch,
+            "the page it already wrote to disk was read from disk"
+        )
+        XCTAssertEqual(second.snapshot.groups.flatMap(\.messages).count, Self.page * 3)
+    }
+
+    @MainActor
+    func testShouldTellHimWhenOlderHistoryIsUnreachable() async throws {
+        // Offline is a state to design, not an error to report -- but a transcript that
+        // silently stops is a lie about where the conversation begins.
+        let server = StubHistory(total: 500, failing: true)
+        try store.upsert(server.messages(from: 401, through: 500))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+        await model.loadEarlier()
+        let onScreen = model.snapshot.groups.flatMap(\.messages).count
+
+        await model.loadEarlier()
+
+        XCTAssertNotNil(model.notice, "he is told, rather than left on a spinner")
+        XCTAssertFalse(model.isLoadingEarlier, "and the control is not stuck loading")
+        XCTAssertEqual(
+            model.snapshot.groups.flatMap(\.messages).count,
+            onScreen,
+            "the local transcript is untouched and still usable"
+        )
+        XCTAssertTrue(model.mayReachFurtherBack, "a failed reach is not an ending")
+    }
+
+    @MainActor
+    func testShouldResolveToAnEndingAtTheTrueBeginning() async throws {
+        // The last page reports `hasMore: false`. That is the ONLY thing that can say
+        // where the conversation begins, and it must be written down -- otherwise every
+        // relaunch re-walks the whole history to rediscover it.
+        let server = StubHistory(total: 60)
+        try store.upsert(server.messages(from: 51, through: 60))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+        XCTAssertFalse(model.snapshot.mayHaveEarlier, "ten messages, one page: disk is done")
+
+        await model.loadEarlier()
+
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, 60, "all of it")
+        XCTAssertFalse(
+            model.mayReachFurtherBack,
+            "the server said there is nothing older, so the control resolves to an ending"
+        )
+
+        await model.loadEarlier()
+        let asked = await server.requestCount
+        XCTAssertEqual(asked, 1, "an ending is not asked again")
+    }
+
+    @MainActor
+    func testShouldNotReachPastTheDeviceWithNoClientWired() async throws {
+        // A model with no way to reach the server behaves exactly as it did before this
+        // task: the transcript ends where the device's history ends, and it says nothing,
+        // because nothing failed.
+        try store.upsert((1...60).map { message(id: id($0), seq: $0) })
+        let model = makeModel()
+        await model.refresh()
+
+        await model.loadEarlier()
+
+        XCTAssertFalse(model.mayReachFurtherBack)
+        XCTAssertNil(model.notice)
+    }
+
+    @MainActor
+    func testShouldNotClaimTheBeginningWhileHistorySitsOnDiskAboveTheWindow() async throws {
+        // **The interaction between the collapse and the history floor**, which neither
+        // task owns and which produces a lie if the ending is read off the floor alone.
+        //
+        // `hasWholeHistory` is window-independent by construction: it compares the
+        // confirmed floor against the oldest seq IN THE DATABASE. The collapse shrinks the
+        // rendered window and leaves every row on disk. So after paging to the true
+        // beginning and then navigating away, the floor still says "confirmed" while most
+        // of his conversation sits on disk one scroll above the window -- and a control
+        // reading only the floor would draw "the beginning" over it.
+        //
+        // The two conditions answer different questions and both must say no.
+        // `mayHaveEarlier` is about the WINDOW -- is there anything held and not shown.
+        // `hasWholeHistory` is about the SERVER -- is there anything not fetched.
+        let server = StubHistory(total: 60)
+        try store.upsert(server.messages(from: 51, through: 60))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+        await model.loadEarlier()
+
+        // The true beginning, reached and recorded: every row on disk, window covering it.
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, 60)
+        XCTAssertFalse(model.mayReachFurtherBack, "this genuinely is the beginning")
+
+        // He leaves the screen. The window comes down; the rows do not.
+        await model.collapseTheWindow()
+
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, Self.page)
+        XCTAssertTrue(
+            model.mayReachFurtherBack,
+            """
+            Ten of his messages are on disk directly above the window and the control was \
+            about to tell him he had reached the start of his history. The floor says where \
+            the beginning IS, not that the window has reached it.
+            """
+        )
+
+        // And reaching back from there is a local read, not another request.
+        let before = await server.requestCount
+        await model.loadEarlier()
+        let after = await server.requestCount
+        XCTAssertEqual(after, before, "it is already on the device")
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, 60)
+    }
+
+    /// A server holding more of the conversation than the device does.
+    ///
+    /// An actor because the assertions are about **what was asked of it** -- how many
+    /// requests, carrying which cursor -- and those are read from the main actor while the
+    /// fetch closure runs off it.
+    actor StubHistory {
+        private let total: Int
+        private let failing: Bool
+        private(set) var cursors: [String?] = []
+        var requestCount: Int { cursors.count }
+
+        init(total: Int, failing: Bool = false) {
+            self.total = total
+            self.failing = failing
+        }
+
+        nonisolated func messages(from first: Int, through last: Int) -> [Message] {
+            (first...last).map { seq in
+                Message(
+                    id: "syl:message:0198f2c0-0001-7000-8000-\(String(format: "%012d", seq))",
+                    conversationId: SylIDs.interactiveConversation,
+                    clientId: nil,
+                    role: .assistant,
+                    text: "Done.",
+                    createdAt: try! Instant.parse("2026-08-09T07:00:03.114Z")
+                        .addingTimeInterval(Double(seq) * (MessageGrouping.maximumGap + 1)),
+                    seq: seq
+                )
+            }
+        }
+
+        /// Decodes the cursor the way the service does, so the test exercises the encoding
+        /// rather than trusting it.
+        private func seq(from cursor: String?) -> Int {
+            guard
+                let cursor,
+                let data = Data(base64Encoded: cursor),
+                let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let seq = decoded["seq"] as? Int
+            else { return total + 1 }
+            return seq
+        }
+
+        func page(cursor: String?, limit: Int) throws -> MessagePage {
+            cursors.append(cursor)
+            if failing { throw AttachmentFetchError.offline }
+
+            let before = seq(from: cursor)
+            let last = before - 1
+            guard last >= 1 else { return MessagePage(items: [], nextCursor: nil, hasMore: false) }
+            let first = max(1, last - limit + 1)
+            return MessagePage(
+                items: messages(from: first, through: last),
+                nextCursor: nil,
+                hasMore: first > 1
+            )
+        }
+
+        nonisolated var fetch: @Sendable (SylID, String?, Int) async throws -> MessagePage {
+            { [self] _, cursor, limit in try await page(cursor: cursor, limit: limit) }
+        }
+    }
+
+    // MARK: - What a screen reader walks (syl-025.6.2)
+    //
+    // **What these can and cannot prove, stated up front.** The RENDERED accessibility
+    // tree is not reachable from this target: SwiftUI materialises it only with VoiceOver
+    // running, and a probe over the hosted window's elements comes back with zero. There
+    // is no UI test target in this project. So focus movement, spoken announcements and
+    // touch-target geometry cannot be asserted here at all, and `syl-025.6.4` carries that
+    // gap rather than this file pretending to cover it.
+    //
+    // What IS assertable is the structure the traversal is built from, and it happens to
+    // be where both failures would come from. Traversal order is the order of children in
+    // the stack, and focus survives a prepend exactly when the rows either side of it keep
+    // their identity.
+
+    @MainActor
+    func testShouldOrderTurnsForTraversalOldestFirst() async throws {
+        // Traversal follows the stack, and the stack follows `snapshot.rows`. This is the
+        // check that would have caught an inverted transcript: `syl-025.2.2` considered
+        // flipping the scroll view and every row inside it, which reverses reading order
+        // for VoiceOver as a side effect of a scrolling fix.
+        //
+        // **This asserts the code as it currently stands, not a decision.** The anchor
+        // question is with the Commander and unanswered; if he rules for the inverted
+        // transcript, this test is what protects him from the traversal regression that
+        // comes with it, and it should go red rather than be relaxed.
+        try store.upsert(longConversation(120))
+        let model = makeModel()
+
+        await model.refresh()
+
+        let times = model.snapshot.rows.compactMap { row -> Date? in
+            if case .turn(let group, _) = row { return group.messages.first?.createdAt }
+            return nil
+        }
+        XCTAssertEqual(times.count, Self.page, "one entry per turn on screen")
+        XCTAssertEqual(times, times.sorted(), "oldest first — the order he would be read")
+    }
+
+    @MainActor
+    func testShouldKeepEveryTurnsIdentityWhenOlderMessagesArePrepended() async throws {
+        // **This is the mechanism, not a proxy for it.** Inserting content above the
+        // reading position is the classic way to throw a screen-reader user back to the
+        // start of a long document, and it happens when the rows they were on are torn
+        // down and rebuilt rather than kept. Each row is identified by its group id, so
+        // focus survives exactly when those ids survive.
+        try store.upsert(longConversation(120))
+        let model = makeModel()
+        await model.refresh()
+        let before = model.snapshot.groups.map(\.id)
+
+        await model.loadEarlier()
+
+        let after = model.snapshot.groups.map(\.id)
+        XCTAssertEqual(
+            Array(after.suffix(before.count)),
+            before,
+            """
+            Every turn he could already see is still present, in the same order, with the \
+            same identity. Anything else and the row VoiceOver was focused on no longer \
+            exists, and focus goes back to the top of the transcript.
+            """
+        )
+        XCTAssertEqual(after.count, before.count + Self.page, "and one page arrived above them")
+        XCTAssertTrue(
+            Set(after.prefix(Self.page)).isDisjoint(with: Set(before)),
+            "the prepended turns are new ones, not a reshuffle of his"
+        )
+    }
+
+    // MARK: - Every state the head of the transcript can be in (syl-025.4.4)
+    //
+    // **These exist because the control was correct and connected to nothing.** The state
+    // reached `ChatView` as `isLoading: Bool`, and a Bool expresses two of the four — so
+    // `beginning` and `unreachable` were unreachable in the shipped app however carefully
+    // the control was written and tested. A type can be entirely right and wired to
+    // nowhere, and nothing in the gate notices. So each state is asserted here at the
+    // seam that actually feeds the view.
+
+    @MainActor
+    func testShouldOfferTheWayBackWhileThereIsMoreOnDisk() async throws {
+        try store.upsert(longConversation(120))
+        let model = makeModel()
+        await model.refresh()
+
+        XCTAssertEqual(model.earlierMessagesState, .idle)
+    }
+
+    @MainActor
+    func testShouldSayItIsWorkingWhileAPageIsInFlight() async throws {
+        try store.upsert(longConversation(120))
+        let model = makeModel()
+        await model.refresh()
+
+        let load = Task { await model.loadEarlier() }
+        var spins = 0
+        while !model.isLoadingEarlier && spins < 1_000 {
+            await Task.yield()
+            spins += 1
+        }
+        XCTAssertEqual(model.earlierMessagesState, .loading)
+        await load.value
+    }
+
+    @MainActor
+    func testShouldSayTheConversationBeginsWhenTheServerConfirmsIt() async throws {
+        let server = StubHistory(total: 60)
+        try store.upsert(server.messages(from: 51, through: 60))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+
+        await model.loadEarlier()
+
+        XCTAssertEqual(
+            model.earlierMessagesState,
+            .beginning,
+            "he has arrived at the first thing either of them said, and can be told so"
+        )
+    }
+
+    @MainActor
+    func testShouldSayOlderHistoryIsUnreachableRatherThanEnded() async throws {
+        // The distinction the Bool could not carry: a network that failed is not a
+        // conversation that began. One is retryable and the other is terminal, and showing
+        // an ending over a failure tells him his history is gone.
+        let server = StubHistory(total: 500, failing: true)
+        try store.upsert(server.messages(from: 401, through: 500))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+        await model.loadEarlier()
+
+        await model.loadEarlier()
+
+        XCTAssertEqual(model.earlierMessagesState, .unreachable)
+    }
+
+    @MainActor
+    func testShouldStopApologisingOnceAReachSucceeds() async throws {
+        // `unreachable` is a report about the last attempt, not a property of the
+        // conversation. A retry that works must clear it, or he is told his history is
+        // unreachable while looking at it.
+        let flaky = FlakyHistory(total: 500)
+        try store.upsert(flaky.messages(from: 401, through: 500))
+        let model = makeModel(fetchOlderMessages: flaky.fetch)
+        await model.refresh()
+        await model.loadEarlier()
+        await model.loadEarlier()
+        XCTAssertEqual(model.earlierMessagesState, .unreachable)
+
+        await flaky.recover()
+        await model.loadEarlier()
+
+        XCTAssertEqual(model.earlierMessagesState, .idle)
+        XCTAssertNil(model.notice)
+    }
+
+    @MainActor
+    func testShouldSayNothingWhenThereIsNothingToSay() async throws {
+        // A conversation shorter than a page, on a device with no way to ask the server.
+        // An ending is a claim, and nothing has confirmed one -- so the head of the
+        // transcript shows no control at all, which is what it did before any of this.
+        try store.upsert((1...3).map { message(id: id($0), seq: $0) })
+        let model = makeModel()
+        await model.refresh()
+
+        XCTAssertNil(model.earlierMessagesState)
+    }
+
+    /// A server that fails until told otherwise.
+    actor FlakyHistory {
+        private let inner: StubHistory
+        private var healthy = false
+
+        init(total: Int) { inner = StubHistory(total: total) }
+
+        nonisolated func messages(from first: Int, through last: Int) -> [Message] {
+            inner.messages(from: first, through: last)
+        }
+
+        func recover() { healthy = true }
+
+        private func page(cursor: String?, limit: Int) async throws -> MessagePage {
+            guard healthy else { throw AttachmentFetchError.offline }
+            return try await inner.page(cursor: cursor, limit: limit)
+        }
+
+        nonisolated var fetch: @Sendable (SylID, String?, Int) async throws -> MessagePage {
+            { [self] _, cursor, limit in try await page(cursor: cursor, limit: limit) }
+        }
+    }
+
     // MARK: - The parse cache (T040)
 
     func testShouldParseAMessageOnceAndReuseIt() {
@@ -594,7 +1431,7 @@ final class ChatViewModelTests: XCTestCase {
         // transcript is empty. That can only happen if the pending message reaches
         // `pendingCount` without reaching `rows`.
         let model = makeModel()
-        model.draft = "Can you create a reminder for me in 1 minute?"
+        model.draft.text = "Can you create a reminder for me in 1 minute?"
 
         await model.send()
 
@@ -681,7 +1518,7 @@ final class ChatViewModelTests: XCTestCase {
     @MainActor
     func testShouldCallAQueuedTurnStalledOnceTheSocketIsDown() async throws {
         let model = makeModel()
-        model.draft = "Remind me at six."
+        model.draft.text = "Remind me at six."
         await model.send()
         await model.apply(.connectionState(.offline))
 
@@ -695,7 +1532,7 @@ final class ChatViewModelTests: XCTestCase {
         // A tailnet handoff is not a failure, and telling him to retry during one
         // trains him to ignore the warning that matters.
         let model = makeModel()
-        model.draft = "Remind me at six."
+        model.draft.text = "Remind me at six."
         await model.send()
         await model.apply(.connectionState(.reconnecting(attempt: 1)))
 
@@ -717,19 +1554,39 @@ final class ChatViewModelTests: XCTestCase {
 
     // MARK: - Harness
 
+    /// - Parameter limit: `nil` builds the model **exactly as `AppDelegate` does**, with
+    ///   no window argument at all. That is the only shape in which a test can say
+    ///   anything about the page size the Commander's phone actually uses; a harness
+    ///   that always passes a limit can never disagree with the production default,
+    ///   which is how a 200 sat opposite the server's 50 unnoticed.
     @MainActor
     private func makeModel(
+        store: LocalStore? = nil,
         sendOverSocket: @escaping @Sendable (String, String, String) async throws -> Void = { _, _, _ in },
         flush: @escaping @Sendable () async -> Void = {},
+        fetchOlderMessages: (@Sendable (SylID, String?, Int) async throws -> MessagePage)? = nil,
         makeClientId: @escaping @Sendable () -> String = { UUID().uuidString },
         now: @escaping @Sendable () -> Date = { try! Instant.parse("2026-08-09T06:59:48.220Z") },
-        limit: Int = 200
+        limit: Int? = nil
     ) -> ChatViewModel {
-        ChatViewModel(
+        let store = store ?? self.store!
+        if let limit {
+            return ChatViewModel(
+                store: store,
+                limit: limit,
+                sendOverSocket: sendOverSocket,
+                flush: flush,
+                fetchOlderMessages: fetchOlderMessages,
+                now: now,
+                makeClientId: makeClientId,
+                makeIdempotencyKey: { UUID().uuidString }
+            )
+        }
+        return ChatViewModel(
             store: store,
-            limit: limit,
             sendOverSocket: sendOverSocket,
             flush: flush,
+            fetchOlderMessages: fetchOlderMessages,
             now: now,
             makeClientId: makeClientId,
             makeIdempotencyKey: { UUID().uuidString }
@@ -786,6 +1643,16 @@ final class ChatViewModelTests: XCTestCase {
                 .addingTimeInterval(Double(seq) * (MessageGrouping.maximumGap + 1)),
             seq: seq
         )
+    }
+
+    /// A transcript far longer than any window that should ever be opened on it.
+    ///
+    /// Two thousand, because the assertion worth making is about the window and not
+    /// about the fixture: at 2,000 the count is wrong by a factor of forty if the read
+    /// is unbounded, and no page size anyone might reasonably choose can make an
+    /// unbounded read look bounded.
+    private func longConversation(_ count: Int = 2_000) -> [Message] {
+        (1...count).map { message(id: id($0), seq: $0) }
     }
 
     /// A distinct, well-formed message id for an index.

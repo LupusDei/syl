@@ -200,7 +200,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
                     idempotencyKey: key
                 )
             },
-            flush: { await engine.synchronise() }
+            flush: { await engine.synchronise() },
+            // The chat screen has never made an HTTP call of its own. This is the one:
+            // when he scrolls past everything this device holds, it reaches for the rest
+            // rather than showing him a floor that looks like the beginning.
+            fetchOlderMessages: ChatViewModel.liveOlderMessages(backend: backend)
         )
 
         // The other half of the delivery guarantee. `deliveredAt` only ever means APNs
