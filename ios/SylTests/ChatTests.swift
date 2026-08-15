@@ -1073,6 +1073,52 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertNil(model.notice)
     }
 
+    @MainActor
+    func testShouldNotClaimTheBeginningWhileHistorySitsOnDiskAboveTheWindow() async throws {
+        // **The interaction between the collapse and the history floor**, which neither
+        // task owns and which produces a lie if the ending is read off the floor alone.
+        //
+        // `hasWholeHistory` is window-independent by construction: it compares the
+        // confirmed floor against the oldest seq IN THE DATABASE. The collapse shrinks the
+        // rendered window and leaves every row on disk. So after paging to the true
+        // beginning and then navigating away, the floor still says "confirmed" while most
+        // of his conversation sits on disk one scroll above the window -- and a control
+        // reading only the floor would draw "the beginning" over it.
+        //
+        // The two conditions answer different questions and both must say no.
+        // `mayHaveEarlier` is about the WINDOW -- is there anything held and not shown.
+        // `hasWholeHistory` is about the SERVER -- is there anything not fetched.
+        let server = StubHistory(total: 60)
+        try store.upsert(server.messages(from: 51, through: 60))
+        let model = makeModel(fetchOlderMessages: server.fetch)
+        await model.refresh()
+        await model.loadEarlier()
+
+        // The true beginning, reached and recorded: every row on disk, window covering it.
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, 60)
+        XCTAssertFalse(model.mayReachFurtherBack, "this genuinely is the beginning")
+
+        // He leaves the screen. The window comes down; the rows do not.
+        await model.collapseTheWindow()
+
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, Self.page)
+        XCTAssertTrue(
+            model.mayReachFurtherBack,
+            """
+            Ten of his messages are on disk directly above the window and the control was \
+            about to tell him he had reached the start of his history. The floor says where \
+            the beginning IS, not that the window has reached it.
+            """
+        )
+
+        // And reaching back from there is a local read, not another request.
+        let before = await server.requestCount
+        await model.loadEarlier()
+        let after = await server.requestCount
+        XCTAssertEqual(after, before, "it is already on the device")
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.messages).count, 60)
+    }
+
     /// A server holding more of the conversation than the device does.
     ///
     /// An actor because the assertions are about **what was asked of it** -- how many
