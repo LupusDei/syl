@@ -340,31 +340,36 @@ class ChatHostedTranscriptCase: XCTestCase {
 
 /// What first paint costs, in rows (`syl-025.2.1`).
 ///
-/// The other half of the freeze, and the half no test has ever asserted.
+/// The other half of the freeze, and the half no test had ever asserted.
 /// `ChatInlineRenderCostTests` above proves a row is not re-parsed. This proves how many
-/// rows there are to parse — which is the multiplier that turned a survivable
-/// per-visible-row cost into a watchdog kill.
+/// rows there are to parse — the multiplier that turned a survivable per-visible-row cost
+/// into a watchdog kill.
 ///
-/// `.defaultScrollAnchor(.bottom)` has to know the transcript's total height to place the
-/// viewport at the foot, so the `LazyVStack` sizes **every** row in the window rather than
-/// the visible ones. `ChatView.body` then re-runs on every keystroke and every presence
-/// frame, and each re-run re-measures the lot.
+/// ## The mechanism this file used to assert, and what replaced it
 ///
-/// ## Why these assertions are shaped the way they are
+/// It said `.defaultScrollAnchor(.bottom)` must know the transcript's total height, so the
+/// `LazyVStack` sizes **every** row in the window. Measured on iOS 26.2 (2026-08-14), that
+/// is **false**: it builds a bounded region of about forty rows whether the window holds
+/// fifty or four hundred. The anchor's cost is real and it does **not** scale.
 ///
-/// A bound of "≤ 2× the page size" is what the spec asks for and it would be **useless
-/// here**: the window is now one page of 50, so 100 is satisfied by an entirely
-/// unlazy render and the test would pass while measuring nothing. The bound that
-/// distinguishes lazy from not is *strictly fewer rows than the window holds* — a screen
-/// 852 points tall cannot show fifty turns of the Commander's real prose, so anything
-/// approaching fifty is total-height measurement.
+/// ## Two assertions, and only one of them is a requirement
 ///
-/// The same trap this file already documents, in a new costume: a probe that cannot fail
-/// for the reason you care about is a probe that agrees with whatever it is handed. Both
-/// tests below are proven against a mutation.
+/// The **ratio** is the requirement, and it is the one no screen size, row height or
+/// prefetch policy can fake: if the transcript is lazy, widening the window from one page
+/// to eight changes what scrolling can reach and changes nothing about the first frame.
+///
+/// The **absolute bound is a characterisation, not a target.** It records a cost the
+/// Commander has accepted — he ruled on 2026-08-15 to keep the anchor, against the
+/// measured alternatives: positioning by identity opens 6,921 points from the newest
+/// message ten launches out of ten, and inverting the transcript reverses VoiceOver
+/// reading order. Forty rows where six are visible is the price of landing on the newest
+/// message every single time, and it is worth it.
+///
+/// So the number is deliberately tight. If it moves, someone should have to look at it and
+/// decide again rather than discover it in a profile.
 final class ChatRowLayoutCostTests: ChatHostedTranscriptCase {
 
-    func testShouldBuildOnlyTheRowsNearTheViewport() async throws {
+    func testShouldBuildABoundedRegionRatherThanTheWholeWindow() async throws {
         let model = try await longConversationModel()
         let window = present(ChatView(model: model))
         defer { dismiss(window) }
@@ -377,12 +382,13 @@ final class ChatRowLayoutCostTests: ChatHostedTranscriptCase {
         XCTAssertGreaterThan(built, 0, "no transcript row was built — the probe is measuring nothing")
         XCTAssertLessThanOrEqual(
             built,
-            ChatPaging.pageSize / 2,
+            45,
             """
-            First paint built \(built) transcript rows. A screen \(Int(Self.screen.height)) \
-            points tall shows perhaps six turns of this prose, so half a window is already \
-            far more than "at or near the viewport" (FR-005) — and every one of them is \
-            re-measured on each `ChatView.body` pass.
+            First paint built \(built) transcript rows where the accepted cost is forty. \
+            That number is a characterisation of the scroll anchor the Commander chose to \
+            keep, not a target — so a change here is not a failure to fix, it is a change \
+            to understand. Measure it, and if the anchor is still in place and the count \
+            has moved, find out what moved it before touching this line.
             """
         )
     }
