@@ -340,31 +340,36 @@ class ChatHostedTranscriptCase: XCTestCase {
 
 /// What first paint costs, in rows (`syl-025.2.1`).
 ///
-/// The other half of the freeze, and the half no test has ever asserted.
+/// The other half of the freeze, and the half no test had ever asserted.
 /// `ChatInlineRenderCostTests` above proves a row is not re-parsed. This proves how many
-/// rows there are to parse — which is the multiplier that turned a survivable
-/// per-visible-row cost into a watchdog kill.
+/// rows there are to parse — the multiplier that turned a survivable per-visible-row cost
+/// into a watchdog kill.
 ///
-/// `.defaultScrollAnchor(.bottom)` has to know the transcript's total height to place the
-/// viewport at the foot, so the `LazyVStack` sizes **every** row in the window rather than
-/// the visible ones. `ChatView.body` then re-runs on every keystroke and every presence
-/// frame, and each re-run re-measures the lot.
+/// ## The mechanism this file used to assert, and what replaced it
 ///
-/// ## Why these assertions are shaped the way they are
+/// It said `.defaultScrollAnchor(.bottom)` must know the transcript's total height, so the
+/// `LazyVStack` sizes **every** row in the window. Measured on iOS 26.2 (2026-08-14), that
+/// is **false**: it builds a bounded region of about forty rows whether the window holds
+/// fifty or four hundred. The anchor's cost is real and it does **not** scale.
 ///
-/// A bound of "≤ 2× the page size" is what the spec asks for and it would be **useless
-/// here**: the window is now one page of 50, so 100 is satisfied by an entirely
-/// unlazy render and the test would pass while measuring nothing. The bound that
-/// distinguishes lazy from not is *strictly fewer rows than the window holds* — a screen
-/// 852 points tall cannot show fifty turns of the Commander's real prose, so anything
-/// approaching fifty is total-height measurement.
+/// ## Two assertions, and only one of them is a requirement
 ///
-/// The same trap this file already documents, in a new costume: a probe that cannot fail
-/// for the reason you care about is a probe that agrees with whatever it is handed. Both
-/// tests below are proven against a mutation.
+/// The **ratio** is the requirement, and it is the one no screen size, row height or
+/// prefetch policy can fake: if the transcript is lazy, widening the window from one page
+/// to eight changes what scrolling can reach and changes nothing about the first frame.
+///
+/// The **absolute bound is a characterisation, not a target.** It records a cost the
+/// Commander has accepted — he ruled on 2026-08-15 to keep the anchor, against the
+/// measured alternatives: positioning by identity opens 6,921 points from the newest
+/// message ten launches out of ten, and inverting the transcript reverses VoiceOver
+/// reading order. Forty rows where six are visible is the price of landing on the newest
+/// message every single time, and it is worth it.
+///
+/// So the number is deliberately tight. If it moves, someone should have to look at it and
+/// decide again rather than discover it in a profile.
 final class ChatRowLayoutCostTests: ChatHostedTranscriptCase {
 
-    func testShouldBuildOnlyTheRowsNearTheViewport() async throws {
+    func testShouldBuildABoundedRegionRatherThanTheWholeWindow() async throws {
         let model = try await longConversationModel()
         let window = present(ChatView(model: model))
         defer { dismiss(window) }
@@ -377,12 +382,13 @@ final class ChatRowLayoutCostTests: ChatHostedTranscriptCase {
         XCTAssertGreaterThan(built, 0, "no transcript row was built — the probe is measuring nothing")
         XCTAssertLessThanOrEqual(
             built,
-            ChatPaging.pageSize / 2,
+            45,
             """
-            First paint built \(built) transcript rows. A screen \(Int(Self.screen.height)) \
-            points tall shows perhaps six turns of this prose, so half a window is already \
-            far more than "at or near the viewport" (FR-005) — and every one of them is \
-            re-measured on each `ChatView.body` pass.
+            First paint built \(built) transcript rows where the accepted cost is forty. \
+            That number is a characterisation of the scroll anchor the Commander chose to \
+            keep, not a target — so a change here is not a failure to fix, it is a change \
+            to understand. Measure it, and if the anchor is still in place and the count \
+            has moved, find out what moved it before touching this line.
             """
         )
     }
@@ -777,3 +783,204 @@ final class ChatReachingBackTests: ChatHostedTranscriptCase {
     }
 }
 
+
+/// Photographs of the real transcript, for a human to look at (`syl-025.2.7`).
+///
+/// **Every claim in this epic is backed by a counter and none by anyone having seen the
+/// screen.** That gap is what let a four-state control ship wired to a Bool: the states
+/// were correct, tested, mutation-proven, and two of them could not occur.
+///
+/// This is not the shipped app end-to-end — the pairing gate needs a Keychain token, and
+/// the only live service is the Commander's own. It IS the production `ChatView`, hosted
+/// in a real `UIWindow`, laid out by real geometry, scrolled through a real `UIScrollView`,
+/// rendering the real four states. What it cannot show is a finger.
+///
+/// Opt-in, like `ChatSnapshotRendering`, and it only ever produces images.
+@MainActor
+final class ChatScreenPhotographs: ChatHostedTranscriptCase {
+    private var enabled: Bool {
+        ProcessInfo.processInfo.environment["SYL_RENDER_SNAPSHOTS"] != nil
+    }
+
+    func testPhotographTheAcceptanceWalk() async throws {
+        try XCTSkipUnless(enabled, "set SYL_RENDER_SNAPSHOTS=1 to produce screen images")
+        let directory = try XCTUnwrap(
+            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        ).appendingPathComponent("chat-screens", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        print("SYL_SCREENS_AT \(directory.path)")
+
+        // US1 — opening the chat on a long conversation.
+        let model = try await longConversationModel()
+        let window = present(ChatView(model: model))
+        defer { dismiss(window) }
+        await settle(window, passes: 25)
+        try shoot(window, "01-first-paint", into: directory)
+
+        let scroll = try XCTUnwrap(transcriptScrollView(in: window))
+
+        // US2 — at the top of the loaded range, before the page arrives.
+        await walkToTheTop(scroll, window)
+        await settle(window, passes: 3)
+        try shoot(window, "02-at-the-top-before", into: directory)
+
+        // …and after. The pair is the jump, or the absence of one.
+        await settle(window, passes: 60)
+        try shoot(window, "03-at-the-top-after-a-page", into: directory)
+
+        // US3 — the true beginning, which nobody has ever seen.
+        let short = StubHistory(total: 60)
+        let beginningModel = try await modelOver(short, holding: 51...60)
+        let beginningWindow = present(ChatView(model: beginningModel))
+        defer { dismiss(beginningWindow) }
+        await settle(beginningWindow, passes: 25)
+        await beginningModel.loadEarlier()
+        await settle(beginningWindow, passes: 40)
+        let atTop = try XCTUnwrap(transcriptScrollView(in: beginningWindow))
+        await walkToTheTop(atTop, beginningWindow)
+        await settle(beginningWindow, passes: 10)
+        XCTAssertEqual(beginningModel.earlierMessagesState, .beginning)
+        try shoot(beginningWindow, "04-the-beginning", into: directory)
+        // The same frame with the scroll view's top-fade mask out of the path, to tell a
+        // control that draws nothing from one the mask is hiding.
+        if let content = atTop.subviews.first {
+            let unmasked = UIGraphicsImageRenderer(bounds: CGRect(x: 0, y: 0, width: 393, height: 300)).image { context in
+                content.layer.render(in: context.cgContext)
+            }
+            try XCTUnwrap(unmasked.pngData())
+                .write(to: directory.appendingPathComponent("04b-beginning-unmasked.png"))
+        }
+
+        // US3 — offline, which must be tellable from the beginning at a glance.
+        let offline = StubHistory(total: 500, failing: true)
+        let offlineModel = try await modelOver(offline, holding: 451...500)
+        let offlineWindow = present(ChatView(model: offlineModel))
+        defer { dismiss(offlineWindow) }
+        await settle(offlineWindow, passes: 25)
+        await offlineModel.loadEarlier()
+        await offlineModel.loadEarlier()
+        await settle(offlineWindow, passes: 20)
+        let offlineScroll = try XCTUnwrap(transcriptScrollView(in: offlineWindow))
+        await walkToTheTop(offlineScroll, offlineWindow)
+        await settle(offlineWindow, passes: 10)
+        XCTAssertEqual(offlineModel.earlierMessagesState, .unreachable)
+        try shoot(offlineWindow, "05-unreachable", into: directory)
+    }
+
+    /// The four states side by side, isolated from the transcript.
+    ///
+    /// The acceptance walk shows where the control sits; this shows what it IS. Question
+    /// four of the walk -- can `beginning` be told from `unreachable` AT A GLANCE -- is a
+    /// question about the control alone, and photographing it inside a scroll view mixes
+    /// it up with masks, offsets and whatever happens to be above it.
+    func testPhotographTheFourStates() throws {
+        try XCTSkipUnless(enabled, "set SYL_RENDER_SNAPSHOTS=1 to produce screen images")
+        let directory = try XCTUnwrap(
+            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        ).appendingPathComponent("chat-screens", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let stack = VStack(spacing: 24) {
+            ForEach(EarlierMessagesState.allCases, id: \.self) { state in
+                VStack(spacing: 4) {
+                    Text(String(describing: state))
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.red)
+                    EarlierMessages(state: state) {}
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 393)
+        .background(SylTheme.Colour.veil)
+
+        let controller = UIHostingController(rootView: stack)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 560))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { context in
+            window.layer.render(in: context.cgContext)
+        }
+        try XCTUnwrap(image.pngData()).write(to: directory.appendingPathComponent("06-four-states.png"))
+        window.isHidden = true
+        window.rootViewController = nil
+    }
+
+    /// The true top of the content, which is NOT offset zero.
+    ///
+    /// The scroll view carries a top inset, so `setContentOffset(.zero)` comes to rest a
+    /// full inset BELOW the first row -- and the head of the transcript sits in the gap,
+    /// off-screen. The first version of these photographs did exactly that and produced a
+    /// blank band where the divider should have been, which reads as a missing control.
+    private func scrollToTheTop(_ scroll: UIScrollView) {
+        scroll.setContentOffset(CGPoint(x: 0, y: -scroll.adjustedContentInset.top), animated: false)
+    }
+
+    /// Walk to the top the way a finger does, rather than teleporting.
+    ///
+    /// **A `LazyVStack` does not have a content height; it has the height of what it has
+    /// built.** On a sixty-message conversation the scroll view reported 862 points
+    /// against a 696-point viewport — a scrollable range of 166 — because only about ten
+    /// rows existed in the layout at all. So a single large step clamps to the top
+    /// immediately and the walk is a teleport wearing a disguise, which is exactly the
+    /// mistake this helper replaced.
+    ///
+    /// Reaching the beginning therefore means going up a little, letting rows come into
+    /// being, and going again — because each realisation is what creates the space above
+    /// to scroll into. The loop stops when neither the offset nor the content will move.
+    private func walkToTheTop(_ scroll: UIScrollView, _ window: UIWindow, step: CGFloat = 120) async {
+        var lastContent: CGFloat = -1
+        var guardRail = 0
+        while guardRail < 400 {
+            let floor = -scroll.adjustedContentInset.top
+            let settled = scroll.contentOffset.y <= floor + 0.5
+                && scroll.contentSize.height == lastContent
+            if settled { return }
+            lastContent = scroll.contentSize.height
+            scroll.setContentOffset(
+                CGPoint(x: 0, y: max(floor, scroll.contentOffset.y - step)),
+                animated: false
+            )
+            window.layoutIfNeeded()
+            try? await Task.sleep(for: .milliseconds(10))
+            guardRail += 1
+        }
+    }
+
+    /// What the scroll view thinks it holds, for a report that needs numbers.
+    fileprivate func geometry(_ scroll: UIScrollView) -> String {
+        "offset=\(Int(scroll.contentOffset.y)) content=\(Int(scroll.contentSize.height)) bounds=\(Int(scroll.bounds.height))"
+    }
+
+    private func modelOver(
+        _ server: StubHistory,
+        holding range: ClosedRange<Int>
+    ) async throws -> ChatViewModel {
+        let database = try SylDatabase.inMemory()
+        let store = LocalStore(database: database)
+        try store.upsert(server.messages(from: range.lowerBound, through: range.upperBound))
+        let model = ChatViewModel(
+            store: store,
+            fetchOlderMessages: server.fetch,
+            now: { try! Instant.parse("2026-08-09T07:00:03.114Z") }
+        )
+        await model.refresh()
+        return model
+    }
+
+    private func shoot(_ window: UIWindow, _ name: String, into directory: URL) throws {
+        // `drawHierarchy(afterScreenUpdates:)` needs the window to be part of an on-screen
+        // render pass and comes back white from a test host. The layer tree is present
+        // either way.
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { context in
+            window.layer.render(in: context.cgContext)
+        }
+        let data = try XCTUnwrap(image.pngData())
+        try data.write(to: directory.appendingPathComponent("\(name).png"))
+    }
+}
+
+/// The stub server, shared with `ChatViewModelTests`.
+typealias StubHistory = ChatViewModelTests.StubHistory
