@@ -8,6 +8,17 @@ import SylKit
 @MainActor
 final class HomeViewModel: ObservableObject {
     @Published private(set) var snapshot = HomeSnapshot()
+
+    /// Why the day could not be read, when it could not be read.
+    ///
+    /// `nil` means the last read succeeded — which is the ONLY circumstance under which
+    /// an empty spine may be reported as a clear day. `syl-019`: these were one state
+    /// for the life of the screen, and the screen chose the comforting reading.
+    ///
+    /// It holds the error's own text rather than a tidy enum on purpose. A tidy enum is
+    /// a claim that the failure modes are already known, and the reason this property
+    /// exists is that they are not.
+    @Published private(set) var loadFailure: String?
     @Published private(set) var presence: PresenceState = .absent
     @Published private(set) var intensity: Double = 0
     @Published private(set) var now: Date = Date()
@@ -107,12 +118,35 @@ final class HomeViewModel: ObservableObject {
         let instant = clock()
         let loader = HomeSnapshotLoader(store: store, now: instant)
 
-        let loaded = await Task.detached(priority: .userInitiated) { () -> HomeSnapshot? in
-            try? loader.load()
+        // `try?` used to stand here, and it is the whole of `syl-019`. It discarded the
+        // error, the guard below returned, and `snapshot` KEPT ITS DEFAULT — an empty
+        // day, which `HomeView` renders as "The day is clear. Nothing needs you."
+        //
+        // So a read that failed and a day with nothing in it were the same screen, and
+        // the failure was the more reassuring of the two. He had eight things due.
+        //
+        // The error is carried out rather than merely counted, because the cause is
+        // still unknown and this screen is now the only instrument that can name it:
+        // it is the one place the failing read actually happens, on the device, against
+        // his data. Anything less than the message itself and the next person is back
+        // to guessing from the shore.
+        let outcome = await Task.detached(priority: .userInitiated) {
+            () -> (snapshot: HomeSnapshot?, failure: String?) in
+            do {
+                return (try loader.load(), nil)
+            } catch {
+                return (nil, String(describing: error))
+            }
         }.value
 
-        guard let loaded else { return }
+        guard let loaded = outcome.snapshot else {
+            // Keep whatever was last shown. A spine that empties itself on a transient
+            // failure would be the same lie in a slower form.
+            loadFailure = outcome.failure ?? "The day would not load, and said nothing about why."
+            return
+        }
 
+        loadFailure = nil
         now = instant
         // Refusals are re-applied rather than dropped. The spine rebuilds itself every
         // minute; a refusal a scheduled refresh erased would be a message he might never

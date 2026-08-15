@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { LANES } from "../../src/harness/agent.js";
+import { LANES, LANES_WITH_HANDS } from "../../src/harness/agent.js";
 import type { TurnOptions, TurnRunner } from "../../src/harness/session.js";
 import { bootstrap, sylHome } from "../../src/index.js";
 import { ContainerViolationError, describeContainer } from "../../src/ops/container.js";
@@ -41,14 +41,14 @@ afterEach(() => {
  *
  * `Record` over the lane names on purpose: adding a lane to `LANES` does not
  * compile until it has an entry here, so a new place Syl thinks from cannot
- * inherit a decision nobody made. That is exactly how the heartbeat and the
- * agenda ended up waking her in the source repository.
+ * inherit a decision nobody made. That is exactly how her unattended turns
+ * ended up waking her in the source repository, back when they had lanes.
  *
  * Every lane was `undefined` and one of them no longer is. `syl-009.3.3` gives
  * her hands as a **narrow, named** MCP surface (`remind_me`, not `Bash`): she
- * loses the engineer's built-ins and gains an assistant's verbs. The lane that
- * gets it changed its entry here, in one visible line, and every other lane
- * still fails if a surface appears.
+ * loses the engineer's built-ins and gains an assistant's verbs. Each lane that
+ * gets it changed its entry here, in one visible line with a reason attached,
+ * and every other lane still fails if a surface appears.
  *
  * A function of her home rather than a literal path, because the whole claim is
  * that the declaration lives **under her home** — a constant would have to be
@@ -60,12 +60,26 @@ afterEach(() => {
 const INTENDED_MCP: Readonly<
   Record<(typeof LANES)[keyof typeof LANES], ((home: string) => string) | undefined>
 > = {
-  // HER HANDS. The Commander's own conversation, and no other lane: the dream
-  // must not be able to write a reminder while judging what matters, and the
-  // heartbeat and agenda read rather than act.
+  // HER HANDS. The Commander's own conversation — and, since his ruling of
+  // 2026-08-11, every turn she takes with nobody watching: the hourly
+  // self-ping, the render review and the morning brief all resume this session
+  // rather than each holding a thread of its own.
+  //
+  // This entry used to be four, and the other three did not lose their hands;
+  // they stopped being lanes. Each was argued for separately and every argument
+  // was the same one — an unattended turn that could only think would judge
+  // something and then have no way to act on the judgement, and there is nobody
+  // to report to at 14:00 on a Tuesday.
+  //
+  // What keeps the surface narrow has never lived here, which is why the merge
+  // did not loosen it: one turn per wake, a daily reaching-him ceiling counted
+  // across every job that can reach him, a bounded number of wakes per render —
+  // and, for his sleep, `AskOptions.hisWords`, which no unattended turn sets on
+  // any lane. That last one WAS a property of the lanes being distinct, and
+  // re-keying it is what stopped the merge repealing it in silence.
   commander: toolConfigPath,
-  heartbeat: undefined,
-  agenda: undefined,
+  // Still nothing: the dream must not be able to write a reminder while judging
+  // what matters.
   consolidation: undefined,
   // The extraction turn reads a conversation, and a conversation is untrusted
   // the moment he pastes an article into it. It is a READER turn — no built-ins
@@ -73,6 +87,13 @@ const INTENDED_MCP: Readonly<
   // lanes: a reader's output is consumed once, but an extracted fact becomes
   // preamble on every later turn. This entry must never become a path.
   extraction: undefined,
+  // Digestion is extraction's sibling and reads the same untrusted prose one
+  // remove further on — node bodies written from a transcript he may have
+  // pasted into. It is a READER turn for the same reason, and it has a stronger
+  // claim on staying one than extraction does: a wrong fact is one attributable
+  // node, while a wrong EDGE changes how every later retrieval traverses the
+  // graph. This entry must never become a path either.
+  digestion: undefined,
 };
 
 describe("bootstrap — the container", () => {
@@ -294,15 +315,25 @@ describe("describeContainer", () => {
     expect(describeContainer(HOME, HANDS)[0]).toContain(HANDS);
   });
 
-  it("should say the surface is one lane and not the whole service", () => {
-    // "no MCP" and "MCP on one lane of five" are different security postures,
+  it("should name every lane that has a surface, and no lane that does not", () => {
+    // "no MCP" and "MCP on one lane of three" are different security postures,
     // and so are "MCP on one lane" and "MCP". Somebody debugging why she did
     // something reads this line to decide whether she could have; a notice that
     // reported the service as tooled would send them looking in the wrong
     // place just as surely as one that reported it as untooled.
+    //
+    // Derived from `LANES_WITH_HANDS` rather than naming today's entries,
+    // because the failure worth catching is the notice that did not move when
+    // the list did — which is what happened when the heartbeat was given hands
+    // and the line went on saying "the commander lane ONLY and no other", and
+    // would have happened again in reverse when the list shrank back to one.
     const [line] = describeContainer(HOME, HANDS);
 
-    expect(line).toContain(LANES.commander);
+    for (const lane of LANES_WITH_HANDS) expect(line).toContain(lane);
+    for (const lane of Object.values(LANES)) {
+      if (LANES_WITH_HANDS.includes(lane)) continue;
+      expect(line, `${lane} has no hands and must not be named as if it had`).not.toContain(lane);
+    }
     expect(line).toMatch(/lane/i);
   });
 

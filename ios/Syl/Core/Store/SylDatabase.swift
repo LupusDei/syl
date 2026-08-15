@@ -316,6 +316,89 @@ struct SylDatabase: Sendable {
             }
         }
 
+        // `syl-015.4.2`. What she sent him, kept.
+        migrator.registerMigration("v6-a-sending-is-kept-not-cached") { db in
+            // **Rows, not one snapshot — and the constellation's reasoning is why.**
+            //
+            // The sky is stored whole because it is a bounded REGION whose membership
+            // changes silently: a star that drops out produces no event, so an upsert
+            // would grow a local sky the server would never draw. None of that is true
+            // here. A sending is an immutable row with a server id that is created and
+            // then only ever completed — `video`, `state`, `reason` filled in when the
+            // render lands — and one that is not on the newest page has not left any
+            // region, it is simply older.
+            //
+            // **So nothing on this device deletes one either.** Acceptance item 6 is a
+            // property of the whole system rather than of the service's triggers, and a
+            // store that mirrored a page by removing what the page did not mention
+            // would throw away the oldest thing she gave him every time she sent a new
+            // one. Rows are written and replaced by id; there is no path here that
+            // removes one, and `LocalStore.tableName(for:)` answers nil for `.sending`
+            // so the sync feed's delete path has no table to reach either.
+            try db.create(table: "sending") { table in
+                table.primaryKey("id", .text).collate(.nocase)
+                // The list's whole order, and the service's own: newest first, ties
+                // broken on the id. Indexed because it is the only query this table has.
+                table.column("createdAt", .datetime).notNull()
+                // `pending` is the one state that has to be found again cheaply: the
+                // video lands minutes later and the device learns of it by asking.
+                table.column("state", .text).notNull()
+                table.column("payload", .blob).notNull()
+            }
+            try db.create(
+                index: "sending_on_createdAt",
+                on: "sending",
+                columns: ["createdAt"]
+            )
+        }
+
+        // `syl-020`. The same recovery goals needed, for the same reason, arrived at by
+        // a different road — see ``SyncEngine/backfillTodos(into:)``.
+        //
+        // Goals were skipped because `.goal` sat in an ignore list. To-dos were never
+        // ignored; they were STARVED. The change feed is 97.9% `job` and `run` rows the
+        // device discards, growing by thousands an hour against a phone that pages 500
+        // changes a run — so the cursor crawls through telemetry and his 23 to-dos sit
+        // behind tens of thousands of rows it never reaches. Filtering the feed fixes
+        // that from now on and, exactly as with goals, cannot recover what the cursor
+        // has already passed.
+        migrator.registerMigration("v7-the-todos-the-cursor-never-reached") { db in
+            try db.alter(table: "syncState") { table in
+                table.add(column: "todosBackfilledAt", .datetime)
+            }
+        }
+
+        // `syl-025.4.2`. Where a conversation BEGINS, once the server has said so.
+        //
+        // The device cannot tell two states apart without this, and they need opposite
+        // behaviour: *we have not looked past what we hold* and *there is nothing older
+        // than what we hold*. Both present as "the local window has run out", so without
+        // a marker every relaunch re-walks the whole history on the first upward scroll,
+        // and the true beginning of a conversation is indistinguishable from an
+        // exhausted local page — which is exactly the distinction the terminal state of
+        // the earlier control rests on. A control that spins forever at the true
+        // beginning is the most likely way this feature reads as broken while working.
+        //
+        // **A row's EXISTENCE is the confirmation**; its absence means nobody has asked.
+        // That is why this is a table rather than a nullable column on `conversation`:
+        // a column would make "never asked" and "asked, answered zero" the same NULL,
+        // which is the one distinction being bought here.
+        //
+        // Keyed by conversation and independent of the `conversation` row, so a floor
+        // can be recorded for a thread whose own row has not been synced yet. `.nocase`
+        // to match every other id column in this schema — ids are hex and either case
+        // is valid, and a case-sensitive join here would silently fail to find the row.
+        migrator.registerMigration("v8-where-a-conversation-begins") { db in
+            try db.create(table: "conversationHistory") { table in
+                table.primaryKey("conversationId", .text).collate(.nocase)
+                // The lowest seq the server has confirmed exists. Never 0: a pending
+                // row carries seq 0 and has no position in the conversation yet, so it
+                // can never be the beginning of one.
+                table.column("floorSeq", .integer).notNull()
+                table.column("confirmedAt", .datetime).notNull()
+            }
+        }
+
         return migrator
     }
 

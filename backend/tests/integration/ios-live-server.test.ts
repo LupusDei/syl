@@ -25,7 +25,7 @@ import { startLiveService, type LiveService } from "../helpers/live-service.js";
  * gate can skip it, and for no other reason.
  *
  * ```sh
- * SYL_IOS_LIVE=1 npx vitest run backend/tests/integration/ios-live-server.test.ts
+ * SYL_IOS_LIVE=1 npx vitest run --config vitest.heavy.config.ts backend/tests/integration/ios-live-server.test.ts
  * ```
  *
  * **Where it actually runs** (`syl-e4f`; for a year it ran nowhere at all, and
@@ -90,6 +90,13 @@ itself and reports success having checked nothing.`,
     expect(runnable, `${path} no longer names this suite`).toContain(
       "ios-live-server.test.ts",
     );
+    expect(
+      runnable,
+      `${path} runs this file without --config vitest.heavy.config.ts. The suite runs in
+two passes and the ROOT config EXCLUDES tests/integration/, so a bare
+\`vitest run <this path>\` matches no files — which is the same nothing-ran
+failure syl-e4f was, arriving by a different door.`,
+    ).toContain("vitest.heavy.config.ts");
   });
 
   it("should be reachable from a workflow that watches the backend", () => {

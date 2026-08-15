@@ -71,9 +71,11 @@ describe("quietHoursFromEnv", () => {
   });
 
   it("should take an override", () => {
+    // Deliberately unlike the default in every field: an override test whose
+    // values happen to equal the default passes whether or not it overrides.
     expect(
-      quietHoursFromEnv({ SYL_QUIET_START: "23:00", SYL_QUIET_END: "07:00", SYL_TZ: "Europe/Berlin" }),
-    ).toEqual({ quiet: { start: "23:00", end: "07:00" }, tz: "Europe/Berlin" });
+      quietHoursFromEnv({ SYL_QUIET_START: "21:30", SYL_QUIET_END: "06:15", SYL_TZ: "Europe/Berlin" }),
+    ).toEqual({ quiet: { start: "21:30", end: "06:15" }, tz: "Europe/Berlin" });
   });
 
   it("should store an IANA zone rather than an offset", () => {

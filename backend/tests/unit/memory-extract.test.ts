@@ -13,12 +13,17 @@ import {
   MAX_BODY_CHARS,
   MAX_EXTRACTED_FACTS,
   MAX_LABEL_CHARS,
+  MAX_WHY_CHARS,
   renderTranscript,
   runExtractionTurn,
   transcriptDigest,
   type TranscriptMessage,
 } from "../../src/memory/extract.js";
-import { MEMORY_NODE_KINDS } from "../../src/memory/schema.js";
+import {
+  ENTITY_NODE_KINDS,
+  isEntityNodeKind,
+  MEMORY_NODE_KINDS,
+} from "../../src/memory/schema.js";
 import {
   flagValue,
   loadFixture,
@@ -49,7 +54,15 @@ const TRANSCRIPT: readonly TranscriptMessage[] = [
 ];
 
 function fact(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return { kind: "person", label: "Vivenna", body: "The Commander's daughter.", saidIn: 1, ...over };
+  return {
+    kind: "person",
+    label: "Vivenna",
+    body: "The Commander's daughter.",
+    saidIn: 1,
+    about: null,
+    why: "He called her his daughter outright.",
+    ...over,
+  };
 }
 
 function reply(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -94,10 +107,17 @@ describe("the closed vocabulary", () => {
 });
 
 describe("asExtraction", () => {
-  it("should accept the contract and return exactly the four fields per fact", () => {
+  it("should accept the contract and return exactly the six fields per fact", () => {
     const extraction = asExtraction(reply({ facts: [fact()] }), TRANSCRIPT);
     expect(extraction.facts).toEqual([
-      { kind: "person", label: "Vivenna", body: "The Commander's daughter.", saidIn: 1 },
+      {
+        kind: "person",
+        label: "Vivenna",
+        body: "The Commander's daughter.",
+        saidIn: 1,
+        about: null,
+        why: "He called her his daughter outright.",
+      },
     ]);
     expect(extraction.instructionsFound).toEqual([]);
   });
@@ -189,6 +209,129 @@ describe("asExtraction", () => {
   });
 });
 
+// ------------------------------------------------- syl-016.4: what a kind is ---
+
+/** The bug in one reply: Ela's entry is what she wants, not who she is. */
+const ELA = { kind: "person", label: "Ela", body: "The Commander's sister.", saidIn: 1 };
+
+describe("`about`, so a person's entry can stay about the person", () => {
+  it("should let a fact name the entity it is a claim about", () => {
+    // The shape syl-016.4 asks for: Ela is a person, and what she wants is a
+    // fact linked to her — not a body stuffed into her person node.
+    const facts = [
+      fact(ELA),
+      fact({
+        kind: "fact",
+        label: "Ela's apartment search",
+        body: "Ela wants an apartment near her parents.",
+        about: 1,
+      }),
+    ];
+    const extraction = asExtraction(reply({ facts }), TRANSCRIPT);
+    expect(extraction.facts[0]?.about).toBeNull();
+    expect(extraction.facts[1]?.about).toBe(1);
+  });
+
+  it("should refuse a claim about another claim", () => {
+    // `about` attaches a fact to the thing it concerns. A general edge-drawing
+    // verb is a different and much larger authority to hand a turn that reads
+    // attacker-influenceable text.
+    const facts = [
+      fact({ kind: "fact", label: "The move", body: "He is moving in October." }),
+      fact({ kind: "fact", label: "The lease", body: "The lease ends in October.", about: 1 }),
+    ];
+    expect(() => asExtraction(reply({ facts }), TRANSCRIPT)).toThrow(/claim about a claim/);
+  });
+
+  it("should only allow entity kinds as the target, and `fact` is the one that is not", () => {
+    expect(isEntityNodeKind("fact")).toBe(false);
+    for (const kind of ENTITY_NODE_KINDS) {
+      const facts = [fact({ kind, label: `A ${kind}` }), fact({ kind: "fact", about: 1 })];
+      expect(asExtraction(reply({ facts }), TRANSCRIPT).facts[1]?.about).toBe(1);
+    }
+  });
+
+  it("should refuse an ordinal that addresses nothing in the reply", () => {
+    // The point of an ordinal into the REPLY rather than a node id: it cannot
+    // reach anything that existed before this turn ran.
+    expect(() => asExtraction(reply({ facts: [fact(ELA), fact({ about: 9 })] }), TRANSCRIPT)).toThrow(
+      /2 entr/,
+    );
+  });
+
+  it("should refuse an entry that is about itself", () => {
+    expect(() => asExtraction(reply({ facts: [fact({ about: 1 })] }), TRANSCRIPT)).toThrow(
+      /itself/,
+    );
+  });
+
+  it("should refuse a missing `about` rather than reading it as null", () => {
+    // Absent and "stands on its own" must not be the same value. A dropped key
+    // would then be indistinguishable from a decision.
+    const { about: _dropped, ...withoutAbout } = fact();
+    expect(() => asExtraction(reply({ facts: [withoutAbout] }), TRANSCRIPT)).toThrow(/about/);
+  });
+
+  it("should leave room for the split shape it now demands", () => {
+    // The cap counts ENTRIES, and syl-016.4 turned one entry into two. Three
+    // people with a fact each is an ordinary exchange, and crossing the cap
+    // costs the whole extraction rather than the last entry.
+    const facts = ["Ela", "Vivenna", "Nightblood"].flatMap((name, index) => [
+      fact({ kind: "person", label: name, body: `${name}, in his world.` }),
+      fact({ kind: "fact", label: `${name}'s plans`, about: index * 2 + 1 }),
+    ]);
+    expect(facts).toHaveLength(6);
+    expect(asExtraction(reply({ facts }), TRANSCRIPT).facts).toHaveLength(6);
+  });
+
+  it("should refuse an `about` that is not a whole number", () => {
+    expect(() => asExtraction(reply({ facts: [fact({ about: "1" })] }), TRANSCRIPT)).toThrow(
+      /whole number or null/,
+    );
+    expect(() =>
+      asExtraction(reply({ facts: [fact(ELA), fact({ about: 1.5 })] }), TRANSCRIPT),
+    ).toThrow(/whole number or null/);
+  });
+});
+
+// --------------------------------------- syl-016.5: the step, not the residue ---
+
+describe("`why`, the one thing here that cannot be derived", () => {
+  it("should require the step from his words to the fact", () => {
+    // syl-y82 one layer down: `remind_me` REQUIRED a reason and then dropped
+    // it. Required here, and `extract-apply.ts` keeps it.
+    const { why: _dropped, ...withoutWhy } = fact();
+    expect(() => asExtraction(reply({ facts: [withoutWhy] }), TRANSCRIPT)).toThrow(/why/);
+    expect(() => asExtraction(reply({ facts: [fact({ why: "   " })] }), TRANSCRIPT)).toThrow(
+      /blank/,
+    );
+  });
+
+  it("should refuse an over-long reason rather than truncating it", () => {
+    expect(() =>
+      asExtraction(reply({ facts: [fact({ why: "x".repeat(MAX_WHY_CHARS + 1) })] }), TRANSCRIPT),
+    ).toThrow(/over the/);
+  });
+
+  it("should NOT ask the turn for his words — a quote it supplies is a claim, not evidence", () => {
+    // The asymmetry syl-y82 settled. `quote` is derived by `extract-apply.ts`
+    // from the transcript it already holds; a field here would let the turn
+    // hand back a plausible near-miss of what he said, filed as the evidence
+    // the reasoning is supposed to be checked against.
+    expect(() => asExtraction(reply({ facts: [fact({ quote: "made it up" })] }), TRANSCRIPT)).toThrow(
+      /quote/,
+    );
+  });
+
+  it("should still carry no confidence, so extraction cannot file an inference", () => {
+    // `why` is an annotation on an observation. An inference carries CONFIDENCE
+    // and decays on a timer, and that field is still absent.
+    expect(() =>
+      asExtraction(reply({ facts: [fact({ confidence: 0.9 })] }), TRANSCRIPT),
+    ).toThrow(/confidence/);
+  });
+});
+
 describe("renderTranscript", () => {
   it("should number every message so `saidIn` addresses exactly one of them", () => {
     const rendered = renderTranscript(TRANSCRIPT);
@@ -237,6 +380,52 @@ describe("the instruction handed to the turn", () => {
   it("should name every kind it is allowed to use, so the closed vocabulary is reachable", () => {
     for (const kind of EXTRACTABLE_KINDS) expect(EXTRACTION_INSTRUCTION).toContain(kind);
     expect(EXTRACTION_INSTRUCTION).not.toContain("subjectId");
+  });
+
+  it("should state that a kind says what a thing IS, and show the case she reported", () => {
+    // Her words: "Ela's entry isn't who she is, it's the fact that she wants an
+    // apartment near her parents." The rule cannot be validated — whether a
+    // body is who someone is or what they want is the judgment the turn is
+    // being paid for — so the instruction has to carry it, with the example.
+    expect(EXTRACTION_INSTRUCTION).toContain("THE KIND SAYS WHAT A THING IS");
+    expect(EXTRACTION_INSTRUCTION).toContain("Ela");
+    expect(EXTRACTION_INSTRUCTION).toContain("apartment near her parents");
+  });
+
+  it("should tell it that a claim may only be about an entity, and name them", () => {
+    for (const kind of ENTITY_NODE_KINDS) expect(EXTRACTION_INSTRUCTION).toContain(kind);
+    expect(EXTRACTION_INSTRUCTION).toContain("may not point at a fact");
+  });
+
+  it("should show the place case Syl reported, with the state she said was missing", () => {
+    // Her words: "Illinois still doesn't exist as a node. The memories say 'the
+    // state' and 'the old state' and never name it." The defect was that a
+    // place could only be filed as a fact with the word inside its label, so
+    // the instruction has to show the shape that replaces it — the place, and
+    // the claims pointed at it.
+    expect(EXTRACTION_INSTRUCTION).toContain("A PLACE IS A THING");
+    expect(EXTRACTION_INSTRUCTION).toContain("Illinois");
+    expect(EXTRACTION_INSTRUCTION).toContain("kind: place");
+  });
+
+  it("should forbid naming a place nothing in the reply is about", () => {
+    // The judgment half of the over-minting guard. The structural half is in
+    // `extract-apply.ts`, which records nothing for a place with no claim
+    // waiting on it; this is the half that stops it being proposed at all.
+    expect(EXTRACTION_INSTRUCTION).toContain("NEVER name a place");
+  });
+
+  it("should ask for the STEP from his words, and say what to do when there is none", () => {
+    // A required field that is never used is what syl-y82 was; a required field
+    // with no standing order about the empty case is how it becomes a
+    // formality. "If you cannot write the step down, do not file the entry."
+    expect(EXTRACTION_INSTRUCTION).toContain("how you got from what he SAID");
+    expect(EXTRACTION_INSTRUCTION).toContain("do not file the entry at all");
+  });
+
+  it("should never ask the turn for his words, because those are derived", () => {
+    expect(EXTRACTION_INSTRUCTION).toContain('"why"');
+    expect(EXTRACTION_INSTRUCTION).not.toContain('"quote"');
   });
 });
 

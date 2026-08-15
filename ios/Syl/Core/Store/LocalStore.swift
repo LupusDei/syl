@@ -57,6 +57,147 @@ struct LocalStore: Sendable {
         }
     }
 
+    /// One page of history strictly OLDER than `seq`, oldest-first (`syl-025.4.2`).
+    ///
+    /// `messages(conversationId:limit:)` above takes the newest page and is what a cold
+    /// launch renders. This is how the Commander reaches back past it: hand it the
+    /// oldest seq on screen and it returns the page immediately before that.
+    ///
+    /// **Which end this comes from is the whole question, and getting it wrong is
+    /// silent.** The page wanted is the one *adjacent* to the cursor — the newest rows
+    /// among those older than it — so this orders `seq DESC`, takes `limit`, and
+    /// reverses into reading order. Ordering ascending would return the oldest rows in
+    /// the entire conversation instead, which under a short history is the identical
+    /// result and past it means every "load earlier" hands back the same first page
+    /// forever. That is the defect recorded above `messages(conversationId:limit:)`,
+    /// which was found the expensive way; this is the same mistake one query along.
+    ///
+    /// **`seq > 0` is not tidiness, it is correctness.** An optimistic row carries seq 0
+    /// until the server gives it a position, so it satisfies `seq < ?` for *every*
+    /// cursor. Without the guard the message he just typed would be dragged into every
+    /// page he loads while still sitting at the foot of the transcript — the same bubble
+    /// rendered twice, once where he sent it and once at the top of history, and again
+    /// on each further page.
+    ///
+    /// Ordering is by `seq` alone rather than by `createdAt` as the head read does,
+    /// because the cursor is a seq and a page must be contiguous in the space its cursor
+    /// lives in. The two agree for confirmed rows; they disagree exactly for the pending
+    /// rows this excludes, which carry the newest `createdAt` and the lowest `seq`.
+    func messages(conversationId: SylID, olderThan seq: Int, limit: Int = 50) throws
+        -> [Message]
+    {
+        try database.queue.read { db in
+            try MessageRecord
+                .filter(Column("conversationId") == conversationId)
+                .filter(Column("seq") > 0 && Column("seq") < seq)
+                .order(Column("seq").desc)
+                .limit(limit)
+                .fetchAll(db)
+                .reversed()
+                .map { try $0.model() }
+        }
+    }
+
+    /// Confirmed messages that have arrived since `seq`, oldest-first (`syl-025.2.6`).
+    ///
+    /// The mirror of ``messages(conversationId:olderThan:limit:)`` and the read that lets
+    /// a refresh stop re-decoding a window it already holds. `ChatSnapshotLoader` was
+    /// reading and JSON-decoding the entire window on every arriving message — measured
+    /// at **93ms of a 127ms load at a window of two thousand, three quarters of the
+    /// whole cost** — to learn about one new row.
+    ///
+    /// `seq > 0` for the same reason the backward read has it: an optimistic row has no
+    /// position yet, so it is newer than nothing and older than nothing. Pending rows are
+    /// read wholesale by ``pendingMessages()`` on every load instead, which is what makes
+    /// reconciliation safe here **by construction rather than by care** — a row that
+    /// changes from a local id to a server id is a new id at a new seq, so it arrives
+    /// through this read, while its predecessor leaves through the pending set.
+    func messages(conversationId: SylID, newerThan seq: Int, limit: Int) throws -> [Message] {
+        try database.queue.read { db in
+            try MessageRecord
+                .filter(Column("conversationId") == conversationId)
+                .filter(Column("seq") > max(seq, 0))
+                .order(Column("seq").asc)
+                .limit(limit)
+                .fetchAll(db)
+                .map { try $0.model() }
+        }
+    }
+
+    /// The lowest CONFIRMED seq held for a thread, or `nil` when it holds none.
+    ///
+    /// The cursor `messages(conversationId:olderThan:)` is asked for. Pending rows are
+    /// excluded for the reason given there: seq 0 is the absence of a position, not the
+    /// beginning of one, and treating it as a floor would ask the server for everything
+    /// before the message he is still sending.
+    func oldestMessageSeq(conversationId: SylID) throws -> Int? {
+        try database.queue.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT MIN(seq) FROM message WHERE conversationId = ? AND seq > 0",
+                arguments: [conversationId]
+            )
+        }
+    }
+
+    /// Record that the server has confirmed this conversation begins at `seq`.
+    ///
+    /// Called when a page of history comes back saying there is nothing before it. The
+    /// row's existence is the confirmation; see the `v8` migration for why that is a
+    /// table rather than a nullable column.
+    ///
+    /// Idempotent, and it only ever moves the floor DOWN. Two devices, or one device on
+    /// two runs, can confirm different depths — and a later confirmation that reported a
+    /// *higher* floor than one already held would claim history had been lost. The
+    /// system does not get to quietly discard things; the lowest answer anyone has ever
+    /// had is kept.
+    func confirmHistoryBegins(at seq: Int, conversationId: SylID, now: Date = Date()) throws {
+        guard seq > 0 else { return }
+        try database.queue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO conversationHistory (conversationId, floorSeq, confirmedAt)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(conversationId) DO UPDATE SET
+                        floorSeq = MIN(floorSeq, excluded.floorSeq),
+                        confirmedAt = excluded.confirmedAt
+                    """,
+                arguments: [conversationId, seq, now]
+            )
+        }
+    }
+
+    /// The seq the server said this conversation begins at, or `nil` if never asked.
+    ///
+    /// `nil` and a value are the two states this whole mechanism exists to separate.
+    /// Do not collapse them into a Bool at the call site without saying which you mean.
+    func historyFloor(conversationId: SylID) throws -> Int? {
+        try database.queue.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT floorSeq FROM conversationHistory WHERE conversationId = ?",
+                arguments: [conversationId]
+            )
+        }
+    }
+
+    /// Whether the device holds this conversation all the way back to its beginning.
+    ///
+    /// True only when the server has confirmed a floor AND the device still holds a row
+    /// at or below it. Both halves are load-bearing: a confirmation alone says where the
+    /// beginning is, not that we have reached it, and a device that has been cleared
+    /// since the confirmation holds nothing while the marker still stands.
+    ///
+    /// This is what tells "there is genuinely nothing older" apart from "the local
+    /// window has run out", and it is the difference between an ending and a spinner.
+    func hasWholeHistory(conversationId: SylID) throws -> Bool {
+        guard let floor = try historyFloor(conversationId: conversationId) else { return false }
+        guard let oldest = try oldestMessageSeq(conversationId: conversationId) else {
+            return false
+        }
+        return oldest <= floor
+    }
+
     /// The highest conversation sequence held for a thread. **Not** the frame-stream
     /// sequence — that lives in `SyncStateRecord.lastFrameSeq` and is a different
     /// number in a different space.
@@ -438,6 +579,16 @@ struct LocalStore: Sendable {
         }
     }
 
+    /// How many goals there are, as opposed to how many a window held (`syl-o319`).
+    ///
+    /// Same argument as ``openTodoCount()``, which this deliberately mirrors: a count
+    /// derived from a windowed read stops being true exactly when it starts mattering.
+    func goalCount() throws -> Int {
+        try database.queue.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM goal") ?? 0
+        }
+    }
+
     func goal(id: SylID) throws -> Goal? {
         try database.queue.read { db in
             try GoalRecord.fetchOne(db, key: id)?.model()
@@ -471,6 +622,62 @@ struct LocalStore: Sendable {
             try ConstellationRecord
                 .fetchOne(db, key: ConstellationRecord.singletonID)?
                 .model()
+        }
+    }
+
+    // MARK: - Sendings
+
+    /// Store a fetched page of sendings.
+    ///
+    /// **Replaces each row it names, and removes none that it does not.** The page is
+    /// the newest few, so a sending missing from it has scrolled off rather than gone —
+    /// nothing in this system deletes a sending, and a store that mirrored the page by
+    /// deleting the difference would be the one thing acceptance item 6 forbids, dressed
+    /// as a cache.
+    ///
+    /// Replacing by id is what carries the one write the service permits: a `pending`
+    /// row becomes `ready` when the render lands, and the device finds out by asking.
+    func replaceSendings(_ page: SendingPage) throws {
+        guard !page.items.isEmpty else { return }
+        try database.queue.write { db in
+            for sending in page.items {
+                try SendingRecord(sending).save(db)
+            }
+        }
+    }
+
+    /// What she has sent him, **newest first**.
+    ///
+    /// The order is the service's own — `createdAt DESC`, ties broken on the id — and it
+    /// is asserted here rather than inherited from the order a page happened to arrive
+    /// in. The mock served this list unsorted for a while and was schema-conformant the
+    /// whole time, because ordering is not something a schema can say.
+    ///
+    /// Every state is returned. A `pending` or `failed` sending is a complete row: the
+    /// words reached him whatever became of the video, and filtering those out would
+    /// hide the half of the feature that is guaranteed to have arrived.
+    func sendings(limit: Int = 200) throws -> [Sending] {
+        try database.queue.read { db in
+            try SendingRecord
+                .order(literal: "createdAt DESC, id DESC")
+                .limit(limit)
+                .fetchAll(db)
+                .map { try $0.model() }
+        }
+    }
+
+    /// The ids of every sending still waiting on its video.
+    ///
+    /// The video lands minutes after the words, and no frame arrives to say so — the
+    /// phone learns by asking. This is what tells a foreground pass whether there is
+    /// anything to ask about.
+    func pendingSendingIDs() throws -> [SylID] {
+        try database.queue.read { db in
+            try SylID.fetchAll(
+                db,
+                sql: "SELECT id FROM sending WHERE state = ?",
+                arguments: [SendingState.pending.rawValue]
+            )
         }
     }
 
@@ -821,7 +1028,13 @@ struct LocalStore: Sendable {
         case .reminder: return "reminder"
         case .todo: return "todo"
         case .goal: return "goal"
-        case .device, .delivery, .job, .run: return nil
+        // **`.sending` is nil on purpose, and it is not the same "nil" as the two
+        // below.** Those are resources the phone does not keep. A sending it does keep —
+        // this is the delete path, and a sending is never deleted, by the service or by
+        // anything here. Naming the table would make acceptance item 6 true only for as
+        // long as no `op: "delete"` ever arrived for one.
+        case .sending: return nil
+        case .device, .delivery, .unrecognised: return nil
         }
     }
 
@@ -859,6 +1072,22 @@ struct LocalStore: Sendable {
             try SyncStateRecord().insert(db, onConflict: .ignore)
             try db.execute(
                 sql: "UPDATE syncState SET goalsBackfilledAt = ? WHERE id = ?",
+                arguments: [instant, SyncStateRecord.singletonID]
+            )
+        }
+    }
+
+    /// Records that the one-time to-do recovery has run. `syl-020`.
+    ///
+    /// Targeted UPDATE for the reason `setCursor` states — this row has several writers
+    /// and a whole-row write would roll one of them back. Writing the whole record here
+    /// would be worse than usual: the column next to it is the sync cursor, and rolling
+    /// THAT back would re-page thousands of rows.
+    func markTodosBackfilled(at instant: Date) throws {
+        try database.queue.write { db in
+            try SyncStateRecord().insert(db, onConflict: .ignore)
+            try db.execute(
+                sql: "UPDATE syncState SET todosBackfilledAt = ? WHERE id = ?",
                 arguments: [instant, SyncStateRecord.singletonID]
             )
         }

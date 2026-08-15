@@ -301,7 +301,7 @@
 				APS_ENVIRONMENT = development;
 				CODE_SIGN_ENTITLEMENTS = Syl.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 22;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				/* Syl uses HTTPS/TLS and the system Keychain and nothing else — all
@@ -309,6 +309,8 @@
 				   awaiting the export-compliance answer and is not installable by a
 				   tester, while CI reports a clean success. */
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Syl reads your health data so she can notice what is changing and tell you when something looks worth knowing. She reads only; she never writes to Health.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Syl never writes to your Health data. Apple requires this text from any app that can reach Health at all, so it is here to satisfy that rule rather than because Syl asks for write access.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -319,7 +321,7 @@
 					"@executable_path/Frameworks",
 				);
 				DEVELOPMENT_TEAM = 2BRYAM5Q52;
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.10.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jmm.syl;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -335,7 +337,7 @@
 				APS_ENVIRONMENT = production;
 				CODE_SIGN_ENTITLEMENTS = Syl.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 22;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				/* Syl uses HTTPS/TLS and the system Keychain and nothing else — all
@@ -343,6 +345,8 @@
 				   awaiting the export-compliance answer and is not installable by a
 				   tester, while CI reports a clean success. */
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Syl reads your health data so she can notice what is changing and tell you when something looks worth knowing. She reads only; she never writes to Health.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Syl never writes to your Health data. Apple requires this text from any app that can reach Health at all, so it is here to satisfy that rule rather than because Syl asks for write access.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -353,7 +357,7 @@
 					"@executable_path/Frameworks",
 				);
 				DEVELOPMENT_TEAM = 2BRYAM5Q52;
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.10.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jmm.syl;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -366,10 +370,10 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 22;
 				GENERATE_INFOPLIST_FILE = YES;
 				DEVELOPMENT_TEAM = 2BRYAM5Q52;
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.10.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jmm.syl.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -383,10 +387,10 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 22;
 				GENERATE_INFOPLIST_FILE = YES;
 				DEVELOPMENT_TEAM = 2BRYAM5Q52;
-				MARKETING_VERSION = 0.9.6;
+				MARKETING_VERSION = 0.10.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jmm.syl.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;

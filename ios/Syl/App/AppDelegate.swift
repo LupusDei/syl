@@ -39,6 +39,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     /// feature rather than a convenience.
     private(set) var constellation: ConstellationSource?
 
+    /// Where From Syl's rows come from: disk first, the server behind it.
+    ///
+    /// Built here beside the constellation and for the same reason — the screen stays a
+    /// pure function of values and can be rendered offscreen without booting the object
+    /// graph.
+    private(set) var sendings: SendingSource?
+
     /// Whether this device holds a credential at all.
     ///
     /// The gate on the whole app: without a token every request goes out with no
@@ -90,6 +97,27 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     /// every HTTP call, but a socket is a long-lived thing and would otherwise keep
     /// hammering the host the Commander switched away from.
     private var socketBaseURL: URL?
+
+    /// The health upload. `syl-t9tj.2.6`.
+    ///
+    /// Foreground only, and there is no background delivery — the same rule that keeps
+    /// `UIBackgroundModes` out of `Syl.entitlements`. A capability we do not rely on is
+    /// one we should not ask for, and health data that arrives when he next opens the app
+    /// arrives in time for everything this feature does with it.
+    private lazy var health = HealthUploader(
+        reader: HealthReader(),
+        transport: SylHealthUploadTransport(backend: backend),
+        watermarks: UserDefaultsHealthWatermarkStore()
+    )
+
+    /// What the last foreground upload did. A value rather than a log line, so the
+    /// diagnostics surface can show it and a failure is not invisible.
+    private(set) var lastHealthUpload: HealthUploadRun?
+
+    /// One run at a time. Two rapid foregrounds would otherwise read the same window
+    /// twice — harmless, because the server deduplicates by sample identity, but it is
+    /// sixty days of history twice on a cold start.
+    private var healthRunInFlight = false
 
     /// What a chat bubble needs in order to fetch a picture.
     ///
@@ -145,6 +173,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
 
         let store = LocalStore(database: database)
         constellation = ConstellationSource(store: store, gateway: .live(backend: backend))
+        sendings = SendingSource(store: store, gateway: .live(backend: backend))
         let outbox = Outbox(database: database)
         let engine = SyncEngine(
             store: store,
@@ -171,7 +200,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
                     idempotencyKey: key
                 )
             },
-            flush: { await engine.synchronise() }
+            flush: { await engine.synchronise() },
+            // The chat screen has never made an HTTP call of its own. This is the one:
+            // when he scrolls past everything this device holds, it reaches for the rest
+            // rather than showing him a floor that looks like the beginning.
+            fetchOlderMessages: ChatViewModel.liveOlderMessages(backend: backend)
         )
 
         // The other half of the delivery guarantee. `deliveredAt` only ever means APNs
@@ -367,6 +400,29 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         // refreshed when it was opened would show yesterday's answer on the first frame —
         // which is worse than a spinner, because it looks correct.
         await list?.refresh()
+        // Last, and deliberately: a cold start is sixty days of history, and nothing
+        // above it should wait behind that.
+        await uploadHealth()
+    }
+
+    /// Read HealthKit and send what is new, on the foreground.
+    ///
+    /// Asking for authorisation on every pass is safe — iOS presents nothing if it has
+    /// already asked — but it is gated on pairing so the very first launch shows the
+    /// pairing screen rather than a Health sheet for a server he has not chosen yet.
+    private func uploadHealth() async {
+        guard isPaired, !healthRunInFlight else { return }
+        healthRunInFlight = true
+        defer { healthRunInFlight = false }
+
+        do {
+            try await health.requestAuthorisation()
+        } catch {
+            // A refused or failed prompt is not a reason to skip the upload. The read
+            // still happens, comes back empty, and the authorisation report says why —
+            // which is the entire point of sending one.
+        }
+        lastHealthUpload = await health.upload()
     }
 
     /// Reopens the socket when the selected server profile has moved.

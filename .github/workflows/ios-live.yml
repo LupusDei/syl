@@ -61,5 +61,10 @@ jobs:
       # `SYL_IOS_LIVE=1` is the whole point of this job. Without it the file skips
       # itself and reports success having checked nothing — which is what it did
       # everywhere, for as long as it existed (`syl-e4f`).
+      #
+      # `--config vitest.heavy.config.ts` is not optional. The suite runs in two
+      # passes and the ROOT config EXCLUDES everything under
+      # `tests/integration/`, so a bare `vitest run <that path>` matches no
+      # files at all. The heavy config is the one that includes it.
       - name: The iOS client against the real backend
-        run: SYL_IOS_LIVE=1 npx vitest run backend/tests/integration/ios-live-server.test.ts
+        run: SYL_IOS_LIVE=1 npx vitest run --config vitest.heavy.config.ts backend/tests/integration/ios-live-server.test.ts

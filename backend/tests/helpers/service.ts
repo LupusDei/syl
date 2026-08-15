@@ -12,9 +12,17 @@ import { syncResolvers } from "../../src/index.js";
 import { DreamLog } from "../../src/memory/dream/log.js";
 import { MemoryGraph } from "../../src/memory/graph.js";
 import { MemoryMetrics } from "../../src/memory/metrics.js";
+import { ExtractionStore } from "../../src/memory/extract-apply.js";
+import { HerOwnMemory } from "../../src/memory/remember.js";
+import type { Retriever } from "../../src/memory/retrieve.js";
 import { EdgeWeights } from "../../src/memory/weights.js";
-import { RenderService } from "../../src/render/render-service.js";
-import { studioAt } from "../../src/render/studio.js";
+import { WorkingMemory } from "../../src/memory/working.js";
+import { HealthCharacteristics } from "../../src/health/characteristics.js";
+import { HealthSamples } from "../../src/health/samples.js";
+import { RenderVerdicts } from "../../src/render/verdicts.js";
+import { RenderService, type RenderRecord } from "../../src/render/render-service.js";
+import { studioAt, type Studio } from "../../src/render/studio.js";
+import { Wardrobe } from "../../src/render/wardrobe.js";
 import type { MemoryViews } from "../../src/routes/memory.js";
 import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api-key-service.js";
 import { AttachmentStore } from "../../src/services/attachment-store.js";
@@ -31,8 +39,9 @@ import { MessageStore } from "../../src/services/message-store.js";
 import { Outbox } from "../../src/services/outbox.js";
 import { PresenceService } from "../../src/services/presence.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
-import { SendingService } from "../../src/services/sending-service.js";
+import { SendingService, type RenderSource } from "../../src/services/sending-service.js";
 import { SendingStore } from "../../src/services/sending-store.js";
+import { RenderWatchStore } from "../../src/services/render-watch-store.js";
 import { SyncService } from "../../src/services/sync-service.js";
 import { TodoService } from "../../src/services/todo-service.js";
 
@@ -267,13 +276,28 @@ export function testChat(messages: MessageStore): ConversationService {
  * the CHECK that fires and the UNIQUE that spans the cold partition, and a mock
  * cannot have them.
  */
-export function testMemory(db: SylDatabase, clock: Clock = fixedClock(TEST_NOW)): MemoryViews {
+export function testMemory(
+  db: SylDatabase,
+  clock: Clock = fixedClock(TEST_NOW),
+  options: { readonly recall?: () => Retriever | null } = {},
+): MemoryViews {
   const graph = new MemoryGraph({ db: db.handle, clock });
   return {
     graph,
     weights: new EdgeWeights({ graph, clock }),
     metrics: new MemoryMetrics({ db: db.handle, clock }),
     dreams: new DreamLog({ db: db.handle, clock }),
+    working: new WorkingMemory({ db: db.handle, graph, clock }),
+    // `null` by default, which is the honest offline configuration: the real
+    // retriever needs `vec0` and a 300M-parameter model, and `npm test` is not
+    // allowed to download one. A test that wants search injects a real
+    // `Retriever` over its own store — see `memory-recall.test.ts` — and the
+    // default keeps every OTHER test on the degraded path, which is exactly the
+    // path a machine without the extension runs.
+    recall: options.recall ?? ((): Retriever | null => null),
+    hers: new HerOwnMemory({ db: db.handle, graph, clock }),
+    provenance: (nodeId: string) =>
+      new ExtractionStore({ db: db.handle, graph, clock }).provenanceFor(nodeId),
   };
 }
 
@@ -292,12 +316,86 @@ export function testMemory(db: SylDatabase, clock: Clock = fixedClock(TEST_NOW))
  * uses one: a unit test must never write into the directory the running
  * service keeps the Commander's own media in.
  */
-export function testRenders(clock: Clock = fixedClock(TEST_NOW)): RenderService {
-  return new RenderService({
-    studio: studioAt(mkdtempSync(join(tmpdir(), "syl-test-studio-"))),
-    backend: null,
-    clock,
+export function testRenders(
+  clock: Clock = fixedClock(TEST_NOW),
+  studio: Studio = testStudio(),
+): RenderService {
+  return new RenderService({ studio, backend: null, clock });
+}
+
+/**
+ * A studio nothing else shares, so a caller can hand the same one to the
+ * render service and the wardrobe.
+ *
+ * They have to agree about which directory her pictures are in — the wardrobe
+ * decides which face a render is anchored on, and a second studio would be a
+ * second answer. Exported so a test that needs both can build them over one
+ * directory rather than discovering the split when an adoption does not show up.
+ */
+export function testStudio(): Studio {
+  return studioAt(mkdtempSync(join(tmpdir(), "syl-test-studio-")));
+}
+
+/**
+ * A render source that always answers with one finished clip.
+ *
+ * Needed because `compose` refuses a render that is not `ready` — the
+ * Commander's ruling of 2026-08-11, so that nothing reaches him about a video
+ * that does not exist. Every route test that posts a sending would otherwise be
+ * testing the refusal rather than the door it means to test, and the empty
+ * studio `testRenders` gives them has nothing in it.
+ *
+ * The mp4 path is never opened: `testDeps` hands the composer a compressor that
+ * refuses, so no test needs ffmpeg or a file that is really a video.
+ */
+export function testReadyRenders(): RenderSource {
+  const record = (name: string): RenderRecord => ({
+    name: name === "latest" ? "syl-20260811t090000z-close" : name,
+    status: "ready",
+    // A close portrait, so her likeness is pinned and the record says which
+    // picture pins it. The flag is derived from exactly that pair, so a fixture
+    // that claimed one without the other would be the shape of `syl-63v`.
+    anchor: "renders/reference.png",
+    renderedAt: "2026-08-11T09:02:00.000Z",
+    taskId: "task-test",
+    model: "seedance2",
+    ratio: "720:1280",
+    resolution: null,
+    keyframes: 2,
+    duration: 15,
+    reference: "reference.png",
+    framing: "close_portrait",
+    prompt: "…",
+    parts: [
+      {
+        taskId: "task-test",
+        prompt: "…",
+        duration: 8,
+        first: "renders/opening-ribbon.png",
+        last: "renders/reference.png",
+        video: "/studio/videos/parts/syl-20260811t090000z-close-1.mp4",
+        credits: 60,
+      },
+      {
+        taskId: "task-test-2",
+        prompt: "…",
+        duration: 7,
+        first: "renders/parts/syl-20260811t090000z-close-1-last.png",
+        last: "renders/opening-ribbon.png",
+        video: "/studio/videos/parts/syl-20260811t090000z-close-2.mp4",
+        credits: 60,
+      },
+    ],
+    scene: "…",
+    holdsLikeness: true,
+    because: "A render the suite can send from.",
+    startedAt: "2026-08-11T09:00:00.000Z",
+    reason: null,
+    credits: 120,
+    usd: 1.2,
+    video: "/studio/videos/syl-20260811t090000z-close.mp4",
   });
+  return { get: (name) => record(name), latest: () => record("latest") };
 }
 
 /** Everything `createApp` and `startServer` need, on one in-memory store. */
@@ -317,8 +415,13 @@ export function testDeps(db: SylDatabase): {
   readonly memory: MemoryViews;
   readonly attachments: AttachmentStore;
   readonly renders: RenderService;
+  readonly renderVerdicts: RenderVerdicts;
+  readonly health: HealthSamples;
+  readonly characteristics: HealthCharacteristics;
+  readonly wardrobe: Wardrobe;
   readonly sendings: SendingStore;
   readonly composer: SendingService;
+  readonly renderWatches: RenderWatchStore;
   readonly presence: PresenceService;
   readonly intakeQueue: IntakeQueue;
   readonly memoryRuntime: MemoryRuntime;
@@ -339,7 +442,8 @@ export function testDeps(db: SylDatabase): {
   const goals = new GoalService({ db: db.handle, clock });
   const jobs = new JobStore({ db: db.handle, clock });
   const memory = testMemory(db, clock);
-  const renders = testRenders(clock);
+  const studio = testStudio();
+  const renders = testRenders(clock, studio);
   // Hoisted rather than inlined below: the composer publishes her words
   // through this same object, exactly as production does.
   const chat = testChat(messages);
@@ -359,7 +463,7 @@ export function testDeps(db: SylDatabase): {
     sync: new SyncService({
       db: db.handle,
       clock,
-      resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings }),
+      resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, sendings }),
     }),
     jobs,
     idempotency: new IdempotencyStore({ db: db.handle, clock }),
@@ -375,6 +479,20 @@ export function testDeps(db: SylDatabase): {
     attachments,
     // Cannot render and cannot reach Runway. See `testRenders`.
     renders,
+    // Real, against the same database. It is a plain table with no backend to
+    // reach, so there is nothing to fake and faking it would only hide the
+    // append-only property that is the point of the store (`syl-b0i`).
+    renderVerdicts: new RenderVerdicts({ db: db.handle, clock }),
+    // Real, against the same database. A plain table with no backend to reach.
+    health: new HealthSamples({ db: db.handle, clock }),
+    // Over the SAME graph and the SAME `remember` verb the memory views were
+    // built on, exactly as `bootstrap` does it. A second `HerOwnMemory` here
+    // would let a route test pass against a wiring production does not have.
+    characteristics: new HealthCharacteristics({ graph: memory.graph, hers: memory.hers, clock }),
+    // Over the SAME studio as `renders`, exactly as `bootstrap` builds them.
+    // Two studios would mean the face a render anchors on and the face the
+    // wardrobe route calls current are answered from two directories.
+    wardrobe: new Wardrobe({ studio, clock }),
     sendings,
     // Composes for real, against the same stores — but its compressor refuses
     // rather than shelling out, so no test needs ffmpeg and none decodes a file
@@ -385,7 +503,11 @@ export function testDeps(db: SylDatabase): {
       chat,
       attachments,
       outbox,
-      renders,
+      // A finished render, always. `renders` above is the real service over an
+      // empty studio, which is right for `/renders` and wrong here: `compose`
+      // now refuses anything that is not `ready`, so a route test posting a
+      // sending would only ever exercise that refusal.
+      renders: testReadyRenders(),
       workDir: mkdtempSync(join(tmpdir(), "syl-test-sendings-")),
       compress: async () => ({
         ok: false,
@@ -393,6 +515,11 @@ export function testDeps(db: SylDatabase): {
       }),
       log: () => undefined,
     }),
+    // The promises to come back and look at a render. Real, on the same
+    // database: nothing in a route test creates one, and a store that refused
+    // to exist would make the review job untestable through the seam that
+    // actually wires it.
+    renderWatches: new RenderWatchStore({ db: db.handle, clock }),
     // No sink. `startServer` attaches one; a test that wants to watch frames
     // hands its own to `PresenceService` directly.
     presence: new PresenceService({ clock }),

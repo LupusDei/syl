@@ -110,11 +110,31 @@ enum ConstellationWords {
     // MARK: - Where it came from
 
     /// Provenance, as a sentence. **The only question that matters about a memory.**
-    static func provenance(species: ConstellationStarSpecies, assertedBy: String?) -> String {
+    ///
+    /// `describing` is the star's own label, and it is here to stop one absurdity the
+    /// Commander photographed. His graph hangs off a single `source` node called
+    /// *"Conversation with the Commander"*, and that node asserts everything — including
+    /// itself. So its card read:
+    ///
+    /// > **Conversation with the Commander**
+    /// > Conversation with the Commander said so.
+    ///
+    /// A thing is not its own evidence. When the asserter *is* the star, the card says what
+    /// the node actually is instead — which is the truthful sentence and also the shorter
+    /// one. Compared by label rather than by kind on purpose: a `source` node that genuinely
+    /// was cited by something else should still say so.
+    static func provenance(
+        species: ConstellationStarSpecies,
+        assertedBy: String?,
+        describing label: String = ""
+    ) -> String {
         switch species {
         case .observed:
-            if let assertedBy, !assertedBy.isEmpty { return "\(assertedBy) said so." }
-            return "She was told this."
+            guard let assertedBy, !assertedBy.isEmpty else { return "She was told this." }
+            guard assertedBy != label else {
+                return "This is where other things she knows came from."
+            }
+            return "\(assertedBy) said so."
         case .inferred:
             return "She worked this out."
         case .unattested:
@@ -149,6 +169,13 @@ enum ConstellationWords {
         case .event: return "Event"
         case .goal: return "Goal"
         case .decision: return "Decision"
+        case .place: return "Place"
+        case .instruction: return "Instruction"
+        case .selfNode: return "Syl"
+        // Named for what it IS — a kind this build does not know — rather than
+        // guessed at. VoiceOver reads this aloud, and "Unknown" would be the
+        // spoken version of rendering it as something it is not.
+        case .unrecognised: return "Something newer than this app"
         }
     }
 
@@ -175,7 +202,9 @@ enum ConstellationWords {
             star.label,
             "\(kind(star.detail.kind)), \(tier(star.detail.tier).lowercased()).",
             certainty(star.confidence),
-            provenance(species: star.detail.species, assertedBy: star.detail.assertedBy),
+            provenance(
+                species: star.detail.species, assertedBy: star.detail.assertedBy,
+                describing: star.label),
         ]
         if let learned = learned(star.detail.learnedAt) { parts.append(learned) }
         return parts.joined(separator: " ")

@@ -643,6 +643,172 @@ code,
   font-size: var(--syl-text-size-small);
 }
 
+/* ------------------------------------------------------------- health */
+
+/*
+ * THE ONE RULE: an empty panel must never look the same twice.
+ *
+ * A chart library handed an empty array draws the same flat line whether he
+ * walked nowhere or nobody was ever allowed to look at his steps. Those are
+ * different facts with different remedies, and a surface that renders them alike
+ * is how the empty/denied ambiguity survives every layer built to catch it —
+ * every request succeeded, every envelope said `success: true`, and the only
+ * symptom is a line that reads as a quiet day.
+ *
+ * So the two empties are drawn on different channels at once, and the CSS owns
+ * two of the four:
+ *
+ *   - MEASURED silence gets a LINE. A baseline is honest here: the type is
+ *     authorised, so the zero was measured.
+ *   - UNLOOKED-AT silence gets NO LINE AT ALL, and hatching instead. There is
+ *     nothing to draw, because nothing was read.
+ *
+ * The hatch is then bordered per state, because the five do not collapse
+ * either: `undisclosed` is a platform that will not answer (and is the ORDINARY
+ * case here, not an edge one), `notDetermined` is a prompt nobody has shown him,
+ * `unavailable` is a device with no HealthKit at all, `unreported` is a phone
+ * that has never said, and `denied` is a refusal no current client can even
+ * produce. Telling him to grant a permission he already granted is useless
+ * advice; telling him to buy hardware for a fact the device cannot report is
+ * worse. One shared grey box produces both.
+ */
+
+.health__types {
+  display: grid;
+  gap: var(--syl-space-3);
+  margin-block-start: var(--syl-space-3);
+}
+
+.health__type {
+  display: block;
+}
+
+.spark {
+  display: block;
+  inline-size: 100%;
+  block-size: 3rem;
+  margin-block-start: var(--syl-space-2);
+  background: var(--syl-bg-inset);
+  border: var(--syl-border-width) solid var(--syl-border);
+  border-radius: var(--syl-radius);
+}
+
+.spark__line {
+  fill: none;
+  stroke: var(--syl-accent);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.silence {
+  margin-block-start: var(--syl-space-2);
+  padding: var(--syl-space-3);
+  border: var(--syl-border-width) solid var(--syl-border);
+  border-radius: var(--syl-radius);
+  font-size: var(--syl-text-size-small);
+}
+
+/* Measured: a real baseline, on the ordinary inset ground. */
+.silence--measured {
+  background: var(--syl-bg-inset);
+  border-color: var(--syl-state-ok);
+  color: var(--syl-text-secondary);
+}
+
+.silence__baseline {
+  display: block;
+  inline-size: 100%;
+  block-size: 2.5rem;
+  margin-block-end: var(--syl-space-2);
+}
+
+.silence__baseline line {
+  stroke: var(--syl-state-ok);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+/*
+ * Unlooked-at: hatched, and deliberately carrying NO drawn line. The stripes
+ * are the point — they read as "this area is not data" at a glance and they
+ * survive a greyscale screenshot, which a colour alone does not.
+ */
+.silence--unlooked {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--syl-bg-inset),
+    var(--syl-bg-inset) 6px,
+    var(--syl-bg-panel) 6px,
+    var(--syl-bg-panel) 12px
+  );
+  border-style: dashed;
+  border-color: var(--syl-text-muted);
+  color: var(--syl-text-secondary);
+}
+
+/* Five states, five borders. Each says a different thing. */
+.health__type[data-standing="undisclosed"] .silence--unlooked {
+  border-color: var(--syl-state-warn);
+}
+
+.health__type[data-standing="notDetermined"] .silence--unlooked {
+  border-color: var(--syl-state-pending);
+}
+
+.health__type[data-standing="unavailable"] .silence--unlooked {
+  border-color: var(--syl-text-muted);
+  border-style: dotted;
+}
+
+.health__type[data-standing="denied"] .silence--unlooked {
+  border-color: var(--syl-state-fail);
+}
+
+.health__type[data-standing="unreported"] .silence--unlooked {
+  border-color: var(--syl-accent);
+}
+
+/*
+ * The one standing the SERVER concluded rather than the phone reporting
+ * (`syl-8ys9.3.3`). Dashed rather than the dotted `unavailable` beside it,
+ * because the two carry the same word on the wire and mean different things:
+ * that one is "this device has no HealthKit", this one is "nothing has ever
+ * written this type".
+ */
+.health__type[data-standing="unpublished"] .silence--unlooked {
+  border-color: var(--syl-text-muted);
+  border-style: dashed;
+}
+
+.silence__text,
+.silence__remedy,
+.silence__grounds {
+  margin: 0;
+}
+
+.silence__remedy {
+  margin-block-start: var(--syl-space-2);
+  color: var(--syl-text-muted);
+}
+
+/* The working under the verdict. Smaller than the claim it supports. */
+.silence__grounds {
+  margin-block-start: var(--syl-space-2);
+  color: var(--syl-text-muted);
+  font-size: var(--syl-text-size-small);
+}
+
+.health__raw {
+  margin-block-start: var(--syl-space-3);
+  font-size: var(--syl-text-size-small);
+}
+
+.health__raw summary {
+  cursor: pointer;
+  color: var(--syl-text-secondary);
+}
+
 /* ------------------------------------------------------------- narrow */
 
 /*

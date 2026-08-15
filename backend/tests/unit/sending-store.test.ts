@@ -217,6 +217,43 @@ describe("SendingStore", () => {
     });
   });
 
+  /**
+   * What the boot-time recovery pass reads.
+   *
+   * Unpaged and oldest first, because it exists to answer one question — which
+   * rows did the last process fail to settle — and a page of fifty would leave
+   * the fifty-first stranded forever, silently, which is the exact injury the
+   * pass was written to close.
+   */
+  describe("pending", () => {
+    it("should answer every row still waiting on a video, oldest first", () => {
+      const first = sendings.create({ words: "One.", because: "a", messageId: words("One.") });
+      now += 60_000;
+      const second = sendings.create({ words: "Two.", because: "b", messageId: words("Two.") });
+
+      expect(sendings.pending().map((s) => s.id)).toEqual([first.id, second.id]);
+    });
+
+    it("should leave out rows that already settled, either way", () => {
+      const waiting = sendings.create({ words: "One.", because: "a", messageId: words("One.") });
+      const done = sendings.create({ words: "Two.", because: "b", messageId: words("Two.") });
+      sendings.attachVideo(done.id, video());
+      const gone = sendings.create({ words: "Three.", because: "c", messageId: words("Three.") });
+      sendings.markFailed(gone.id, "There is no render by that name.");
+
+      expect(sendings.pending().map((s) => s.id)).toEqual([waiting.id]);
+    });
+
+    it("should not stop at a page, because the row past the edge is the one that is lost", () => {
+      for (let n = 0; n < 60; n += 1) {
+        now += 1_000;
+        sendings.create({ words: `Number ${String(n)}.`, because: "a", messageId: words(`Number ${String(n)}.`) });
+      }
+
+      expect(sendings.pending()).toHaveLength(60);
+    });
+  });
+
   describe("get", () => {
     it("should answer null for an id that names nothing", () => {
       expect(sendings.get("syl:sending:00000000-0000-7000-8000-00000000dead")).toBeNull();

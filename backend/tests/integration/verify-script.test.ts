@@ -1,10 +1,13 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
+
+import { HELPER_DEADLINE_MS } from "../helpers/budget.js";
 
 /**
  * `scripts/syl-verify.sh` — the proof-of-life runner for `syl-007.4.2`.
@@ -118,6 +121,33 @@ function freePort(): number {
   return 41_000 + Math.floor(Math.random() * 15_000);
 }
 
+/**
+ * Wait until something is accepting connections on a loopback port.
+ *
+ * The script under test asks once, with `curl --max-time 5`, so everything it
+ * is meant to notice has to already be listening when it runs. Answering "is
+ * it up yet" by connecting is the only version of that claim which is true on
+ * a machine running five other things.
+ */
+async function untilListening(port: number): Promise<void> {
+  const deadline = Date.now() + HELPER_DEADLINE_MS;
+  for (;;) {
+    const open = await new Promise<boolean>((resolve) => {
+      const socket = createConnection({ port, host: "127.0.0.1" });
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once("error", () => resolve(false));
+    });
+    if (open) return;
+    if (Date.now() > deadline) {
+      throw new Error(`nothing bound 127.0.0.1:${String(port)} within ${String(HELPER_DEADLINE_MS)}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 describe("syl-verify.sh", () => {
   it("should reject a subcommand it does not have", () => {
     const result = run(["nonsense"], {});
@@ -145,7 +175,11 @@ describe("syl-verify.sh", () => {
     const env = {
       SYL_LAUNCHCTL: stub,
       SYL_HEALTH_URL: `http://127.0.0.1:${String(port)}/api/v1/health`,
-      SYL_VERIFY_RESTART_DEADLINE: "30",
+      // Derived, like every other deadline in this suite. The script polls for
+      // this many seconds while the stub respawns the "service"; on a loaded
+      // machine that respawn is a node cold start competing with everything
+      // else, and 30 was another number measured on an idle laptop.
+      SYL_VERIFY_RESTART_DEADLINE: String(Math.round(HELPER_DEADLINE_MS / 1000)),
     };
 
     // First call brings the "service" up.
@@ -161,7 +195,7 @@ describe("syl-verify.sh", () => {
     expect(after).not.toBe(before);
 
     execFileSync("/bin/bash", ["-c", `kill -9 ${after} 2>/dev/null || true`]);
-  }, 120_000);
+  });
 
   it("should say so, and fail, when there is nothing running to kill", () => {
     const directory = mkdtempSync(join(tmpdir(), "syl-verify-"));
@@ -173,7 +207,7 @@ describe("syl-verify.sh", () => {
 
     expect(result.status).toBe(1);
     expect(result.output).toContain("nothing to kill");
-  }, 60_000);
+  });
 
   /**
    * The stale-build check.
@@ -188,8 +222,22 @@ describe("syl-verify.sh", () => {
    * git itself. The only thing arranged is whether the two agree.
    */
   describe("stale", () => {
-    /** A server that answers `/health` with the given build stamp. */
-    function healthServer(port: number, build: unknown): void {
+    /**
+     * A server that answers `/health` with the given build stamp.
+     *
+     * Async because the caller has to WAIT for the listener, and there is no
+     * honest synchronous way to do that. This used to end with
+     * `execFileSync("/bin/bash", ["-c", "sleep 0.6"])` and a comment saying
+     * "give it a moment to bind" — a fixed sleep chosen on an idle machine to
+     * cover a node cold start. On a loaded one 600ms is not enough, the single
+     * `curl --max-time 5` the script makes finds nothing listening, and the
+     * test fails asserting that a healthy service reported STALE.
+     *
+     * That is the shape `awaitLog` in `launchd-entrypoint.test.ts` already
+     * names: an assertion resting on a delay somebody hoped was long enough.
+     * Polling is both faster on an idle machine and correct on a busy one.
+     */
+    async function healthServer(port: number, build: unknown): Promise<void> {
       const directory = mkdtempSync(join(tmpdir(), "syl-verify-health-"));
       directories.push(directory);
       const script = join(directory, "server.js");
@@ -205,8 +253,7 @@ describe("syl-verify.sh", () => {
       const child = spawn(process.execPath, [script], { detached: true, stdio: "ignore" });
       child.unref();
       servers.push(child);
-      // The server is a real listener; give it a moment to bind before curl asks.
-      execFileSync("/bin/bash", ["-c", "sleep 0.6"]);
+      await untilListening(port);
     }
 
     /** A real repository with one commit, so HEAD is a real SHA. */
@@ -236,10 +283,10 @@ describe("syl-verify.sh", () => {
       return stub;
     }
 
-    it("should pass when the running build is the commit at HEAD", () => {
+    it("should pass when the running build is the commit at HEAD", async () => {
       const port = freePort();
       const { directory, head } = repository();
-      healthServer(port, { commit: head, builtAt: "2026-08-10T00:18:00.000Z", dirty: false, branch: "main" });
+      await healthServer(port, { commit: head, builtAt: "2026-08-10T00:18:00.000Z", dirty: false, branch: "main" });
 
       const result = run(["stale"], {
         SYL_LAUNCHCTL: stubbedLaunchctl(),
@@ -251,12 +298,12 @@ describe("syl-verify.sh", () => {
       expect(result.status).toBe(0);
     });
 
-    it("should fail, and say STALE, when the running build is not HEAD", () => {
+    it("should fail, and say STALE, when the running build is not HEAD", async () => {
       // The three-hour failure, reproduced: the service is up, healthy, and
       // running code from before the fix landed.
       const port = freePort();
       const { directory, head } = repository();
-      healthServer(port, {
+      await healthServer(port, {
         commit: "49ac2dce862dfca27edaeb6c2e69c157ea434eda",
         builtAt: "2026-08-09T19:58:11.000Z",
         dirty: false,
@@ -275,10 +322,10 @@ describe("syl-verify.sh", () => {
       expect(result.output).toContain(head.slice(0, 7));
     });
 
-    it("should fail when the service reports no build stamp at all", () => {
+    it("should fail when the service reports no build stamp at all", async () => {
       const port = freePort();
       const { directory } = repository();
-      healthServer(port, null);
+      await healthServer(port, null);
 
       const result = run(["stale"], {
         SYL_LAUNCHCTL: stubbedLaunchctl(),
@@ -290,10 +337,10 @@ describe("syl-verify.sh", () => {
       expect(result.output).toMatch(/no build commit/);
     });
 
-    it("should say so when a build was made from a dirty tree, even if the commit matches", () => {
+    it("should say so when a build was made from a dirty tree, even if the commit matches", async () => {
       const port = freePort();
       const { directory, head } = repository();
-      healthServer(port, { commit: head, builtAt: "2026-08-10T00:18:00.000Z", dirty: true, branch: "main" });
+      await healthServer(port, { commit: head, builtAt: "2026-08-10T00:18:00.000Z", dirty: true, branch: "main" });
 
       const result = run(["stale"], {
         SYL_LAUNCHCTL: stubbedLaunchctl(),
@@ -339,5 +386,5 @@ describe("syl-verify.sh", () => {
     expect(result.output).toContain("The machine");
     expect(result.output).toContain("launchd");
     expect(result.output).toMatch(/AC sleep|autorestart/);
-  }, 60_000);
+  });
 });

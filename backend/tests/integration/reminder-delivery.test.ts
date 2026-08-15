@@ -24,6 +24,11 @@ import { Outbox } from "../../src/services/outbox.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
 import { SendingService } from "../../src/services/sending-service.js";
 import { SendingStore } from "../../src/services/sending-store.js";
+import { HealthCharacteristics } from "../../src/health/characteristics.js";
+import { HealthSamples } from "../../src/health/samples.js";
+import { RenderVerdicts } from "../../src/render/verdicts.js";
+import { Wardrobe } from "../../src/render/wardrobe.js";
+import { RenderWatchStore } from "../../src/services/render-watch-store.js";
 import { SyncService } from "../../src/services/sync-service.js";
 import { TodoService } from "../../src/services/todo-service.js";
 import type { SylDatabase } from "../../src/services/database.js";
@@ -37,6 +42,7 @@ import {
   testKeys,
   testMemory,
   testRenders,
+  testStudio,
 } from "../helpers/service.js";
 
 /**
@@ -139,8 +145,12 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
     const todos = new TodoService({ db: db.handle, clock });
     const goals = new GoalService({ db: db.handle, clock });
     const sendings = new SendingStore({ db: db.handle, clock, attachments });
-    const renders = testRenders(clock);
+    const studio = testStudio();
+    const renders = testRenders(clock, studio);
     const chat = testChat(messages);
+    // Hoisted so the characteristics seam below is built over the SAME graph
+    // and the same `remember` verb, exactly as `bootstrap` builds them.
+    const memory = testMemory(db, clock);
 
     running = await startTestApp(
       createApp(testConfig(), {
@@ -155,15 +165,17 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         sync: new SyncService({
           db: db.handle,
           clock,
-          resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, jobs, sendings }),
+          resolvers: syncResolvers({ messages, reminders, todos, goals, devices, outbox, sendings }),
         }),
         jobs,
         idempotency: new IdempotencyStore({ db: db.handle, clock }),
         intake: new ArticleIntake({ store: new IntakeStore({ db: db.handle, clock }), clock }),
-        memory: testMemory(db, clock),
+        memory,
         attachments,
         // Cannot render, cannot reach Runway, spends nothing. See `testRenders`.
         renders,
+        // Over the same studio, exactly as `bootstrap` builds them.
+        wardrobe: new Wardrobe({ studio, clock }),
         sendings,
         composer: new SendingService({
           sendings,
@@ -175,6 +187,10 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
           compress: async () => ({ ok: false, reason: "no ffmpeg in tests" }),
           log: () => undefined,
         }),
+        renderWatches: new RenderWatchStore({ db: db.handle, clock }),
+        renderVerdicts: new RenderVerdicts({ db: db.handle, clock }),
+        health: new HealthSamples({ db: db.handle, clock }),
+        characteristics: new HealthCharacteristics({ graph: memory.graph, hers: memory.hers, clock }),
       }),
     );
     token = keys.pair(keys.issuePairingCode().code, "Commander's iPhone").token;

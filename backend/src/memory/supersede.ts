@@ -532,13 +532,48 @@ export class SupersessionLedger {
   }
 
   /**
-   * Run several statements as one.
+   * Run several statements as one, joining the caller's unit of work when there
+   * already is one.
    *
-   * `BEGIN IMMEDIATE` rather than a deferred begin: the writes are known up
-   * front, so taking the write lock at the start turns a lock upgrade failure
-   * into a wait, which the busy timeout already handles.
+   * At the top level: `BEGIN IMMEDIATE` rather than a deferred begin, because
+   * the writes are known up front, so taking the write lock at the start turns a
+   * lock upgrade failure into a wait, which the busy timeout already handles.
+   *
+   * **Inside somebody else's transaction: a SAVEPOINT, because SQLite refuses a
+   * second `BEGIN` outright** — `cannot start a transaction within a
+   * transaction`, verified on the shipped `node:sqlite` (22.23.1). That refusal
+   * is what makes this branch necessary rather than tidy. `syl-016.3` merges two
+   * nodes by moving edges, superseding a node AND recording where it went in
+   * this ledger; those are one fact and a crash between them leaves a memory
+   * that has been retired with no record of what replaced it, which is
+   * constraint 6's failure exactly. A caller cannot wrap that in a transaction
+   * without this, so it would have had to give up atomicity or reimplement the
+   * ledger write — and the second is how an invariant ends up with two owners.
+   *
+   * Which branch to take is **derived from the connection**, never declared by
+   * the caller. `db.isTransaction` is what SQLite actually thinks; a flag or an
+   * option would be a claim about the world that goes stale the first time a
+   * call site is moved, and would fail in the direction that loses data.
    */
   #transaction(work: () => void): void {
+    if (this.#db.isTransaction) {
+      this.#db.exec("SAVEPOINT syl_ledger");
+      try {
+        work();
+        this.#db.exec("RELEASE syl_ledger");
+      } catch (cause) {
+        try {
+          this.#db.exec("ROLLBACK TO syl_ledger");
+          this.#db.exec("RELEASE syl_ledger");
+        } catch {
+          // Already unwound by the caller's own rollback. The original failure
+          // is the one worth reporting, and swallowing this keeps it visible.
+        }
+        throw cause;
+      }
+      return;
+    }
+
     this.#db.exec("BEGIN IMMEDIATE");
     try {
       work();

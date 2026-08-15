@@ -22,6 +22,27 @@ public enum SylAPI {
         .get("/health", requiresAuthentication: false)
     }
 
+    /// Upload a batch of HealthKit samples, with the authorisation report that says what
+    /// the phone was allowed to look at.
+    ///
+    /// The idempotency key is freshly minted per attempt here, which is the opposite of
+    /// the outbox's rule — and it is safe for one reason: **this write is idempotent by
+    /// sample identity, not by request.** `(type, startedAt, endedAt, source)` is what
+    /// deduplicates, so a retry under a new key is a no-op that answers
+    /// `duplicates: n, written: 0`. A per-request key would guard one HTTP call, and the
+    /// failure to guard against is the same measurement arriving in two different calls —
+    /// from a retry, a second device, or an app that lost its watermark.
+    ///
+    /// A batch with **no samples is a legitimate upload**, not a no-op to be skipped: it
+    /// is how a type he has denied reaches the server at all. Silence with no report
+    /// attached is precisely what this whole feature exists to abolish.
+    public static func uploadHealthSamples(
+        _ body: HealthUpload,
+        idempotencyKey: String
+    ) throws -> Endpoint<HealthUploadResult> {
+        try .write(.post, "/health/samples", body: body, idempotencyKey: idempotencyKey)
+    }
+
     // MARK: - Auth
 
     public static func pair(
@@ -235,6 +256,27 @@ public enum SylAPI {
         idempotencyKey: String
     ) throws -> Endpoint<Goal> {
         try .write(.post, "/goals", body: body, idempotencyKey: idempotencyKey)
+    }
+
+    // MARK: - Sendings
+
+    /// What she has sent him, newest first — the From Syl surface.
+    ///
+    /// A read, so no idempotency key: `Endpoint.init` traps on a write without one, and
+    /// this is the one endpoint of the sendings trio the phone calls. `POST /sendings` is
+    /// hers, performed by her tool server against the same door, and has no client here
+    /// because the phone never composes a sending.
+    ///
+    /// The response is a page of complete rows whatever happened to the videos. A
+    /// `pending` or `failed` sending still carries her words and its date, and a client
+    /// that filters those out throws away the half of the feature that is guaranteed to
+    /// have arrived.
+    public static func sendings(cursor: String? = nil, limit: Int? = nil) -> Endpoint<SendingPage> {
+        .get("/sendings", query: page(cursor: cursor, limit: limit))
+    }
+
+    public static func sending(_ id: SylID) -> Endpoint<Sending> {
+        .get("/sendings/\(id)")
     }
 
     // MARK: - Devices

@@ -231,6 +231,9 @@ describe("SendingService", () => {
         because: "He was worried about the drive.",
         renderName: "latest",
       });
+      // Drained, because the push now follows the video rather than running
+      // ahead of it. See "the push waits for the video" below.
+      await service.drain();
 
       const delivery = outbox.list().items[0];
       expect(delivery?.payload.body).toBe("The rain stopped and I wanted you to know.");
@@ -339,17 +342,119 @@ describe("SendingService", () => {
       // The words are already his, and the answer is already back.
       expect(sending.state).toBe("pending");
       expect(messages.get(sending.messageId)).not.toBeNull();
-      expect(outbox.list().items).toHaveLength(1);
+      // AND HE HAS NOT BEEN BUZZED. The Commander's ruling: a notification that
+      // runs ahead of the video leads him to a spinner. The render was finished
+      // before `compose` would run at all, so this is a wait of seconds rather
+      // than the minutes it used to be — but it is still a wait, and the push
+      // is on the far side of it.
+      expect(outbox.list().items).toHaveLength(0);
 
       release?.();
       await service.drain();
       expect(sendings.get(sending.id)?.state).toBe("ready");
+      expect(outbox.list().items).toHaveLength(1);
     });
   });
 
   /**
-   * The heart of it. Five ways the video can fail, and in every one the words
-   * must already be his.
+   * The Commander's ruling, 2026-08-11, and the reason this file changed shape.
+   *
+   * > *"It sounds like the push notification goes out, regardless of whether a
+   * > video was created or not — that seems a little bit backwards to me."*
+   *
+   * Two halves, and both are asserted here rather than left to the job that
+   * arranges the looking: **a render that is not finished cannot be composed
+   * at all**, and **the push is enqueued when the video settles**. Together
+   * they make "he is never buzzed about a video that is not there" a property
+   * of this class rather than a rule the caller has to keep.
+   */
+  describe("nothing reaches him before the video does", () => {
+    it("should refuse a render that is still going, without writing anything", async () => {
+      renders = {
+        get: () => readyRender({ status: "rendering", video: null, renderedAt: null }),
+        latest: () => readyRender({ status: "rendering", video: null, renderedAt: null }),
+      };
+      service = build();
+      const before = messages.list(INTERACTIVE_CONVERSATION_ID).items.length;
+
+      await expect(
+        service.compose({ words: "Look.", because: "b", renderName: "latest" }),
+      ).rejects.toThrow(/still rendering/i);
+
+      // No message, no row, no notification. A refusal here costs nothing and
+      // reaches nobody, which is the whole point of doing it first.
+      expect(messages.list(INTERACTIVE_CONVERSATION_ID).items).toHaveLength(before);
+      expect(sendings.list().items).toHaveLength(0);
+      expect(outbox.list().items).toHaveLength(0);
+    });
+
+    it("should refuse a render that failed, and say why in a sentence", async () => {
+      renders = {
+        get: () =>
+          readyRender({ status: "failed", video: null, reason: "Runway ended this render as FAILED." }),
+        latest: () =>
+          readyRender({ status: "failed", video: null, reason: "Runway ended this render as FAILED." }),
+      };
+      service = build();
+
+      await expect(
+        service.compose({ words: "Look.", because: "b", renderName: "latest" }),
+      ).rejects.toThrow(/Runway ended this render as FAILED/);
+      expect(outbox.list().items).toHaveLength(0);
+    });
+
+    it("should refuse a render name that resolves to nothing", async () => {
+      // Her mistake, not his problem. She named a render she does not have, so
+      // she is told so and can name the right one — rather than his phone
+      // buzzing about a video nobody could ever have found.
+      renders = { get: () => null, latest: () => null };
+      service = build();
+
+      await expect(
+        service.compose({ words: "I made you something.", because: "b", renderName: "syl-nope" }),
+      ).rejects.toThrow(/no render called/i);
+      expect(sendings.list().items).toHaveLength(0);
+      expect(outbox.list().items).toHaveLength(0);
+    });
+
+    it("should buzz him once the clip is actually on the row", async () => {
+      compress = compressorWriting(mp4());
+      const sending = await service.compose({ words: "Here.", because: "b", renderName: "latest" });
+      await service.drain();
+
+      expect(sendings.get(sending.id)?.state).toBe("ready");
+      expect(outbox.list().items).toHaveLength(1);
+      expect(outbox.list().items[0]?.payload.body).toBe("Here.");
+    });
+
+    it("should still buzz him when the compression fails, because the words are already his", async () => {
+      // The one case where a notification accompanies no video, and it is the
+      // right answer: `compose` already verified the render, so the only way
+      // here is for the derived copy to have failed AFTER her words reached his
+      // conversation. Silence would leave him a message he is never told about.
+      compress = async () => ({ ok: false, reason: "I could not compress that render: ffmpeg ENOENT" });
+
+      const sending = await service.compose({ words: "Here.", because: "b", renderName: "latest" });
+      await service.drain();
+
+      expect(sendings.get(sending.id)?.state).toBe("failed");
+      expect(outbox.list().items).toHaveLength(1);
+      expect(outbox.list().items[0]?.payload.body).toBe("Here.");
+    });
+  });
+
+  /**
+   * The heart of it. Three ways the video can fail once the render itself was
+   * finished, and in every one the words must already be his.
+   *
+   * There used to be five. The two that are gone — a render that was still
+   * going, and one that had failed — are no longer reachable from `compose`:
+   * they are refused before a message exists, because a notification about a
+   * video that does not exist is worse than no notification at all. They are
+   * asserted as refusals in "nothing reaches him before the video does". What
+   * remains is everything that can only go wrong AFTER she looked at a finished
+   * clip and decided to send it, and for those the old rule stands exactly:
+   * **the words are never contingent on the video.**
    */
   describe("when the video does not work, the words still stand", () => {
     /** Assert the invariant that this whole feature is built around. */
@@ -357,51 +462,6 @@ describe("SendingService", () => {
       expect(messages.get(sending.messageId)?.text).toBe(words);
       expect(outbox.list().items[0]?.payload.body).toBe(words);
     }
-
-    it("should still deliver the words when the render does not exist", async () => {
-      renders = { get: () => null, latest: () => null };
-      service = build();
-
-      const sending = await service.compose({
-        words: "I made you something.",
-        because: "b",
-        renderName: "syl-nonexistent",
-      });
-      await service.drain();
-
-      expectWordsDelivered(sending, "I made you something.");
-      expect(sendings.get(sending.id)?.state).toBe("failed");
-      expect(sendings.get(sending.id)?.reason).toMatch(/no render/i);
-    });
-
-    it("should still deliver the words when the render is still going", async () => {
-      renders = {
-        get: () => readyRender({ status: "rendering", video: null, renderedAt: null }),
-        latest: () => readyRender({ status: "rendering", video: null, renderedAt: null }),
-      };
-      service = build();
-
-      const sending = await service.compose({ words: "Look.", because: "b", renderName: "latest" });
-      await service.drain();
-
-      expectWordsDelivered(sending, "Look.");
-      expect(sendings.get(sending.id)?.state).toBe("failed");
-      expect(sendings.get(sending.id)?.reason).toMatch(/still rendering/i);
-    });
-
-    it("should still deliver the words when the render itself failed", async () => {
-      renders = {
-        get: () => readyRender({ status: "failed", video: null, reason: "Runway ended this render as FAILED." }),
-        latest: () => readyRender({ status: "failed", video: null, reason: "Runway ended this render as FAILED." }),
-      };
-      service = build();
-
-      const sending = await service.compose({ words: "Look.", because: "b", renderName: "latest" });
-      await service.drain();
-
-      expectWordsDelivered(sending, "Look.");
-      expect(sendings.get(sending.id)?.state).toBe("failed");
-    });
 
     it("should still deliver the words when there is no ffmpeg to compress with", async () => {
       compress = async () => ({ ok: false, reason: "I could not compress that render: ffmpeg ENOENT" });
@@ -470,6 +530,205 @@ describe("SendingService", () => {
       // A sending is she says something and the form it takes is her own face.
       // Words with no face is an ordinary message.
       await expect(service.compose({ words: "Hello.", because: "b", renderName: "  " })).rejects.toThrow();
+    });
+  });
+
+  /**
+   * The one state the in-process promise cannot cover: a restart.
+   *
+   * `#follow` is detached and `drain` only survives a clean shutdown, so a
+   * process that dies between `create` and `attachVideo`/`markFailed` leaves a
+   * row saying `pending` with nothing left to re-drive it. Her words already
+   * reached him saying something was coming, it never comes, and nothing says
+   * so — constraint 4 wearing the render's hat.
+   *
+   * Every row here is built through the STORE rather than through `compose`,
+   * deliberately: that is how a crash constructs one, a row that exists with
+   * no promise behind it. `resume()` is then called on a service built fresh,
+   * which is a restarted process as closely as a unit test can stand in for
+   * one. Nothing mocks the follower; the pass is judged on what the data says
+   * afterwards.
+   */
+  describe("a sending stranded pending by a restart", () => {
+    /** A row a dead process left behind, with its words already delivered. */
+    function stranded(
+      words: string,
+      renderName: string | null = "syl-20260811t090000z-close",
+    ): { readonly id: string; readonly messageId: string } {
+      const appended = chat.append({
+        conversationId: INTERACTIVE_CONVERSATION_ID,
+        clientId: null,
+        role: "assistant",
+        text: words,
+      });
+      const row = sendings.create({
+        words,
+        because: "He said he missed the sky.",
+        messageId: appended.message.id,
+        renderName,
+      });
+      expect(row.state).toBe("pending");
+      return { id: row.id, messageId: row.messageId };
+    }
+
+    /** A restarted process: a new service over the same stores. */
+    function restart(): SendingService {
+      service = build();
+      service.resume();
+      return service;
+    }
+
+    it("should pick a pending row up on boot and drive it to ready when the render is still there", async () => {
+      compress = compressorWriting(mp4());
+      const row = stranded("I made you something.");
+
+      await restart().drain();
+
+      const settled = sendings.get(row.id);
+      expect(settled?.state).toBe("ready");
+      expect(settled?.video).not.toBeNull();
+      expect(settled?.video?.hasThumbnail).toBe(true);
+    });
+
+    it("should drive a pending row whose render is gone to failed, WITH a sentence", async () => {
+      // Not merely "not pending". A row moved to `failed` with nothing in
+      // `reason` reads as a bug on his screen, and the whole point of settling
+      // it is that he is told rather than left waiting.
+      renders = { get: () => null, latest: () => null };
+      const row = stranded("Look at this.");
+
+      await restart().drain();
+
+      const settled = sendings.get(row.id);
+      expect(settled?.state).toBe("failed");
+      expect(settled?.reason).toMatch(/no render/iu);
+      expect((settled?.reason ?? "").trim().length).toBeGreaterThan(20);
+    });
+
+    it("should settle a pending row whose render failed, rather than leave it claiming a video", async () => {
+      renders = {
+        get: () => readyRender({ status: "failed", video: null, reason: "Runway ended this render as FAILED." }),
+        latest: () => readyRender({ status: "failed", video: null, reason: "Runway ended this render as FAILED." }),
+      };
+      const row = stranded("Here.");
+
+      await restart().drain();
+
+      expect(sendings.get(row.id)?.state).toBe("failed");
+      expect(sendings.get(row.id)?.reason).not.toBeNull();
+    });
+
+    it("should settle a pending row whose render is still going, so nothing is left claiming a video", async () => {
+      // The pass hands the row back to the SAME follower `compose` uses, and
+      // that follower's verdict on a render still in flight is a settled
+      // failure with a sentence — see `#makeVideo`. It deliberately does not
+      // wait: waiting would make `pending` mean two different things, and this
+      // is the pass that has to tell them apart.
+      renders = {
+        get: () => readyRender({ status: "rendering", video: null, renderedAt: null }),
+        latest: () => readyRender({ status: "rendering", video: null, renderedAt: null }),
+      };
+      const row = stranded("Nearly.");
+
+      await restart().drain();
+
+      expect(sendings.get(row.id)?.state).not.toBe("pending");
+      expect(sendings.get(row.id)?.reason).toMatch(/still rendering/iu);
+    });
+
+    it("should settle a pending row that named no render at all", async () => {
+      // The store allows a NULL `render_name`; nothing is ever coming for such
+      // a row, so leaving it pending would be the same lie by omission.
+      const row = stranded("Just this.", null);
+
+      await restart().drain();
+
+      expect(sendings.get(row.id)?.state).toBe("failed");
+      expect(sendings.get(row.id)?.reason).not.toBeNull();
+    });
+
+    it("should leave a ready row and a failed row exactly as it found them", async () => {
+      compress = compressorWriting(mp4());
+      const done = await service.compose({ words: "Done.", because: "b", renderName: "latest" });
+      await service.drain();
+      const gone = stranded("Failed.");
+      sendings.markFailed(gone.id, "There is no render by that name.");
+      // And one genuinely stranded row, so the pass has work to do rather than
+      // passing this test by finding nothing at all.
+      stranded("Still waiting.");
+
+      const before = { done: sendings.get(done.id), gone: sendings.get(gone.id) };
+      expect(before.done?.state).toBe("ready");
+      // A later clock, so a pass that rewrote a settled row would move
+      // `updatedAt` and be visible rather than idempotent-looking.
+      now += 60_000;
+
+      await restart().drain();
+
+      expect(sendings.get(done.id)).toEqual(before.done);
+      expect(sendings.get(gone.id)).toEqual(before.gone);
+    });
+
+    it("should never touch the words, the reason for them, or the message that carried them", async () => {
+      // Said on purpose rather than left implicit: `sendings_never_rewritten`
+      // in `0024_sendings.sql` is a BEFORE UPDATE trigger that ABORTS on any
+      // change to `words`, `because`, `message_id`, `id` or `created_at`. So a
+      // pass that reached the words would not quietly differ here — it would
+      // throw out of `markFailed`, the row would stay pending, and the boot
+      // would carry a stranded sending anyway. This asserts both halves: the
+      // fields are untouched, and the pass settled the row while not touching
+      // them.
+      renders = { get: () => null, latest: () => null };
+      const row = stranded("The exact words she chose.");
+      const before = sendings.get(row.id);
+
+      await restart().drain();
+
+      const after = sendings.get(row.id);
+      expect(after?.words).toBe(before?.words);
+      expect(after?.because).toBe(before?.because);
+      expect(after?.messageId).toBe(before?.messageId);
+      expect(after?.createdAt).toBe(before?.createdAt);
+      expect(after?.state).toBe("failed");
+    });
+
+    it("should drive every stranded row, not merely the first one it finds", async () => {
+      compress = compressorWriting(mp4());
+      const rows = [stranded("One."), stranded("Two."), stranded("Three.")];
+
+      await restart().drain();
+
+      expect(rows.map((row) => sendings.get(row.id)?.state)).toEqual(["ready", "ready", "ready"]);
+    });
+
+    it("should buzz him when it finally settles, because nothing buzzed before", async () => {
+      // The push is enqueued at the video's SETTLEMENT now, so a row stranded
+      // `pending` by a crash is a row he was never notified about. The recovery
+      // pass finishing it is the thing that finally tells him — the opposite of
+      // what this assertion used to say, and for the reason the Commander
+      // overruled: nothing reaches him until there is something to reach him
+      // about.
+      compress = compressorWriting(mp4());
+      stranded("Already read.");
+
+      await restart().drain();
+
+      expect(outbox.list().items).toHaveLength(1);
+      expect(outbox.list().items[0]?.payload.body).toBe("Already read.");
+    });
+
+    it("should never buzz him twice for one sending, however often it is recovered", async () => {
+      // The idempotency property, stated where it is actually load-bearing. The
+      // key is derived from the sending's own id, so a second recovery pass —
+      // or a retried settlement — writes no second row.
+      compress = compressorWriting(mp4());
+      const row = stranded("Only once.");
+
+      await restart().drain();
+      await restart().drain();
+
+      expect(outbox.list().items).toHaveLength(1);
+      expect(outbox.list().items[0]?.idempotencyKey).toContain(row.id);
     });
   });
 

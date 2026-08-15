@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_QUIET_HOURS as QUIET_HOURS_SETTING } from "../../src/config.js";
+import { nextDailyOccurrence } from "../../src/harness/schedule.js";
 import {
   DEFAULT_QUIET_HOURS,
   DEFAULT_TIMEZONE,
@@ -404,8 +406,10 @@ describe("PresenceService", () => {
     service.turnStarted();
     expect(service.current.state).toBe("absent");
 
-    // 08:00 Chicago, the moment the window ends.
-    now = Date.UTC(2026, 7, 12, 13, 0, 0);
+    // The moment the window ends, asked of the window rather than typed out —
+    // a literal here would stop being the boundary the day the window moved,
+    // and would keep passing while testing an ordinary morning minute.
+    now = nextDailyOccurrence(DEFAULT_QUIET_HOURS.end, new Date(NIGHT), DEFAULT_TIMEZONE).getTime();
     vi.advanceTimersByTime(60_000);
 
     expect(service.current.state).toBe("thinking");
@@ -483,7 +487,15 @@ describe("the defaults", () => {
     // Never a fixed UTC offset: an offset is a property of an instant, not of
     // a place, and one that reaches storage survives exactly one DST boundary.
     expect(DEFAULT_TIMEZONE).toBe("America/Chicago");
-    expect(DEFAULT_QUIET_HOURS).toEqual({ start: "23:00", end: "08:00" });
+    expect(DEFAULT_TIMEZONE).toBe(QUIET_HOURS_SETTING.tz);
+  });
+
+  it("should take the window from config rather than declaring one of its own", () => {
+    // This module used to export DEFAULT_QUIET_HOURS with a DIFFERENT value
+    // under the SAME name, so presence went absent an hour after the outbox
+    // started holding notifications. The window's value is asserted once, in
+    // `quiet-window.test.ts`; what matters here is that this is that window.
+    expect(DEFAULT_QUIET_HOURS).toBe(QUIET_HOURS_SETTING.quiet);
   });
 
   it("should match the ttl values the contract's fixtures were captured with", () => {

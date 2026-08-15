@@ -47,7 +47,11 @@ if [ ! -d "$repo_dir/node_modules" ]; then
 fi
 # SYL_IOS_LIVE=1 is what stops the suite skipping itself. Do not remove it to make a
 # run faster; removing it makes the run mean nothing, and says so nowhere.
-(cd "$repo_dir" && SYL_IOS_LIVE=1 npx vitest run backend/tests/integration/ios-live-server.test.ts)
+#
+# --config vitest.heavy.config.ts is equally load-bearing: the suite runs in two
+# passes and the ROOT config excludes everything under tests/integration/, so a
+# bare `vitest run <that path>` matches no files.
+(cd "$repo_dir" && SYL_IOS_LIVE=1 npx vitest run --config vitest.heavy.config.ts backend/tests/integration/ios-live-server.test.ts)
 
 echo "==> Syl app (simulator: $destination)"
 xcodebuild test \

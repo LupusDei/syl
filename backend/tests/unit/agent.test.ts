@@ -16,6 +16,19 @@ import type { TurnOptions, TurnResult, TurnRunner } from "../../src/harness/sess
 import { PRECEDENCE_SECTION } from "../../src/harness/turn-context.js";
 import { autoMemoryAt } from "../../src/memory/auto-memory.js";
 
+/**
+ * Two lanes that are not in {@link LANES}, for the tests about lanes as a
+ * mechanism rather than about today's list of them.
+ *
+ * `Lane` is a plain string on purpose — a caller may add one without touching
+ * `harness/agent.ts` — and these are what that looks like. They are used where
+ * a test needs two ordinary remembering lanes, which the named list no longer
+ * supplies: `commander` is the only one left that is not memoryless, since the
+ * Commander merged her unattended turns onto it (2026-08-11).
+ */
+const A_LANE = "research";
+const ANOTHER_LANE = "briefing";
+
 function fakeResult(sessionId: string, text = "ok"): TurnResult {
   return {
     sessionId,
@@ -232,7 +245,7 @@ describe("SylAgent", () => {
     });
 
     await agent.ask("dream", LANES.consolidation);
-    await agent.ask("morning", LANES.agenda);
+    await agent.ask("morning", ANOTHER_LANE);
 
     expect(optionsOfCall(runner, 0).systemPrompt).not.toContain("TOOL SCHEMAS");
     expect(optionsOfCall(runner, 1).systemPrompt).toContain("TOOL SCHEMAS");
@@ -305,11 +318,10 @@ describe("SylAgent", () => {
     expect(optionsOfCall(runner, 0).cwd).toBe("/home/syl");
   });
 
-  // Parameterised over LANES rather than over today's four names, so a lane
-  // added later FAILS until somebody decides what container it gets instead of
-  // inheriting silence. That is exactly how the heartbeat and the agenda came
-  // to wake her in the source repository — and those two are the lanes that
-  // speak to the Commander unprompted.
+  // Parameterised over LANES rather than over today's names, so a lane added
+  // later FAILS until somebody decides what container it gets instead of
+  // inheriting silence. That is exactly how her unattended turns came to wake
+  // her in the source repository, back when they had lanes of their own.
   describe.each(Object.values(LANES))("the %s lane", (lane) => {
     it("should carry her home, her empty built-in surface, and no ambient settings", async () => {
       // Three separate mechanisms and every one of them load-bearing. `cwd`
@@ -346,6 +358,82 @@ describe("SylAgent", () => {
 
       expect(optionsOfCall(runner, 0).strictMcpConfig).toBe(true);
       expect(optionsOfCall(runner, 0).mcpConfig).toBeUndefined();
+    });
+
+    it("should say which lane it is, so a wrapper can tell one transcript from another", async () => {
+      // A runner wrapper sees a prompt and an options object and nothing else,
+      // so anything it needs to know has to be in one of them.
+      const runner = announcingRunner(() => "sess-1");
+      const agent = new SylAgent({ runner, store: memoryStore() });
+
+      await agent.forLane(lane).ask("who are you?");
+
+      expect(optionsOfCall(runner, 0).lane).toBe(lane);
+    });
+
+    it("should never mark a turn as the Commander's own words unless the caller said so", async () => {
+      // THE ONE THAT PROTECTS HIS SLEEP. `index.ts` records the prompt of a
+      // turn as evidence of what he said, and `harness/urgency.ts` checks a
+      // claimed urgent phrase against that file — so a turn wrongly marked can
+      // quote the words it was woken with and pierce quiet hours.
+      //
+      // It used to be inferred: first from `mcpConfig !== undefined`, then from
+      // the lane being `commander`. Both were exactly right until they were
+      // silently wrong, and the second stopped being true the day the Commander
+      // moved her unattended turns onto his lane. So it is asked and not
+      // inferred, and ABSENT MEANS NO — including on his own lane, where every
+      // scheduled turn she takes now runs.
+      const runner = announcingRunner(() => "sess-1");
+      const agent = new SylAgent({ runner, store: memoryStore() });
+
+      await agent.forLane(lane).ask("nobody asked you for anything");
+
+      expect(optionsOfCall(runner, 0).hisWords).toBe(false);
+    });
+
+    it("should not let a caller's options award themselves the Commander's voice", async () => {
+      // Same shape as the lane forgery test below, and a sharper consequence:
+      // a turn that could set this in its own `turnOptions` could grant itself
+      // the quiet-hours bypass. Written after the caller's overrides, so the
+      // last word belongs to the agent.
+      const runner = announcingRunner(() => "sess-1");
+      const agent = new SylAgent({
+        runner,
+        store: memoryStore(),
+        turnOptions: { hisWords: true } as TurnOptions,
+      });
+
+      await agent.forLane(lane).ask("nobody asked you for anything");
+
+      expect(optionsOfCall(runner, 0).hisWords).toBe(false);
+    });
+
+    it("should mark a turn as his when the caller holding his message says so", async () => {
+      // The other half: the safe default is worth nothing if the real path
+      // cannot get through it. `services/conversation-service.ts` is the one
+      // caller entitled to pass this, because it holds a message off the store
+      // that he authenticated to send.
+      const runner = announcingRunner(() => "sess-1");
+      const agent = new SylAgent({ runner, store: memoryStore() });
+
+      await agent.ask("wake me for this one, whatever the hour", lane, { hisWords: true });
+
+      expect(optionsOfCall(runner, 0).hisWords).toBe(true);
+    });
+
+    it("should not let a caller's options claim to be a different lane", async () => {
+      // The whole value of the field is that it cannot be forged: it is written
+      // after the caller's overrides, not before.
+      const runner = announcingRunner(() => "sess-1");
+      const agent = new SylAgent({
+        runner,
+        store: memoryStore(),
+        turnOptions: { lane: LANES.commander },
+      });
+
+      await agent.forLane(lane).ask("who are you?");
+
+      expect(optionsOfCall(runner, 0).lane).toBe(lane);
     });
   });
 
@@ -437,17 +525,18 @@ describe("SylAgent", () => {
 
   describe("session lanes", () => {
     it("should keep each lane on its own conversation", async () => {
-      // The failure this prevents: the heartbeat, the morning agenda and the
-      // Commander's own conversation sharing one thread, so Syl's inner
-      // monologue interleaves with talking to him.
+      // What a lane still guarantees, after three of them were merged onto the
+      // Commander's: two lanes are two transcripts. The dream must not read
+      // back its own speculation as though it were experience, and the
+      // extraction turn must not carry a pasted article into anything.
       const store = memoryStore();
       const runner = announcingRunner((n) => `sess-${n}`);
       const syl = new SylAgent({ runner, store });
 
-      await syl.ask("morning agenda please", LANES.agenda);
-      await syl.ask("anything needing attention?", LANES.heartbeat);
-      await syl.ask("agenda again", LANES.agenda);
-      await syl.ask("heartbeat again", LANES.heartbeat);
+      await syl.ask("first on one", ANOTHER_LANE);
+      await syl.ask("first on the other", A_LANE);
+      await syl.ask("second on one", ANOTHER_LANE);
+      await syl.ask("second on the other", A_LANE);
 
       expect(optionsOfCall(runner, 0).resume).toBeUndefined();
       expect(optionsOfCall(runner, 1).resume).toBeUndefined();
@@ -463,45 +552,117 @@ describe("SylAgent", () => {
       await new SylAgent({ runner, store }).ask("hi");
 
       expect(store.read(LANES.commander)).toBe("sess-c");
-      expect(store.read(LANES.heartbeat)).toBeUndefined();
+      expect(store.read(A_LANE)).toBeUndefined();
     });
 
     it("should expose a lane-scoped agent so a scheduled job can hold a stable handle", async () => {
       const store = memoryStore();
       const runner = announcingRunner((n) => `sess-${n}`);
-      const heartbeat = new SylAgent({ runner, store }).forLane(LANES.heartbeat);
+      const scoped = new SylAgent({ runner, store }).forLane(A_LANE);
 
-      await heartbeat.ask("tick");
-      await heartbeat.ask("tock");
+      await scoped.ask("tick");
+      await scoped.ask("tock");
 
-      expect(heartbeat.lane).toBe(LANES.heartbeat);
+      expect(scoped.lane).toBe(A_LANE);
       expect(optionsOfCall(runner, 1).resume).toBe("sess-0");
       expect(store.read(LANES.commander)).toBeUndefined();
     });
 
     it("should reset only the lane it was asked to reset", async () => {
-      const store = memoryStore({ commander: "sess-c", heartbeat: "sess-h" });
+      const store = memoryStore({ commander: "sess-c", research: "sess-h" });
       const runner = announcingRunner(() => "fresh");
       const syl = new SylAgent({ runner, store });
 
-      syl.reset(LANES.heartbeat);
+      syl.reset(A_LANE);
 
       expect(syl.sessionIdFor(LANES.commander)).toBe("sess-c");
-      expect(syl.sessionIdFor(LANES.heartbeat)).toBeUndefined();
+      expect(syl.sessionIdFor(A_LANE)).toBeUndefined();
     });
 
     it("should recover a stale lane without disturbing the others", async () => {
-      const store = memoryStore({ commander: "sess-c", heartbeat: "dead" });
+      const store = memoryStore({ commander: "sess-c", research: "dead" });
       const runner = vi
         .fn<TurnRunner>()
         .mockRejectedValueOnce(new Error("No conversation found with session ID: dead"))
         .mockResolvedValueOnce(fakeResult("sess-h2"));
       const syl = new SylAgent({ runner, store });
 
-      await syl.ask("tick", LANES.heartbeat);
+      await syl.ask("tick", A_LANE);
 
-      expect(syl.sessionIdFor(LANES.heartbeat)).toBe("sess-h2");
+      expect(syl.sessionIdFor(A_LANE)).toBe("sess-h2");
       expect(syl.sessionIdFor(LANES.commander)).toBe("sess-c");
+    });
+
+    it("should take one turn at a time on a lane, so two --resume processes never share a session", async () => {
+      // A turn is `claude --resume <session id>`, and two of those at once are
+      // two processes reading and appending one transcript. Nothing used to be
+      // able to arrange it: every unattended turn had a lane of its own, so the
+      // per-conversation queue in `ConversationService` was accidentally a
+      // per-session queue too. Merging her turns onto his lane ends that — the
+      // hour fires from the job runner while he is typing — so the exclusion
+      // has to be stated here, where the session id actually lives.
+      const store = memoryStore();
+      let open = 0;
+      let overlapped = false;
+      const order: string[] = [];
+      const runner = vi.fn<TurnRunner>(async (prompt, options) => {
+        open += 1;
+        if (open > 1) overlapped = true;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        open -= 1;
+        order.push(prompt);
+        options.onSessionId?.("sess-1");
+        return fakeResult("sess-1");
+      });
+      const syl = new SylAgent({ runner, store });
+
+      await Promise.all([syl.ask("his message"), syl.ask("her hour"), syl.ask("his next")]);
+
+      expect(overlapped, "two turns ran against one session id at once").toBe(false);
+      expect(order).toEqual(["his message", "her hour", "his next"]);
+    });
+
+    it("should let a lane go again after a turn throws, rather than wedging it forever", async () => {
+      // A queue that only released on success would turn one failed turn into a
+      // lane that never speaks again — which is a far worse failure than the
+      // one the queue exists to prevent.
+      const runner = vi
+        .fn<TurnRunner>()
+        .mockRejectedValueOnce(new Error("claude exited 1"))
+        .mockResolvedValueOnce(fakeResult("sess-2"));
+      const syl = new SylAgent({ runner, store: memoryStore() });
+
+      await expect(syl.ask("first")).rejects.toThrow(/exited 1/);
+      await expect(syl.ask("second")).resolves.toMatchObject({ sessionId: "sess-2" });
+    });
+
+    it("should report the lane busy while a turn holds it, so a low-priority job can stand aside", async () => {
+      // What `jobs/heartbeat-job.ts` asks before spending an hour. Read off the
+      // same queue `ask` uses — a second bookkeeping scheme over one session id
+      // is the bug this queue exists to prevent, wearing a hat.
+      let release = (): void => undefined;
+      const runner = vi.fn<TurnRunner>(async (_prompt, options) => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        options.onSessionId?.("sess-1");
+        return fakeResult("sess-1");
+      });
+      const syl = new SylAgent({ runner, store: memoryStore() });
+
+      expect(syl.busy()).toBe(false);
+      const turn = syl.ask("his message");
+      expect(syl.busy()).toBe(true);
+      // Another lane is another transcript, so it is not busy for this one.
+      expect(syl.busy(A_LANE)).toBe(false);
+
+      // The runner starts on a microtask, so `release` is not the real one
+      // until the queue has actually handed the turn over.
+      await Promise.resolve();
+      await Promise.resolve();
+      release();
+      await turn;
+      expect(syl.busy()).toBe(false);
     });
 
     it("should reject a lane name that cannot be a file name", async () => {
@@ -605,8 +766,8 @@ describe("SylAgent", () => {
       });
 
       await syl.ask("hi", LANES.commander);
-      await syl.ask("tick", LANES.heartbeat);
-      await syl.ask("morning", LANES.agenda);
+      await syl.ask("tick", A_LANE);
+      await syl.ask("morning", ANOTHER_LANE);
 
       const directories = [0, 1, 2].map((n) => optionsOfCall(runner, n).autoMemory);
       expect(new Set(directories.map((m) => JSON.stringify(m))).size).toBe(1);
@@ -617,10 +778,12 @@ describe("SylAgent", () => {
       // Guards the list itself rather than its current contents: if someone
       // adds a lane to MEMORYLESS_LANES, the lanes above stop sharing memory
       // and this says so at the point of change instead of at the point of
-      // confusion.
+      // confusion. `commander` matters most of the four now — every unattended
+      // turn she takes runs on it, so putting it in that set would silently
+      // switch auto-memory off for all of them at once.
       expect(MEMORYLESS_LANES.has(LANES.commander)).toBe(false);
-      expect(MEMORYLESS_LANES.has(LANES.heartbeat)).toBe(false);
-      expect(MEMORYLESS_LANES.has(LANES.agenda)).toBe(false);
+      expect(MEMORYLESS_LANES.has(A_LANE)).toBe(false);
+      expect(MEMORYLESS_LANES.has(ANOTHER_LANE)).toBe(false);
       expect(MEMORYLESS_LANES.has(LANES.consolidation)).toBe(true);
     });
 
@@ -634,7 +797,7 @@ describe("SylAgent", () => {
         autoMemory: autoMemoryAt("/srv/syl/memory"),
       });
 
-      await syl.forLane(LANES.heartbeat).ask("tick");
+      await syl.forLane(A_LANE).ask("tick");
 
       expect(optionsOfCall(runner, 0).autoMemory).toEqual({
         mode: "directory",

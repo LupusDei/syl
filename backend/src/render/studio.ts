@@ -25,8 +25,12 @@ import { fileURLToPath } from "node:url";
  *
  *     ~/.syl/renders/<name>.mp4          the render
  *     ~/.syl/renders/<name>.mp4.json     what made it
- *     ~/.syl/renders/reference.png       her likeness, what they all anchor on
+ *     ~/.syl/renders/reference.png       his guess at her likeness, from before he knew her
  *     ~/.syl/renders/frames/<name>/      the stills she looked at
+ *     ~/.syl/renders/parts/              the halves of a render made in two
+ *     ~/.syl/renders/faces/              every likeness she has adopted since
+ *     ~/.syl/renders/openings/           every opening she has kept beyond the ribbon
+ *     ~/.syl/renders/wardrobe.json       what she adopted, when, and why
  *
  * Flat and obvious on purpose. `characters/syl/video` was the *toolkit's*
  * nesting — it disambiguated her from other characters in a repository that
@@ -39,7 +43,28 @@ import { fileURLToPath } from "node:url";
  */
 
 /**
- * Her likeness, in her home, relative to it.
+ * Her likeness, in her home, relative to it — **and the frame an anchored render
+ * is CUT ON.**
+ *
+ * Sent as `promptImage` with `position: "last"` on the first half of a render
+ * whose subject is her face, which is what stops the model inventing a stranger
+ * now that frame one is the ribbon. The second half then starts from the frame
+ * that half actually ended on, and unravels back to the ribbon, so the finished
+ * clip opens and closes on the ribbon with her face held at the join. See
+ * `join.ts` for why that is the only shape available.
+ *
+ * **Never as `first`.** Sending it there is what made every service render open
+ * on her smiling headshot — and it is also what makes a video landscape:
+ * measured 2026-08-11, a 4-second probe handed this picture as `first` came
+ * back **1112x834**, transposed, because the opening frame decides the aspect
+ * and overrules `ratio`. That measurement is why the second half of an anchored
+ * render starts from an extracted 834x1112 frame rather than from this file.
+ *
+ * **It stays 1120x832 and it does not need re-cutting.** The obvious worry with
+ * two pictures is that they disagree about shape. Measured on 2026-08-11 with
+ * one render each way: a portrait re-cut and this landscape original both
+ * produced 834x1112 video with her likeness intact when the RIBBON was `first`.
+ * The opening frame decides the shape and the closing picture is fitted into it.
  *
  * **Do not switch this to `syl_source_upscaled.png`.** It cannot be sent:
  *
@@ -67,6 +92,40 @@ import { fileURLToPath } from "node:url";
  * and `docs/VIDEO.md`.
  */
 export const DEFAULT_REFERENCE = "renders/reference.png";
+
+/**
+ * The bare blue ribbon every clip opens on — **and the video's first frame.**
+ *
+ * `promptImage` is not a style hint. Runway *starts the video from the picture
+ * it is handed*, so whatever is here is literally frame one of every render.
+ * That is the whole of the Commander's report of 2026-08-11: his renders were
+ * arriving with "the template smiling still frame as the first frame", against
+ * the eight loops he named as the template, which all open on the ribbon.
+ *
+ * Two things were being asked of one file and they are not the same job:
+ *
+ *     reference.png        WHO she is    — a close portrait, her likeness
+ *     opening-ribbon.png   WHERE it STARTS — the bare ribbon, frame one
+ *
+ * `reference.png` is a smiling headshot, so handing it over pinned frame one to
+ * her face and left `LOOP_CLAUSE` — which says the clip opens on a ribbon with
+ * no figure in it — describing something the model had already been told
+ * otherwise. **No wording can move a frame that an image input pins**, which is
+ * why rewriting that clause did not fix this and could not have.
+ *
+ * It also decides the SHAPE. Measured on the artifacts, 2026-08-11: the eight
+ * loops are 834x1112 and a service render was 1112x834 — the same pixels,
+ * transposed. Both requested `720:1280`. seedance2 takes the video's aspect
+ * from `promptImage` and quietly overrules the ratio, and `reference.png` is
+ * 1120x832 landscape. So a portrait opening still is what makes a portrait
+ * video, and `DEFAULTS.ratio` agreeing with it is belt and braces rather than
+ * the mechanism.
+ *
+ * Named for what it is rather than for the clip it was cut out of: in her home
+ * there is one of these, and a person opening the directory should be able to
+ * tell what it does.
+ */
+export const DEFAULT_OPENING = "renders/opening-ribbon.png";
 
 /**
  * The prefix on every render Syl made herself.
@@ -101,14 +160,65 @@ export interface Studio {
   readonly videoDir: string;
   /** Where extracted stills go, one directory per render. */
   readonly frameDir: string;
-  /** The reference image handed to the model, absolute. */
+  /** Where the halves of a joined render are kept. See {@link Studio.part}. */
+  readonly partDir: string;
+  /**
+   * Every face she has ever adopted, kept forever. See `wardrobe.ts`.
+   *
+   * A directory rather than a file, because {@link Studio.reference} is one
+   * picture and a likeness she is still looking for is a series of them. The
+   * seed stays where it is: it is *his guess*, the one that was there before
+   * she could choose, and moving it would break every sidecar that names it.
+   */
+  readonly faceDir: string;
+  /** Every opening she has kept beyond the ribbon. Same rule as {@link Studio.faceDir}. */
+  readonly openingDir: string;
+  /**
+   * The log of what she has adopted and why.
+   *
+   * Beside the pictures rather than in the database, for the same reason the
+   * sidecars are: the file that must be right is the one next to the thing it
+   * describes, and her home travels as a unit. It is append-only — an entry is
+   * never edited and never removed — so which face is current is *derived* from
+   * it rather than stored as a second assertion that could disagree.
+   */
+  readonly wardrobeLog: string;
+  /** Her likeness, absolute. What a shot of her face would anchor on. */
   reference(relative?: string): string;
+  /** The ribbon still handed to the model as `promptImage`, absolute. Frame one. */
+  opening(relative?: string): string;
   /** The mp4 for a render. */
   video(name: string): string;
   /** The sidecar beside it — `<video>.json`, exactly as `generate.mjs` writes. */
   sidecar(name: string): string;
   /** Where this render's stills are kept. */
   frames(name: string): string;
+  /**
+   * One half of a render that was made in two, numbered from one.
+   *
+   * **Kept, not cleaned up.** `SOUL.md`: *"Never delete a render, and never let
+   * one be deleted."* A half is a render — it cost credits, it is fifteen
+   * seconds of her, and the joined file is a derivative of it. It also happens
+   * to be the only way to re-cut a join without paying for both halves again.
+   *
+   * Under `renders/parts/` rather than beside the finished clips so that a
+   * person opening `renders/` sees the renders, and so that the ledger — which
+   * reads sidecars — is never tempted to count a half as a render of its own.
+   */
+  part(name: string, index: number): string;
+  /**
+   * The still a half ends on, and the picture the next half starts from.
+   *
+   * `.png` rather than `.jpg`: it goes straight back to Runway as the next
+   * half's opening frame, so the join is exact rather than exact plus a round
+   * of JPEG. At 834x1112 that is ~1MB, ~1.3MB as a data URI — comfortably
+   * inside Runway's 5MB cap. **A 4K render would not be**, so a bigger ratio
+   * needs the ephemeral upload (`POST /v1/uploads`) rather than a data URI, and
+   * the failure would arrive as a union error that reads like a URL problem.
+   */
+  partFrame(name: string, index: number): string;
+  /** The concat list a join was made from. Kept for the same reason as the halves. */
+  partList(name: string): string;
 }
 
 /** A studio rooted at a given directory, which is normally her home. */
@@ -118,18 +228,29 @@ export function studioAt(root: string): Studio {
   // they came out of, and one directory called `renders` is what a person
   // opening her home is looking for.
   const frameDir = resolve(videoDir, "frames");
+  const partDir = resolve(videoDir, "parts");
+  const faceDir = resolve(videoDir, "faces");
+  const openingDir = resolve(videoDir, "openings");
 
   return {
     root,
     videoDir,
     frameDir,
+    partDir,
+    faceDir,
+    openingDir,
+    wardrobeLog: resolve(videoDir, "wardrobe.json"),
     reference: (relative = DEFAULT_REFERENCE) => resolve(root, relative),
+    opening: (relative = DEFAULT_OPENING) => resolve(root, relative),
     video: (name) => resolve(videoDir, `${name}.mp4`),
     // `<video>.json` rather than `<name>.json`: `generate.mjs` writes it that
     // way, and a sidecar that does not sit beside its video under its video's
     // own name is a sidecar somebody moves the video away from.
     sidecar: (name) => resolve(videoDir, `${name}.mp4.json`),
     frames: (name) => resolve(frameDir, name),
+    part: (name, index) => resolve(partDir, `${name}-${String(index)}.mp4`),
+    partFrame: (name, index) => resolve(partDir, `${name}-${String(index)}-last.png`),
+    partList: (name) => resolve(partDir, `${name}.txt`),
   };
 }
 
@@ -183,6 +304,36 @@ export function referenceSeed(
   return resolve(here, "..", "..", "assets", "syl_source.png");
 }
 
+/**
+ * The opening ribbon that ships with the source, used to seed her home.
+ *
+ * `assets/syl_opening_ribbon.png` is the **first frame of `syl-loop-1-emerge`
+ * at native resolution**, 834x1112. It is in the repository for the same reason
+ * the reference is: it is what every render starts from, and losing it does not
+ * fail loudly — it renders the wrong opening, expensively.
+ *
+ * The eight loops all open on this exact picture. That is measured rather than
+ * assumed: PSNR between the first frames of any two of them is ~35dB, which is
+ * one image through two h264 encodes, not two independent generations. So it
+ * was a `promptImage` they shared, and this is it, recovered from the only
+ * place it survives.
+ *
+ * Re-cut it with, from the repository root:
+ *
+ *     ffmpeg -y -ss 0 -i <a syl-loop-*.mp4> -frames:v 1 -pix_fmt rgb24 \
+ *       assets/syl_opening_ribbon.png
+ *
+ * 1.3MB, so ~1.8MB as a data URI, comfortably inside Runway's 5MB cap
+ * (`RUNWAY_API_INDEX.md` §5.2). Keep it under that or the request is rejected
+ * as malformed with an error that reads like a URL problem — see
+ * {@link DEFAULT_REFERENCE} for how that one presents.
+ */
+export function openingSeed(
+  here: string = dirname(dirname(fileURLToPath(import.meta.url))),
+): string {
+  return resolve(here, "..", "..", "assets", "syl_opening_ribbon.png");
+}
+
 /** What a boot did about her likeness. */
 export type ReferencePlacement =
   /** It was already in her home. Nothing was touched. */
@@ -205,7 +356,28 @@ export type ReferencePlacement =
  *   path, which is where a person can act on it, and no credit is spent.
  */
 export function ensureReference(studio: Studio, seed: string = referenceSeed()): ReferencePlacement {
-  const target = studio.reference();
+  return place(studio.reference(), seed);
+}
+
+/**
+ * Put the ribbon her clips open on in her home if it is not there already.
+ *
+ * The same two rules as {@link ensureReference}, and the same reasons. What is
+ * in her home is hers; a boot must not die because a picture is missing.
+ *
+ * Separate from the reference because the two pictures answer different
+ * questions — *who she is* and *where the clip starts* — and the boot that
+ * places one must be able to report on the other independently. Both are sent
+ * now, but not on the same renders: this one is frame one of everything, so its
+ * absence stops every render, while a missing reference stops only the framings
+ * that show her face.
+ */
+export function ensureOpening(studio: Studio, seed: string = openingSeed()): ReferencePlacement {
+  return place(studio.opening(), seed);
+}
+
+/** Copy a seed picture into her home, once, without ever replacing one. */
+function place(target: string, seed: string): ReferencePlacement {
   if (existsSync(target)) return "present";
   if (!existsSync(seed)) return "unplaced";
 

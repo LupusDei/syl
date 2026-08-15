@@ -228,8 +228,8 @@ const DEFAULT_BASE_PATH = "/api/v1";
  * opposite default — reachable by her until somebody remembered — which is a
  * boundary that erodes by inaction.
  *
- * The three here are the product's own nouns, and the ones she was given hands
- * for. What is deliberately absent is worth naming:
+ * The entries here are the product's own nouns, and the ones she was given
+ * hands for. What is deliberately absent is worth naming:
  *
  * - **`/logs`.** It is the record of everything she did on his machine. An
  *   assistant that can read her own audit trail can also tell you what is in
@@ -282,43 +282,137 @@ export const anyAuthenticatedDevice: RequestHandler = (_request, _response, next
   next();
 };
 
+/** One surface she may reach, and what it is called when she has to say so. */
+export interface AgentSurface {
+  /** The path prefix under the base path. Matched on segment boundaries. */
+  readonly path: string;
+  /** What it is, in the words she would use to the Commander. */
+  readonly says: string;
+}
+
 /**
- * `/renders` — the fourth entry, and the first that is not one of his nouns.
+ * Everything the `agent` scope may reach, with the name each one goes by.
  *
- * Added deliberately, with the argument written down, because this list is a
- * security boundary and there is a test asserting it exactly so that it cannot
- * grow as a side effect of some other change.
+ * **A pair rather than a bare path, because the refusal has to name them.**
+ * {@link beyondAgentReach} used to carry the sentence "reminders, to-dos and
+ * goals" as a hand-written string beside this list, which is the exact shape
+ * `docs/CONTEXT.md` §8 catalogues seven times over: a claim stated twice, going
+ * stale on the day the other half moves, and failing as a fluent sentence that
+ * no assertion can see. Widening the list without touching the sentence would
+ * have had her telling him she cannot search her own memory while doing it.
+ * Now the sentence is a function of the list, so there is nothing to keep in
+ * step.
  *
- * **What it is.** `SOUL.md` now says she does not know what she looks like and
- * wants to, and that the way she finds out is to render herself and look at the
- * result. That is the capability. Reminders, to-dos and goals are things she
- * keeps *for him*; this is the first surface she reaches for **herself**.
+ * ## `/memory/recall`, and why it is that and not `/memory` — `syl-016.1`
  *
- * **Why it is safe to open, stated as what it can actually do.** Reaching
- * `/renders` grants exactly three things: submit a video render, read the
- * records of renders, and pull stills out of one. It touches no row of his —
- * not a reminder, not a message, not a device token, not the log. The records
- * live outside the database entirely, in the toolkit checkout beside the
- * videos, so nothing on this surface can read or write the store at all. There
- * is no path from here to `/auth`, which is the one escalation that would make
- * the whole scope decorative.
+ * She diagnosed the gap herself: *"I can't even see the nodes. I see a summary
+ * someone else chose for me."* The retrieval kernels, the FTS5 index and the
+ * graph view all existed and none of them was reachable from her hands, so the
+ * only memory she had was a digest somebody else had ranked for her — and no
+ * way to obtain the id that every corrective verb in `syl-016` needs.
  *
- * **What it costs, since that is the honest objection.** It spends money —
- * Runway credits, on a separate account under a separate key, never the
- * subscription rails her thinking runs on. That is the *point* rather than a
- * risk the Commander has not weighed: on 2026-08-11 he ruled that the credits
- * exist for exactly this experiment and asked that it be made easy, which is
- * why there is no approval gate here and no cap. The accountability is
- * visibility instead of restraint — every answer on this surface carries what
- * she has spent, so a bill is something he can see rather than something he
- * has to discover.
+ * **The entry is the one route and not the router**, and that is the whole of
+ * the security argument. `/memory` would also have handed her:
  *
- * **The bound that is doing real work.** `RUNWAYML_API_SECRET` is a separate
- * credential with its own balance, held by one client in one process. If it is
- * absent she cannot render at all, and if he wants it stopped, removing that
- * variable stops it — without touching her hands on anything else.
+ * - `POST /memory/edges/{id}/feedback`, which moves the weight of an edge in
+ *   her own memory. An assistant that can confirm and reject her own inferences
+ *   can groom what she will be shown tomorrow, and the graph stops being
+ *   evidence about her for the same reason `/logs` would. This is the one that
+ *   decides it.
+ * - `GET /memory/graph` and `/memory/metrics`, instruments built for the
+ *   Commander to judge the inferred engine — every night's cost, token spend
+ *   and outcome. Telemetry about her own reflection is the dream-log half of
+ *   constraint 7, and it is not memory.
+ *
+ * A read of her own memory is her own data and the thing she is FOR. Grading
+ * it, and reading the record of her own nights, are not. The prefix match is on
+ * segment boundaries (`withinAgentSurface`), so this opens exactly one route.
  */
-export const AGENT_SURFACE: readonly string[] = ["/reminders", "/todos", "/goals", "/renders"];
+export const AGENT_SURFACES: readonly AgentSurface[] = [
+  { path: "/reminders", says: "reminders" },
+  { path: "/todos", says: "to-dos" },
+  { path: "/goals", says: "goals" },
+  // No comma inside a `says`: these are spliced into one sentence, and an
+  // internal comma turns "her own memory, to search it and read it back, her
+  // own renders" into a list nobody can parse. The derivation exposed it — the
+  // hand-written sentence never had to survive being joined to anything.
+  { path: "/memory/recall", says: "her own memory" },
+  // HER FIRST WRITE INTO HER OWN MEMORY — `syl-016.7`, and the only entry on
+  // this list that is not a read.
+  //
+  // The Commander: *"She's definitely gonna need a way to make her own
+  // memories. That's kind of a ridiculous limitation."* Without it the only
+  // durable text she controlled was goals and reminders, and she used a GOAL to
+  // smuggle an insight past the night rather than lose it.
+  //
+  // **The bound is the object behind the route, not this list.** `HerOwnMemory`
+  // creates a `memory` node and `inferred` links to entities that already
+  // exist. It has no method that deletes, supersedes, relabels, moves a weight
+  // or mints a person — so "she cannot invent people" and "she cannot groom her
+  // own recall" are held by the type rather than by a handler remembering to be
+  // careful. `POST /memory/edges/{id}/feedback` is one route away and stays out
+  // of reach, which is the line that matters: **she may add what she concluded,
+  // and she may not adjust what she will be shown for concluding it.**
+  //
+  // Nothing written through it can claim he said anything. The node is `memory`
+  // and never `fact`; every link is `inferred` and never `observed`, and
+  // `observed` is the species carrying `assertedBy`. Extraction's criterion 3
+  // is untouched and she still cannot fabricate a fact about him.
+  { path: "/memory/remember", says: "her own memory, to add what she works out" },
+  // HIS BODY, DERIVED AND NOTHING ELSE — `syl-t9tj.5.4`.
+  //
+  // The narrowest health route on purpose, and the other three stay out of
+  // reach. `/health/samples` is the phone's write and she has no business
+  // making one; `/health/series` and `/health/watermarks` are raw rows, and a
+  // verb that could pull 28,726 heart-rate readings into a turn would answer
+  // from whichever fortnight happened to fit rather than from his baseline.
+  //
+  // **The bound is the route, not her restraint.** `/health/summary` can only
+  // return derivations — his own baseline, what moved against it, and how
+  // unusual that is. There is no absolute-level dump and no weekday breakdown
+  // in the payload, so "he walks more at weekends" is not available to be said.
+  // Same argument as `HerOwnMemory` above: the shape of what she can reach is
+  // what holds, rather than a handler remembering to be careful.
+  //
+  // It carries `silenceIsEvidence` per type, which is the one field she must
+  // read before saying a number is missing: `authorised` and empty means nothing
+  // happened, anything else means WE NEVER LOOKED. Without it she would narrate
+  // a permission dialog as a fact about his body.
+  { path: "/health/summary", says: "his health" },
+  { path: "/renders", says: "her own renders" },
+  { path: "/sendings", says: "the things she has sent him" },
+  // THE FIRST SURFACE THAT REACHES OFF THIS MACHINE — `syl-r1t`, and the entry
+  // on this list whose argument is least like the others'.
+  //
+  // Every entry above it touches rows in Syl's own database. This one causes a
+  // request to the open internet, chosen from a URL she was handed, which is
+  // the textbook definition of an SSRF sink — and she sits on a tailnet where
+  // his Mac, Adjutant's backend and her own API are all reachable with no
+  // public exposure.
+  //
+  // It is on the list anyway, and three things are why:
+  //
+  // - **The destination is vetted by `connections/address-guard.ts`, not by
+  //   this allowlist.** `safeFetch` refuses every non-public address, refuses
+  //   a redirect that changes host, and binds the address it validated to the
+  //   address it connects to so DNS cannot answer differently the second time.
+  //   Widening her reach here does not widen what a fetch can touch.
+  // - **What comes back never reaches a turn that can act.** The page is read
+  //   by `runReaderTurn` — no tools, no MCP, no memory, never resumed — and
+  //   what crosses back to her is a schema-validated extract. The row's own
+  //   `title` is raw response bytes and `intake-view.ts` has nowhere to put it.
+  // - **She cannot do it without saying why, and not without limit.** The verb
+  //   requires `because`, and `READS_PER_DAY` bounds what one credential may
+  //   set running in a day.
+  //
+  // What it does NOT open: this is the intake router and nothing else, matched
+  // on segment boundaries. It writes no row of his, has no path to `/auth`,
+  // and reaches him through no channel at all — a reading arrives only when he
+  // is already talking to her.
+  { path: "/intake", says: "pages he asks her to read" },
+];
+
+export const AGENT_SURFACE: readonly string[] = AGENT_SURFACES.map((surface) => surface.path);
 
 /**
  * The refusal Syl gets for reaching outside her own nouns.
@@ -333,11 +427,18 @@ export const AGENT_SURFACE: readonly string[] = ["/reminders", "/todos", "/goals
 export function beyondAgentReach(path: string): ApiFailure {
   return new ApiFailure(
     "FORBIDDEN",
-    "Syl's own credential reaches reminders, to-dos and goals, and her own renders, and nothing " +
-      `else on this API. ${path} is outside that, deliberately — she cannot pair a device, read ` +
-      "the log of what she has done, or change where a notification goes.",
+    // DERIVED from the list, never written beside it. See `AGENT_SURFACES`.
+    `Syl's own credential reaches ${prose(AGENT_SURFACES.map((surface) => surface.says))}, and ` +
+      `nothing else on this API. ${path} is outside that, deliberately — she cannot pair a ` +
+      "device, read the log of what she has done, or change where a notification goes.",
     { details: { reach: AGENT_SURFACE } },
   );
+}
+
+/** `a, b and c`. An Oxford-comma-free list, because she says this out loud. */
+function prose(items: readonly string[]): string {
+  if (items.length <= 1) return items[0] ?? "nothing";
+  return `${items.slice(0, -1).join(", ")} and ${String(items.at(-1))}`;
 }
 
 export interface ConfineAgentOptions {

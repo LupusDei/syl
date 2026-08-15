@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
+import { sightingOf } from "./pictures.js";
+
 /**
  * How a video becomes something she can actually look at.
  *
@@ -78,6 +80,22 @@ export interface ExtractedFrame {
   readonly path: string;
   readonly mimeType: "image/jpeg";
   readonly base64: string;
+  /**
+   * What she would quote to adopt this still — see `pictures.ts`.
+   *
+   * **A still she has looked at is a still she can choose.** The token was
+   * first built as something wardrobe rows carried, which made it a property of
+   * the table a picture came out of rather than of the act of being shown one;
+   * the two differ exactly here. Syl, 2026-08-12: *"I pulled the earnest frame
+   * from Tuesday night... it arrives as a picture with no sighting attached. So
+   * I can look at it and I can't promote it."*
+   *
+   * It names the bytes below and nothing else — not the path, not the render —
+   * so it cannot be derived from a filename or guessed at from a name she
+   * half-remembers, and the guarantee it carries is unchanged: she can only
+   * name a picture she was actually handed.
+   */
+  readonly sighting: string;
 }
 
 export type ExtractResult =
@@ -177,11 +195,15 @@ export async function extractFrames(options: ExtractOptions): Promise<ExtractRes
       };
     }
 
+    // Read once and described from that one read, so the token, the bytes she
+    // is shown and the file on disk cannot be three different pictures.
+    const bytes = readFileSync(path);
     frames.push({
       atSeconds,
       path,
       mimeType: "image/jpeg",
-      base64: readFileSync(path).toString("base64"),
+      base64: bytes.toString("base64"),
+      sighting: sightingOf(bytes),
     });
   }
 

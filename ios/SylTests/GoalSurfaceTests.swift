@@ -390,7 +390,55 @@ final class GoalSurfaceTests: XCTestCase {
         path.append(.goals)
 
         XCTAssertEqual(path, [.goals])
-        XCTAssertEqual(Set(HomeView.Destination.allDestinations).count, 3)
+        XCTAssertEqual(Set(HomeView.Destination.allDestinations).count, 4)
+    }
+
+    // MARK: - The window says when it stopped short (syl-o319)
+    //
+    // Every fixture above this line is far under the limit, which is the condition that
+    // makes an undisclosed cap invisible. These seed PAST it.
+
+    func testShouldSayHowManyGoalsThereAreWhenTheWindowCannotHoldThemAll() throws {
+        try store.upsert((1...12).map { GoalFixtures.goal(id: GoalFixtures.goalID($0)) })
+
+        let snapshot = try GoalSnapshotLoader(
+            store: store, now: now, calendar: calendar, limit: 5
+        ).load()
+
+        XCTAssertEqual(snapshot.sections.reduce(0) { $0 + $1.rows.count }, 5, "the window")
+        XCTAssertTrue(snapshot.hasMore)
+        XCTAssertEqual(snapshot.goalCount, 12, "a real count, not the window's size")
+    }
+
+    func testShouldNotClaimThereIsMoreWhenTheGoalsFitExactly() throws {
+        // "Did the window fill" is cheaper and wrong exactly on a whole multiple, which
+        // would offer a way to nothing.
+        try store.upsert((1...5).map { GoalFixtures.goal(id: GoalFixtures.goalID($0)) })
+
+        let snapshot = try GoalSnapshotLoader(
+            store: store, now: now, calendar: calendar, limit: 5
+        ).load()
+
+        XCTAssertFalse(snapshot.hasMore)
+        XCTAssertEqual(snapshot.goalCount, 5)
+    }
+
+    func testShouldKeepAChildLinkedToAParentThatSortsInsideTheWindow() throws {
+        // The invisible half of the same defect. These rows build the parent/child index,
+        // so a truncated read used to orphan a child whose parent fell outside it — a
+        // goal that reads as corrupted data while its parent sits on disk.
+        let parent = GoalFixtures.goalID(1)
+        try store.upsert([
+            GoalFixtures.goal(id: parent, targetDate: "2026-01-01"),
+            GoalFixtures.goal(id: GoalFixtures.goalID(2), parentId: parent, targetDate: "2026-01-02"),
+        ])
+
+        let snapshot = try GoalSnapshotLoader(
+            store: store, now: now, calendar: calendar, limit: 5
+        ).load()
+
+        let child = snapshot.sections.flatMap(\.rows).first { $0.goal.id == GoalFixtures.goalID(2) }
+        XCTAssertEqual(child?.parent?.id, parent, "the child still knows its parent")
     }
 
     // MARK: - Helpers
@@ -404,5 +452,5 @@ extension HomeView.Destination {
     /// Only used by the test above, to assert the enum is hashable in the way a navigation
     /// path needs. Kept beside the test rather than on the type, so nothing in the app
     /// starts iterating destinations as though they were a menu.
-    static var allDestinations: [HomeView.Destination] { [.goals, .memory, .today] }
+    static var allDestinations: [HomeView.Destination] { [.goals, .memory, .fromSyl, .today] }
 }

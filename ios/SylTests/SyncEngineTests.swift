@@ -367,11 +367,11 @@ final class SyncEngineTests: XCTestCase {
             changes: [
                 upsertChange(type: .todo, id: "syl:todo:0198f2c2-0001-7000-8000-00000000c001"),
                 SyncChange(
-                    type: .job,
+                    type: .device,
                     op: .upsert,
-                    id: "syl:job:0198f2c4-0001-7000-8000-00000000e001",
+                    id: "syl:device:0198f2c4-0001-7000-8000-00000000e001",
                     at: instant("2026-08-09T07:00:00.000Z"),
-                    resource: .object(["id": .string("syl:job:x")])
+                    resource: .object(["id": .string("syl:device:x")])
                 ),
             ],
             serverTime: instant("2026-08-09T07:00:05.000Z")
@@ -475,7 +475,7 @@ final class SyncEngineTests: XCTestCase {
     func testShouldStillSkipTheResourcesThePhoneGenuinelyHasNoUseFor() async throws {
         // Goals moved out of the skipped list; deliveries, devices, jobs and runs stay
         // in it for the original reason.
-        for type in [SyncResourceType.device, .delivery, .job, .run] {
+        for type in [SyncResourceType.device, .delivery] {
             XCTAssertNil(LocalStore.tableName(for: type), "\(type.rawValue) is not stored")
         }
         XCTAssertEqual(LocalStore.tableName(for: .goal), "goal")
@@ -637,12 +637,26 @@ final class SyncEngineTests: XCTestCase {
         allGoals: @escaping @Sendable (String?) async throws -> GoalPage = { _ in
             GoalPage(items: [], nextCursor: nil, hasMore: false)
         },
+        allTodos: @escaping @Sendable (String?) async throws -> TodoPage = { _ in
+            TodoPage(items: [], nextCursor: nil, hasMore: false)
+        },
+        /// What the engine asked the feed for. Kept as a side-channel so `pull` above
+        /// stays a one-argument closure and every existing test reads unchanged.
+        onPullTypes: @escaping @Sendable ([SyncResourceType]) -> Void = { _ in },
         maxPagesPerRun: Int = 10
     ) -> SyncEngine {
         SyncEngine(
             store: store,
             outbox: outbox,
-            gateway: SyncGateway(push: push, pull: pull, allGoals: allGoals),
+            gateway: SyncGateway(
+                push: push,
+                pull: { since, types in
+                    onPullTypes(types)
+                    return try await pull(since)
+                },
+                allGoals: allGoals,
+                allTodos: allTodos
+            ),
             maxPagesPerRun: maxPagesPerRun
         )
     }
@@ -898,5 +912,167 @@ final class SyncEngineTests: XCTestCase {
     actor Counter {
         private(set) var value = 0
         func increment() { value += 1 }
+    }
+
+    // MARK: - syl-020: the to-dos that never arrived
+
+    /// The device must ask the feed only for what it stores.
+    ///
+    /// Measured on the Commander's own database the day this was written: 26,268 rows in
+    /// `sync_log`, of which 25,705 — 97.9% — were `job` and `run` telemetry no device
+    /// keeps. The phone pages 500 changes a run while those types were being written at
+    /// 6,352 an hour, so it was not slowly catching up, it was falling behind for good,
+    /// and his 23 to-do rows sat behind tens of thousands it would never reach.
+    ///
+    /// `GET /sync` has accepted `?types=` all along. The phone simply never sent it.
+    func testShouldAskTheFeedOnlyForTheTypesItActuallyStores() async throws {
+        let asked = TypeRecorder()
+
+        _ = await makeEngine(onPullTypes: { types in asked.record(types) }).synchronise()
+
+        let types = asked.seen
+        XCTAssertFalse(types.isEmpty, "the phone asked for everything, which is syl-020")
+        XCTAssertTrue(types.contains(.todo))
+        // The four it downloads and throws away. `job` and `run` alone were 97.9%.
+        for ignored in [SyncResourceType.device, .delivery] {
+            XCTAssertFalse(
+                types.contains(ignored),
+                "asked for \(ignored.rawValue), which this device discards on arrival"
+            )
+        }
+    }
+
+    /// The requested list and the stored list are the same list.
+    ///
+    /// The two are declared in different places — `SYNCED_RESOURCE_TYPES` and the switch
+    /// in `SyncEngine.upsert` — and drift between them is silent in the direction that
+    /// matters: a type stored but not requested simply never arrives, with no error, on
+    /// every device. That is this bug's whole shape, so it gets a test rather than a
+    /// comment asking people to remember.
+    func testShouldRequestExactlyTheTypesItKnowsHowToStore() {
+        XCTAssertEqual(
+            Set(SYNCED_RESOURCE_TYPES),
+            Set([.conversation, .message, .reminder, .todo, .goal, .sending] as [SyncResourceType]),
+            "SYNCED_RESOURCE_TYPES and SyncEngine.upsert have drifted apart"
+        )
+    }
+
+    /// Filtering fixes the future. It cannot reach behind the cursor.
+    ///
+    /// `GET /sync` returns only what is ahead of the cursor, so every to-do the starved
+    /// feed already walked past is unreachable by any amount of correct paging. Goals
+    /// needed a hand-written recovery for exactly this and to-dos never got one.
+    func testShouldRecoverTheTodosTheCursorAlreadyWalkedPast() async throws {
+        let stranded = Todo(
+            id: "syl:todo:0198f2c2-0020-7000-8000-00000000d020",
+            text: "Verify Blue Cross Blue Shield", goalId: nil, dueAt: nil, pinned: true,
+            status: .open, source: .commander, delegatedJobId: nil,
+            createdAt: try Instant.parse("2026-08-09T07:00:00.000Z"),
+            updatedAt: try Instant.parse("2026-08-09T07:00:00.000Z"),
+            completedAt: nil
+        )
+
+        // The feed has nothing to say — the row is behind the cursor, which is the whole
+        // problem. Only the list route can still see it.
+        _ = await makeEngine(
+            allTodos: { _ in TodoPage(items: [stranded], nextCursor: nil, hasMore: false) }
+        ).synchronise()
+
+        XCTAssertEqual(try store.openTodos().map(\.id), [stranded.id])
+    }
+
+    /// The recovery runs once, not on every launch.
+    ///
+    /// A full list fetch every time would trade a one-off rescue for a permanent cost —
+    /// `backfillGoals` states the same rule and this must not be the version that
+    /// forgets it.
+    func testShouldRecoverTheTodosOnlyOnce() async throws {
+        let calls = Counter()
+
+        let engine = makeEngine(
+            allTodos: { _ in
+                await calls.increment()
+                return TodoPage(items: [], nextCursor: nil, hasMore: false)
+            }
+        )
+        _ = await engine.synchronise()
+        _ = await engine.synchronise()
+
+        let count = await calls.value
+        XCTAssertEqual(count, 1, "the one-off recovery ran again")
+    }
+
+    /// A failed recovery must not record itself as done.
+    ///
+    /// The one thing it may never do. Recording success it did not have would strand
+    /// those to-dos permanently behind a flag saying they had been fetched.
+    func testShouldRetryTheRecoveryWhenItCouldNotFetch() async throws {
+        struct Offline: Error {}
+        let calls = Counter()
+
+        let engine = makeEngine(
+            allTodos: { _ in
+                await calls.increment()
+                throw Offline()
+            }
+        )
+        _ = await engine.synchronise()
+        _ = await engine.synchronise()
+
+        let count = await calls.value
+        XCTAssertEqual(count, 2, "a failed recovery marked itself done and will never retry")
+    }
+
+    /// The cursor does not step over a page that failed to apply.
+    ///
+    /// This is the mechanism behind both `syl-011.9` and `syl-020`, and the code used to
+    /// carry a comment asserting the opposite — that a failed change "stays stale, and
+    /// the next cursor pass sees it again". It did not: `GET /sync` returns only what is
+    /// ahead of the cursor, so a change stepped over is lost permanently and silently,
+    /// and the device goes on believing it is current.
+    func testShouldNotAdvanceTheCursorPastAChangeThatFailedToApply() async throws {
+        let response = SyncResponse(
+            cursor: "cursor-past-the-broken-row",
+            hasMore: false,
+            changes: [
+                SyncChange(
+                    type: .todo,
+                    op: .upsert,
+                    id: "syl:todo:0198f2c2-0021-7000-8000-00000000d021",
+                    at: instant("2026-08-09T06:30:00.000Z"),
+                    // An upsert carrying no resource: a contract violation, and formerly
+                    // dropped with no error recorded anywhere at all.
+                    resource: nil
+                )
+            ],
+            serverTime: instant("2026-08-09T07:00:05.000Z")
+        )
+
+        let report = await makeEngine(pull: { _ in response }).synchronise()
+
+        XCTAssertFalse(
+            report.failures.isEmpty,
+            "a to-do vanished without one trace in the report"
+        )
+        XCTAssertNotEqual(
+            try store.syncState().cursor, "cursor-past-the-broken-row",
+            "the cursor moved past a change that never applied — it can never be re-delivered"
+        )
+    }
+
+    /// Captures what the engine asked for, from whatever task the closure ran on.
+    final class TypeRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var types: [SyncResourceType] = []
+
+        func record(_ values: [SyncResourceType]) {
+            lock.lock(); defer { lock.unlock() }
+            types = values
+        }
+
+        var seen: [SyncResourceType] {
+            lock.lock(); defer { lock.unlock() }
+            return types
+        }
     }
 }

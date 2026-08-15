@@ -34,6 +34,12 @@ import SylKit
 /// dashboard failure mode, and it makes a quiet day look like an empty one.
 struct HomeView: View {
     var snapshot: HomeSnapshot
+    /// Why the day could not be read, if it could not. `nil` is the only state in which
+    /// an empty spine may be called a clear day — see ``couldNotRead(_:)`` and `syl-019`.
+    ///
+    /// Defaulted so every existing caller keeps compiling into the succeeded case, which
+    /// is what they all meant; only ``HomeScreen`` has a failure to pass.
+    var loadFailure: String?
     var presence: PresenceState
     var presenceIntensity: Double
     var now: Date
@@ -57,11 +63,18 @@ struct HomeView: View {
     /// Where an orb goes.
     ///
     /// `Hashable` since `syl-011.5.3`, because it is now a navigation path value:
-    /// `HomeScreen` pushes `.goals` onto a `NavigationStack`. Goals is wired; `memory`
-    /// belongs to `syl-010` and `today` is already this screen.
+    /// `HomeScreen` pushes `.goals` onto a `NavigationStack`. Goals, Memory and From Syl
+    /// all lead somewhere; `today` is already this screen and scrolls instead.
+    ///
+    /// **Adding a case here breaks every exhaustive switch over it**, which is exactly
+    /// why `onCapture` above is a closure rather than a fourth case. That is a feature:
+    /// the compiler finds each site and each one gets a decision, which is why none of
+    /// them has a `default`.
     enum Destination: Hashable, Sendable {
         case goals
         case memory
+        /// What she has sent him. `syl-015.4.7`.
+        case fromSyl
         case today
     }
 
@@ -185,31 +198,14 @@ struct HomeView: View {
         // else is composited over the bottom of it, which is what the concept art always
         // showed and what the Commander asked for.
         ZStack(alignment: .bottom) {
-            ZStack {
-                SylHero(presence: presence, intensity: presenceIntensity, prefersStill: !scrolls)
+            // The hero art alone. What she is *doing* used to be drawn across it, as a
+            // ribbon — see ``SylHalo`` for why it moved, and for why the ribbon was
+            // right in chat and wrong here.
+            SylHero(presence: presence, intensity: presenceIntensity, prefersStill: !scrolls)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .animation(SylTheme.Motion.breathe, value: presence)
 
-                // The ribbon appears only while she is *doing* something.
-                //
-                // Drawn continuously it was a coloured line lying across her — a
-                // scratch, not light, and it competed with the art every second of
-                // every day. Restricting it to the active states fixes the look and is
-                // the better rule anyway: the art says who she is, the ribbon says what
-                // she is doing, and most of the time she is not doing anything, which
-                // is exactly the state this whole product is designed to make restful.
-                if HomeSnapshot.isActive(presence) {
-                    SylRibbon(state: presence, intensity: presenceIntensity)
-                        .frame(height: viewport.height * 0.20)
-                        .offset(y: viewport.height * 0.06)
-                        .opacity(0.75)
-                        .blendMode(.plusLighter)
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(SylTheme.Motion.breathe, value: presence)
-
-            nameplate
+            nameplate(width: viewport.width)
         }
         // One *visible* screen, not one raw geometry height.
         //
@@ -237,25 +233,26 @@ struct HomeView: View {
     /// needs, and a thin `luminanceCore` sheen just above it catches the eye the way a
     /// curved glass surface would — that is the "glossy" part, and without it the ramp
     /// alone reads as a grey wash.
-    private var nameplate: some View {
+    private func nameplate(width: CGFloat) -> some View {
         VStack(spacing: 0) {
             Text("Syl")
                 .font(.system(size: 54, design: .serif))
                 .foregroundStyle(SylTheme.Colour.ink)
                 .shadow(color: SylTheme.Colour.luminanceCore.opacity(0.9), radius: 14)
 
-            Text(HomeSnapshot.phrase(for: presence) ?? snapshot.greeting)
-                .font(.system(.subheadline, design: .serif))
-                .tracking(2.2)
-                .foregroundStyle(SylTheme.Colour.inkSoft)
-                .multilineTextAlignment(.center)
-                .contentTransition(.opacity)
-                .animation(SylTheme.Motion.breathe, value: presence)
-                .padding(.top, SylTheme.Metric.tight)
-                .padding(.horizontal, SylTheme.Metric.gutter)
+            // Her line, inside the halo that orbits it. The halo owns the `Text` because
+            // it is sized from the phrase's own measured lines, and it occupies a layout
+            // box exactly the size of its ring — which is what makes "the ring never
+            // collides with the title above or the orbs below" a fact about this stack
+            // rather than a promise about some numbers.
+            SylHalo(
+                phrase: HomeSnapshot.phrase(for: presence) ?? snapshot.greeting,
+                state: presence,
+                intensity: presenceIntensity,
+                availableWidth: width
+            )
 
             orbs
-                .padding(.top, SylTheme.Metric.loose)
                 .padding(.bottom, SylTheme.Metric.gutter)
         }
         .frame(maxWidth: .infinity)
@@ -293,14 +290,28 @@ struct HomeView: View {
 
         // One *visible* screen, not one raw geometry height.
         //
+    /// **Even slots rather than fixed spacing**, since From Syl made this a fourth door.
+    ///
+    /// Four 82-point spheres separated by `chapter` need 448 points and the narrowest
+    /// phone this app runs on has 375. A smaller constant would have fixed today's count
+    /// and broken on the next one; distributing the width means the row breathes at three
+    /// doors and still fits at four, on every device, with no number to revisit.
     private var orbs: some View {
-        HStack(alignment: .top, spacing: SylTheme.Metric.chapter) {
+        HStack(alignment: .top, spacing: 0) {
             SylOrb(title: "Goals", symbol: "sparkle") { onOpen(.goals) }
+                .frame(maxWidth: .infinity)
             // Open since `syl-ryp.2`. It was dimmed because an orb identical to the two
             // beside it that does nothing when tapped is worse than one visibly not
             // ready — he tapped it and reasonably concluded the app was broken. It now
             // leads to the constellation, so the dimming would be the lie instead.
             SylOrb(title: "Memory", symbol: "cloud") { onOpen(.memory) }
+                .frame(maxWidth: .infinity)
+            // An envelope rather than a play triangle, and that is the same ruling the
+            // screen's title carries: what arrives there is not a video, it is her. A
+            // file-format glyph would name the wrong thing on the one door where the
+            // sender is the point.
+            SylOrb(title: "From Syl", symbol: "envelope") { onOpen(.fromSyl) }
+                .frame(maxWidth: .infinity)
             SylOrb(
                 title: "Today",
                 symbol: "sun.horizon",
@@ -309,6 +320,7 @@ struct HomeView: View {
                 // absent entirely when there are none.
                 detail: snapshot.isClear ? nil : "\(snapshot.remaining) left"
             ) { scrollToDay &+= 1 }
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -334,7 +346,13 @@ struct HomeView: View {
                 NoteCard(note: note)
             }
 
-            if snapshot.moments.isEmpty {
+            if let failure = loadFailure {
+                // BEFORE ANY READING OF THE SPINE. An empty spine means "nothing is due"
+                // only when the read that produced it succeeded; if it failed, the spine
+                // is not empty, it is UNKNOWN, and those must never render the same
+                // (`syl-019`).
+                couldNotRead(failure)
+            } else if snapshot.moments.isEmpty {
                 clearDay
             } else {
                 DaySpine(
@@ -360,6 +378,36 @@ struct HomeView: View {
         .padding(.horizontal, SylTheme.Metric.gutter)
         .padding(.top, SylTheme.Metric.gutter)
         .padding(.bottom, SylTheme.Metric.chapter)
+    }
+
+    /// The day could not be read — which is NOT the same as the day being clear.
+    ///
+    /// She says she does not know, rather than that there is nothing, because those are
+    /// different facts and only one of them is safe to be wrong about. Being told his
+    /// day is clear when it is not is how he misses something; being told she cannot see
+    /// it costs him one glance at the list.
+    ///
+    /// The error text is shown, deliberately and unprettified. This screen is currently
+    /// the only place the failure is observable at all, so hiding the detail behind a
+    /// friendly sentence would remove the only evidence anyone has.
+    private func couldNotRead(_ failure: String) -> some View {
+        VStack(alignment: .leading, spacing: SylTheme.Metric.snug) {
+            Text("I cannot see your day")
+                .font(SylTheme.Typeface.title)
+                .foregroundStyle(SylTheme.Colour.ink)
+
+            Text("Something went wrong reading it, so I will not tell you it is clear — I do not know that. Your list below is intact.")
+                .font(SylTheme.Typeface.detail)
+                .foregroundStyle(SylTheme.Colour.inkSoft)
+
+            Text(failure)
+                .font(SylTheme.Typeface.detail.monospaced())
+                .foregroundStyle(SylTheme.Colour.inkSoft)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+        .accessibilityElement(children: .combine)
     }
 
     /// Nothing left. Still the best state the screen has — she simply has the screen

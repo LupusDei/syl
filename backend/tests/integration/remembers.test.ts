@@ -6,6 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { bootstrap, type ServiceDependencies } from "../../src/index.js";
 import type { TurnOptions, TurnResult, TurnRunner } from "../../src/harness/session.js";
+import {
+  ABOUT_RELATION,
+  ExtractionStore,
+  STATED_RELATION,
+} from "../../src/memory/extract-apply.js";
 import { WorkingMemory } from "../../src/memory/working.js";
 import { fixedClock } from "../../src/services/clock.js";
 import { INTERACTIVE_CONVERSATION_ID, type SylDatabase } from "../../src/services/database.js";
@@ -49,14 +54,33 @@ const HE_SAID = "My daughter is called Vivenna, and she starts at Bishop's in Se
 const SHE_SAID = "Noted — Vivenna, Bishop's, September.";
 const HE_ASKED = "What is my daughter called?";
 
-/** What the extraction turn returns, as JSON on the wire. */
+/**
+ * What the extraction turn returns, as JSON on the wire.
+ *
+ * TWO entries, and that is `syl-016.4` end to end. This used to be one — a
+ * `person` node whose body was "The Commander's daughter; starts at Bishop's in
+ * September", which is a person and a fact about her welded together. The
+ * projection groups by kind, so filing it that way makes the People bucket stop
+ * meaning people. Vivenna is a person; where she goes to school is a `fact`,
+ * linked back to her.
+ */
 const EXTRACTED = JSON.stringify({
   facts: [
     {
       kind: "person",
       label: "Vivenna",
-      body: "The Commander's daughter; starts at Bishop's in September.",
+      body: "The Commander's daughter.",
       saidIn: 1,
+      about: null,
+      why: "He called her his daughter directly.",
+    },
+    {
+      kind: "fact",
+      label: "Vivenna's school",
+      body: "Vivenna starts at Bishop's in September.",
+      saidIn: 1,
+      about: 1,
+      why: "He said it outright in the same sentence.",
     },
   ],
   instructionsFound: [],
@@ -140,6 +164,8 @@ function boot(
   readonly deps: ServiceDependencies;
   readonly calls: Recorded[];
   readonly preamble: () => string;
+  /** For reading the stores `deps` does not expose — the provenance rows. */
+  readonly extractions: ExtractionStore;
 } {
   const { runner, calls } = scriptedRunner(reply);
   const clock = fixedClock(now);
@@ -150,7 +176,12 @@ function boot(
   open.push(database);
 
   const working = new WorkingMemory({ db: database.handle, graph: deps.memory.graph, clock });
-  return { deps, calls, preamble: () => working.preamble() };
+  return {
+    deps,
+    calls,
+    preamble: () => working.preamble(),
+    extractions: new ExtractionStore({ db: database.handle, graph: deps.memory.graph, clock }),
+  };
 }
 
 /** Say something to Syl and wait for the exchange, extraction included. */
@@ -175,12 +206,31 @@ describe("Syl remembers what the Commander told her", () => {
     // The fact is in the graph, and it is attributable.
     const people = monday.deps.memory.graph.listNodes({ kind: "person", limit: 10 });
     expect(people.map((node) => node.label)).toEqual(["Vivenna"]);
+    // Her entry is WHO SHE IS. Where she goes to school is its own node.
+    expect(people[0]?.body).toBe("The Commander's daughter.");
+
+    const claims = monday.deps.memory.graph.listNodes({ kind: "fact", limit: 10 });
+    expect(claims.map((node) => node.label)).toEqual(["Vivenna's school"]);
+    const link = monday.deps.memory.graph.edgesBetween(
+      claims[0]?.id ?? "",
+      people[0]?.id ?? "",
+    )[0];
+    expect(link?.relation).toBe(ABOUT_RELATION);
 
     const source = monday.deps.memory.graph.listNodes({ kind: "source", limit: 10 })[0];
     expect(source?.subjectId).toBe(INTERACTIVE_CONVERSATION_ID);
-    const provenance = monday.deps.memory.graph.edgesAssertedBy(source?.id ?? "");
-    expect(provenance).toHaveLength(1);
-    expect(provenance[0]?.targetNode).toBe(people[0]?.id);
+    const asserted = monday.deps.memory.graph.edgesAssertedBy(source?.id ?? "");
+    // Two facts stated, and the link between them, all vouched for by the
+    // conversation they came out of.
+    expect(asserted.filter((edge) => edge.relation === STATED_RELATION).map((edge) => edge.targetNode))
+      .toEqual(expect.arrayContaining([people[0]?.id, claims[0]?.id]));
+    expect(asserted).toHaveLength(3);
+
+    // And his own words are kept beside the step she took from them, which is
+    // what lets him correct the reasoning rather than only the conclusion.
+    const provenance = monday.extractions.provenanceFor(claims[0]?.id ?? "")[0];
+    expect(provenance?.quote).toBe(HE_SAID);
+    expect(provenance?.why).toBe("He said it outright in the same sentence.");
 
     // And it is in the projection her next turn is built from.
     expect(monday.preamble()).toContain("Vivenna");

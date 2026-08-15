@@ -6,8 +6,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { bootstrap, sylHome } from "../../src/index.js";
 import {
+  DEFAULT_OPENING,
   DEFAULT_REFERENCE,
+  ensureOpening,
   ensureReference,
+  openingSeed,
   referenceSeed,
   studioAt,
   studioRootFrom,
@@ -199,6 +202,71 @@ describe("ensureReference — her likeness, in her own home", () => {
   });
 });
 
+describe("ensureOpening — the ribbon every clip opens on", () => {
+  it("should ship the ribbon with the source, the same as her likeness", () => {
+    // `promptImage` is the video's FIRST FRAME. If this file stops existing,
+    // either she cannot render or something else becomes the opening shot —
+    // which is exactly the defect the Commander reported: the template headshot
+    // arriving as frame one.
+    expect(existsSync(openingSeed())).toBe(true);
+  });
+
+  it("should ship a PORTRAIT ribbon, because the video takes its shape from it", () => {
+    // Measured, 2026-08-11: seedance2 returned 1112x834 for a render that asked
+    // for `720:1280`, matching the 1120x832 landscape headshot it was handed.
+    // The picture decides the shape, so the shape of this file is load-bearing
+    // and a landscape replacement would silently bring the landscape videos
+    // back. Read out of the PNG header rather than trusted from a filename.
+    const header = readFileSync(openingSeed());
+
+    expect(header.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    const width = header.readUInt32BE(16);
+    const height = header.readUInt32BE(20);
+    expect(width).toBe(834);
+    expect(height).toBe(1112);
+  });
+
+  it("should place the ribbon in her home when it is not there yet", () => {
+    const root = scratch();
+    const seed = join(scratch("syl-seed-"), "ribbon.png");
+    writeFileSync(seed, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x11]));
+    const studio = studioAt(root);
+
+    expect(ensureOpening(studio, seed)).toBe("copied");
+    expect(readFileSync(studio.opening())).toEqual(readFileSync(seed));
+  });
+
+  it("should never overwrite the ribbon already in her home", () => {
+    // Same rule as her likeness, and for the same reason: what is in her home
+    // is hers, and a boot does not get to replace it with what shipped.
+    const root = scratch();
+    const seed = join(scratch("syl-seed-"), "ribbon.png");
+    writeFileSync(seed, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x11]));
+    const studio = studioAt(root);
+    mkdirSync(dirname(studio.opening()), { recursive: true });
+    writeFileSync(studio.opening(), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x22]));
+
+    expect(ensureOpening(studio, seed)).toBe("present");
+    expect(readFileSync(studio.opening())).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x22]));
+  });
+
+  it("should say so rather than throw when there is no ribbon to place", () => {
+    const root = scratch();
+    const studio = studioAt(root);
+
+    expect(ensureOpening(studio, join(root, "no-such-seed.png"))).toBe("unplaced");
+    expect(existsSync(studio.opening())).toBe(false);
+  });
+
+  it("should keep the ribbon beside her likeness, under a name that says what it is", () => {
+    const root = scratch();
+
+    expect(studioAt(root).opening()).toBe(join(root, DEFAULT_OPENING));
+    expect(DEFAULT_OPENING).not.toBe(DEFAULT_REFERENCE);
+    expect(dirname(studioAt(root).opening())).toBe(dirname(studioAt(root).reference()));
+  });
+});
+
 describe("bootstrap — her renders are wired to her home", () => {
   it("should read a render out of her own home rather than out of a toolkit checkout", () => {
     const home = scratch("syl-boot-");
@@ -242,6 +310,18 @@ describe("bootstrap — her renders are wired to her home", () => {
 
     expect(existsSync(join(home, DEFAULT_REFERENCE))).toBe(true);
     expect(readFileSync(join(home, DEFAULT_REFERENCE))).toEqual(readFileSync(referenceSeed()));
+  });
+
+  it("should place the ribbon her clips open on in her home on first boot", () => {
+    // Without this a fresh machine has nothing to hand Runway as a first frame,
+    // and `RenderService.start` refuses every render.
+    const home = scratch("syl-boot-");
+
+    const built = bootstrap(testConfig({ databasePath: join(home, "syl.db") }));
+    closers.push(() => built.database.close());
+
+    expect(existsSync(join(home, DEFAULT_OPENING))).toBe(true);
+    expect(readFileSync(join(home, DEFAULT_OPENING))).toEqual(readFileSync(openingSeed()));
   });
 
   it("should never reach into her real home from a test", () => {

@@ -6,6 +6,7 @@ import {
   buildWorkingMemory,
   toCandidate,
   WORKING_MEMORY_EMPTY,
+  WORKING_MEMORY_EXCLUDED_KINDS,
   WORKING_MEMORY_MAX_BYTES,
   WORKING_MEMORY_MAX_LINES,
   WORKING_MEMORY_NOTE,
@@ -13,6 +14,7 @@ import {
   WORKING_MEMORY_TITLE,
   WorkingMemory,
   WorkingMemoryOverflowError,
+  WorkingMemoryPinnedOverflowError,
   type WorkingMemoryCandidate,
 } from "../../src/memory/working.js";
 import { fixedClock } from "../../src/services/clock.js";
@@ -124,19 +126,71 @@ describe("buildWorkingMemory", () => {
   it("should NAME what did not fit rather than dropping it silently", () => {
     // The auto-memory index cliff (`syl-03d`) in one assertion: past a limit
     // the thing stops being loaded and nothing says so. Here it says so.
-    const plan = buildWorkingMemory(many(400));
+    //
+    // Deliberately sized to overflow the REAL production budget rather than a
+    // caller-supplied one — this asserts the cliff at the ceiling that actually
+    // ships. 400 stopped overflowing when the budget went 4,000 -> 32,000
+    // (`syl-ulf`); the count has to track the budget or the test quietly stops
+    // testing anything, which is the same class of rot the expected-failures
+    // gate exists to catch.
+    const plan = buildWorkingMemory(many(1_200));
 
     expect(plan.dropped.length).toBeGreaterThan(0);
     expect(plan.text).toContain(`…and ${String(plan.dropped.length)} more`);
-    expect(plan.included).toHaveLength(400 - plan.dropped.length);
+    expect(plan.included).toHaveLength(1_200 - plan.dropped.length);
+  });
+
+  it("should say what KIND was left out, not merely how many — `syl-016.2`", () => {
+    // Her complaint, verbatim: "It says there are ten more items it isn't
+    // showing me." A bare count tells her she is deciding with a known gap and
+    // gives her nothing to weigh — ten dropped sources and ten dropped people
+    // are not remotely the same situation, and she could not tell which.
+    const plan = buildWorkingMemory(
+      [
+        ...many(4, { kind: "person" }),
+        ...many(3, { kind: "fact", salience: 0.5 }),
+      ].map((entry, index) => ({ ...entry, id: `syl:memory_node:${String(index)}` })),
+      { maxLines: 9 },
+    );
+
+    expect(plan.dropped.length).toBeGreaterThan(0);
+    // Named in the plural where there is more than one, singular where there is
+    // one: she reads this out, and "3 memory" is a schema leaking into it.
+    expect(plan.text).toMatch(/not shown here: \d+ (person|people|fact|facts)/u);
+  });
+
+  it("should tell her how to open what it is hiding, now that she can", () => {
+    // An omission count with no way to reach it is worse than a shorter list.
+    // This line was "Search deep memory for anything specific" for months while
+    // she had no tool that could — an instruction outliving its capability,
+    // which is the failure this project keeps catching in prose.
+    //
+    // Sized to overflow the REAL budget, like its two siblings above. 400
+    // stopped overflowing when the budget went 4,000 -> 32,000 (`syl-ulf`), so
+    // this asserted the notice on a plan that no longer had one. A test whose
+    // fixture drifts under the thing it measures stops measuring it silently.
+    const plan = buildWorkingMemory(many(1_200));
+
+    expect(plan.text).toContain("recall");
+  });
+
+  it("should size the notice it will really print, not one from a count", () => {
+    // The budget is measured against the rendered text, and the notice now
+    // varies with what was dropped. A trial render sized from a count and a
+    // final render printed from a list would be two answers to one question,
+    // and the budget would silently be the wrong one.
+    const plan = buildWorkingMemory(many(400));
+
+    expect(plan.bytes).toBe(Buffer.byteLength(plan.text, "utf8"));
+    expect(plan.bytes).toBeLessThanOrEqual(WORKING_MEMORY_MAX_BYTES);
   });
 
   it("should drop the LEAST salient tail, never the most salient head", () => {
-    const plan = buildWorkingMemory(many(400));
-    const first = many(400)[0];
+    const plan = buildWorkingMemory(many(1_200));
+    const first = many(1_200)[0];
 
     expect(plan.included[0]).toBe(first?.id);
-    expect(plan.dropped).toContain(many(400)[399]?.id);
+    expect(plan.dropped).toContain(many(1_200)[1_199]?.id);
   });
 
   it("should be deterministic — the same input renders the same bytes", () => {
@@ -166,18 +220,329 @@ describe("buildWorkingMemory", () => {
     expect(plan.dropped.length).toBeGreaterThan(0);
   });
 
-  it("should have a section for every node kind, so nothing hot is unrenderable", () => {
+  it("should account for every node kind — rendered or deliberately excluded", () => {
     // A new kind added to `MEMORY_NODE_KINDS` with no section here would be
     // selected into the projection and then rendered nowhere — hot, chosen,
-    // and invisible, with nothing failing.
+    // and invisible, with nothing failing. `syl-024.2` adds the second half:
+    // a kind may instead be excluded ON PURPOSE, and that has to be DECLARED
+    // rather than achieved by leaving it out of the list, which looks
+    // identical from here and is the same silent invisibility.
     const kinds = WORKING_MEMORY_SECTIONS.map((section) => section.kind);
+    const excluded = [...WORKING_MEMORY_EXCLUDED_KINDS];
 
     expect(new Set(kinds).size).toBe(kinds.length);
-    expect([...kinds].sort()).toEqual([...MEMORY_NODE_KINDS].sort());
+    // Disjoint: a kind that is both rendered and excluded is two answers to
+    // one question, and which one wins would depend on where you read.
+    expect(kinds.filter((kind) => excluded.includes(kind))).toEqual([]);
+    expect([...kinds, ...excluded].sort()).toEqual([...MEMORY_NODE_KINDS].sort());
     expect(
       buildWorkingMemory(kinds.map((kind, index) => candidate({ id: `n${String(index)}`, kind })))
         .dropped,
     ).toEqual([]);
+  });
+});
+
+/**
+ * `syl-024.2` — namespacing, not isolation.
+ *
+ * The first attempt kept her self-findings out of "what do I know about him" by
+ * refusing to give them edges. That works, in the sense that a node nothing
+ * points at is absent from every projection — including the ones that should
+ * have it. Her diagnosis: *"a render note should be absent from 'what do I know
+ * about Justin' because the query excludes it, not because it's connected to
+ * nothing."*
+ *
+ * So the test that carries the bead asserts BOTH halves in one place. Either
+ * alone is satisfied by the version this replaces: absence alone is what
+ * isolation gave, and reachability alone is what it gave up.
+ */
+describe("a self-finding is namespaced, not isolated", () => {
+  it("should be absent from the projection about him and still reachable by traversal", () => {
+    const commander = graph.addNode({ kind: "person", label: "the Commander" });
+    const order = graph.addNode({ kind: "instruction", label: "she is allowed to be funny" });
+    const self = graph.addNode({
+      kind: "self",
+      label: "she keeps reaching for the engineer's voice",
+      body: "asked who she was, she described this codebase",
+    });
+    // The three edges the Commander asked for by name: to his person node, to
+    // an instruction, and to a fact about his life.
+    const fact = graph.addNode({ kind: "fact", label: "he works late" });
+    for (const target of [commander.id, order.id, fact.id]) {
+      graph.observe({
+        sourceNode: self.id,
+        targetNode: target,
+        relation: "about",
+        assertedBy: commander.id,
+      });
+    }
+
+    const memory = new WorkingMemory({ db, graph, clock: fixedClock(NOW) });
+    const result = memory.regenerate();
+
+    // Absent — by the WHERE clause, not by eviction. It is not in the text, not
+    // admitted, and not in the overflow either: a notice reading "1 note about
+    // myself" would hand back exactly what the filter removed.
+    expect(result.row.text).not.toContain("engineer's voice");
+    expect(result.plan.included).not.toContain(self.id);
+    expect(result.plan.dropped).not.toContain(self.id);
+    expect(memory.overflow({ limit: 1_000 }).items.map((item) => item.id)).not.toContain(self.id);
+    expect(memory.overflow({ limit: 1_000 }).byKind.map((entry) => entry.kind)).not.toContain(
+      "self",
+    );
+
+    // And reachable. Every edge survives, in the hot tier, from his side.
+    const around = graph.neighbourhood(commander.id);
+    expect(around.nodes.map((node) => node.id)).toContain(self.id);
+    expect(graph.edgesTouching(self.id)).toHaveLength(3);
+    expect(graph.getNode(self.id)?.tier).toBe("hot");
+  });
+
+  it("should still answer with what he told her — an instruction is his, not hers", () => {
+    // The filter is one kind wide. `instruction` is something he SAID, so it
+    // belongs in the answer to what she knows about him; excluding both
+    // together would be the isolation bug wearing the new vocabulary.
+    graph.addNode({ kind: "instruction", label: "he prefers renders with a face" });
+    graph.addNode({ kind: "self", label: "her renders keep drifting off-model" });
+
+    const text = new WorkingMemory({ db, graph, clock: fixedClock(NOW) }).regenerate().row.text;
+
+    expect(text).toContain("## Standing orders");
+    expect(text).toContain("he prefers renders with a face");
+    expect(text).not.toContain("off-model");
+  });
+
+  it("should rank a standing order above the anchors, and a self-finding below them", () => {
+    // The floor is what stops a standing order being evicted by whatever was
+    // said this morning — the failure measured on his own family (`syl-ulf`).
+    // Ranking is only half of it; admission is `syl-024.3`.
+    graph.addNode({ kind: "instruction", label: "be funny" });
+    graph.addNode({ kind: "person", label: "the Commander" });
+    graph.addNode({ kind: "self", label: "she reaches for the engineer's voice" });
+    graph.addNode({ kind: "fact", label: "he works late" });
+
+    // No edges anywhere, so each node scores exactly its kind floor.
+    const scored = new Map(graph.listSalientNodes().map((node) => [node.kind, node.salience]));
+
+    expect(scored.get("instruction")).toBeGreaterThan(scored.get("person") ?? 0);
+    expect(scored.get("self")).toBeLessThan(scored.get("person") ?? 0);
+    expect(scored.get("self")).toBeGreaterThan(scored.get("fact") ?? 0);
+  });
+});
+
+/**
+ * `syl-024.3` — a standing order never fades, and admission is the half that
+ * was silently missing.
+ *
+ * There are two ways an instruction disappears from what she actually sees.
+ * Decay is the obvious one and `DEMOTE_SWEEP_SQL` closes it. The other is this:
+ * the node survives the night at full strength, keeps every edge, and is cut
+ * from the projection because the budget filled and something outranked it.
+ * That one is worse, because afterwards nothing looks wrong — the graph is
+ * intact and there is no error anywhere.
+ *
+ * `## Standing orders` leading {@link WORKING_MEMORY_SECTIONS} does NOT protect
+ * them: section order is RENDERING, and admission is greedy in SALIENCE order.
+ * These tests drive the budget hard enough that ordinary memory is dropped, so
+ * they fail the moment pinning is replaced by a high floor and a hope.
+ */
+describe("a standing order is never dropped for want of room", () => {
+  it("should survive a budget that drops everything else", () => {
+    const orders = many(3, { kind: "instruction", salience: 0.1 }).map((entry, index) => ({
+      ...entry,
+      id: `syl:memory_node:order-${String(index)}`,
+      label: `standing order ${String(index)}`,
+    }));
+    // Deliberately the LEAST salient things in the room, and forty of the most
+    // salient competing for the same budget. Under greedy admission alone the
+    // orders are exactly the contiguous tail that gets cut.
+    const noise = many(40, { kind: "person", salience: 100 });
+
+    const plan = buildWorkingMemory([...noise, ...orders], { maxBytes: 900, maxLines: 20 });
+
+    expect(plan.dropped.length).toBeGreaterThan(0);
+    for (const order of orders) {
+      expect(plan.included).toContain(order.id);
+      expect(plan.dropped).not.toContain(order.id);
+      expect(plan.text).toContain(order.label);
+    }
+  });
+
+  it("should never name a standing order in the overflow, because none is ever withheld", () => {
+    // The notice is the only thing that would say an order had been cut, and it
+    // is also how "she was told, and she cannot see it" would look survivable.
+    //
+    // The order is left UNCONNECTED and the people are wired into a chain, so
+    // every person outscores it on real edge weight. Otherwise the instruction
+    // floor alone puts it first and this asserts the floor rather than the
+    // pin — which is exactly the confusion the bead's finding was about.
+    graph.addNode({ kind: "instruction", label: "she is allowed to be funny" });
+    const note = graph.addNode({ kind: "source", label: "a standup note" }).id;
+    const people = Array.from({ length: 40 }, (_unused, index) =>
+      graph.addNode({ kind: "person", label: `person number ${String(index)}` }),
+    );
+    for (let i = 1; i < people.length; i += 1) {
+      graph.observe({
+        sourceNode: people[i - 1]?.id ?? "",
+        targetNode: people[i]?.id ?? "",
+        relation: "knows",
+        assertedBy: note,
+      });
+    }
+
+    const memory = new WorkingMemory({ db, graph, clock: fixedClock(NOW), maxLines: 12 });
+    const overflow = memory.overflow({ limit: 1_000 });
+
+    expect(overflow.total).toBeGreaterThan(0);
+    expect(overflow.items.every((item) => item.kind !== "instruction")).toBe(true);
+    expect(overflow.byKind.map((entry) => entry.kind)).not.toContain("instruction");
+    expect(memory.regenerate().row.text).toContain("she is allowed to be funny");
+  });
+
+  it("should keep the budget it is admitted under — pinning does not raise the ceiling", () => {
+    // The guarantee is about WHAT is dropped, never about how much is loaded.
+    // A projection that grew past the budget to keep a promise would be back at
+    // the auto-memory cliff (`syl-03d`), where the file is on disk and the last
+    // part of it is silently never read.
+    const plan = buildWorkingMemory([
+      ...many(12, { kind: "instruction", salience: 0.1 }),
+      ...many(600, { kind: "fact" }),
+    ]);
+
+    expect(plan.bytes).toBeLessThanOrEqual(WORKING_MEMORY_MAX_BYTES);
+    expect(plan.lines).toBeLessThanOrEqual(WORKING_MEMORY_MAX_LINES);
+    expect(plan.dropped.length).toBeGreaterThan(0);
+  });
+
+  it("should refuse loudly when the orders alone cannot fit, rather than choosing one to cut", () => {
+    // The one honest end of the promise. Frozen is stale and recoverable; a
+    // silently dropped standing order is neither, and it is invisible from the
+    // graph, the log and the document itself.
+    expect(() =>
+      buildWorkingMemory(many(50, { kind: "instruction" }), { maxBytes: 600, maxLines: 12 }),
+    ).toThrow(WorkingMemoryPinnedOverflowError);
+  });
+
+  it("should still refuse an over-budget projection the ordinary way when nothing is pinned", () => {
+    // Without a pinned entry there is no guarantee to fail, so the store's own
+    // guard stays the thing that refuses — one failure mode, not two names for
+    // it depending on what happened to be hot.
+    graph.addNode({ kind: "person", label: "x".repeat(400) });
+    const tiny = new WorkingMemory({ db, graph, maxBytes: 10, clock: fixedClock(NOW) });
+
+    expect(() => tiny.regenerate()).toThrow(WorkingMemoryOverflowError);
+  });
+
+  it("should render standing orders as their own section, first", () => {
+    const text = buildWorkingMemory([
+      candidate({ id: "syl:memory_node:f", kind: "fact", label: "he works late", salience: 99 }),
+      candidate({ id: "syl:memory_node:o", kind: "instruction", label: "be funny", salience: 0.1 }),
+    ]).text;
+
+    expect(text.indexOf("## Standing orders")).toBeGreaterThan(-1);
+    expect(text.indexOf("## Standing orders")).toBeLessThan(text.indexOf("## Facts"));
+  });
+});
+
+describe("WorkingMemory.overflow", () => {
+  /**
+   * A projection squeezed by LINES rather than bytes.
+   *
+   * The byte budget has a floor — the note alone is 200-odd bytes, and
+   * `regenerate` refuses a projection over budget even with nothing admitted —
+   * so squeezing that way would exercise the overflow *guard* instead of the
+   * overflow.
+   */
+  const working = (): WorkingMemory =>
+    new WorkingMemory({ db, graph, clock: fixedClock(NOW), maxLines: 9 });
+
+  function crowd(): void {
+    graph.addNode({ kind: "person", label: "the Commander" });
+    graph.addNode({ kind: "person", label: "his wife" });
+    graph.addNode({ kind: "goal", label: "sell the house" });
+    graph.addNode({ kind: "fact", label: "he sleeps badly in August" });
+    graph.addNode({ kind: "decision", label: "no metered API, ever" });
+  }
+
+  it("should be exactly what the projection could not fit", () => {
+    // The property that makes this trustworthy: one admission rule, in one
+    // function, producing both the text she reads and the list she can open.
+    // A stored list of dropped ids would be a second answer to the same
+    // question, going stale the moment the graph moved.
+    crowd();
+    const memory = working();
+    const plan = memory.regenerate().plan;
+
+    const overflow = memory.overflow({ limit: 1_000 });
+
+    expect(overflow.items.map((item) => item.id)).toEqual(plan.dropped);
+    expect(overflow.total).toBe(plan.dropped.length);
+  });
+
+  it("should carry the ids, because an id is what every other verb needs", () => {
+    crowd();
+
+    for (const item of working().overflow({ limit: 1_000 }).items) {
+      expect(item.id).toMatch(/^syl:memory_node:/u);
+      expect(item.label).not.toBe("");
+    }
+  });
+
+  it("should count the overflow by kind, in the order the sections run", () => {
+    crowd();
+
+    const overflow = working().overflow({ limit: 1_000 });
+    const order = overflow.byKind.map((entry) => entry.kind);
+
+    expect(overflow.byKind.reduce((sum, entry) => sum + entry.count, 0)).toBe(overflow.total);
+    expect(order).toEqual(
+      WORKING_MEMORY_SECTIONS.map((section) => section.kind).filter((kind) => order.includes(kind)),
+    );
+    // No zero rows: a kind that was not dropped is not part of the omission.
+    expect(overflow.byKind.every((entry) => entry.count > 0)).toBe(true);
+  });
+
+  it("should narrow to one kind while still reporting the whole omission", () => {
+    // She reads "2 people, 1 fact" and asks for the people. Narrowing must not
+    // make the rest invisible — that is the original defect with an extra step.
+    crowd();
+    const memory = working();
+
+    const people = memory.overflow({ kind: "person", limit: 1_000 });
+
+    expect(people.items.every((item) => item.kind === "person")).toBe(true);
+    expect(people.matched).toBe(people.items.length);
+    expect(people.total).toBe(memory.overflow({ limit: 1_000 }).total);
+    expect(people.byKind).toEqual(memory.overflow({ limit: 1_000 }).byKind);
+  });
+
+  it("should report how many a limit held back, rather than looking complete", () => {
+    crowd();
+    const memory = working();
+    const whole = memory.overflow({ limit: 1_000 });
+
+    const first = memory.overflow({ limit: 1 });
+
+    expect(first.items).toHaveLength(1);
+    expect(first.matched).toBe(whole.total);
+  });
+
+  it("should be empty when the projection is hiding nothing", () => {
+    graph.addNode({ kind: "person", label: "the Commander" });
+
+    const overflow = new WorkingMemory({ db, graph, clock: fixedClock(NOW) }).overflow();
+
+    expect(overflow.items).toEqual([]);
+    expect(overflow.total).toBe(0);
+    expect(overflow.byKind).toEqual([]);
+  });
+
+  it("should not need the projection to have been regenerated first", () => {
+    // A brand-new install has no stored row at all. Recomputing from the graph
+    // means the overflow is answerable before the first night has ever run.
+    crowd();
+
+    expect(working().overflow({ limit: 1_000 }).total).toBeGreaterThan(0);
   });
 });
 
@@ -338,8 +703,67 @@ describe("toCandidate", () => {
       kind: "person",
       label: "the Commander",
       body: "he is busy",
-      salience: 0,
+      // A `person` scores its kind floor with no edges at all (`syl-zdf.6`).
+      salience: 3,
       updatedAt: NOW_ISO,
     });
+  });
+});
+
+/**
+ * The budget, raised from 4,000 to 32,000 bytes on the Commander's order
+ * (2026-08-11, `syl-ulf`). He accepted the extra per-turn cost explicitly:
+ * "I'm fine with it burning extra tokens... if it ever gets too expensive we
+ * can start rolling that back."
+ *
+ * The FIRST test here is the cheap one and it is not the point. The second is:
+ * `0019`'s `CHECK (bytes > 0 AND bytes <= 4096)` is a SCHEMA backstop, so
+ * raising the constant alone leaves a code path that fits 32,000 bytes and a
+ * database that refuses to store them. That failure would not appear in any
+ * test that only reads the constant — it appears on the first real projection
+ * that grows past 4 KB, in production, as a write error on a path whose whole
+ * job is to never go silently dark.
+ */
+describe("working memory — the raised budget", () => {
+  it("should carry a budget of 32,000 bytes across at least 400 lines", () => {
+    expect(WORKING_MEMORY_MAX_BYTES).toBe(32_000);
+    expect(WORKING_MEMORY_MAX_LINES).toBeGreaterThanOrEqual(400);
+  });
+
+  it("should PERSIST a projection larger than the old 4,096-byte schema backstop", () => {
+    // 120 nodes of ~160 chars each is ~19 KB of entries: comfortably past the
+    // old ceiling and comfortably inside the new one, so this asserts the
+    // migration rather than the arithmetic.
+    for (let i = 0; i < 120; i += 1) {
+      graph.addNode({
+        kind: "fact",
+        label: `fact number ${String(i)}`,
+        body: `a body long enough to matter, repeated to fill the entry budget ${"x".repeat(90)}`,
+      });
+    }
+
+    const working = new WorkingMemory({ db, graph, clock: fixedClock(NOW) });
+    const result = working.regenerate();
+
+    expect(result.row.bytes).toBeGreaterThan(4096);
+    expect(result.row.bytes).toBeLessThanOrEqual(WORKING_MEMORY_MAX_BYTES);
+    expect(working.preamble()).toBe(result.row.text);
+
+    const stored = db.prepare("SELECT bytes FROM working_memory WHERE id = 1").get() as {
+      bytes: number;
+    };
+    expect(stored.bytes).toBe(result.row.bytes);
+  });
+
+  it("should admit far more entries than the old budget could hold", () => {
+    for (let i = 0; i < 120; i += 1) {
+      graph.addNode({ kind: "fact", label: `fact number ${String(i)}`, body: "short body" });
+    }
+
+    const working = new WorkingMemory({ db, graph, clock: fixedClock(NOW) });
+    const result = working.regenerate();
+
+    // The old 4,000-byte budget admitted 23 entries against the live graph.
+    expect(result.plan.included.length).toBeGreaterThan(60);
   });
 });

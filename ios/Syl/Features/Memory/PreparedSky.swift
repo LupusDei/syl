@@ -24,6 +24,15 @@ struct PreparedSky: Equatable, Sendable {
     /// travels with it and the view re-prepares when it changes.
     var size: CGSize = .zero
 
+    /// What the app's own chrome takes off ``size``. See ``ConstellationChrome``.
+    ///
+    /// It travels **with the sky** rather than being read again wherever it is wanted,
+    /// because the layout that placed the stars and the arithmetic that decides where the
+    /// card's edge falls have to be answering with the same numbers. Two independent reads of
+    /// the safe area is how a star ends up under the tab bar in one of them and clear of it
+    /// in the other.
+    var chrome: ConstellationChrome = .none
+
     /// Carried through from the snapshot: the read failed outright, rather than finding
     /// nothing. See ``ConstellationSnapshot/unreachable``.
     var unreachable: Bool = false
@@ -51,6 +60,64 @@ struct PreparedSky: Equatable, Sendable {
     /// One constant rather than two literals: the two rules have to agree or the sky grows
     /// invisible holes that swallow taps.
     static let faintestDrawn: Double = 0.004
+}
+
+/// What the app's own furniture takes off the glass, at the top and at the foot.
+///
+/// **The sky is drawn edge to edge and lived in inside the safe area, and until 2026-08-11
+/// nothing here knew the difference.** ``ConstellationLayout`` carried two hard-coded
+/// numbers — 104 and 72 — which were a guess at a navigation bar and a home indicator made
+/// before this screen was in a tab bar. A tab bar is 83 points on a modern iPhone, so the
+/// lowest star in the field was drawn *underneath* it: visible, and not touchable.
+///
+/// ``ConstellationBand`` had the mirror image of the same hole. It put the card's top edge at
+/// `size.height − cardHeight − step`, measuring from the bottom of the **glass**, while the
+/// card actually sits above the **tab bar** — eighty-three points higher. So the sky panned a
+/// selection to a line it believed was clear and the card came up over it. That is exactly
+/// what the Commander photographed: the card describing the hub, sitting on the hub.
+///
+/// One value, carried on the sky, so the two can never disagree again.
+struct ConstellationChrome: Equatable, Sendable {
+    /// The status bar and the navigation bar.
+    var top: CGFloat = 0
+    /// The tab bar and the home indicator.
+    var bottom: CGFloat = 0
+
+    /// No chrome at all. What a bare render or a preview sits in, and honest about it.
+    static let none = ConstellationChrome()
+
+    /// A phone with a navigation bar over a tab bar — the app as he actually holds it.
+    ///
+    /// Used by the render harness so an image corresponds to the device rather than to a
+    /// pleasanter rectangle nobody is looking at. Measured on the iPhone 16 simulator.
+    static let phone = ConstellationChrome(top: 96, bottom: 83)
+
+    /// How far from the chrome a star must keep. Enough that its core is unambiguously on
+    /// open glass rather than a point away from a translucent edge.
+    static let clearance: CGFloat = 28
+}
+
+/// The rectangle the sky is drawn on, and what the chrome takes off it.
+///
+/// Reported as **one value** because a size without its insets is exactly half an answer:
+/// every defect this type exists to close came from something knowing one and assuming the
+/// other.
+struct ConstellationGlass: Equatable, Sendable {
+    var size: CGSize = .zero
+    var chrome: ConstellationChrome = .none
+
+    static let none = ConstellationGlass()
+
+    /// Whether these two are the same glass as far as anything drawable is concerned.
+    ///
+    /// A point, per axis, for the reason ``CGSize/isWithinAPoint(of:)`` gives: below it
+    /// nothing on screen can change, so there is nothing to compute — and chasing a fraction
+    /// of a point is a bug the Commander has already seen once.
+    func isWithinAPoint(of other: ConstellationGlass) -> Bool {
+        size.isWithinAPoint(of: other.size)
+            && abs(chrome.top - other.chrome.top) < 1
+            && abs(chrome.bottom - other.chrome.bottom) < 1
+    }
 }
 
 /// One star, ready to draw.
@@ -126,6 +193,27 @@ enum StarTint: Equatable, Sendable {
     case warm
     /// A spren dimming rather than a UI greying out. What `suppressed` looks like.
     case dim
+
+    // FOUR KINDS THAT DO CARRY THEIR OWN COLOUR — the Commander's call, 2026-08-14:
+    // "Instructions a light green. Places a deep blue. Self nodes can be purple.
+    // Unrecognized should be red."
+    //
+    // This is a DEPARTURE from the rule three cases above, and it is written down
+    // rather than smuggled in. That rule says a per-kind colour key is what gives a
+    // screen a legend, and it is right about the seven kinds it was written for:
+    // fact, memory, goal and the rest are all the same KIND of thing about him, so
+    // colouring them would be decoration pretending to be information.
+    //
+    // These four are not that. Three of them are categorically different — a place
+    // is not a claim, an instruction is his voice rather than her conclusion, and
+    // `self` is the one star in the sky that is not about him at all. The fourth is
+    // a warning. Colour here is not a key to be looked up; it is the difference
+    // being visible without one.
+    case instruction
+    case place
+    case selfNode
+    /// Red, and it should be alarming. See `ConstellationKind.unrecognised`.
+    case unrecognised
 }
 
 /// Builds a finished sky from a snapshot. `Sendable` and holding no view, no view model
@@ -138,17 +226,21 @@ struct SkyPreparer: Sendable {
         self.now = now
     }
 
-    func prepare(_ snapshot: ConstellationSnapshot, size: CGSize) -> PreparedSky {
+    func prepare(
+        _ snapshot: ConstellationSnapshot,
+        size: CGSize,
+        chrome: ConstellationChrome = .none
+    ) -> PreparedSky {
         guard size.width > 1, size.height > 1, !snapshot.nodes.isEmpty else {
 
             // An empty sky still gets bounds, and they still contain the centre. A gesture
             // on a sky with nothing in it must be a no-op, not a fall through a hole.
             return PreparedSky(
-                stars: [], filaments: [], size: size,
+                stars: [], filaments: [], size: size, chrome: chrome,
                 contentBounds: Self.bounds(of: [], in: size))
         }
 
-        let layout = ConstellationLayout(size: size)
+        let layout = ConstellationLayout(size: size, chrome: chrome)
         let placements = layout.place(snapshot)
 
         var stars: [PreparedStar] = []
@@ -260,6 +352,7 @@ struct SkyPreparer: Sendable {
             stars: stars,
             filaments: filaments,
             size: size,
+            chrome: chrome,
             unreachable: snapshot.unreachable,
             contentBounds: Self.bounds(of: stars, in: size)
         )
@@ -314,7 +407,16 @@ struct SkyPreparer: Sendable {
     }
 
     private func tint(for node: ConstellationNode) -> StarTint {
+        // Suppressed still wins. A star he has put away is dim whatever it is,
+        // because "he set this aside" outranks "this is a place".
         if node.tier == .suppressed { return .dim }
-        return node.kind == .person ? .warm : .cool
+        switch node.kind {
+        case .person: return .warm
+        case .instruction: return .instruction
+        case .place: return .place
+        case .selfNode: return .selfNode
+        case .unrecognised: return .unrecognised
+        case .fact, .memory, .source, .event, .goal, .decision: return .cool
+        }
     }
 }

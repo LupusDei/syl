@@ -34,6 +34,28 @@ function parseWallTime(spec: string, label = "time"): WallTime {
   return { hour: Number(match[1]), minute: Number(match[2]) };
 }
 
+/**
+ * A wall time moved by whole minutes, wrapping at midnight.
+ *
+ * For conventions that are defined *relative to* the quiet window — "an hour
+ * before it begins" — so they are computed from it rather than written down
+ * beside it. A second number with a comment saying it agrees with the first is
+ * the arrangement that puts them an hour apart the moment either one moves.
+ *
+ * Wrapped rather than clamped: clamping collapses two different times onto
+ * 00:00, which is the same silent divergence in a different shape.
+ *
+ * @throws {Error} if `spec` is not 24-hour `HH:MM`.
+ */
+export function shiftWallTime(spec: string, minutes: number): string {
+  const time = parseWallTime(spec);
+  const dayMinutes = 24 * 60;
+  const shifted = (((time.hour * 60 + time.minute + minutes) % dayMinutes) + dayMinutes) %
+    dayMinutes;
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${pad(Math.floor(shifted / 60))}:${pad(shifted % 60)}`;
+}
+
 /** Wall-clock fields for an instant, as seen in a given zone. */
 interface ZonedParts {
   year: number;
@@ -175,6 +197,83 @@ export function nextDailyOccurrence(spec: string, from: Date, timeZone: string):
   if (todaysOccurrence.getTime() > from.getTime()) return todaysOccurrence;
 
   return resolveLocalDateTime(addLocalDays(today, 1), time, timeZone);
+}
+
+/**
+ * The calendar date an instant falls on, in a zone, as `YYYY-MM-DD`.
+ *
+ * For anything counted "per day" — a ceiling on how often she reaches him, a
+ * ledger that must not bank what yesterday did not spend. A day counted in UTC
+ * turns over at 19:00 or 18:00 local, so his whole evening lands on tomorrow's
+ * tally and a twice-a-day rate quietly becomes four.
+ *
+ * Zero-padded, so the strings compare and sort exactly as the dates do and no
+ * caller ever has to parse one back.
+ */
+export function localDate(instant: Date, timeZone: string): string {
+  const p = partsInZone(instant, timeZone);
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${String(p.year).padStart(4, "0")}-${pad(p.month)}-${pad(p.day)}`;
+}
+
+/**
+ * The instant local midnight begins on a given `YYYY-MM-DD`, in a zone.
+ *
+ * The inverse of {@link localDate}, and the pair are what let a caller say "all
+ * of Tuesday, HIS Tuesday" as a half-open range of instants:
+ * `[startOfLocalDay(d), startOfLocalDay(next(d)))`.
+ *
+ * Here rather than beside its caller because the DST arithmetic is already
+ * here and is already right. A zone that springs forward AT midnight — Chile
+ * and Cuba both do — has no 00:00 on that date at all, and
+ * `resolveLocalDateTime` returns the first instant that does exist rather than
+ * a time that does not. A second implementation of this would get that wrong
+ * once a year, in one hemisphere, and look like data corruption.
+ *
+ * `syl-t9tj.2.7`: the 60-day downsample folds a day of measurements into one
+ * row, and which day a 23:40 reading belongs to is a question about his clock.
+ *
+ * @throws {Error} if `day` is not `YYYY-MM-DD`.
+ */
+export function startOfLocalDay(day: string, timeZone: string): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!match) {
+    throw new Error(`Invalid day "${day}": expected a calendar date (YYYY-MM-DD).`);
+  }
+  return resolveLocalDateTime(
+    {
+      year: Number(match[1]),
+      month: Number(match[2]),
+      day: Number(match[3]),
+      hour: 0,
+      minute: 0,
+    },
+    { hour: 0, minute: 0 },
+    timeZone,
+  );
+}
+
+/**
+ * The instant as HE would read it: his weekday, his date, his 24-hour clock.
+ *
+ * For the prompts of unattended turns, which have to state the hour they are in
+ * before they can reason about it. Lives here rather than beside any one job
+ * because two of them now need it and a second copy of an `Intl` format is a
+ * second place for the hour to be rendered differently.
+ *
+ * 24-hour and zone-aware on purpose: a turn handed "2:00" cannot tell morning
+ * from afternoon, and a turn handed UTC converts it wrongly.
+ */
+export function wallClockIn(instant: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(instant);
 }
 
 function minutesOfDay(instant: Date, timeZone: string): number {

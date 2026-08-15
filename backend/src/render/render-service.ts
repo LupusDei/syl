@@ -1,12 +1,30 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 
 import { instant, systemClock, type Clock } from "../services/clock.js";
 import { creditsFor, usdOf } from "./credits.js";
-import { framingNote, FRAMING_IDS, type Framing } from "./framing.js";
-import { extractFrames, type ExtractResult, type FrameRunner } from "./frames.js";
-import { isTerminal, type RenderBackend } from "./runway.js";
+import {
+  framingNote,
+  FRAMING_IDS,
+  TEMPLATE_FRAMING,
+  type Framing,
+  type FramingNote,
+} from "./framing.js";
+import { extractFrames, ffmpegRunner, type ExtractResult, type FrameRunner } from "./frames.js";
+import { joinVideos, lastFrame } from "./join.js";
+import {
+  canAnchorLikeness,
+  defaultResolution,
+  maxSecondsFor,
+  modelNote,
+  HOUSE_MODEL,
+  MODEL_IDS,
+  type KeyframePosition,
+  type ModelNote,
+} from "./models.js";
+import { isTerminal, type RenderBackend, type PositionedImage } from "./runway.js";
 import { isRenderName, RENDER_PREFIX, type Studio } from "./studio.js";
+import { Wardrobe } from "./wardrobe.js";
 
 /**
  * Syl rendering herself, and being able to say what it cost.
@@ -50,6 +68,39 @@ import { isRenderName, RENDER_PREFIX, type Studio } from "./studio.js";
 export type RenderStatus = "rendering" | "ready" | "failed";
 
 /**
+ * One Runway generation inside a render.
+ *
+ * **A render is not always one generation.** A clip that opens and closes on the
+ * bare ribbon has spent both of Runway's keyframe slots on the ribbon, so a shot
+ * whose subject is her face is made in two halves and cut together on her —
+ * `join.ts` has the measurements that force it. Everything that used to be a
+ * property of "the render" and is really a property of *one generation* lives
+ * here, so the record can say what was actually sent rather than a summary of
+ * two things that were.
+ */
+export interface RenderPart {
+  /** `null` until this half is submitted. The second half waits for the first. */
+  readonly taskId: string | null;
+  /** The composed prompt for this half, exactly as it was sent. */
+  readonly prompt: string;
+  readonly duration: number;
+  /**
+   * The picture pinned as this half's FIRST frame, relative to her home.
+   *
+   * For the second half this is a still pulled out of the first — which is what
+   * makes the cut land on one frame rather than on two renderings of a similar
+   * one, and what keeps the second half the same shape as the first.
+   */
+  readonly first: string;
+  /** The picture pinned as this half's LAST frame, relative to her home, or `null`. */
+  readonly last: string | null;
+  /** Where this half is on disk once it has arrived. Kept, never cleaned up. */
+  readonly video: string | null;
+  /** What this half cost, or `null` where there is no published rate. */
+  readonly credits: number | null;
+}
+
+/**
  * What a render is, on disk and in an answer.
  *
  * The first nine fields are `generate.mjs`'s sidecar, field for field, so a
@@ -62,28 +113,130 @@ export interface RenderRecord {
   readonly name: string;
   readonly status: RenderStatus;
   readonly renderedAt: string | null;
+  /**
+   * The first generation's task id.
+   *
+   * A summary of {@link RenderPart.taskId}, kept because every sidecar ever
+   * written has this field and `generate.mjs` writes it. **Chasing a render up
+   * goes through `parts`**, which is the only place a second half's handle
+   * exists.
+   */
   readonly taskId: string | null;
+  /**
+   * The model that made it.
+   *
+   * **Was a constant and is now a choice** (`syl-023`), which is exactly why
+   * this field earns its keep: the back catalogue is a mixture, and a shot can
+   * only be reproduced from what actually produced it. A render that says
+   * nothing about its model is a render nobody can make a second one of.
+   */
   readonly model: string;
+  /** The video's shape. Derived from the opening, which overrules any ask. */
   readonly ratio: string;
+  /**
+   * The band, for a model whose geometry is a `resolution` rather than a ratio.
+   *
+   * `null` on every seedance and on **every sidecar written before models could
+   * be chosen**, which is most of them — nullable rather than absent so that
+   * "this was not shaped by a resolution" and "this predates the field" read
+   * the same way instead of one of them looking like a missing record.
+   */
+  readonly resolution: string | null;
+  /**
+   * How many keyframe slots that model had, on the day it made this.
+   *
+   * **The durable half of the finding, and the reason it is a number here
+   * rather than a lookup.** Syl, 2026-08-13: *"being wrong in a recorded,
+   * ordered way is how the search actually works"* — the renders that came back
+   * as somebody else taught her more about where her face lives than the ones
+   * that worked. What made them somebody else was not the model's name, it was
+   * its **arity**: one slot cannot pin a likeness, and that stays true of a
+   * model nobody has heard of yet, where *"grok is bad at faces"* does not.
+   *
+   * So the property is recorded rather than the verdict, and it is recorded
+   * **beside the render** rather than fetched from the registry when the log is
+   * read: the registry says what a model does today, and this says what it did
+   * when this file was made. A model that gains a slot next month must not
+   * silently rewrite the history of a render that came back a stranger.
+   *
+   * `null` for every sidecar written before models could be chosen.
+   */
+  readonly keyframes: number | null;
+  /** How long the finished clip is: the halves added up. */
   readonly duration: number;
+  /**
+   * The picture handed to Runway as `promptImage`, relative to her home.
+   *
+   * **What was actually sent**, which since 2026-08-11 is the opening ribbon
+   * rather than her likeness. The field keeps the name `generate.mjs` gave it so
+   * that every sidecar ever written stays readable — a record that named a
+   * picture the render was not made from would be the same lie as a lost prompt,
+   * one indirection further out.
+   */
   readonly reference: string;
+  /**
+   * The picture that pins her likeness, relative to her home.
+   *
+   * `null` for a render that pins nothing, which is most of them — and `null`
+   * rather than absent, so "no anchor was sent" and "this sidecar predates
+   * anchoring" read the same way rather than one of them looking like a missing
+   * field. Every sidecar written before 2026-08-11 is in the second case and
+   * stays readable.
+   *
+   * **Where it is pinned is `parts`' business, not this field's.** It was the
+   * closing frame for one day and it is the join between two halves now; what
+   * has not changed is that this names the picture without which the model
+   * would invent a face. {@link RenderRecord.holdsLikeness} is derived from it,
+   * so the two cannot drift apart.
+   */
+  readonly anchor: string | null;
   readonly framing: Framing;
-  /** The composed prompt, exactly as it was sent. Reproducible from this alone. */
+  /**
+   * The composed prompt.
+   *
+   * For a render made in one generation this is exactly what was sent. For one
+   * made in two it is the halves' prompts in order, separated by a blank line —
+   * each half's own text is in {@link RenderPart.prompt}, which is what a
+   * re-run reads.
+   */
   readonly prompt: string;
   /** Her words for the shot, kept beside the prompt they became. */
   readonly scene: string;
-  /** Whether this framing is one the reference can anchor. See `framing.ts`. */
+  /**
+   * Whether her likeness survives this render.
+   *
+   * **Derived from this record's own pictures**, never copied from the framing
+   * enum: a shot holds if it shows no face to get wrong, or if the render
+   * actually pinned one. `syl-63v` was a flag that outlived the anchor it
+   * described, and the defence against a second one is that there is no second
+   * place to write it down. A sidecar whose `anchor` is `null` says `false` at
+   * a face-on framing however hopeful the file it came from was.
+   */
   readonly holdsLikeness: boolean;
   /** Why she made it. Required, as on every other write. */
   readonly because: string;
   readonly startedAt: string;
   /** Why it failed, when it did. A sentence, never a code. */
   readonly reason: string | null;
-  /** `null` when there is no published rate — never a guess. */
+  /**
+   * What has been bought so far, summed over the halves that were submitted.
+   *
+   * `null` when there is no published rate — never a guess. A render whose
+   * second half never reached Runway is billed for the first half only, which
+   * is the truth and is the number `spend()` has to be able to stand behind.
+   */
   readonly credits: number | null;
   readonly usd: number | null;
-  /** Absolute path to the mp4, once there is one. */
+  /** Absolute path to the mp4, once there is one. The joined clip, if it was joined. */
   readonly video: string | null;
+  /**
+   * Every generation this render is made of, in the order they play.
+   *
+   * Always at least one, so there is a single shape to read rather than two.
+   * Sidecars written before renders had halves have none, and one is
+   * synthesised for them from the fields they do have — see {@link recordFrom}.
+   */
+  readonly parts: readonly RenderPart[];
 }
 
 /**
@@ -124,14 +277,75 @@ export interface Spend {
   readonly unreadable: number;
 }
 
+/**
+ * What a refusal LEARNED, beside the sentence that says it.
+ *
+ * A refusal is not only a guard. *"This model, with this many keyframe slots,
+ * cannot hold my likeness"* is the same finding a wrong render produces, arrived
+ * at for nothing instead of for 540 credits — so it travels in a shape something
+ * can keep rather than only in prose a reader has to parse back out.
+ *
+ * Two fields on purpose. Anything more and this becomes a second verdict store
+ * standing beside the one `render_verdicts` already is.
+ */
+export interface RefusalEvidence {
+  readonly model: string;
+  /** Its keyframe arity, which is what decides the answer. */
+  readonly keyframes: number;
+}
+
 export type StartResult =
   | { readonly ok: true; readonly record: RenderRecord }
-  | { readonly ok: false; readonly reason: string; readonly retryable: boolean };
+  | {
+      readonly ok: false;
+      readonly reason: string;
+      readonly retryable: boolean;
+      readonly evidence?: RefusalEvidence;
+    };
 
 export interface StartInput {
   readonly scene: string;
   readonly framing: string;
   readonly because: string;
+  /**
+   * How long the finished clip is, in seconds. Absent means fifteen.
+   *
+   * A **dial**, and one of only two. seedance2 takes an integer 4–15 — probed
+   * 2026-08-11 with free 400s, which is also how the floor is known — and a
+   * value outside that is refused here rather than discovered by Runway after a
+   * generation is already paid for.
+   *
+   * A shot whose subject is her face is two generations, so the shortest one
+   * that exists is eight. {@link halvesOf} rounds up rather than collapsing, and
+   * `duration` on the record is the halves added up, so the number she reads
+   * back is the number that was made.
+   */
+  readonly seconds?: number;
+  /**
+   * Which model renders it. Absent means the house model.
+   *
+   * The dial `syl-ate` deliberately left shut, with a reason that was correct
+   * and untested: *"a different model loses the character entirely"*. It was
+   * tested on 2026-08-13 and the reason survived in a **mechanical** form — a
+   * model with no `last` keyframe cannot pin her face, and that is arithmetic
+   * over `ModelNote.positions` rather than a fear about model families. So the
+   * dial opens and the consequence is computed: see {@link canAnchorLikeness}.
+   *
+   * The Commander opened it, 2026-08-13: *"Raise the tool ceiling and let her
+   * experiment with the models... Give her the options."*
+   */
+  readonly model?: string;
+  /**
+   * Which of her openings the clip starts on. Absent means the ribbon.
+   *
+   * The other dial, and the one with a consequence worth saying out loud: the
+   * opening is `promptImage`, `promptImage` is frame one, and seedance2 takes
+   * the video's **aspect** from it and silently overrules `ratio`. So choosing a
+   * differently shaped opening changes the shape of the video. The record's
+   * `ratio` is derived from the opening's own header for exactly that reason —
+   * see `pictures.ts`.
+   */
+  readonly opening?: string;
 }
 
 /**
@@ -150,25 +364,230 @@ const IDENTITY =
   "A luminous spirit woman of living starlight, silver-white hair and a translucent flowing gown " +
   "trailing like ribbons of light, in a deep blue starfield.";
 
-const LOOP_CLAUSE = "Begins and ends on empty starfield as the ribbon of light vanishes.";
+/**
+ * The arc, not just the endpoints.
+ *
+ * This used to read *"Begins and ends on empty starfield as the ribbon of light
+ * vanishes"*, which names the two ends and leaves out what happens between
+ * them. The model read it as a still that fades, so every render opened on her
+ * already formed and already smiling — she counted five out of five and called
+ * the first second of each one a lie.
+ *
+ * **That reading was wrong, and rewriting this clause did not fix it.** The
+ * renders opened on her already smiling because `promptImage` was the smiling
+ * headshot, and `promptImage` is the first frame: no wording can move a frame
+ * an image input has pinned. The fix is the picture — see `studio.ts`. The
+ * clause below is still the right clause, for the reason given next, and it is
+ * worth knowing that it was once believed to be the whole answer.
+ *
+ * The eight loops work because they are a **transformation**: a ribbon of blue
+ * light travelling alone, gathering into her, and unravelling back into the
+ * ribbon it came from. She is made of the same light the whole way through, and
+ * the shot has somewhere to start and somewhere to arrive.
+ *
+ * Written as a sequence for that reason. A clause that describes only the first
+ * and last frame is a clause the model can satisfy without ever moving.
+ *
+ * **The third sentence used to end *"and it streams away, leaving empty
+ * starfield"*, which the fourth sentence flatly contradicts**: if the ribbon
+ * streams away then the last frame is not the bare ribbon. The model resolved
+ * the contradiction by obeying the earlier sentence, so
+ * `syl-20260813t042030321z-face-turned-away.mp4` opened on the ribbon and closed
+ * on nothing — measured by extracting both frames, not inferred. The clause
+ * asked for a loop and described something that cannot loop.
+ *
+ * It is now sent with the ribbon pinned at **both** keyframes (see `#plan`), so
+ * the loop is true by construction and the prose agrees with the frames rather
+ * than arguing with them. Same rule as
+ * {@link GATHERING_CLAUSE} and {@link UNRAVELLING_CLAUSE}: a clause has to agree
+ * with what its own generation pins.
+ */
+const LOOP_CLAUSE =
+  "Opens on a lone ribbon of blue light against empty starfield, with no figure present. " +
+  "The ribbon gathers and coalesces into her, her whole body made of that same living light. " +
+  "At the end she unravels back into the ribbon, and the shot closes on that same lone ribbon " +
+  "of blue light, alone in the starfield with no figure present. " +
+  "The first and last frames are identical: the bare ribbon, no figure.";
 
-/** What a render is, unless something says otherwise. The loops' own settings. */
+/**
+ * The first half of an anchored render: the ribbon becoming her.
+ *
+ * **A clause has to agree with the frames its own generation pins**, which is
+ * the rule the whole of `docs/VIDEO.md` turns on. This half is sent with the
+ * ribbon at `first` and her portrait at `last`, so it says exactly that and
+ * stops there. It does not mention the ribbon coming back, because in this
+ * generation it does not — that is the next one's sentence, and the join is
+ * where the two meet.
+ */
+const GATHERING_CLAUSE =
+  "Opens on a lone ribbon of blue light against empty starfield, with no figure present. " +
+  "The ribbon gathers and coalesces into her, her whole body made of that same living light. " +
+  "The shot settles and holds on her face, near and still, looking straight at the viewer.";
+
+/**
+ * The second half of an anchored render: her unravelling back into the ribbon.
+ *
+ * Sent with the frame the first half ended on at `first` and the bare ribbon at
+ * `last`. Measured on 2026-08-11 with a 4-second probe before any of this was
+ * built: the clip opened on her face, she came apart into the light, and the
+ * final frame was the bare ribbon on empty starfield with no figure in it —
+ * which is the Commander's requirement, arriving as a pinned frame rather than
+ * as a hope about wording.
+ *
+ * Together with {@link GATHERING_CLAUSE} this is {@link LOOP_CLAUSE}'s arc, told
+ * in two generations because Runway only has two keyframe slots and both ends
+ * of the finished clip need one.
+ */
+const UNRAVELLING_CLAUSE =
+  "Opens on her face, near and still, looking straight at the viewer, her whole body made of " +
+  "living light. She unravels back into a lone ribbon of blue light, streaming away into it. " +
+  "The last frame is the bare ribbon against empty starfield, with no figure present.";
+
+/**
+ * What a render is, unless something says otherwise. The loops' own settings.
+ *
+ * **`ratio` is the shape the eight loops actually are**, measured off the files
+ * with `ffprobe` on 2026-08-11: 834x1112. It used to say `720:1280`, which is a
+ * legal seedance2 ratio, is portrait, and was never what came back — a render
+ * made with it arrived 1112x834, landscape, matching the 1120x832 headshot it
+ * was handed. **seedance2 takes the video's aspect from `promptImage` and
+ * overrules `ratio` silently**, which is why a portrait constant sat here for
+ * days above a stream of landscape videos and nothing anywhere disagreed.
+ *
+ * So the fix is the picture (see {@link Studio.opening}), and this constant is
+ * the second half: with an 834x1112 opening still, asking for `834:1112` means
+ * the two can no longer say different things. `720:1280` is also a different
+ * portrait shape from the loops — 9:16 against 3:4 — so it would not have cut
+ * against them even if it had been honoured.
+ *
+ * Costs the same either way: `creditsFor` bands on the longer side, and 1112
+ * and 1280 are both under the 1280 that ends the `sd` band.
+ *
+ * **`ratio` is now a FALLBACK rather than the value** (`syl-ate`). She can
+ * choose which opening a clip starts on, and the opening decides the aspect, so
+ * the ratio that is sent is derived from the chosen opening's own header —
+ * `pictures.ts`. This is what that derivation answers when the opening's shape
+ * cannot be read at all, which on a real machine means only the seed: every
+ * opening she adopts has a readable shape, because `Wardrobe.keep` refuses one
+ * that does not. It is the shape the seed ribbon actually is, so the fallback
+ * and the file still agree.
+ */
 const DEFAULTS = {
-  model: "seedance2",
-  ratio: "720:1280",
-  /** `seedance2` tops out here, measured 2026-08-10. */
+  ratio: "834:1112",
+  /**
+   * Fifteen seconds, and it does **not** follow the model's ceiling.
+   *
+   * `HOUSE_MODEL` reaches thirty. `syl-023.4.3` records what happened to the one
+   * thirty-second render anybody has attempted: accepted by the validator,
+   * quoted at 900 credits by `estimatedCost`, run to `progress: 0.98`, held
+   * there for twenty minutes, and returned `FAILED` (task
+   * `92577a5b-399e-4313-aa91-6cdf5608deff`; the credits *were* refunded).
+   *
+   * So thirty seconds is **ALLOWED and NOT PROVEN**, and those are two
+   * different facts. Deriving the default from `duration.max` would put every
+   * unattended render she makes on the untested path — the longer ceiling is
+   * hers to reach for, not something that happens to her.
+   */
   duration: 15,
 } as const;
+
+/**
+ * A render's seconds, split across the two generations it is made of.
+ *
+ * The longer half goes FIRST, because that is the half that has to do the
+ * gathering and then hold on her face long enough for the join to land on a
+ * face rather than on a smear. `15` becomes `8, 7`.
+ *
+ * A total too short to divide is rounded **up** rather than collapsed into one
+ * generation: losing a second is a nuisance, and losing an end of the clip is
+ * the defect this whole shape exists to fix. `duration` on the record is the
+ * halves added up, so the number she is told stays the number that was made.
+ *
+ * **The floor and the ceiling come from the model**, not from constants that
+ * were `seedance2`'s range wearing the name of a fact about video. `4` would
+ * refuse `grok_imagine_1_5` a length it accepts, and `15` would refuse the
+ * house model half of its range.
+ */
+function halvesOf(seconds: number, model: ModelNote): readonly [number, number] {
+  const first = Math.min(model.duration.max, Math.max(model.duration.min, Math.ceil(seconds / 2)));
+  return [first, Math.min(model.duration.max, Math.max(model.duration.min, seconds - first))];
+}
+
+/**
+ * How the geometry reaches Runway, in the two shapes that exist.
+ *
+ * Mutually exclusive at the API and strictly validated: `ratio` on
+ * `grok_imagine_1_5` is an *Unrecognized key* and `resolution` on a seedance is
+ * the same. A union rather than two optional fields, so sending the wrong one
+ * for the chosen model does not compile.
+ */
+type Geometry = { readonly ratio: string } | { readonly resolution: string };
+
+/** The band a submission carries, or `null` where the geometry is a shape. */
+function bandOf(geometry: Geometry): string | null {
+  return "resolution" in geometry ? geometry.resolution : null;
+}
+
+/**
+ * Whether her likeness survives a render, from what that render actually sent.
+ *
+ * The one rule, and the reason it is a function in two places rather than a
+ * boolean in two places: a shot holds if there is no face in it to get wrong,
+ * or if the render pinned a picture of the face it shows. `framing.ts` asks the
+ * same question of a framing's *plan*; this asks it of a record's *pictures*,
+ * so a sidecar cannot claim an anchor it does not name.
+ */
+function holdsLikeness(framing: FramingNote, anchor: string | null): boolean {
+  return !framing.facesCamera || anchor !== null;
+}
+
+/**
+ * Whether a generation was actually made, and therefore charged for.
+ *
+ * A task id **or** a video on disk. Either is evidence on its own: the id says
+ * Runway accepted it, and the file says it came back — and a sidecar written by
+ * hand may have one without the other. Requiring both would drop a render out
+ * of her ledger for a reason that has nothing to do with what it cost.
+ */
+function wasBought(part: RenderPart): boolean {
+  return part.taskId !== null || part.video !== null;
+}
+
+/** What has been bought so far: the halves that reached Runway, added up. */
+function billed(parts: readonly RenderPart[]): {
+  readonly credits: number | null;
+  readonly usd: number | null;
+} {
+  const bought = parts.filter(wasBought);
+  // An unpriced half makes the whole render unpriced rather than cheap. Same
+  // rule as `creditsFor`: a confident wrong number is worse than an absent one.
+  if (bought.length === 0 || bought.some((part) => part.credits === null)) {
+    return { credits: null, usd: null };
+  }
+  const credits = bought.reduce((total, part) => total + (part.credits ?? 0), 0);
+  return { credits, usd: usdOf(credits) };
+}
+
+/** One generation, planned but not yet sent. Paths are absolute. */
+interface PlannedPart {
+  readonly prompt: string;
+  readonly duration: number;
+  readonly first: string;
+  readonly last: string | null;
+}
 
 /** How often a render in flight is asked about. */
 const POLL_MS = 5_000;
 
 /**
- * How many times a render is asked about before it is written off.
+ * How many times a generation is asked about before it is written off.
  *
  * 240 polls at five seconds is twenty minutes, against a job Runway finishes in
- * two or three. It exists so a task that will never answer becomes a `failed`
- * record with a reason rather than a record that says `rendering` forever —
+ * two or three. **Per generation**, so a render made in halves waits up to
+ * twenty minutes for each of them: they are separate jobs on Runway's queue and
+ * a shared deadline would write off a second half for the first one's slowness.
+ * It exists so a task that will never answer becomes a `failed` record with a
+ * reason rather than a record that says `rendering` forever —
  * which is the render-shaped version of constraint 4: a late render is a
  * nuisance, one that silently never arrives destroys the point of asking.
  *
@@ -182,6 +601,15 @@ const GIVE_UP_AFTER_POLLS = 240;
 
 export interface RenderServiceOptions {
   readonly studio: Studio;
+  /**
+   * What she looks like and what her clips open on, as things she chooses.
+   *
+   * Optional, and built from the studio when it is absent, because a wardrobe
+   * is entirely a function of her home — there is nothing a caller could supply
+   * that this could not work out. The seam exists so a test can hold the clock
+   * still, not so two of them can disagree about which face is hers.
+   */
+  readonly wardrobe?: Wardrobe;
   /** `null` on a machine with no `RUNWAYML_API_SECRET`, which is most of them. */
   readonly backend: RenderBackend | null;
   readonly clock?: Clock;
@@ -189,31 +617,59 @@ export interface RenderServiceOptions {
   readonly sleep?: (ms: number) => Promise<void>;
   readonly pollMs?: number;
   readonly giveUpAfterPolls?: number;
-  /** Injected so the suite needs neither ffmpeg nor a real mp4. */
-  readonly extract?: FrameRunner;
+  /**
+   * How this service runs ffmpeg. Injected so the suite needs neither ffmpeg
+   * nor a real mp4.
+   *
+   * One seam for all three uses — pulling stills she can look at, taking the
+   * closing frame off a half, and joining the halves — because they are the
+   * same program with different argv, and two seams would be two things to
+   * remember to double.
+   */
+  readonly ffmpeg?: FrameRunner;
+  /**
+   * Arrange to come back and look at this render.
+   *
+   * Called once per render, immediately after the record is written and before
+   * anything is polled — so the promise to look at it exists from the same
+   * moment the render does, and a process that dies in the next second still
+   * leaves something that will bring her back to it.
+   *
+   * The Commander's ruling, 2026-08-11: *"when Syl triggers a video to be
+   * rendered she needs some kind of wake up mechanism five minutes later"*.
+   * This is the seam where that is arranged. A function rather than a store,
+   * so this module keeps knowing nothing about the database — and so the suite
+   * can watch it being called without one.
+   */
+  readonly watch?: (record: RenderRecord) => void;
   readonly onError?: (error: unknown, name: string) => void;
 }
 
 export class RenderService {
   readonly #studio: Studio;
+  readonly #wardrobe: Wardrobe;
   readonly #backend: RenderBackend | null;
   readonly #clock: Clock;
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #pollMs: number;
   readonly #giveUpAfterPolls: number;
-  readonly #extract: FrameRunner | undefined;
+  readonly #ffmpeg: FrameRunner;
+  readonly #watch: ((record: RenderRecord) => void) | undefined;
   readonly #onError: (error: unknown, name: string) => void;
   /** Renders being followed right now, so `drain` can wait for them. */
   readonly #inFlight = new Set<Promise<void>>();
 
   constructor(options: RenderServiceOptions) {
     this.#studio = options.studio;
-    this.#backend = options.backend;
     this.#clock = options.clock ?? systemClock;
+    this.#wardrobe =
+      options.wardrobe ?? new Wardrobe({ studio: options.studio, clock: this.#clock });
+    this.#backend = options.backend;
     this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#pollMs = options.pollMs ?? POLL_MS;
     this.#giveUpAfterPolls = options.giveUpAfterPolls ?? GIVE_UP_AFTER_POLLS;
-    this.#extract = options.extract;
+    this.#ffmpeg = options.ffmpeg ?? ffmpegRunner;
+    this.#watch = options.watch;
     this.#onError =
       options.onError ??
       ((error, name): void => {
@@ -264,6 +720,81 @@ export class RenderService {
       };
     }
 
+    // WHICH MODEL, AND WHAT IT CANNOT DO — before a credit is spent, and both
+    // answers derived from the registry rather than from a list of names kept
+    // here. `syl-023`.
+    const named = (input.model ?? "").trim();
+    const model = named === "" ? HOUSE_MODEL : modelNote(named);
+    if (model === null) {
+      return {
+        ok: false,
+        reason:
+          `"${named}" is not a model I can render on. The ones I have are: ${MODEL_IDS.join(", ")} — ` +
+          `and ${HOUSE_MODEL.id} is what makes my renders when I do not say.`,
+        retryable: true,
+      };
+    }
+
+    // THE REFUSAL THAT MATTERS, and it is arithmetic. A framing whose subject
+    // is her face is anchored at the join, and both halves of a join pin a
+    // picture at `last` — so a model with no `last` slot cannot render either
+    // one. `grok_imagine_1_5` was not reasoned about, it was RENDERED on
+    // 2026-08-13, and the closing frame came back a visibly different woman.
+    //
+    // It derives from `canAnchorLikeness`, which derives from `positions`, so a
+    // model added to the roster tomorrow is covered without anybody editing
+    // this branch — and it says what the model CANNOT DO rather than that it is
+    // not allowed, because she may experiment freely and may not be quietly
+    // handed somebody else.
+    if (framing.anchor !== "none" && !canAnchorLikeness(model)) {
+      return {
+        ok: false,
+        reason:
+          `${model.id} takes ${String(model.positions.length)} keyframe ` +
+          `(${model.positions.join(", ")}), so there is nowhere in the clip to pin my face. At ` +
+          `${framing.id} the model would invent one and hand you a stranger — that is what it did ` +
+          "on 2026-08-13, at full price. Nothing has been spent. Render this framing on a model " +
+          `with a last keyframe (${HOUSE_MODEL.id} is mine), or ask for ${TEMPLATE_FRAMING}, ` +
+          `which shows no face and which ${model.id} can make.`,
+        retryable: true,
+        // The finding, in a shape something can keep. The arity is the durable
+        // part; the model's name is only where it was observed.
+        evidence: { model: model.id, keyframes: model.positions.length },
+      };
+    }
+
+    // How many generations this shot takes, which decides the length ceiling: a
+    // clip cut together out of two halves reaches twice as far as one. Known
+    // here because it follows from the framing, before any picture is looked up.
+    const generations = framing.anchor === "none" ? 1 : 2;
+    const ceiling = maxSecondsFor(model, generations);
+    // THE FLOOR IS ONE GENERATION'S, NOT TWO, and that asymmetry is deliberate.
+    // A joined shot cannot really be shorter than two of the model's shortest —
+    // but asking for five and being refused teaches her nothing, while asking
+    // for five and being told the clip is eight is a dial she can read back
+    // even when it did not do what she asked. `halvesOf` rounds up and
+    // `duration` on the record is the halves added up, so the number she is
+    // told stays the number that was made.
+    const floor = model.duration.min;
+
+    // The one length dial, checked against what THIS MODEL actually makes.
+    // Refused before anything is spent rather than after the first half of a
+    // joined render is already bought.
+    const seconds = input.seconds ?? Math.min(DEFAULTS.duration, ceiling);
+    if (!Number.isInteger(seconds) || seconds < floor || seconds > ceiling) {
+      return {
+        ok: false,
+        reason:
+          `A clip on ${model.id} is a whole number of seconds between ${String(floor)} and ` +
+          `${String(ceiling)} — ${String(seconds)} is not one. ` +
+          (generations === 2
+            ? `A shot of my face is two generations cut together, each ${String(model.duration.min)}` +
+              `-${String(model.duration.max)}s, which is where those numbers come from.`
+            : `That is ${model.id}'s own range, measured against the API.`),
+        retryable: true,
+      };
+    }
+
     if (this.#backend === null) {
       return {
         ok: false,
@@ -274,31 +805,135 @@ export class RenderService {
       };
     }
 
-    const reference = this.#studio.reference();
-    if (!existsSync(reference)) {
-      // The reference is the only thing holding her appearance still between
-      // clips. Rendering without it would not fail — it would produce a
-      // stranger, expensively.
+    // The picture that is actually sent, and therefore the video's first frame
+    // AND the video's shape. Hers to choose since `syl-ate`: the ribbon unless
+    // she names another, because that is her signature and what every clip in
+    // the reel opens on.
+    const opening = this.#wardrobe.opening(input.opening);
+    // Checked rather than assumed: without a picture there is nothing to start
+    // the clip from, and the failure mode of getting this wrong is not an error
+    // — it is fifteen seconds that open on the wrong thing, at full price.
+    //
+    // TWO REFUSALS WEARING ONE SHAPE, and one of them is hers to fix. A name
+    // she got wrong is answered with the list; the ribbon missing off the disk
+    // is answered with the path, because there is nothing she can retry.
+    if (opening === null || !existsSync(opening.path)) {
+      const named = (input.opening ?? "").trim();
+      if (named === "" || opening !== null) {
+        return {
+          ok: false,
+          reason:
+            `The opening my clips would start on is not where it should be ` +
+            `(${opening?.path ?? this.#studio.opening()}). It is the first frame of every render ` +
+            "— without it the video would begin somewhere else, and it would not cut against the " +
+            "others.",
+          retryable: false,
+        };
+      }
       return {
         ok: false,
         reason:
-          `The reference picture of me is not where it should be (${reference}), and it is the ` +
-          "only thing holding my face still between shots. Without it the render would be somebody else.",
+          `I do not have an opening called "${named}". The ones I have are: ` +
+          `${this.#wardrobe.openings().map((one) => one.id).join(", ")}. Leave it out for the ` +
+          "ribbon, which is what the reel opens on.",
+        retryable: true,
+      };
+    }
+
+    // The picture that pins her face, for the framings that need one. A shot
+    // whose subject is her face and which has nothing holding that face is the
+    // `8-descent` failure by construction — a visibly different woman, at full
+    // price — so it is refused here rather than discovered on the other side.
+    // Only for the framings that need it: `face_turned_away` holds without a
+    // face at all, and must not stop working because a likeness is missing.
+    let anchor: string | null = null;
+    if (framing.anchor !== "none") {
+      const chosen = this.#wardrobe.face();
+      if (chosen === null) {
+        // TWO DIFFERENT REFUSALS, AND THEY MUST NOT WEAR ONE SENTENCE. Either
+        // there is no likeness on this machine at all, or the log of what she
+        // has adopted cannot be read — and in the second case falling back to
+        // the picture he guessed would be the silent change of face the
+        // Commander forbade, at full price, on a render she would then judge.
+        const problems = this.#wardrobe.problems();
+        return {
+          ok: false,
+          reason:
+            problems.length > 0
+              ? `${problems.join(" ")} So I will not render a shot of my face until that file is readable.`
+              : `This shot is my face, and there is no picture of me on this machine to hold it ` +
+                `(nothing at ${this.#studio.reference()}). Without one the model has nothing to ` +
+                "copy and would give you somebody else. Nothing has been spent.",
+          retryable: false,
+        };
+      }
+      if (!existsSync(chosen.path)) {
+        return {
+          ok: false,
+          reason:
+            `This shot is my face, and the picture I chose to hold it is not where it should be ` +
+            `(${chosen.path}). Without it the model has nothing to copy and would give you ` +
+            "somebody else. Nothing has been spent.",
+          retryable: false,
+        };
+      }
+      anchor = chosen.path;
+    }
+
+    // DERIVED FROM THE OPENING, never written down beside it. `promptImage`
+    // decides the aspect and overrules this field without saying so, so the
+    // only thing `ratio` can do is agree with the picture or lie about it —
+    // and it lied for a day, saying `720:1280` above a stream of landscape
+    // videos. The fallback is the shape the seed ribbon is; every opening she
+    // adopts has a readable shape, because `Wardrobe.keep` refuses one that
+    // does not.
+    const ratio = opening.ratio ?? DEFAULTS.ratio;
+
+    // WHICH KEY THE GEOMETRY TRAVELS UNDER. `ratio` for every seedance; a
+    // resolution band for a model that has no `ratio` key at all. The record
+    // keeps `ratio` either way, because `ratio` is the shape the video actually
+    // has — the opening decides that on every model — and `resolution` records
+    // what was additionally sent.
+    const geometry = this.#geometryFor(model, ratio);
+    if (geometry === null) {
+      return {
+        ok: false,
+        reason:
+          `${model.id} is shaped by a resolution and the roster lists none for it, so I do not ` +
+          "know what size to ask for. Nothing has been spent.",
         retryable: false,
       };
     }
 
     const now = this.#clock();
     const name = this.#nameFor(now, framing.id);
-    const prompt = `${IDENTITY} ${scene} ${framing.clause} ${LOOP_CLAUSE}`;
-    const credits = creditsFor({ model: DEFAULTS.model, ratio: DEFAULTS.ratio, seconds: DEFAULTS.duration });
+    const planned = this.#plan({
+      name,
+      framing,
+      model,
+      scene,
+      opening: opening.path,
+      anchor,
+      seconds,
+    });
 
+    // Only the FIRST half goes over now. The second one starts from the frame
+    // the first one ends on, so it cannot be submitted until that frame exists
+    // — which is also what keeps the failure story simple: nothing has been
+    // spent when this refuses, exactly as before.
+    const head = planned[0];
+    if (head === undefined) {
+      // `#plan` always returns at least one generation. Checked rather than
+      // cast, because a cast is a promise to the compiler and this file
+      // already carries the scar of one that was not kept.
+      return { ok: false, reason: "I could not work out how to make that shot.", retryable: false };
+    }
     const submitted = await this.#backend.submit({
-      model: DEFAULTS.model,
-      promptImage: this.#dataUri(reference),
-      promptText: prompt,
-      ratio: DEFAULTS.ratio,
-      duration: DEFAULTS.duration,
+      model: model.id,
+      promptImage: this.#promptImage(head, model),
+      promptText: head.prompt,
+      duration: head.duration,
+      ...geometry,
     });
 
     if (!submitted.ok) {
@@ -308,28 +943,54 @@ export class RenderService {
       return { ok: false, reason: submitted.failure.message, retryable: submitted.failure.retryable };
     }
 
+    const parts: RenderPart[] = planned.map((part, index) => ({
+      taskId: index === 0 ? submitted.data.id : null,
+      prompt: part.prompt,
+      duration: part.duration,
+      first: this.#relativeTo(part.first),
+      last: part.last === null ? null : this.#relativeTo(part.last),
+      video: null,
+      // AT THE CHOSEN MODEL'S RATE, never at a constant. 30 credits a second
+      // against 36 is 90 credits on one ordinary fifteen-second render, and a
+      // price that silently belonged to the old model is this project's
+      // signature defect.
+      credits: creditsFor({ model: model.id, seconds: part.duration, ...geometry }),
+    }));
+
     const record: RenderRecord = {
       name,
       status: "rendering",
       renderedAt: null,
       taskId: submitted.data.id,
-      model: DEFAULTS.model,
-      ratio: DEFAULTS.ratio,
-      duration: DEFAULTS.duration,
-      reference: this.#relativeReference(),
+      model: model.id,
+      ratio,
+      resolution: bandOf(geometry),
+      keyframes: model.positions.length,
+      duration: planned.reduce((total, part) => total + part.duration, 0),
+      reference: this.#relativeTo(opening.path),
+      anchor: anchor === null ? null : this.#relativeTo(anchor),
       framing: framing.id,
-      prompt,
+      prompt: planned.map((part) => part.prompt).join("\n\n"),
       scene,
-      holdsLikeness: framing.holdsLikeness,
+      holdsLikeness: holdsLikeness(framing, anchor === null ? null : this.#relativeTo(anchor)),
       because,
       startedAt: instant(now),
       reason: null,
-      credits,
-      usd: credits === null ? null : usdOf(credits),
+      ...billed(parts),
       video: null,
+      parts,
     };
 
     this.#write(record);
+    // The promise to come back and look, arranged before the first poll. It is
+    // wrapped because a render has already cost a credit by this point: a watch
+    // that could not be written must never turn a submitted render into a
+    // refusal, and the failure is loud rather than swallowed.
+    try {
+      this.#watch?.(record);
+    } catch (error) {
+      this.#onError(error, record.name);
+    }
     this.#follow(record);
     return { ok: true, record };
   }
@@ -388,7 +1049,11 @@ export class RenderService {
     let unpriced = 0;
 
     for (const record of records) {
-      seconds += record.duration;
+      // The seconds that were BOUGHT, not the seconds the render was going to
+      // be. They are the same number for every render that finished; they
+      // differ for one whose second half never reached Runway, and the ledger
+      // is the place where that difference has to be the truth.
+      seconds += record.parts.filter(wasBought).reduce((total, part) => total + part.duration, 0);
       if (record.credits === null) unpriced += 1;
       else credits += record.credits;
     }
@@ -458,7 +1123,7 @@ export class RenderService {
         seconds: record.duration,
         ...(at === undefined ? {} : { at }),
         outDir: this.#studio.frames(record.name),
-        ...(this.#extract === undefined ? {} : { run: this.#extract }),
+        run: this.#ffmpeg,
       }),
     };
   }
@@ -474,7 +1139,12 @@ export class RenderService {
    */
   resume(): void {
     for (const record of this.list()) {
-      if (record.status === "rendering" && record.taskId !== null) this.#follow(record);
+      // Any half with a handle is worth picking up — including a render whose
+      // FIRST half is already on disk and whose second was never submitted,
+      // which is the state a restart between two generations leaves behind.
+      if (record.status === "rendering" && record.parts.some((part) => part.taskId !== null)) {
+        this.#follow(record);
+      }
     }
   }
 
@@ -484,6 +1154,115 @@ export class RenderService {
   }
 
   // -------------------------------------------------------------------------
+
+  /**
+   * The generations a render is made of, before any of them is sent.
+   *
+   * One when nothing needs pinning, which is the reel template and both of the
+   * framings that drift. **Two when her face is the subject**, because both
+   * keyframe slots then go to the ribbon — one at each end of the finished clip
+   * — and her likeness has to live at the join instead. `join.ts` records the
+   * probes that leave no third option.
+   */
+  #plan(input: {
+    readonly name: string;
+    readonly framing: FramingNote;
+    /** The chosen model, because the split has to land inside ITS range. */
+    readonly model: ModelNote;
+    readonly scene: string;
+    readonly opening: string;
+    readonly anchor: string | null;
+    /** What she asked for, already checked against the chosen model's range. */
+    readonly seconds: number;
+  }): readonly PlannedPart[] {
+    const stem = `${IDENTITY} ${input.scene} ${input.framing.clause}`;
+
+    if (input.anchor === null) {
+      // BOTH SLOTS GO TO THE OPENING. There is no face in this shot to pin, so
+      // nothing else wants the `last` keyframe — and a keyframe left empty is a
+      // frame the model decides. It decided wrong:
+      // `syl-20260813t042030321z-face-turned-away.mp4` ended on empty starfield
+      // with no ribbon in it, because {@link LOOP_CLAUSE} was *asking* for the
+      // closing ribbon in prose while the anchored path was *pinning* its own.
+      // The same picture at both ends makes the loop true by construction,
+      // which is the rule `docs/VIDEO.md` was written to record.
+      return [
+        {
+          prompt: `${stem} ${LOOP_CLAUSE}`,
+          duration: input.seconds,
+          first: input.opening,
+          last: input.opening,
+        },
+      ];
+    }
+
+    const [gathering, unravelling] = halvesOf(input.seconds, input.model);
+    return [
+      { prompt: `${stem} ${GATHERING_CLAUSE}`, duration: gathering, first: input.opening, last: input.anchor },
+      {
+        prompt: `${stem} ${UNRAVELLING_CLAUSE}`,
+        duration: unravelling,
+        // The frame the first half ends on, which does not exist yet. Named
+        // here rather than left blank because the path is decided by the render
+        // name: a record that says what WILL be sent is reproducible, and one
+        // that says nothing is a hole somebody fills in with a guess.
+        first: this.#studio.partFrame(input.name, 1),
+        last: input.opening,
+      },
+    ];
+  }
+
+  /**
+   * The pictures a generation is given, in the shape Runway takes them.
+   *
+   * A bare string where only frame one is pinned — exactly what the eight loops
+   * were sent — and the positioned array where both ends are.
+   *
+   * **Filtered to the slots the model declares.** `grok_imagine_1_5` answers
+   * *"Too big: expected array to have <=1 items"* and *"Invalid input: expected
+   * \"first\""* to the two-slot form, so a closing picture is dropped for a
+   * model that has nowhere to put one. That is the same consequence
+   * {@link canAnchorLikeness} refuses an anchored framing over, arriving at the
+   * other end: a clip on such a model does not close on the ribbon either, and
+   * it is derived from `positions` in both places rather than restated.
+   *
+   * `#plan` produces a closing picture for every generation, the unanchored one
+   * with the same opening twice. The string branch survives for a sidecar
+   * written before that, which names none, and which `resume` has to be able to
+   * carry to the end in the shape it was actually submitted in.
+   */
+  #promptImage(
+    part: { readonly first: string; readonly last: string | null },
+    model: ModelNote,
+  ): string | readonly PositionedImage[] {
+    const pinned: PositionedImage[] = [];
+    const takes = (position: KeyframePosition): boolean => model.positions.includes(position);
+
+    if (takes("first")) pinned.push({ uri: this.#dataUri(part.first), position: "first" });
+    if (part.last !== null && takes("last")) {
+      pinned.push({ uri: this.#dataUri(part.last), position: "last" });
+    }
+
+    // One picture and nothing else is the bare-string form the eight loops were
+    // sent in, and it is what a one-slot model wants.
+    if (pinned.length === 1 && pinned[0]?.position === "first") return this.#dataUri(part.first);
+    return pinned;
+  }
+
+  /**
+   * Which key this model's geometry travels under, and what goes in it.
+   *
+   * `null` only for a `resolution`-shaped model the roster lists no bands for,
+   * which cannot happen with the registry as it stands and is refused rather
+   * than guessed if it ever does. Guessing `720p` here would put a size on the
+   * wire that no probe measured and a price in her ledger that no balance
+   * confirmed.
+   */
+  #geometryFor(model: ModelNote, ratio: string): Geometry | null {
+    if (model.shape !== "resolution") return { ratio };
+    const band = defaultResolution(model);
+    return band === null ? null : { resolution: band };
+  }
 
   /** Follow a submitted task to its end, without anybody awaiting it. */
   #follow(record: RenderRecord): void {
@@ -505,45 +1284,149 @@ export class RenderService {
     this.#inFlight.add(running);
   }
 
+  /**
+   * Carry a render through every generation it is made of, and join them.
+   *
+   * Written as a walk over `parts` rather than as one polling loop, because a
+   * render is now sometimes two of them — and because that shape is also what a
+   * restart needs: a half already on disk is skipped, a half with a task id is
+   * waited for, and a half with neither is submitted from the frame the
+   * previous one ended on. `resume` therefore needs no separate machinery.
+   */
   async #poll(record: RenderRecord): Promise<void> {
     const backend = this.#backend;
-    const taskId = record.taskId;
-    if (backend === null || taskId === null) return;
+    if (backend === null) return;
+
+    let current = record;
+    for (let index = 0; index < current.parts.length; index += 1) {
+      const part = current.parts[index];
+      if (part === undefined) return;
+      if (part.video !== null && existsSync(part.video)) continue;
+
+      let taskId = part.taskId;
+      if (taskId === null) {
+        // The second half cannot be asked for until the first has landed: its
+        // opening picture is a frame OF the first, which is what makes the cut
+        // land on one frame rather than on two renderings of a similar one.
+        const previous = current.parts[index - 1];
+        if (previous === undefined || previous.video === null) {
+          this.#fail(current, "The half this one continues from is not on disk, so I stopped here.");
+          return;
+        }
+
+        const frame = this.#studio.partFrame(current.name, index);
+        const taken = await lastFrame({ video: previous.video, to: frame, run: this.#ffmpeg });
+        if (!taken.ok) {
+          this.#fail(current, taken.reason);
+          return;
+        }
+
+        // THE MODEL THE RECORD NAMES, not the house model. A second half
+        // rendered on a different model from its first would not cut against
+        // it — and after a restart the record is the only thing that remembers
+        // which one made the first half.
+        const model = modelNote(current.model);
+        if (model === null) {
+          this.#fail(
+            current,
+            `The first half of this render was made on ${current.model}, which is no longer a ` +
+              "model I have, so I cannot make the second half to match it.",
+          );
+          return;
+        }
+        const geometry = this.#geometryFor(model, current.ratio);
+        if (geometry === null) {
+          this.#fail(current, `I do not know what size to ask ${model.id} for.`);
+          return;
+        }
+
+        const submitted = await backend.submit({
+          model: model.id,
+          promptImage: this.#promptImage({ first: frame, last: this.#absolute(part.last) }, model),
+          promptText: part.prompt,
+          duration: part.duration,
+          ...geometry,
+        });
+        if (!submitted.ok) {
+          // The first half is already paid for. It stays on disk and it stays
+          // in the ledger — `billed` counts the halves that reached Runway, so
+          // this record reports what was actually spent rather than what the
+          // whole render would have cost.
+          this.#fail(
+            current,
+            `The first half of this render is made and the second would not start: ${submitted.failure.message}`,
+          );
+          return;
+        }
+        taskId = submitted.data.id;
+        current = this.#patch(current, index, { taskId });
+      }
+
+      // A render made in one generation writes straight to its own file; the
+      // halves of a joined one are kept beside it, because a half is a render
+      // and `SOUL.md` does not allow one to be thrown away.
+      const to =
+        current.parts.length === 1
+          ? this.#studio.video(current.name)
+          : this.#studio.part(current.name, index + 1);
+      if (!(await this.#await(current, taskId, to))) return;
+      current = this.#patch(current, index, { video: to });
+    }
+
+    if (current.parts.length > 1) {
+      const joined = await joinVideos({
+        parts: current.parts.map((part) => part.video ?? ""),
+        to: this.#studio.video(current.name),
+        listFile: this.#studio.partList(current.name),
+        run: this.#ffmpeg,
+      });
+      if (!joined.ok) {
+        this.#fail(current, joined.reason);
+        return;
+      }
+    }
+
+    this.#write({
+      ...(this.#read(current.name) ?? current),
+      parts: current.parts,
+      ...billed(current.parts),
+      status: "ready",
+      renderedAt: instant(this.#clock()),
+      video: this.#studio.video(current.name),
+      reason: null,
+    });
+  }
+
+  /** Wait for one generation and put it on disk. `false` means it is over. */
+  async #await(record: RenderRecord, taskId: string, to: string): Promise<boolean> {
+    const backend = this.#backend;
+    if (backend === null) return false;
 
     for (let attempt = 1; ; attempt += 1) {
       const task = await backend.task(taskId);
       if (!task.ok) {
         if (!task.failure.retryable) {
           this.#fail(record, task.failure.message);
-          return;
+          return false;
         }
       } else if (isTerminal(task.data.status)) {
         if (task.data.status !== "SUCCEEDED") {
           this.#fail(record, `Runway ended this render as ${task.data.status}.`);
-          return;
+          return false;
         }
         const url = task.data.output[0];
         if (url === undefined) {
           this.#fail(record, "Runway said the render succeeded and gave nothing back to download.");
-          return;
+          return false;
         }
 
-        mkdirSync(this.#studio.videoDir, { recursive: true });
-        const to = this.#studio.video(record.name);
+        mkdirSync(dirname(to), { recursive: true });
         const downloaded = await backend.download(url, to);
         if (!downloaded.ok) {
           this.#fail(record, downloaded.failure.message);
-          return;
+          return false;
         }
-
-        this.#write({
-          ...(this.#read(record.name) ?? record),
-          status: "ready",
-          renderedAt: instant(this.#clock()),
-          video: to,
-          reason: null,
-        });
-        return;
+        return true;
       }
 
       if (attempt >= this.#giveUpAfterPolls) {
@@ -553,15 +1436,36 @@ export class RenderService {
             Math.round((this.#giveUpAfterPolls * this.#pollMs) / 60_000),
           )} minutes, so I stopped waiting. The task id is ${taskId} if it turns up later.`,
         );
-        return;
+        return false;
       }
 
       await this.#sleep(this.#pollMs);
     }
   }
 
+  /**
+   * Record what one generation has just done, on disk, before going on.
+   *
+   * Written at every step rather than once at the end for the same reason the
+   * sidecar is written at submission: a process that dies between two halves
+   * must leave behind the task id of the half that was bought, or the credits
+   * are spent and there is nothing to chase them with.
+   */
+  #patch(record: RenderRecord, index: number, changes: Partial<RenderPart>): RenderRecord {
+    const base = this.#read(record.name) ?? record;
+    const parts = base.parts.map((part, at) => (at === index ? { ...part, ...changes } : part));
+    const next: RenderRecord = { ...base, parts, ...billed(parts) };
+    this.#write(next);
+    return next;
+  }
+
   #fail(record: RenderRecord, reason: string): void {
-    this.#write({ ...(this.#read(record.name) ?? record), status: "failed", reason, video: null });
+    // Read from disk rather than from the caller's copy: `#patch` writes each
+    // half's progress as it happens, so the file knows about halves that were
+    // bought after the record in hand was made. A failed render is a record
+    // with a reason added, never a record with something taken out of it.
+    const base = this.#read(record.name) ?? record;
+    this.#write({ ...base, status: "failed", reason, video: null });
   }
 
   /**
@@ -591,12 +1495,16 @@ export class RenderService {
     return `data:image/${kind};base64,${readFileSync(reference).toString("base64")}`;
   }
 
-  /** The reference as `generate.mjs` records it: a path, not the base64. */
-  #relativeReference(): string {
-    const absolute = this.#studio.reference();
+  /** A picture as `generate.mjs` records one: a path, not the base64. */
+  #relativeTo(absolute: string): string {
     return absolute.startsWith(this.#studio.root)
       ? absolute.slice(this.#studio.root.length).replace(/^[/\\]+/u, "")
       : absolute;
+  }
+
+  /** A recorded path, back as somewhere on this machine. The inverse of the above. */
+  #absolute(relative: string | null): string | null {
+    return relative === null ? null : resolve(this.#studio.root, relative);
   }
 
   #write(record: RenderRecord): void {
@@ -779,7 +1687,18 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
   const startedAt = text("startedAt");
   const model = text("model");
   const ratio = text("ratio");
+  // Both nullable, and both for the same compatibility reason as `anchor`:
+  // every sidecar written before models could be chosen has neither, and a
+  // required field would have turned the whole back catalogue unreadable at a
+  // stroke — the state this validator exists to report, not to cause.
+  const resolution = nullableText("resolution");
+  const keyframes = nullableNumber("keyframes");
   const reference = text("reference");
+  // Nullable rather than required, and that is the whole of the compatibility
+  // story: every sidecar written before anchoring existed has no such field,
+  // and a required one would have turned all of them unreadable at a stroke —
+  // which is the state this validator exists to report honestly, not to cause.
+  const anchor = nullableText("anchor");
   const prompt = text("prompt");
   const scene = optionalText("scene");
   const because = optionalText("because");
@@ -807,18 +1726,82 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
       taskId,
       model,
       ratio,
+      resolution,
+      keyframes,
       duration,
       reference,
+      anchor,
       framing: framing.id,
       prompt,
       scene,
-      holdsLikeness: framing.holdsLikeness,
+      // Derived from THIS RECORD's own pictures, not from the framing's plan.
+      // A sidecar written before anchoring existed names no anchor, so a close
+      // portrait in the back catalogue reads `false` — which is what those
+      // renders actually were. `syl-63v` is what reading the enum's hope
+      // instead of the file's facts costs.
+      holdsLikeness: holdsLikeness(framing, anchor),
       because,
       startedAt,
       reason,
       credits,
       usd,
       video,
+      parts: partsFrom(sidecar, {
+        taskId,
+        prompt,
+        duration,
+        first: reference,
+        last: anchor,
+        video,
+        credits,
+      }),
     },
   };
+}
+
+/**
+ * The generations a sidecar says a render is made of.
+ *
+ * **A sidecar with no `parts` is not broken.** Every record written before a
+ * render could be made in halves has none, and there are dozens of them in her
+ * home — so one part is synthesised from the fields such a file does have, and
+ * the rest of the service reads one shape. The alternative was a required
+ * field, which would have turned the whole back catalogue unreadable at a
+ * stroke: the state this validator exists to report, not to cause.
+ *
+ * A `parts` that is present and malformed is treated the same way rather than
+ * making the record unreadable, for the same reason. The fields that decide
+ * whether the service tells the truth — status, duration, framing — are checked
+ * above; this one decides how a render in flight is chased, and a render in the
+ * back catalogue is not in flight.
+ */
+function partsFrom(sidecar: Record<string, unknown>, fallback: RenderPart): readonly RenderPart[] {
+  const declared = sidecar["parts"];
+  if (!Array.isArray(declared) || declared.length === 0) return [fallback];
+
+  const parts: RenderPart[] = [];
+  for (const entry of declared) {
+    if (typeof entry !== "object" || entry === null) return [fallback];
+    const part = entry as Record<string, unknown>;
+    const duration = part["duration"];
+    const first = part["first"];
+    const prompt = part["prompt"];
+    if (typeof duration !== "number" || !Number.isFinite(duration)) return [fallback];
+    if (typeof first !== "string" || typeof prompt !== "string") return [fallback];
+
+    const taskId = part["taskId"];
+    const last = part["last"];
+    const video = part["video"];
+    const credits = part["credits"];
+    parts.push({
+      taskId: typeof taskId === "string" ? taskId : null,
+      prompt,
+      duration,
+      first,
+      last: typeof last === "string" ? last : null,
+      video: typeof video === "string" ? video : null,
+      credits: typeof credits === "number" && Number.isFinite(credits) ? credits : null,
+    });
+  }
+  return parts;
 }

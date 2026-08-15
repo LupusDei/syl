@@ -61,8 +61,17 @@ const NOT_A_TABLE: ReadonlySet<string> = new Set(["SET", "SELECT", "VALUES", "WH
  * chain) rather than on a bare `name AS (`. A looser pattern would eventually
  * match a column alias and EXCLUDE a real table, which fails silently — the one
  * direction this scanner must never fail in.
+ *
+ * **The column list is optional and that is not a loosening.** `WITH
+ * day(label, opens, closes) AS (VALUES …)` is the ordinary way to name a
+ * literal table inline, and `health/samples.ts` builds one per read to bucket
+ * samples into HIS days. Without this the scanner reported `day` as a table no
+ * migration creates — a finding nobody can act on, in a check whose whole value
+ * is that it is believed. The anchor is unchanged, so `WITH name(…) AS (` is
+ * still only ever matched where a CTE can actually be declared.
  */
-const CTE_NAME = /(?:\bWITH\s+(?:RECURSIVE\s+)?|\)\s*,\s*)([A-Za-z_][A-Za-z0-9_]*)\s+AS\s*\(/g;
+const CTE_NAME =
+  /(?:\bWITH\s+(?:RECURSIVE\s+)?|\)\s*,\s*)([A-Za-z_][A-Za-z0-9_]*)\s*(?:\([^)]*\))?\s+AS\s*\(/g;
 
 /**
  * SQLite's own schema tables.

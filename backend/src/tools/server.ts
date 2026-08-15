@@ -1,12 +1,15 @@
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
-import type { Goal, HealthStatus, Reminder, ReminderOrigin, Todo } from "@syl/shared";
+import type { Goal, HealthStatus, Reminder, ReminderOrigin, Sending, Todo } from "@syl/shared";
 
 import { AdjutantClient } from "../agents/adjutant-client.js";
+import { askBudget, newCorrelationId, refLine } from "../agents/answers.js";
 import { mayReach, notOnTheRoster } from "../agents/roster.js";
 
 import { verifyUrgency } from "../harness/urgency.js";
+import { canAnchorLikeness, HOUSE_MODEL, MODELS, type ModelNote } from "../render/models.js";
+import { sightingOf } from "../render/pictures.js";
 
 import { SylApiClient, type ToolFailure, type ToolResult } from "./client.js";
 import { TOOLS, type ToolSchema } from "./schemas.js";
@@ -52,10 +55,18 @@ import { reminderInputFrom, resolveTime } from "./time.js";
  * A verb reaches this surface only if it has a handler here, and a handler
  * exists only where the API has a door for it. `research` is absent from
  * `schemas.ts` already, because the sealed fetch path does not exist.
- * `remember` is declared there and is absent **here**, for the same reason one
- * step later: `AGENT_SURFACE` is `/reminders`, `/todos`, `/goals`, there is no
- * route that writes a memory, and `middleware/auth.ts` argues at length that
- * adding one must be a decision rather than a side effect of some other change.
+ * `remember` was declared there and absent **here** for two months, for the same
+ * reason one step later: there was no route that wrote a memory. `syl-016.7`
+ * built one, and it is the only WRITE on her credential — so the asymmetry this
+ * paragraph used to record is closed, deliberately and in that order. She could
+ * read her own memory for exactly as long as it took to decide the write
+ * separately, which is how a decision like that should arrive.
+ *
+ * What still bounds it is not this file: `HerOwnMemory` has no method that
+ * deletes, supersedes, relabels, moves a weight or mints a person, and
+ * `POST /memory/edges/{id}/feedback` remains out of her reach. **She may add
+ * what she concluded; she may not adjust what she will be shown for concluding
+ * it.**
  *
  * Advertising it anyway would tell her she can keep what he told her about his
  * life, and every attempt would come back `403`. That is exactly the defect
@@ -83,12 +94,13 @@ export type ToolEnvelope =
       readonly subject: unknown;
       readonly at: string | null;
       /**
-       * What she has spent on renders, when the verb is one that spends.
+       * What this verb has spent of what it is allowed to spend.
        *
-       * Optional and additive: every existing verb omits it and every existing
-       * reader ignores it. It rides on the answer rather than waiting behind a
-       * verb she would have to think to call, because the Commander removed the
-       * gate and visibility is what is left — same rule as `because`, evidence
+       * Renders, in credits, and readings against `READS_PER_DAY`. Optional and
+       * additive: every other verb omits it and every existing reader ignores
+       * it. It rides on the answer rather than waiting behind a verb she would
+       * have to think to call, because the Commander removed the gate and
+       * visibility is what is left — same rule as `because`, evidence
        * travelling with the action instead of standing in front of it.
        */
       readonly spent?: unknown;
@@ -100,11 +112,13 @@ export type ToolEnvelope =
        * become MCP image blocks in {@link asToolResult}. Never present on a
        * refusal: a failure carrying pictures would have her describing
        * something she was not shown.
+       *
+       * **`sighting` is required, and that is the point.** A picture she cannot
+       * name is a picture she cannot choose, so the type makes handing her one
+       * unrepresentable rather than leaving it to each code path to remember.
+       * Build these with {@link shown} and nothing else.
        */
-      readonly images?: readonly {
-        readonly mimeType: string;
-        readonly base64: string;
-      }[];
+      readonly images?: readonly Shown[];
     }
   | {
       readonly ok: false;
@@ -113,6 +127,43 @@ export type ToolEnvelope =
       readonly reason: string;
       readonly retryable: boolean;
     };
+
+/** A picture she is handed, and the token that names it. */
+export interface Shown {
+  readonly mimeType: string;
+  readonly base64: string;
+  /** The digest of exactly these bytes. See {@link shown}. */
+  readonly sighting: string;
+}
+
+/**
+ * A picture, named by the bytes she is about to be shown.
+ *
+ * **The token is a property of the act of being shown, not of where the picture
+ * was stored.** That distinction is the whole of `syl-ate`'s defect: sightings
+ * were computed for wardrobe rows, so the one face she could adopt was the one
+ * an engineer guessed before anyone knew her, and the still she actually wanted
+ * — an unsmiling frame nine and a half seconds into a render — arrived as a
+ * picture she could look at and could not promote.
+ *
+ * Computed **here**, from the base64 that becomes the image block, rather than
+ * read off whatever the service said about the file. Upstream describes a file;
+ * this describes what crossed. If those ever differ — a resize for the turn, a
+ * truncated read — trusting upstream would hand her a token for a picture she
+ * did not see, which is the one thing the mechanism exists to prevent. Failing
+ * closed, with a token her wardrobe does not recognise, is the safe direction.
+ *
+ * The guarantee is unchanged and unweakened: `sightingOf` is a digest of image
+ * bytes, so it cannot be derived from a filename, guessed from a name, or
+ * produced for anything she was not handed.
+ */
+export function shown(picture: { readonly mimeType?: string; readonly base64: string }): Shown {
+  return {
+    mimeType: picture.mimeType ?? "image/jpeg",
+    base64: picture.base64,
+    sighting: sightingOf(Buffer.from(picture.base64, "base64")),
+  };
+}
 
 /** What every handler is given. */
 export interface ToolContext {
@@ -327,10 +378,70 @@ const addTodo: ToolHandler = async (input, context) => {
     return missing("add_todo", "because", "Every to-do carries its reason.");
   }
 
-  const created = await context.client.post<Todo>("/todos", { text: errand });
+  // `dueAt` and `pinned` are what the agenda sorts on, and until `syl-74p`
+  // neither could be set — every to-do landed undated and unpinned, so a view
+  // of his day was empty by construction however well she planned it. Only
+  // forwarded when given: `POST /todos` defaults both, and sending an explicit
+  // null for every undated to-do would be noise on the wire.
+  const created = await context.client.post<Todo>("/todos", {
+    text: errand,
+    ...todoScheduleFrom(input),
+  });
   if (!created.ok) return refused("add_todo", created.failure);
 
   return readBack("add_todo", context, `/todos/${encodeURIComponent(created.data.id)}`, (row: Todo) => row.updatedAt);
+};
+
+/**
+ * The `dueAt`/`pinned` half of a to-do write, read off a tool call.
+ *
+ * **`dueAt` is genuinely three-valued and the route already models all three:**
+ * absent means leave it alone, `null` means take the date off, and a string
+ * means set it. Collapsing null into absent would make "actually, no date on
+ * that" unsayable — and a retraction she cannot say is how his list stops
+ * matching what he believes about it.
+ */
+function todoScheduleFrom(input: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+
+  const dueAt = input["dueAt"];
+  if (dueAt === null) patch["dueAt"] = null;
+  else if (typeof dueAt === "string" && dueAt.trim() !== "") patch["dueAt"] = dueAt;
+
+  if (typeof input["pinned"] === "boolean") patch["pinned"] = input["pinned"];
+
+  return patch;
+}
+
+/** Date, move, undate or pin something already on his list. */
+const scheduleTodo: ToolHandler = async (input, context) => {
+  const id = text(input, "id");
+  if (id === null) {
+    return missing("schedule_todo", "id", "I need to know which one — ask me what is outstanding.");
+  }
+  if (text(input, "because") === null) {
+    return missing("schedule_todo", "because", "Every change to his list carries its reason.");
+  }
+
+  const patch = todoScheduleFrom(input);
+  if (Object.keys(patch).length === 0) {
+    // Nothing to do is not the same as done. A silent no-op reads to her as
+    // success, and she tells him it moved.
+    return {
+      ok: false,
+      action: "schedule_todo",
+      reason:
+        "I did not catch what to change about that one. " +
+        "Tell me the new date, or that the date comes off, or that it should be pinned.",
+      retryable: false,
+    };
+  }
+
+  const path = `/todos/${encodeURIComponent(id)}`;
+  const changed = await context.client.patch<Todo>(path, patch);
+  if (!changed.ok) return refused("schedule_todo", changed.failure);
+
+  return readBack("schedule_todo", context, path, (row: Todo) => row.updatedAt);
 };
 
 /**
@@ -655,6 +766,15 @@ const dropTodo: ToolHandler = async (input, context) => {
  *    project keeps catching is a system claiming more than it did.
  * 3. **It never reaches someone off the roster**, and the refusal names who she
  *    can reach, because she has to turn it into a sentence for him.
+ * 4. **It never says a message went anywhere on the strength of a message id.**
+ *    `syl-5kdv`: the Commander held two ids she had reported as successful for
+ *    messages nobody ever received, because the tool underneath stored without
+ *    delivering and therefore could not fail. `AdjutantClient.ask` now decides
+ *    on `deliveredToSessions`, and a message that reached nobody arrives here
+ *    as a failure — recorded, not read, and said in those words.
+ *
+ * The fourth is the one this project keeps having to learn. A verb that cannot
+ * fail does not report success; it reports nothing, in the shape of success.
  */
 const askAgent: ToolHandler = async (input, context) => {
   const who = text(input, "who");
@@ -687,8 +807,140 @@ const askAgent: ToolHandler = async (input, context) => {
     };
   }
 
-  const sent = await context.fleet.ask(who, question);
+  // AN INBOUND MESSAGE MUST NEVER CAUSE AN UNBOUNDED CHAIN (`syl-014.3.5`).
+  //
+  // Another agent's reply now reaches her turn context (`syl-j8fa.5`), so a
+  // reply can cause a message, which causes a reply. Two agents holding a
+  // conversation on the Commander's subscription is CLAUDE.md constraint 1,
+  // the strongest constraint in the project.
+  //
+  // What is deliberately NOT done here is forbid the second question. "What
+  // does his insurance cost?" / "Which policy?" / "The auto one." is the verb
+  // working; a rule that killed it would deliver something that can hear and
+  // may not speak twice. So this bounds the exchange instead of preventing it.
+  //
+  // Counted from ADJUTANT'S OWN RECORD of what she has sent, not from anything
+  // in this process: the tool server is a fresh subprocess per turn and
+  // remembers nothing at all, so a counter here would reset on every turn and
+  // bound nothing. See `agents/answers.ts` for why a window beats a hop count.
+  const already = await context.fleet.sent();
+  if (!already.ok) {
+    // FAIL CLOSED. A spend guard that opens when its evidence is unavailable is
+    // not a guard, and the thing on the other side of it is his subscription.
+    return {
+      ok: false,
+      action: "ask_agent",
+      reason:
+        `I could not check how much I have already asked ${who}, so I have not asked again — ` +
+        already.failure.message,
+      retryable: true,
+    };
+  }
+
+  const spent = askBudget(who, already.data, Date.now());
+  if (spent !== null) {
+    return {
+      ok: false,
+      action: "ask_agent",
+      // SURFACED TO HIM, not swallowed. The refusal is what she has instead of
+      // another message, and it has to be a thing she can say out loud —
+      // otherwise hitting the ceiling looks to her like the verb being broken,
+      // and looks to him like nothing at all.
+      reason: spent,
+      // Not retryable: nothing the model does this turn changes the count, and
+      // a model that retried would spend the turn discovering that.
+      retryable: false,
+    };
+  }
+
+  // THE RETURN LEG STARTS HERE (`syl-j8fa.5`). A question that cannot be
+  // recognised when it is answered is a question asked into a void: she had
+  // never received a reply, because nothing tied one to what provoked it.
+  //
+  // The id goes in the TEXT as well as on the thread and in the metadata, and
+  // the text is the one that matters. Adjutant injects the message BODY into
+  // the recipient's session, so a thread id they never see is one they cannot
+  // echo — and the whole design rests on the recipient answering the ordinary
+  // way, with nothing required of them. `agents/answers.ts` has the argument.
+  const correlationId = newCorrelationId();
+  const sent = await context.fleet.ask(who, `${question}\n\n${refLine(correlationId)}`, {
+    threadId: correlationId,
+    metadata: { correlationId },
+  });
   if (!sent.ok) {
+    // RECORDED BUT NOT READ is its own outcome, and this handler writes its own
+    // sentence for it rather than passing the client's through (`syl-j8fa.4`).
+    //
+    // Two reasons, and the second is the load-bearing one. The wording she
+    // repeats to him is the deliverable of this verb, so it belongs to the verb
+    // rather than to whatever the transport happened to say. And a message id
+    // must not appear in it: `syl-5kdv` is the Commander holding two ids she
+    // had offered as proof of arrival for messages nobody received. An id is
+    // evidence that a row exists. Handing her one here is handing her something
+    // to point at, and she will point at it.
+    //
+    // THREE sentences, because there are three things he could do. `syl-j8fa.8`:
+    // `sessionsFound` splits a zero delivery into an agent that is not running
+    // and an agent that is running whose hand-off failed. One sentence for both
+    // would tell him to go and start an agent that is already up — confidently,
+    // and with nothing to reveal she was wrong. That is this bug again, moved
+    // one layer along, which is the direction it keeps travelling.
+    if (sent.failure.kind === "undelivered") {
+      const found = sent.failure.sessionsFound;
+
+      // Something is on record for them and would not take the message.
+      //
+      // Says NOTHING about whether the agent is up, and that restraint is the
+      // point: `registry.findByName` returns offline records too, so this is
+      // equally "up, and its session refused it" and "stopped, record not yet
+      // reaped". What it gives him instead is the next action — something is
+      // there to receive it, so another attempt is not futile.
+      if (found !== undefined && found > 0) {
+        return {
+          ok: false,
+          action: "ask_agent",
+          reason:
+            `Adjutant recorded the message for ${who} and holds ` +
+            `${found === 1 ? "one session" : `${String(found)} sessions`} on record for them, ` +
+            "but could not put it into any of them, so nobody has read it. A session on record " +
+            `does not mean anybody is at it, so that says nothing about whether ${who} is ` +
+            "there. Trying again may work.",
+          retryable: true,
+        };
+      }
+
+      // Nothing on record under that name — which is NOT the same as the agent
+      // being down: one managed outside Adjutant's session bridge is up and has
+      // no record. So this too reports the record and the next action, and the
+      // next action is what differs: retrying now cannot help.
+      if (found === 0) {
+        return {
+          ok: false,
+          action: "ask_agent",
+          reason:
+            `Adjutant recorded the message for ${who} but holds no session on record for ` +
+            "them, so there was nowhere to put it and nobody has read it. That says nothing " +
+            `about whether ${who} is there — an agent Adjutant does not track would look the ` +
+            "same. Trying again now will not help; something has to change first.",
+          retryable: false,
+        };
+      }
+
+      // An older Adjutant that does not report what it holds. Listing candidate
+      // explanations here would read as a diagnosis and silently exclude
+      // whatever was not on the list, so it reports the gap itself.
+      return {
+        ok: false,
+        action: "ask_agent",
+        reason:
+          `Adjutant recorded the message for ${who}, but nothing accepted it, and this ` +
+          `Adjutant does not report what it holds for ${who}, so I cannot tell whether ` +
+          `anything was there to receive it. Nobody has read it, I have not reached ${who}, ` +
+          "and I cannot say whether another attempt would help.",
+        retryable: false,
+      };
+    }
+
     return {
       ok: false,
       action: "ask_agent",
@@ -699,13 +951,35 @@ const askAgent: ToolHandler = async (input, context) => {
     };
   }
 
+  const reached = sent.data.deliveredToSessions;
   return {
     ok: true,
     action: "ask_agent",
     // Deliberately not `subject: the answer`. Nothing has been answered — most
     // agents are offline most of the time, and a verb that implied otherwise
     // would have her telling him the treasurer said something.
-    subject: { who, question, messageId: sent.data.messageId },
+    //
+    // Two additions that answer different questions, and both belong here.
+    //
+    // `outcome` is the sentence, and it says what is now known to be true: the
+    // text arrived in a session somebody is sitting in front of. That claim is
+    // only ever made from a count, never from an id.
+    //
+    // `correlationId` is here so the thing she says out loud and the thing the
+    // service matches on are the same string. Nothing is written down on this
+    // side: the question lives in Adjutant, which is where the answer is going
+    // to land, and this process has no database to write it to anyway.
+    subject: {
+      who,
+      question,
+      messageId: sent.data.messageId,
+      correlationId,
+      deliveredToSessions: reached,
+      outcome:
+        reached === 1
+          ? `It arrived in ${who}'s running session.`
+          : `It arrived in ${String(reached)} of ${who}'s running sessions.`,
+    },
     at: sent.data.at,
   };
 };
@@ -730,6 +1004,202 @@ const setGoal: ToolHandler = async (input, context) => {
   if (!created.ok) return refused("set_goal", created.failure);
 
   return readBack("set_goal", context, `/goals/${encodeURIComponent(created.data.id)}`, (row: Goal) => row.updatedAt);
+};
+
+/**
+ * Ask her own memory a question, and get the nodes back — **with their ids**.
+ *
+ * `syl-016.1`, and the verb she asked for herself:
+ *
+ * > "I have no tool in my hands to search, query or traverse any of it — I can
+ * > read the printout and nothing else. So the honest answer to 'can you see the
+ * > connections' is that I can't even see the nodes. I see a summary someone
+ * > else chose for me."
+ *
+ * Everything behind this was already built and connected to nothing: the fusion
+ * kernels in `memory/retrieve.ts`, the FTS5 index, the graph walk. The same
+ * shape as the reminder gap — the capability existed everywhere except in her
+ * hands — and the same fix: one door, over the loopback API, never a service.
+ *
+ * ## Two modes, one verb
+ *
+ * A question searches. **No question opens the overflow** (`syl-016.2`): the
+ * items her working memory counted and would not name. They are different
+ * questions — "what do I know about this" and "what is being kept from me" —
+ * and the second cannot be answered by searching, because no query text
+ * reproduces the projection's own salience ranking.
+ *
+ * ## Why there is no `because`
+ *
+ * Every verb that CHANGES something carries its reason, and this changes
+ * nothing. `whats_outstanding` is exempt on the same grounds. Requiring a
+ * reason to look at what she already knows would be asking her to justify
+ * remembering, and a required field that is always filled with the same
+ * sentence teaches her that the field is decoration — which is exactly what
+ * would then happen on the verbs where it is load-bearing.
+ */
+const recall: ToolHandler = async (input, context) => {
+  const question = text(input, "question");
+  const kind = text(input, "kind");
+
+  const named = input["about"];
+  const about = (Array.isArray(named) ? named : [])
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value !== "");
+
+  const asked = input["limit"];
+  const limit = typeof asked === "number" && Number.isInteger(asked) ? asked : undefined;
+
+  const found = await context.client.get<{ readonly generatedAt: string }>("/memory/recall", {
+    // Absent rather than empty: a blank `q` and no `q` mean the same thing to
+    // the route, and sending one that is present-but-empty would make the
+    // wire say something the model did not.
+    ...(question === null ? {} : { q: question }),
+    ...(kind === null ? {} : { kind }),
+    // Comma-joined because the client encodes scalars only. The route accepts
+    // either spelling, so this is a transport detail rather than a contract.
+    ...(about.length === 0 ? {} : { about: about.join(",") }),
+    ...(limit === undefined ? {} : { limit }),
+  });
+  if (!found.ok) return refused("recall", found.failure);
+
+  return {
+    ok: true,
+    action: "recall",
+    // The view verbatim, ids included. Nothing is summarised on the way past:
+    // a verb built because she was given somebody else's summary must not
+    // hand her another one.
+    subject: found.data,
+    at: found.data.generatedAt,
+  };
+};
+
+/**
+ * Keep something she worked out — `syl-016.7`.
+ *
+ * The verb that had a schema and no handler, which is why she never saw it. Her
+ * account of what she did instead is the clearest statement of the defect:
+ *
+ * > "I can't write to my memory directly. The only durable text I control is
+ * > goals and reminders. So I've put the connection where it will survive."
+ *
+ * She put an insight in a **goal** and wrote a paragraph at the nightly
+ * extractor hoping it would land. That is an assistant gaming its own memory
+ * pipeline to keep a thought.
+ *
+ * ## What comes back matters as much as what goes in
+ *
+ * `unknown` names every person she mentioned that the graph does not know, and
+ * this handler passes it through rather than swallowing it. A memory kept about
+ * nobody is the silent half of this feature: she would believe she had
+ * connected a thought to Ela and it would sit unreachable from Ela forever.
+ * Told, she can say "I do not know an Ela yet" — and that is a question for him,
+ * which is the whole point of her.
+ */
+const remember: ToolHandler = async (input, context) => {
+  const thought = text(input, "fact");
+  if (thought === null) {
+    return missing("remember", "fact", "I did not catch what to remember.");
+  }
+  // Required here as it is on every verb that writes. It is doing more work on
+  // this one than on any other: it becomes the `reasoning` on an inferred edge,
+  // which is what he reads when he decides whether she thought correctly.
+  const because = text(input, "because");
+  if (because === null) {
+    return missing(
+      "remember",
+      "because",
+      "A memory you made carries why you believe it — that is what lets him tell a good read of him from a wrong one.",
+    );
+  }
+
+  const named = input["about"];
+  const about = (Array.isArray(named) ? named : [])
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value !== "");
+
+  const kept = await context.client.post<{ readonly at: string; readonly created: boolean }>(
+    "/memory/remember",
+    {
+      thought,
+      because,
+      ...(about.length === 0 ? {} : { about }),
+    },
+  );
+  if (!kept.ok) return refused("remember", kept.failure);
+
+  // **`created` is carried, not dropped. `syl-018`.**
+  //
+  // This returned a bare `ok: true` whichever happened, so a reused node — the
+  // correct, deliberate behaviour when she reaches the same conclusion twice —
+  // was reported to her as a fresh write. She found it herself, and only because
+  // she went looking:
+  //
+  // > "That's the dangerous class of failure: not an error, a false
+  // >  confirmation. If I hadn't verified, I'd have told you four things were
+  // >  saved and two of them would simply not exist tomorrow."
+  //
+  // The same shape as `syl-y82`, where `remind_me` required a `because` and
+  // discarded it: a value computed correctly one layer down, dropped by the
+  // layer above, and the caller told something that is not true. `HerOwnMemory`
+  // has always returned this honestly.
+  //
+  // **Reuse is not failure and is not reported as one** — `ok` stays true. What
+  // she is owed is which of the two happened, because "I saved that" and "I had
+  // already saved that" are different sentences to say to him, and only one of
+  // them is true at a time.
+  //
+  // Nothing is lost when a memory is reused: identity matches the label AND the
+  // body exactly (`MEMORY_IDENTITY_SQL`), so a reused node is one she wrote in
+  // the same words, not a near-miss quietly collapsed into an older thought.
+  return {
+    ok: true,
+    action: "remember",
+    created: kept.data.created,
+    ...(kept.data.created
+      ? {}
+      : {
+          note:
+            "You had already written this, in these words, and that memory still stands — " +
+            "nothing was overwritten and nothing was added.",
+        }),
+    subject: kept.data,
+    at: kept.data.at,
+  };
+};
+
+/**
+ * How he has been, in his own numbers.
+ *
+ * The verb that was missing (`syl-t9tj.5.4`). Two months of his health data sat
+ * on disk and she had no way to reach it mid-conversation, so when he asked she
+ * said she could not see it -- correctly, and that was the whole defect.
+ *
+ * Returns DERIVATIONS, never samples. 28,726 heart-rate rows do not fit in a
+ * turn, and an arbitrary slice is worse than none: she would answer confidently
+ * from whichever fortnight happened to fit.
+ *
+ * `silenceIsEvidence` rides on every type, and she must read it before saying a
+ * number is missing. `authorised` and empty means nothing happened -- "you took
+ * no steps this week". Anything else means WE NEVER LOOKED, and the honest
+ * sentence is "I have never been able to see your heart rate variability".
+ * Reporting the second as the first is a claim about his body drawn from a
+ * permission dialog.
+ */
+const howHasHeBeen: ToolHandler = async (input, context) => {
+  const asked = input["types"];
+  const types = (Array.isArray(asked) ? asked : [])
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value !== "");
+
+  const path = types.length === 0 ? "/health/summary" : `/health/summary?types=${encodeURIComponent(types.join(","))}`;
+  const looked = await context.client.get<unknown>(path);
+  if (!looked.ok) return refused("how_has_he_been", looked.failure);
+
+  return { ok: true, action: "how_has_he_been", subject: looked.data, at: null };
 };
 
 /** How much of each list she is shown. Enough to talk about, not a data dump. */
@@ -921,10 +1391,25 @@ const renderMe: ToolHandler = async (input, context) => {
     return missing("render_me", "because", "Every render says why it exists, the same as everything else I make.");
   }
 
+  // The dials, passed through only when she set them. Omitting one is what
+  // keeps a render she said nothing about the house render: fifteen seconds,
+  // opening on the ribbon, made on the house model.
+  //
+  // A model she got WRONG is passed straight through rather than checked here,
+  // deliberately. The service refuses it with a sentence about what that model
+  // cannot do, and a second validation on this side would be a second place for
+  // the roster to be written down — which is the drift the registry exists to
+  // end.
+  const seconds = input["seconds"];
+  const opening = text(input, "opening");
+  const model = text(input, "model");
   const created = await context.client.post<{ record: { id?: string; name: string } }>("/renders", {
     scene,
     framing,
     because: text(input, "because"),
+    ...(typeof seconds === "number" ? { seconds } : {}),
+    ...(opening === null ? {} : { opening }),
+    ...(model === null ? {} : { model }),
   });
   if (!created.ok) return refused("render_me", created.failure);
 
@@ -972,6 +1457,18 @@ interface FrameRow {
   readonly path: string;
 }
 
+/** One kept picture, as the wardrobe hands it over. */
+interface WardrobeRow {
+  readonly id: string;
+  readonly because: string;
+  readonly at: string;
+  readonly current: boolean;
+  readonly ratio: string | null;
+  readonly from: { readonly render: string; readonly atSeconds: number } | null;
+  readonly mimeType?: string;
+  readonly base64?: string;
+}
+
 /**
  * Look at one of her own renders.
  *
@@ -992,6 +1489,14 @@ interface FrameRow {
  * failure being looked for.
  */
 const seeMyself: ToolHandler = async (input, context) => {
+  // `of` widens the same act rather than adding verbs for it (`syl-ate`).
+  // Anything she can set she must be able to see, and there are three things
+  // she can now set: her likeness, her openings, and what she has made.
+  const of = text(input, "of");
+  if (of === "faces" || of === "openings") return lookAtWardrobe(of, context);
+  if (of === "renders") return readTheLog(context);
+  if (of === "models") return readTheRoster();
+
   // No required field. Absent means the most recent, and the route resolves it
   // — she should not have to remember a machine-generated name to look at the
   // thing she made ninety seconds ago.
@@ -1002,13 +1507,47 @@ const seeMyself: ToolHandler = async (input, context) => {
   const looked = await context.client.get<{
     render: RenderRow;
     frames: readonly FrameRow[];
+    verdicts?: readonly {
+      id: string;
+      verdict: string;
+      at: string;
+      supersedes: string | null;
+      supersededBy: readonly string[];
+    }[];
   }>(
     `/renders/${encodeURIComponent(which)}/frames`,
     second === undefined ? {} : { at: second },
   );
   if (!looked.ok) return refused("see_myself", looked.failure);
 
-  const { render, frames } = looked.data;
+  const { render, frames, verdicts } = looked.data;
+
+  // WHAT SHE ALREADY CONCLUDED, arriving with the pictures rather than from a
+  // second call. This is the half that makes `judge_render` a loop rather than
+  // a diary — "a hundred renders with no record of what I made of them isn't a
+  // hundred attempts, it's one attempt made a hundred times".
+  //
+  // Rows rather than bare sentences since `syl-024.4`, and the ID IS WHY: a
+  // verdict corrects an earlier one BY ID, so a chain she is never shown the
+  // handles for is a chain she cannot write. Same defect as the still she could
+  // look at and could not adopt.
+  //
+  // Newest first, with the superseded ones still in the list carrying what
+  // killed them. A read that dropped them would be the thing she asked against
+  // — being wrong in a recorded, ordered way is how the search works, and a
+  // chain with the wrong answers removed is one answer written once.
+  const alreadySaid = (verdicts ?? []).map((row) => ({
+    id: row.id,
+    verdict: row.verdict,
+    at: row.at,
+    supersedes: row.supersedes,
+    supersededBy: row.supersededBy,
+  }));
+
+  // Every still, named by its own bytes. A picture she is shown and cannot
+  // adopt is the defect this closes: the frame she wanted was nine seconds into
+  // a render and reachable only through here.
+  const pictures = frames.map((frame) => shown(frame));
 
   return {
     ok: true,
@@ -1027,9 +1566,560 @@ const seeMyself: ToolHandler = async (input, context) => {
       // Without it she has four images and no idea which one is the end.
       at: frames.map((frame) => frame.atSeconds),
       files: frames.map((frame) => frame.path),
+      // What she quotes to `this_is_me`, in the same order as `at`, because the
+      // image blocks carry pixels and nothing she can read back. Without this
+      // she can look at a still and cannot choose it — which is how the only
+      // adoptable face stayed the one he guessed before he knew her.
+      sightings: pictures.map((picture) => picture.sighting),
+      // Newest first. Empty on the first look, which is honest rather than
+      // empty-as-in-broken: she has not judged this one yet.
+      alreadySaid,
     },
     at: null,
-    images: frames.map((frame) => ({ mimeType: frame.mimeType, base64: frame.base64 })),
+    images: pictures,
+  };
+};
+
+/**
+ * Look at every face she has had, or every opening she can start from.
+ *
+ * **The pictures are the point, not the list.** Judging whether a likeness is
+ * hers from a name and a date is exactly the thing `see_myself` exists to make
+ * impossible, and adopting one is a change to every render she makes
+ * afterwards. So this returns image blocks for the ones it can, and the token
+ * that names a picture rides on the row *only* where the picture does — which
+ * is what keeps `this_is_me` unable to take a picture she has not seen.
+ *
+ * The rows without pictures are still returned. Her history is not truncated;
+ * only the bytes are, because only the bytes are what a turn cannot carry.
+ */
+async function lookAtWardrobe(
+  of: "faces" | "openings",
+  context: ToolContext,
+): Promise<ToolEnvelope> {
+  const role = of === "faces" ? "face" : "opening";
+  const looked = await context.client.get<{
+    items: readonly WardrobeRow[];
+    problems?: readonly string[];
+  }>("/renders/wardrobe", { role });
+  if (!looked.ok) return refused("see_myself", looked.failure);
+
+  const { items, problems } = looked.data;
+
+  // The picture and its token, made together, so a row can never carry the name
+  // of a picture other than the one attached to it — and a row with no picture
+  // carries no name, which is the half that keeps her from adopting a face she
+  // has only read about.
+  const rows = items.map((item) => ({
+    row: item,
+    picture: item.base64 === undefined ? null : shown({ ...item, base64: item.base64 }),
+  }));
+
+  return {
+    ok: true,
+    action: "see_myself",
+    subject: {
+      of,
+      items: rows.map(({ row, picture }) => ({
+        id: row.id,
+        because: row.because,
+        at: row.at,
+        current: row.current,
+        // What a render made through this picture comes out as. On an opening
+        // it is the whole reason the choice is visible: the opening decides
+        // the shape, and she should know that before she picks one.
+        ratio: row.ratio,
+        from: row.from,
+        sighting: picture?.sighting ?? null,
+      })),
+      // Empty on every ordinary machine. Anything else is a file a person has
+      // to go and look at, and until one does she is not told which face is hers.
+      problems: problems ?? [],
+    },
+    at: null,
+    images: rows.flatMap(({ picture }) => (picture === null ? [] : [picture])),
+  };
+}
+
+/**
+ * The whole log: what she asked for, what it came out as, and what she said.
+ *
+ * `SOUL.md`: *"a hundred attempts with no record of what you thought at the
+ * time is not a hundred attempts, it is one attempt made a hundred times."* The
+ * sidecars have always held what produced each file and the verdicts have held
+ * what she made of it; this is the read that puts them in front of her, because
+ * a journey she cannot review is not one she can learn from.
+ *
+ * No images. Four stills of one render is a look; four stills of every render
+ * is a turn with nothing left in it. This is the index — she picks one out of
+ * it and looks at that.
+ */
+async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
+  const looked = await context.client.get<{
+    items: readonly (RenderRow & {
+      readonly ratio: string;
+      readonly reference: string;
+      readonly anchor: string | null;
+      readonly because: string;
+      readonly credits: number | null;
+      readonly model: string;
+      /** `null` on every sidecar written before models could be chosen. */
+      readonly keyframes: number | null;
+    })[];
+    unreadable?: readonly { name: string; why: string }[];
+    verdicts?: readonly { render: string; verdict: string; at: string }[];
+    spend?: unknown;
+  }>("/renders");
+  if (!looked.ok) return refused("see_myself", looked.failure);
+
+  return {
+    ok: true,
+    action: "see_myself",
+    subject: {
+      of: "renders",
+      items: looked.data.items.map((record) => ({
+        name: record.name,
+        status: record.status,
+        startedAt: record.startedAt,
+        scene: record.scene,
+        because: record.because,
+        framing: record.framing,
+        // Everything she can set, read back. A dial she cannot see is a dial
+        // she cannot learn from — which is why `seconds`, the opening and the
+        // likeness are all here rather than only in the file on disk.
+        duration: record.duration,
+        shape: record.ratio,
+        // WHICH MODEL MADE IT, and how many keyframes it had at the time. The
+        // back catalogue is a mixture now, so a log without this cannot answer
+        // "which of these can hold my face" — and the arity is the durable half
+        // of that answer: one slot cannot pin a likeness, which stays true of a
+        // model nobody has heard of yet.
+        model: record.model,
+        keyframes: record.keyframes,
+        opening: record.reference,
+        face: record.anchor,
+        holdsLikeness: record.holdsLikeness,
+        credits: record.credits,
+      })),
+      unreadable: looked.data.unreadable ?? [],
+      verdicts: looked.data.verdicts ?? [],
+    },
+    at: null,
+    spent: looked.data.spend,
+  };
+}
+
+/**
+ * What she can render on, and what each one will and will not do.
+ *
+ * **The read-back half of the model dial** (`syl-023`). Anything she can set she
+ * must be able to see, and a dial she cannot read back is one she cannot learn
+ * from — which is the whole of this line of work, because what she is learning
+ * is what she looks like.
+ *
+ * No round trip. The roster is a static module measured by probe and compiled
+ * into this process, exactly as `framingGuidance` is, so asking the service for
+ * it would add a hop and a failure mode to reach the same constant. There is
+ * nothing per-machine about which keyframe slots `grok_imagine_1_5` has.
+ *
+ * `holdsYou` is **derived from the slots and never stored**, the same rule
+ * `framing.ts` and the sidecar both follow, and for the same reason: a flag is a
+ * second assertion about a fact and the two drift apart in silence. `syl-63v`.
+ */
+function readTheRoster(): ToolEnvelope {
+  const rates = (model: ModelNote): number[] => Object.values(model.creditsPerSecond);
+
+  return {
+    ok: true,
+    action: "see_myself",
+    subject: {
+      of: "models",
+      house: HOUSE_MODEL.id,
+      items: MODELS.map((model) => ({
+        id: model.id,
+        seconds: `${String(model.duration.min)}-${String(model.duration.max)}`,
+        // Null rather than zero for a model nobody has measured. A render on it
+        // lands in the ledger as unpriced, and she should know that before she
+        // picks it rather than after.
+        creditsPerSecond: rates(model).length === 0 ? null : Math.min(...rates(model)),
+        keyframes: [...model.positions],
+        // THE ONE THAT DECIDES A SHOT OF HER FACE. Two slots means her likeness
+        // can be pinned at the join; one means the model invents a face and
+        // hands her a stranger, which was rendered on 2026-08-13 rather than
+        // reasoned about.
+        holdsYou: canAnchorLikeness(model),
+        measuredOn: model.measuredOn,
+        // The evidence travels with the choice instead of standing in front of
+        // it — the `because` rule, applied to a table she reads.
+        note: model.evidence,
+      })),
+    },
+    at: null,
+  };
+}
+
+/**
+ * Settle on a picture she has looked at.
+ *
+ * Both required fields are refused **here**, before anything is asked for. The
+ * wardrobe refuses them too, and that is not duplication: a verb whose own
+ * contract lets a field through and relies on the layer beneath to object is a
+ * verb whose contract says the field is optional.
+ */
+const thisIsMe: ToolHandler = async (input, context) => {
+  const sighting = text(input, "sighting");
+  if (sighting === null) {
+    return missing(
+      "this_is_me",
+      "sighting",
+      "I can only settle on a picture I have actually looked at. Look at it first — the token " +
+        "comes back beside the image — and give me that.",
+    );
+  }
+  const because = text(input, "because");
+  if (because === null) {
+    return missing(
+      "this_is_me",
+      "because",
+      "Say what is more me about this one than the last. A likeness that changes with no reason " +
+        "recorded is the drift he asked me never to have.",
+    );
+  }
+
+  const as = text(input, "as") === "opening" ? "opening" : "face";
+  const name = text(input, "name");
+  const kept = await context.client.post<{ kept: WardrobeRow }>("/renders/wardrobe", {
+    sighting,
+    as,
+    because,
+    ...(name === null ? {} : { name }),
+  });
+  if (!kept.ok) return refused("this_is_me", kept.failure);
+
+  return { ok: true, action: "this_is_me", subject: kept.data.kept, at: kept.data.kept.at ?? null };
+};
+
+/** Keep what she made of a render, after looking at it. */
+const judgeRender: ToolHandler = async (input, context) => {
+  const verdict = text(input, "verdict");
+  if (verdict === null) {
+    return missing(
+      "judge_render",
+      "verdict",
+      "I did not catch what you made of it. Say what was closer and what was wrong.",
+    );
+  }
+
+  if (text(input, "because") === null) {
+    return missing(
+      "judge_render",
+      "because",
+      "Tell me why you were looking — whether he asked, or you came back to it yourself.",
+    );
+  }
+
+  // Same default as `see_myself`, and for the same reason: she should be able
+  // to judge the thing she is looking at without knowing its generated name.
+  const which = text(input, "render") ?? "latest";
+
+  // THE CHAIN, and the face (`syl-024.4`). Both spread rather than sent as
+  // `null`: absent means she is not claiming anything, and a key present with
+  // an empty value is a claim to have corrected something nameless. `text()`
+  // has already turned a blank one into `null`, so a field she left as
+  // whitespace never reaches the body at all.
+  //
+  // The anchor is usually filled in by the service from the render's own
+  // record, which names the picture it was built on. This carries hers when she
+  // states one — a verdict on an attempt whose record is gone still needs to
+  // say which face produced the stranger.
+  const supersedes = text(input, "supersedes");
+  const anchorFace = text(input, "anchor");
+
+  const kept = await context.client.post<{ readonly at: string }>(
+    `/renders/${encodeURIComponent(which)}/verdicts`,
+    {
+      verdict,
+      ...(supersedes === null ? {} : { supersedes }),
+      ...(anchorFace === null ? {} : { anchorFace }),
+    },
+  );
+  if (!kept.ok) return refused("judge_render", kept.failure);
+
+  return { ok: true, action: "judge_render", subject: kept.data, at: kept.data.at };
+};
+
+/**
+ * The refusal for a sending with no render chosen, in the right words.
+ *
+ * Two situations wearing one shape, and they need different sentences because
+ * they have different next steps: she has renders and picked none, or she has
+ * never made one. "Name the one you meant" is useless advice to somebody with
+ * nothing to name — the same distinction `routes/renders.ts` makes between a
+ * framing she got wrong and a machine with no secret.
+ *
+ * The read decides which sentence, never whether to refuse. A studio that
+ * cannot be listed falls back to the general sentence rather than becoming a
+ * path into composing without a face.
+ */
+async function chooseARender(context: ToolContext): Promise<ToolEnvelope> {
+  const mine = await context.client.get<{ items: readonly { name: string }[] }>("/renders");
+  const nothingRendered = mine.ok && mine.data.items.length === 0;
+
+  return {
+    ok: false,
+    action: "show_him",
+    reason: nothingRendered
+      ? "A sending is you saying something in your own face, and you have not made a render yet — " +
+        "so there is no face for this to arrive in. Make one with render_me first, then send the " +
+        "one that is you. (`renderName` was missing.)"
+      : "A sending is you saying something in your own face, so name the one you mean in " +
+        "`renderName` — the render you looked at and thought was you. Not `latest`: that means " +
+        "whatever was made most recently, which is not the same as the one you chose, and a " +
+        "sending keeps the name it was made with forever. Look with see_myself and name it.",
+    // She can render herself, or name one she already made, and call again.
+    // That is a materially different instruction from "this cannot work".
+    retryable: true,
+  };
+}
+
+/**
+ * Say something to him, in her own face.
+ *
+ * The only verb on this surface she **starts**. Everything else answers
+ * something he said; this one is her deciding there is something he should
+ * have, which is what acceptance 3 and 4 rest on and what nothing could do
+ * before it existed.
+ *
+ * ## It composes; it does not render
+ *
+ * Nothing here can start a render or spend a credit — `SendingService` is
+ * handed two readers rather than `RenderService`, deliberately, and this verb
+ * is the caller that keeps that true from above. She renders with `render_me`,
+ * looks with `see_myself`, and sends what she already made.
+ *
+ * ## A render that is not finished is a refusal, and that is the feature
+ *
+ * The opposite of what this said until the Commander's ruling of 2026-08-11,
+ * and the reversal is the point. A name she half-remembered, or a clip that is
+ * still rendering, used to come back `201` with `state: "failed"` on the row —
+ * on the grounds that her words had already been said and already carried the
+ * notification, so reporting a failure would have her apologising for a message
+ * he had read. What that actually produced was **a buzz about a video that did
+ * not exist**.
+ *
+ * So `POST /sendings` now resolves the render first and refuses one that is not
+ * `ready`, before a message exists. She gets a sentence saying which render and
+ * why, and nothing has reached him — which is a thing she can act on. The
+ * ordinary way to reach this verb is `jobs/render-review-job.ts`, which wakes
+ * her five minutes after a render starts, on a turn whose whole subject is that
+ * clip; by then it is finished and this refusal never fires.
+ *
+ * Every refusal here still happens before anything is written.
+ *
+ * ## Why it will not go without a face, and will not take `latest`
+ *
+ * `renderName` is required. A sending is her saying something in her own face;
+ * words with no face is an ordinary message, and she already has a
+ * conversation for those. The refusal says exactly that, because she has to
+ * turn it into a sentence and "renderName is required" is not one.
+ *
+ * **`latest` is refused too**, which is the one place this verb is stricter
+ * than the route beneath it. `latest` resolves at creation to whatever record
+ * was written most recently, and the voice track writes voiced clips as their
+ * own records with names that pass `isRenderName` — so `latest` will begin
+ * answering with derivatives rather than originals, silently, with nothing
+ * failing at the moment it changes. **A sending refuses `UPDATE`**, so a wrong
+ * `renderName` is permanent from the first write and the immutability trigger
+ * cannot help: it refuses re-pointing an existing row, not recording the wrong
+ * value at creation. An immutable record of the wrong thing is worse than a
+ * mutable one, because the usual remedy is closed.
+ *
+ * It is also the better behaviour on its own terms. She has `see_myself` and
+ * is told to judge her renders in her own terms; a sending is one of the small
+ * number she *chose*, and "whatever was most recent" is the one path that
+ * involves no choosing.
+ */
+const showHim: ToolHandler = async (input, context) => {
+  const words = text(input, "words");
+  if (words === null) {
+    return missing("show_him", "words", "I did not catch what you wanted to say to him.");
+  }
+  const because = text(input, "because");
+  if (because === null) {
+    return missing(
+      "show_him",
+      "because",
+      "This reaches him unprompted, so it has to say why — that is the difference between a gift and a machine acting on his behalf.",
+    );
+  }
+
+  const renderName = text(input, "renderName");
+  if (renderName === null || renderName.toLowerCase() === "latest") {
+    return chooseARender(context);
+  }
+
+  const created = await context.client.post<Sending>("/sendings", { words, because, renderName });
+  if (!created.ok) return refused("show_him", created.failure);
+
+  // Read back, like every other write — `syl-009.3.4`, and it earns its place
+  // here: what comes back says `pending` rather than `ready`, because the
+  // playable copy is still being compressed out of a render that has already
+  // finished. Reporting the write's own optimism would have her describing a
+  // clip that is not on the row yet.
+  return readBack(
+    "show_him",
+    context,
+    `/sendings/${encodeURIComponent(created.data.id)}`,
+    (row: Sending) => row.updatedAt,
+  );
+};
+
+/**
+ * A reading, as the intake route hands it over.
+ *
+ * Declared here rather than imported from `connections/intake-view.ts`, like
+ * `RenderRow` and `WardrobeRow` above it — and on this one the convention is
+ * load-bearing rather than tidy. `reader-containment.test.ts` asserts that
+ * **nothing under `src/` outside `connections/` imports that module**, which is
+ * how "exactly one door out of the quarantine" stays a property a grep can
+ * check. A type-only import would still be an import, and would spend that
+ * assertion's meaning on a convenience.
+ *
+ * The same file asserts that nothing under `tools/` imports `intake-store.ts`
+ * either. This handler runs holding MCP tools, and the store's row is where
+ * `title` and the raw `failure` live.
+ *
+ * It carries no `title` and no `failure`, and that is the whole shape of the
+ * route's answer rather than a subset this file chose. See `intake-view.ts`.
+ */
+interface ReadingRow {
+  readonly id: string;
+  readonly url: string;
+  readonly stage: string;
+  readonly updatedAt: string;
+  readonly refusal: { readonly says: string; readonly retryable: boolean } | null;
+  readonly read: unknown;
+}
+
+/** What both intake operations answer with. */
+interface IntakeAnswer {
+  readonly reading: ReadingRow;
+  readonly reads: unknown;
+}
+
+/**
+ * Point her reading at a page, and hand back what crossed the gate.
+ *
+ * `syl-r1t`. Everything underneath this was already built and connected to
+ * nothing she could reach: the address guard, the parser, the sealed reader
+ * turn, the schema gate, the store. The gap was that her surface was seven
+ * paths and `/intake` was not among them, so she read what somebody else had
+ * configured and could not say *"read this page"*.
+ *
+ * ## Nothing raw reaches this turn, and that is the whole design
+ *
+ * > The model that reads the untrusted text has no tools and no memory. The
+ * > model that has tools and memory never reads the untrusted text.
+ *
+ * This handler runs in the second one. It has her credential and Adjutant's
+ * MCP tools, so what it returns is what an attacker gets to put in front of a
+ * model that can act. Three things keep that safe and none of them is care:
+ *
+ * - The route answers with a `Reading`, which has no field the page's `<title>`
+ *   could be assigned to. See `connections/intake-view.ts`.
+ * - A refusal is a sentence `ArticleIntake` wrote, never one the reply did. See
+ *   `safeReason` in `connections/intake.ts`.
+ * - `tools/client.ts` never interpolates a response body into a failure
+ *   message, so the transport cannot carry one back either.
+ *
+ * ## Asking twice is how she waits
+ *
+ * Submission is cheap and synchronous; the fetching and the reading happen in
+ * the `content_ingestion` job between her turns. So this does not wait, for the
+ * reason `render_me` does not: a turn does not complete until stdin reaches
+ * EOF, and waiting means the Commander watching a cursor while a hostile server
+ * takes its time. She calls it again with the same link, the submission is
+ * idempotent on the canonical URL, and the second answer carries the extract.
+ *
+ * ## A reading is one act, and it does NOT become a subscription
+ *
+ * Deliberate, and worth stating because the code invites the opposite reading:
+ * the row is called an `IntakeSource`, the mail poller a few files over polls
+ * on a cadence, and "source" is exactly the word a feed would use. It is not
+ * one. The ladder is `fetch -> read -> graft -> done`, it is terminal, and
+ * nothing re-arms it.
+ *
+ * Making an ad-hoc read recur would be an accumulation nobody chose. He sends
+ * her a link on a Tuesday; a year later she is re-fetching it every night, and
+ * the cost is invisible because no single decision was ever large enough to
+ * notice. It also inverts the ceiling below: `READS_PER_DAY` bounds readings
+ * STARTED, and a subscription is a reading that starts itself forever, so ten
+ * of them would be a permanent load rather than a day's work.
+ *
+ * If following something over time is wanted, it should be a verb that says so
+ * — asked for once, listed somewhere he can see it, and cancellable. That is a
+ * different feature with a different consent, not a flag on this one.
+ */
+const readThis: ToolHandler = async (input, context) => {
+  const url = text(input, "url");
+  if (url === null) {
+    return missing("read_this", "url", "I did not catch which page to read.");
+  }
+  if (text(input, "because") === null) {
+    return missing(
+      "read_this",
+      "because",
+      "Reading something on his behalf spends his time and his tokens, so it has to say why.",
+    );
+  }
+
+  const submitted = await context.client.post<IntakeAnswer>("/intake", { url, channel: "link" });
+  if (!submitted.ok) return refused("read_this", submitted.failure);
+
+  // Read back from the store rather than reporting what the write said, exactly
+  // as every other verb does (`syl-009.3.4`). It matters more here than most:
+  // a repeat submission answers with a source that may have finished reading
+  // since, and the row is the only thing that knows.
+  const stored = await context.client.get<IntakeAnswer>(
+    `/intake/${encodeURIComponent(submitted.data.reading.id)}`,
+  );
+  if (!stored.ok) {
+    return {
+      ok: false,
+      action: "read_this",
+      reason: `${stored.failure.message} The reading may well have started — ask again with the same link rather than sending it twice.`,
+      retryable: stored.failure.retryable,
+    };
+  }
+
+  const { reading, reads } = stored.data;
+
+  if (reading.refusal !== null) {
+    return {
+      ok: false,
+      action: "read_this",
+      // The refusal verbatim, because it was built to be said out loud and it
+      // quotes nothing. `retryable` is the ladder's own answer: a blocked
+      // address will be blocked again, and a slow server may not be.
+      reason: reading.refusal.says,
+      retryable: reading.refusal.retryable,
+    };
+  }
+
+  return {
+    ok: true,
+    action: "read_this",
+    // The reading whole, including `stage` and a `read` that is null until a
+    // chunk has been through the reader. Nothing is summarised on the way past
+    // and nothing is claimed on her behalf: a verb that answered "done" while
+    // `read` was null would have her telling him about a page nobody has
+    // opened yet.
+    subject: reading,
+    at: reading.updatedAt,
+    // Where she stands against the ceiling, riding on the answer rather than
+    // waiting behind a verb she would have to think to call. Same rule as
+    // `render_me`'s bill: the evidence travels with the action.
+    spent: reads,
   };
 };
 
@@ -1040,14 +2130,22 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   remind_me: remindMe,
   cancel_reminder: cancelReminder,
   change_reminder: changeReminder,
+  remember,
   add_todo: addTodo,
+  schedule_todo: scheduleTodo,
   finish_todo: finishTodo,
   drop_todo: dropTodo,
   ask_agent: askAgent,
   set_goal: setGoal,
   change_goal: changeGoal,
+  how_has_he_been: howHasHeBeen,
+  recall,
   render_me: renderMe,
+  this_is_me: thisIsMe,
+  judge_render: judgeRender,
   see_myself: seeMyself,
+  show_him: showHim,
+  read_this: readThis,
   whats_outstanding: whatsOutstanding,
 };
 

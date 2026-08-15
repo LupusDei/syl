@@ -1,0 +1,279 @@
+import XCTest
+
+@testable import SylKit
+
+/// The wire half of `syl-t9tj`: that a health upload leaves this client in the shape
+/// `backend/src/health/contract.ts` pins, and that the authorisation report survives the
+/// trip as an object rather than as the array Swift would otherwise write.
+final class HealthUploadWireTests: XCTestCase {
+    // MARK: - The trap that would have shipped
+
+    func testShouldEncodeTheAuthorisationReportAsAnObjectAndNotAsAFlatArray() throws {
+        // `JSONEncoder` writes a dictionary keyed by a non-String type as an ARRAY of
+        // alternating keys and values. It round-trips through Swift perfectly and is
+        // unreadable to the server — the same family as the four traps in FourTrapsTests.
+        // `CodingKeyRepresentable` on HealthType is the whole fix and this is its guard.
+        let upload = HealthUpload(
+            authorisation: report(steps: .denied, otherwise: .authorised),
+            samples: []
+        )
+
+        let json = try object(from: upload)
+        let authorisation = try XCTUnwrap(json["authorisation"] as? [String: Any])
+
+        XCTAssertEqual(authorisation["steps"] as? String, "denied")
+        XCTAssertEqual(authorisation["sleep"] as? String, "authorised")
+        XCTAssertEqual(authorisation.count, HealthType.allCases.count)
+    }
+
+    func testShouldEncodeTheWatermarkMapAsAnObjectToo() throws {
+        let result = HealthUploadResult(
+            written: 3,
+            duplicates: 1,
+            watermarks: [.steps: Date(timeIntervalSince1970: 1_786_000_000)]
+        )
+
+        let json = try object(from: result)
+        let watermarks = try XCTUnwrap(json["watermarks"] as? [String: Any])
+
+        XCTAssertEqual(watermarks["steps"] as? String, "2026-08-06T07:06:40.000Z")
+    }
+
+    // MARK: - The contract's field names, exactly
+
+    func testShouldNameEverySampleFieldTheWayTheContractDoes() throws {
+        let sample = HealthSampleInput(
+            type: .heartRateVariability,
+            startedAt: Date(timeIntervalSince1970: 1_786_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_786_000_060),
+            value: 42.5,
+            source: "Justin's Apple Watch"
+        )
+
+        let json = try object(from: HealthUpload(authorisation: report(), samples: [sample]))
+        let encoded = try XCTUnwrap((json["samples"] as? [[String: Any]])?.first)
+
+        XCTAssertEqual(Set(encoded.keys), ["type", "startedAt", "endedAt", "value", "source"])
+        XCTAssertEqual(encoded["type"] as? String, "heartRateVariability")
+        XCTAssertEqual(encoded["startedAt"] as? String, "2026-08-06T07:06:40.000Z")
+        XCTAssertEqual(encoded["endedAt"] as? String, "2026-08-06T07:07:40.000Z")
+        XCTAssertEqual(encoded["value"] as? Double, 42.5)
+        XCTAssertEqual(encoded["source"] as? String, "Justin's Apple Watch")
+    }
+
+    func testShouldRoundTripAnUploadResultTheServiceWouldSend() throws {
+        let wire = """
+            {
+              "written": 12,
+              "duplicates": 4,
+              "watermarks": { "steps": "2026-08-06T07:06:40.000Z" }
+            }
+            """
+        let decoded = try SylJSON.decoder().decode(
+            HealthUploadResult.self,
+            from: Data(wire.utf8)
+        )
+
+        XCTAssertEqual(decoded.written, 12)
+        XCTAssertEqual(decoded.duplicates, 4)
+        XCTAssertEqual(decoded.watermarks[.steps], Date(timeIntervalSince1970: 1_786_000_000))
+        XCTAssertNil(decoded.watermarks[.sleep], "partial, so an absent type stays absent")
+    }
+
+    // MARK: - The thirteen types
+
+    func testShouldCarryExactlyTheThirteenTypesTheContractPinsInItsOrder() {
+        // Copied character for character from HEALTH_TYPES in
+        // backend/src/health/contract.ts, INCLUDING THE ORDER. Both halves matter and
+        // they fail differently: a spelling this client gets wrong is a 400 on a phone
+        // nobody is looking at, and when these two drifted before the phone reported
+        // `denied` for three types that were merely quiet. An ORDER this client gets
+        // wrong is quieter still — `derive.ts` reports its series in this sequence and
+        // the admin renders in it, so a case inserted in the middle relabels every panel
+        // on the page against data that did not move.
+        XCTAssertEqual(
+            HealthType.allCases.map(\.rawValue),
+            [
+                "heartRate", "restingHeartRate", "heartRateVariability",
+                "sleep", "steps", "workout", "bodyMass",
+                "activeEnergy", "basalEnergy", "bodyFatPercentage",
+                "vo2Max", "leanBodyMass", "respiratoryRate",
+            ]
+        )
+    }
+
+    func testShouldFixOneUnitPerTypeMatchingTheContractsUnitTable() {
+        // Every entry of UNITS in backend/src/health/contract.ts, spelled out rather than
+        // looped, because the thing being guarded IS the spelling.
+        XCTAssertEqual(HealthType.heartRate.unit, "count/min")
+        XCTAssertEqual(HealthType.restingHeartRate.unit, "count/min")
+        XCTAssertEqual(HealthType.heartRateVariability.unit, "ms")
+        XCTAssertEqual(HealthType.sleep.unit, "min")
+        XCTAssertEqual(HealthType.steps.unit, "count")
+        XCTAssertEqual(HealthType.workout.unit, "min")
+        XCTAssertEqual(HealthType.bodyMass.unit, "lb")
+        XCTAssertEqual(HealthType.activeEnergy.unit, "kcal")
+        XCTAssertEqual(HealthType.basalEnergy.unit, "kcal")
+        XCTAssertEqual(HealthType.bodyFatPercentage.unit, "%")
+        // HealthKit's own unitString, checked against a running simulator. NOT
+        // `ml/kg/min` and not `ml/kg·min`; every spelling normalises to this one.
+        XCTAssertEqual(HealthType.vo2Max.unit, "mL/min·kg")
+        XCTAssertEqual(HealthType.leanBodyMass.unit, "lb")
+        XCTAssertEqual(HealthType.respiratoryRate.unit, "count/min")
+    }
+
+    func testShouldGiveEveryTypeAUnitAndNeverAnEmptyOne() {
+        // The property behind the thirteen assertions above, so a case added later
+        // without a unit fails here rather than uploading a bare number. `unit` is
+        // exhaustive by the compiler; this catches the other way of getting it wrong.
+        for type in HealthType.allCases {
+            XCTAssertFalse(type.unit.isEmpty, "\(type.rawValue) has no unit")
+        }
+    }
+
+    func testShouldSpellTheFiveAuthorisationStatesTheContractsWay() {
+        // Copied character for character from AUTHORISATION_STATES in
+        // backend/src/health/contract.ts, `authorised` included. A state this client
+        // spells differently is a 400 on a phone nobody is looking at.
+        XCTAssertEqual(
+            HealthAuthorisationState.allCases.map(\.rawValue),
+            ["authorised", "denied", "notDetermined", "undisclosed", "unavailable"]
+        )
+    }
+
+    func testShouldEncodeEveryAuthorisationStateAsItsContractSpelling() throws {
+        // The two states the contract gained after this client shipped are the ones with
+        // no encoding history behind them, so they are the ones a typo would reach
+        // production through.
+        for state in HealthAuthorisationState.allCases {
+            let upload = HealthUpload(
+                authorisation: report(steps: state, otherwise: .authorised),
+                samples: []
+            )
+            let authorisation = try XCTUnwrap(
+                try object(from: upload)["authorisation"] as? [String: Any]
+            )
+            XCTAssertEqual(authorisation["steps"] as? String, state.rawValue)
+        }
+    }
+
+    func testShouldDecodeTheTwoStatesTheContractGainedAfterThisClientShipped() throws {
+        // All thirteen, spelled out. A report that omits one is refused by the server,
+        // so a fixture that omits one is a fixture the server would never see.
+        let wire = """
+            {
+              "authorisation": {
+                "heartRate": "authorised", "restingHeartRate": "undisclosed",
+                "heartRateVariability": "unavailable", "sleep": "denied",
+                "steps": "notDetermined", "workout": "undisclosed",
+                "bodyMass": "undisclosed", "activeEnergy": "authorised",
+                "basalEnergy": "authorised", "bodyFatPercentage": "undisclosed",
+                "vo2Max": "authorised",
+                "leanBodyMass": "undisclosed", "respiratoryRate": "authorised"
+              },
+              "samples": []
+            }
+            """
+
+        let decoded = try SylJSON.decoder().decode(HealthUpload.self, from: Data(wire.utf8))
+
+        XCTAssertEqual(decoded.authorisation[.restingHeartRate], .undisclosed)
+        XCTAssertEqual(decoded.authorisation[.heartRateVariability], .unavailable)
+        XCTAssertTrue(decoded.isComplete)
+    }
+
+    // MARK: - Completeness is the client's business too
+
+    func testShouldNameTheMissingTypesWhenAReportIsIncomplete() {
+        var partial = report()
+        partial[.workout] = nil
+        partial[.bodyMass] = nil
+
+        let upload = HealthUpload(authorisation: partial, samples: [])
+
+        XCTAssertFalse(upload.isComplete)
+        XCTAssertEqual(Set(upload.unreportedTypes), [.workout, .bodyMass])
+    }
+
+    func testShouldTreatAFullReportAsComplete() {
+        XCTAssertTrue(HealthUpload(authorisation: report(), samples: []).isComplete)
+    }
+
+    // MARK: - The one function the whole feature turns on
+
+    func testShouldTreatSilenceAsEvidenceOnlyForAnAuthorisedType() {
+        // "He walked nowhere" is a conclusion; "we were never allowed to look" is not.
+        XCTAssertTrue(HealthUpload.silenceIsEvidence(.authorised))
+        XCTAssertFalse(HealthUpload.silenceIsEvidence(.denied))
+        XCTAssertFalse(HealthUpload.silenceIsEvidence(.notDetermined))
+        XCTAssertFalse(HealthUpload.silenceIsEvidence(.undisclosed))
+        XCTAssertFalse(HealthUpload.silenceIsEvidence(.unavailable))
+    }
+
+    func testShouldNeverLetAStateAddedLaterBecomeEvidenceByDefault() {
+        // The property rather than the five cases: whatever the contract grows next, only
+        // `authorised` licenses a conclusion drawn from quiet. This is the guard that
+        // catches `state != .denied` being written here in a hurry.
+        for state in HealthAuthorisationState.allCases where state != .authorised {
+            XCTAssertFalse(
+                HealthUpload.silenceIsEvidence(state),
+                "\(state.rawValue) is not proof that we were allowed to look"
+            )
+        }
+    }
+
+    // MARK: - The endpoint
+
+    func testShouldPostToHealthSamplesWithAnIdempotencyKey() throws {
+        let endpoint = try SylAPI.uploadHealthSamples(
+            HealthUpload(authorisation: report(), samples: []),
+            idempotencyKey: "key-1"
+        )
+
+        XCTAssertEqual(endpoint.method, .post)
+        XCTAssertEqual(endpoint.path, "/health/samples")
+        XCTAssertEqual(endpoint.idempotencyKey, "key-1")
+        XCTAssertTrue(endpoint.requiresAuthentication)
+        XCTAssertNotNil(endpoint.body)
+    }
+
+    func testShouldSendAnEmptyBatchRatherThanSkipIt() throws {
+        // An empty batch is how an unreadable type reaches the server at all. A client
+        // that optimised it away would leave the server unable to attribute the silence,
+        // which is the entire defect this feature exists to close.
+        let endpoint = try SylAPI.uploadHealthSamples(
+            HealthUpload(
+                authorisation: report(steps: .undisclosed, otherwise: .authorised),
+                samples: []
+            ),
+            idempotencyKey: "key-2"
+        )
+
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: XCTUnwrap(endpoint.body)) as? [String: Any]
+        )
+        XCTAssertEqual((json["samples"] as? [Any])?.count, 0)
+        XCTAssertEqual(
+            (json["authorisation"] as? [String: Any])?["steps"] as? String,
+            "undisclosed"
+        )
+    }
+
+    // MARK: - Helpers
+
+    private func report(
+        steps: HealthAuthorisationState? = nil,
+        otherwise fallback: HealthAuthorisationState = .authorised
+    ) -> [HealthType: HealthAuthorisationState] {
+        var report: [HealthType: HealthAuthorisationState] = [:]
+        for type in HealthType.allCases {
+            report[type] = type == .steps ? (steps ?? fallback) : fallback
+        }
+        return report
+    }
+
+    private func object(from value: some Encodable) throws -> [String: Any] {
+        let data = try SylJSON.encoder().encode(value)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}

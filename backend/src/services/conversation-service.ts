@@ -389,7 +389,15 @@ export class ConversationService {
 
     this.#presence?.turnStarted();
     try {
-      const result = await this.#agent.ask(message.text, lane);
+      // `hisWords`, and this is the only place in the service entitled to say
+      // it. `message` came off the message store, appended by an authenticated
+      // write from him — so this prompt is not merely *on his lane*, it is text
+      // he sent. Everything else that takes a turn is Syl waking herself up,
+      // and since those turns now resume this very session the lane can no
+      // longer tell the two apart. `harness/urgency.ts` is what rests on it:
+      // only words he actually wrote can grant a reminder the right to pierce
+      // quiet hours. See `AskOptions.hisWords`.
+      const result = await this.#agent.ask(message.text, lane, { hisWords: true });
       // `spoken`, not `text`. The CLI's result field carries only the prose after the
       // last tool call, so the moment she could create a reminder mid-answer her replies
       // began arriving with everything before the tool removed. `text` stays the raw

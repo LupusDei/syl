@@ -269,7 +269,7 @@ function sha256(parts: readonly string[]): string {
   const hash = createHash("sha256");
   for (const part of parts) {
     hash.update(part);
-    hash.update(" ");
+    hash.update("\0");
   }
   return hash.digest("hex");
 }

@@ -2,6 +2,7 @@ import { instant, parseInstant, systemClock, type Clock } from "../services/cloc
 import { isId } from "../services/id.js";
 import type { Database } from "../services/sqlite.js";
 import {
+  ENTITY_NODE_KINDS,
   newMemoryEdgeId,
   newMemoryNodeId,
   nodePartition,
@@ -55,13 +56,14 @@ import {
  *
  * Every method here is one or the other, deliberately:
  *
- * | Scans — hot tier only          | Identity lookups — every tier             |
- * | ------------------------------ | ----------------------------------------- |
- * | {@link MemoryGraph.listNodes}  | {@link MemoryGraph.getNode}               |
+ * | Scans — hot tier only             | Identity lookups — every tier          |
+ * | --------------------------------- | -------------------------------------- |
+ * | {@link MemoryGraph.listNodes}     | {@link MemoryGraph.getNode}            |
+ * | {@link MemoryGraph.nodeNamed}     |                                        |
  * | {@link MemoryGraph.neighbourhood} | {@link MemoryGraph.getEdge}            |
- * |                                | {@link MemoryGraph.findEdge}              |
- * |                                | {@link MemoryGraph.edgesBetween}          |
- * |                                | {@link MemoryGraph.nodesForSubject}       |
+ * | {@link MemoryGraph.edgesTouching} | {@link MemoryGraph.findEdge}           |
+ * |                                   | {@link MemoryGraph.edgesBetween}       |
+ * |                                   | {@link MemoryGraph.nodesForSubject}    |
  *
  * The right-hand column never mentions `tier` in its SQL. That is not an
  * optimisation detail: if a cold edge cannot be found, "demote, never prune"
@@ -89,6 +91,7 @@ export type GraphErrorKind =
   | "blank_relation"
   | "corrupt_row"
   | "duplicate_edge"
+  | "kind_locked"
   | "no_such_observation"
   | "not_cold"
   | "not_hot"
@@ -286,7 +289,84 @@ const NODE_COLUMNS_QUALIFIED = NODE_COLUMNS.split(", ")
   .join(", ");
 
 /**
+ * What a node's KIND is worth to the ranking, before any edge touches it.
+ *
+ * Measured on the live graph on 2026-08-11: every non-hub node had exactly one
+ * incident edge — provenance — so the edge sum was the **constant 1** across
+ * all 29 memories. A constant primary sort key is not a sort key, so admission
+ * fell through to the recency tiebreaker, and the working-memory projection
+ * evicted the Commander's own name, his wife, his son and his daughter in
+ * favour of newer chatter (`syl-ulf`). His father survived because he was
+ * mentioned more recently than his children.
+ *
+ * Two things are wrong there and they need different fixes. The graph having no
+ * real edges is `syl-5co` and is fixed by digestion writing them. But even in a
+ * richly connected graph, **degree alone is the wrong ranking for a projection
+ * that answers "who is this man"**: a person he mentions constantly and a fact
+ * that happens to sit in a dense corner would rank the same, and the identity
+ * that makes every other memory legible would be evicted by whatever was said
+ * this morning.
+ *
+ * So salience is degree PLUS a floor set by kind. The floor is small enough
+ * that a well-connected fact still outranks an isolated person, and large
+ * enough that a person is never dropped for a fact of equal degree — which is
+ * exactly the failure that was measured. `person` and `goal` sit highest
+ * because they are the anchors the constellation spec already treats as
+ * anchors, and `source` sits at zero because a source is a handle, not
+ * knowledge (`working.ts` filters it out of the rendered projection for the
+ * same reason).
+ *
+ * This also makes salience VARY on a graph that has no inferred edges yet,
+ * which matters more than it sounds: until digestion lands, a constant ranking
+ * key means the projection is ordered by nothing at all.
+ *
+ * ## The two kinds `syl-024.1` added, and why they sit where they do
+ *
+ * **`instruction` is the highest floor in the table, above `person`.** It is
+ * what the Commander told her to BE — the humour, that he prefers renders with
+ * a face — and the failure this floor is set against is precisely the one
+ * measured for his family: a standing order evicted by whatever was said this
+ * morning. It outranks even the anchors because an anchor is something she
+ * KNOWS and an instruction is something she was TOLD; getting the second wrong
+ * is a breach of the bond rather than a gap in the file. Its rank is only half
+ * the protection — `working.ts` pins standing orders at admission
+ * (`syl-024.3`), because a floor decides ORDER and admission decides whether
+ * there was room at all.
+ *
+ * **`self` sits at the `event` floor.** A finding about what she is is a thing
+ * that compounds rather than a loose claim, so it belongs above the 0.5 that
+ * facts and memories fall through to — and well below the anchors, because it
+ * is never the answer to "who is this man". `working.ts` excludes it from that
+ * projection outright (`syl-024.2`), so this floor is load-bearing for the
+ * OTHER readers of salience — the constellation the phone draws, and the
+ * digest's window — and not for the preamble.
+ */
+const KIND_FLOOR_SQL =
+  `CASE n.kind ` +
+  `WHEN 'instruction' THEN 4.0 ` +
+  `WHEN 'person' THEN 3.0 ` +
+  `WHEN 'goal' THEN 3.0 ` +
+  `WHEN 'decision' THEN 2.0 ` +
+  `WHEN 'event' THEN 1.0 ` +
+  `WHEN 'self' THEN 1.0 ` +
+  `WHEN 'source' THEN 0.0 ` +
+  `ELSE 0.5 END`;
+
+/**
  * Hot nodes ranked by how much hot edge weight touches them, pinned as text.
+ *
+ * **Provenance edges do not count, at either end.** Both halves join BOTH
+ * endpoints and drop the edge if either is a `source`. Every memory has exactly
+ * one such edge — the conversation it came from — so it contributed a constant
+ * to every node and therefore zero information.
+ *
+ * Excluding it only on the far side is not enough, and the difference is
+ * visible on the live graph: the hub's own edges all point at non-sources, so a
+ * one-sided exclusion still let it accumulate **32**, leaving the conversation
+ * container ranked as the single most salient thing Syl knew — ahead of his
+ * children. A source is a handle, not knowledge; it should score its floor of
+ * zero and sit at the bottom, which is what dropping the edge at both ends
+ * gives.
  *
  * Written as a `UNION ALL` over the two endpoint columns and then aggregated,
  * rather than as a correlated `SUM(...) WHERE source = n.id OR target = n.id`.
@@ -300,13 +380,20 @@ const NODE_COLUMNS_QUALIFIED = NODE_COLUMNS.split(", ")
  */
 export const SALIENCE_SQL =
   `WITH incident AS ( ` +
-  `SELECT source_node AS node_id, weight FROM memory_edges WHERE tier = 'hot' ` +
+  `SELECT e.source_node AS node_id, e.weight FROM memory_edges e ` +
+  `JOIN memory_nodes a ON a.id = e.source_node ` +
+  `JOIN memory_nodes b ON b.id = e.target_node ` +
+  `WHERE e.tier = 'hot' AND a.kind <> 'source' AND b.kind <> 'source' ` +
   `UNION ALL ` +
-  `SELECT target_node AS node_id, weight FROM memory_edges WHERE tier = 'hot' ` +
+  `SELECT e.target_node AS node_id, e.weight FROM memory_edges e ` +
+  `JOIN memory_nodes a ON a.id = e.source_node ` +
+  `JOIN memory_nodes b ON b.id = e.target_node ` +
+  `WHERE e.tier = 'hot' AND a.kind <> 'source' AND b.kind <> 'source' ` +
   `), salience AS ( ` +
   `SELECT node_id, sum(weight) AS total FROM incident GROUP BY node_id ` +
   `) ` +
-  `SELECT ${NODE_COLUMNS_QUALIFIED}, coalesce(s.total, 0.0) AS salience ` +
+  `SELECT ${NODE_COLUMNS_QUALIFIED}, ` +
+  `coalesce(s.total, 0.0) + ${KIND_FLOOR_SQL} AS salience ` +
   `FROM memory_nodes n LEFT JOIN salience s ON s.node_id = n.id ` +
   `WHERE n.tier = 'hot' ` +
   `ORDER BY salience DESC, n.updated_at DESC, n.id LIMIT ?`;
@@ -338,10 +425,49 @@ export const EDGE_IDENTITY_SQL =
  * remains in that index forever — quietly accumulating exactly the history the
  * partitioning exists to keep out of the hot path. The failure is invisible
  * until the index has grown to hold the whole graph.
+ *
+ * ## An instruction never fades — `syl-024.3`
+ *
+ * The `NOT EXISTS` is the whole of the exemption: an edge with an
+ * `instruction` node at either end is left where it is, however long ago it
+ * crossed the relevance floor. Syl's argument, and it is the strongest one she
+ * made: standing orders are *"the kind that most needs to be unfadeable,
+ * because it's the bond rather than the work. If those got their own kind you
+ * could make them exempt from decay entirely and stop me writing them twice
+ * with your name on to fake it."* The duplication was the evidence — she was
+ * writing the same instruction twice with his name attached, because a memory
+ * linked to his person node survives where a loose one fades.
+ *
+ * **Either end, not just the instruction's own side.** What must survive is the
+ * ATTACHMENT — that he told her this, that it is about renders — and an edge is
+ * only ever half owned by each endpoint. Exempting one side would leave the
+ * order hot and unreachable from the thing it is about, which is the isolation
+ * failure of `syl-024.2` arriving down the decay path instead.
+ *
+ * **Constraint 6 is untouched and gets no new powers.** Demotion has never been
+ * deletion; this makes one narrow class exempt from even that. Nothing here can
+ * remove a row, and the Commander's explicit order remains the only thing that
+ * can remove any memory.
+ *
+ * The exempt rows keep a `demote_after` in the past, so they stay in the
+ * partial index and are re-examined every night. That is deliberate and it is
+ * cheap — the set is bounded by how many things he has told her to be — and the
+ * alternatives are both worse: clearing the stamp is refused outright by the
+ * migration's CHECK that a hot inferred edge always has one, and pushing the
+ * instant forward would be a write every night that lied about the decay law.
+ *
+ * This is only half of "unfadeable". The other half is admission: an order that
+ * survives at full strength in the graph and is then cut from the working-memory
+ * projection because the budget filled has faded whatever the tier column says,
+ * and it looks like nothing at all is wrong. `working.ts` pins it.
  */
 export const DEMOTE_SWEEP_SQL =
   `UPDATE memory_edges SET tier = 'cold', demote_after = NULL, updated_at = ? ` +
-  `WHERE tier = 'hot' AND demote_after IS NOT NULL AND demote_after <= ?`;
+  `WHERE tier = 'hot' AND demote_after IS NOT NULL AND demote_after <= ? ` +
+  `AND NOT EXISTS ( ` +
+  `SELECT 1 FROM memory_nodes n WHERE n.kind = 'instruction' ` +
+  `AND n.id IN (memory_edges.source_node, memory_edges.target_node) ` +
+  `)`;
 
 interface NodeRow {
   readonly id: string;
@@ -448,6 +574,35 @@ function requireText(value: string, kind: GraphErrorKind, what: string): string 
   return trimmed;
 }
 
+/**
+ * A label in the one form the store keeps it in: trimmed, and with every run of
+ * whitespace collapsed to a single space.
+ *
+ * **This is the identity rule for a node's text, applied at the door rather
+ * than at every lookup.** `syl-016.3` is the graph accumulating one thing under
+ * several entries, and the cheapest slice of that is entries that differ by
+ * nothing a reader can see — a trailing space, a newline where a sentence
+ * wrapped, two spaces after a full stop. Normalising at the lookup instead
+ * would mean every caller had to remember to, and the one that forgot would
+ * mint the duplicate silently.
+ *
+ * Deliberately NOT case-folding. The stored form is the one Syl reads back to
+ * the Commander, and `Ela` is not `ela` on a screen. Case is handled where it
+ * belongs — in the *comparison*, by `COLLATE NOCASE` at the identity lookups
+ * that decide whether a thing already exists.
+ *
+ * This is not near-duplicate merging. `supersede.ts` §1 measures what that
+ * costs (0.82 accuracy to 0.62) and nothing here approximates: two labels
+ * collapse only when they are the same characters.
+ */
+export function canonicalLabel(label: string): string {
+  return label.replace(/\s+/gu, " ").trim();
+}
+
+function requireLabel(value: string): string {
+  return canonicalLabel(requireText(value, "blank_label", "A node's label"));
+}
+
 function requireUnitInterval(value: number, kind: GraphErrorKind, what: string): number {
   if (!Number.isFinite(value) || value <= 0 || value > 1) {
     throw new GraphError(
@@ -518,7 +673,7 @@ export class MemoryGraph {
    */
   addNode(input: CreateNodeInput): MemoryNode {
     const partition = nodePartition(SCANNED_TIER, input.kind);
-    const label = requireText(input.label, "blank_label", "A node's label");
+    const label = requireLabel(input.label);
     const subjectId = input.subjectId == null ? null : requireSubject(input.subjectId);
     const id = newMemoryNodeId();
     const at = instant(this.#clock());
@@ -533,6 +688,35 @@ export class MemoryGraph {
   /** One node by id, or `null`. An IDENTITY LOOKUP: it spans every tier. */
   getNode(id: string): MemoryNode | null {
     const row = this.#db.prepare(`SELECT ${NODE_COLUMNS} FROM memory_nodes WHERE id = ?`).get(id);
+    return row === undefined ? null : toNode(row as unknown as NodeRow);
+  }
+
+  /**
+   * A THING she already knows, by name, or `null`.
+   *
+   * Only the kinds that name a thing rather than a claim, so a fact whose label
+   * happens to read like a name cannot be mistaken for the thing it is about —
+   * the distinction `syl-016.4` exists for.
+   *
+   * **Exact label match, case-insensitive, and no fuzziness on purpose.** Every
+   * caller uses this to decide what a new statement is ABOUT, and a near-match
+   * attaches it to the wrong subject. Being silent about who is recoverable;
+   * being confidently wrong about who is not.
+   *
+   * Added for `syl-022`, where the caller is an untrusted article and the answer
+   * decides whether a webpage may name someone in his life. There it is half of
+   * a stricter rule — **resolve, never mint** — so a name this returns `null`
+   * for is reported rather than created.
+   */
+  nodeNamed(name: string): MemoryNode | null {
+    const row = this.#db
+      .prepare(
+        `SELECT ${NODE_COLUMNS} FROM memory_nodes ` +
+          `WHERE label = ? COLLATE NOCASE AND tier = ? ` +
+          `AND kind IN (${ENTITY_NODE_KINDS.map(() => "?").join(", ")}) ` +
+          `ORDER BY updated_at DESC, id LIMIT 1`,
+      )
+      .get(name, SCANNED_TIER, ...ENTITY_NODE_KINDS);
     return row === undefined ? null : toNode(row as unknown as NodeRow);
   }
 
@@ -626,7 +810,7 @@ export class MemoryGraph {
    * @throws {GraphError} `blank_label`, `unknown_node`.
    */
   relabel(node: MemoryNode, label: string): MemoryNode {
-    const next = requireText(label, "blank_label", "A node's label");
+    const next = requireLabel(label);
     const at = instant(this.#clock());
 
     this.#db
@@ -634,6 +818,156 @@ export class MemoryGraph {
       .run(next, at, node.id, next);
 
     return this.#nodeOrThrow(node.id);
+  }
+
+  /**
+   * Rewrite a node's body — the correction half of `syl-016.6`.
+   *
+   * `SOUL.md` requires Syl to say which memory looks wrong when the Commander
+   * contradicts her, and until this existed she could then do nothing about it:
+   * required to notice, forbidden to act. {@link MemoryGraph.relabel} could move
+   * the one-line name; the sentence underneath it — which is where an extracted
+   * fact actually lives — had no write at all.
+   *
+   * **An edit, not a second row.** The alternative was to mint a corrected copy
+   * and supersede the old one, and that is `syl-016.3` arriving through the fix
+   * for it: the graph would gain a duplicate every time a fact was tidied. What
+   * the OLD value needs is to stay *answerable*, not to stay in the scan, and
+   * the supersession ledger already answers that — `tidy.ts` writes the previous
+   * text there before calling this, so `believedAt` still says what this memory
+   * read in March.
+   *
+   * `NULL` clears it. The statement carries `body IS NOT ?` — `IS NOT` and not
+   * `<>`, because `NULL <> NULL` is `NULL` and the row would be rewritten on
+   * every call — so setting the body it already has touches nothing, including
+   * `updated_at`.
+   *
+   * @throws {GraphError} `unknown_node`.
+   */
+  rebody(node: MemoryNode, body: string | null): MemoryNode {
+    const next = body === null ? null : body.trim() === "" ? null : body;
+    const at = instant(this.#clock());
+
+    this.#db
+      .prepare("UPDATE memory_nodes SET body = ?, updated_at = ? WHERE id = ? AND body IS NOT ?")
+      .run(next, at, node.id, next);
+
+    return this.#nodeOrThrow(node.id);
+  }
+
+  /**
+   * Move a node to the kind it should have had — the other half of `syl-016.6`.
+   *
+   * `schema.ts` calls the kind axis "effectively immutable: a person does not
+   * become an event", and that is still true of the WORLD. It was never true of
+   * the FILING, and `syl-016.4` is the proof — Syl found her own People bucket
+   * full of facts with a person's name in them:
+   *
+   * > "Ela's entry isn't *who she is*, it's the fact that she wants an apartment
+   * > near her parents."
+   *
+   * The projection groups by kind, so a misfiled node makes the grouping carry
+   * no information. Extraction was taught not to do it again; **nothing could
+   * repair the ones already filed**, which is the shape of every defect in
+   * `docs/CONTEXT.md` §8 — the capability existing everywhere except in her
+   * hands.
+   *
+   * Two refusals, and both are identity rather than caution:
+   *
+   * - **A node with a `subjectId` is a HANDLE**, and `memory_nodes_handle_idx`
+   *   is UNIQUE on `(subject_id, kind)`. Its kind is half of what addresses it,
+   *   so moving it does not correct a filing — it makes `projectInto` mint a
+   *   rival handle for the same row on the next projection.
+   * - **Nothing is promoted INTO `source`.** A source node is what `assertedBy`
+   *   points at, and `assertedBy` is the entire claim that somebody said so.
+   *   Anything that could become a source could become the thing that vouches
+   *   for observations, which is a provenance forgery one `UPDATE` wide.
+   *
+   * The tier is untouched, and the `memory_nodes_vector_reindex_au` trigger
+   * fires on `kind` — so the vector's partition repair is owed by the store
+   * automatically rather than remembered by a caller here.
+   *
+   * @throws {GraphError} `kind_locked`, `unknown_node`; {@link MemorySchemaError}
+   * on a kind outside the vocabulary.
+   */
+  recategorise(node: MemoryNode, kind: MemoryNodeKind): MemoryNode {
+    const next = nodePartition(node.tier, kind).kind as MemoryNodeKind;
+
+    if (node.subjectId !== null) {
+      throw new GraphError(
+        "kind_locked",
+        `${node.id} is a handle for ${node.subjectId}, and a handle's kind is half of what ` +
+          `addresses it — memory_nodes_handle_idx is UNIQUE on (subject_id, kind). Moving it ` +
+          `would not correct the filing; it would make the next projection mint a rival handle ` +
+          `for the same row.`,
+      );
+    }
+    if (next === "source") {
+      throw new GraphError(
+        "kind_locked",
+        `Nothing is promoted into 'source'. A source node is what an observation's assertedBy ` +
+          `points at, and that is the whole claim that somebody said so — so a node that could ` +
+          `become one could become the thing vouching for observations.`,
+      );
+    }
+
+    const at = instant(this.#clock());
+    this.#db
+      .prepare("UPDATE memory_nodes SET kind = ?, updated_at = ? WHERE id = ? AND kind <> ?")
+      .run(next, at, node.id, next);
+
+    return this.#nodeOrThrow(node.id);
+  }
+
+  /**
+   * Claim an identity for a node — "these two rows are the same person".
+   *
+   * `subject_id` is the identity column. It has been there since
+   * `0012_memory_core.sql` and, until `syl-zdf.3`, nothing on the conversational
+   * path had ever written it: `extract-apply.ts` says *"Deliberately no
+   * `subjectId`"*, correctly, because a turn that could point one at an
+   * operational row would have exactly the one field it needs to attach itself
+   * to a goal. The service may write it; the model still may not.
+   *
+   * **Never overwrites a different identity.** A node already claiming one has
+   * been resolved before — or is a projection handle, where `subject_id` means
+   * "the row this is a handle for" and re-pointing it would silently detach a
+   * goal from its own node. Re-stamping the SAME identity is a no-op, statement
+   * and all: the `WHERE` carries `subject_id IS NULL`, so a second identical
+   * pass writes nothing and does not bump `updated_at`. That is what lets an
+   * idempotence test assert on `updatedAt` rather than merely on a row count.
+   *
+   * Nothing is merged and nothing is deleted. Two rows keep their bodies, their
+   * provenance and their edges, and gain a shared answer to "who is this?" —
+   * which is the reading of constraint 6 that applies here: the system does not
+   * get to silently discard things, so identity is something rows SHARE rather
+   * than something one row survives.
+   *
+   * @throws {GraphError} `bad_subject` on a malformed id or on a node that
+   * already claims a different one; `unknown_node` if the row is gone.
+   */
+  setSubject(node: MemoryNode, subjectId: string): MemoryNode {
+    const subject = requireSubject(subjectId);
+    const current = this.#nodeOrThrow(node.id);
+
+    if (current.subjectId !== null && current.subjectId !== subject) {
+      throw new GraphError(
+        "bad_subject",
+        `Node ${current.id} already claims identity ${current.subjectId}, so it will not be ` +
+          `re-pointed at ${subject}. Reconciling two identities is a merge of merges: it is ` +
+          `proposed and surfaced, never applied, because a wrong merge collapses two things ` +
+          `into one and no amount of decay makes that less wrong.`,
+      );
+    }
+
+    const at = instant(this.#clock());
+    this.#db
+      .prepare(
+        "UPDATE memory_nodes SET subject_id = ?, updated_at = ? WHERE id = ? AND subject_id IS NULL",
+      )
+      .run(subject, at, current.id);
+
+    return this.#nodeOrThrow(current.id);
   }
 
   // ── Edges: the two species ───────────────────────────────────────────────
@@ -787,6 +1121,32 @@ export class MemoryGraph {
       .all(nodeId)
       .map((row) => toEdge(row as unknown as EdgeRow))
       .filter((edge): edge is ObservedEdge => edge.kind === "observed");
+  }
+
+  /**
+   * Every edge with this node at either end, in the partitions named.
+   *
+   * A SCAN — it reads the hot tier unless told otherwise, for the same reason
+   * {@link MemoryGraph.neighbourhood} does, and it is that traversal's own
+   * single-hop step made public. `tidy.ts` is the caller that needed it:
+   * merging two nodes has to know exactly what the losing one is connected to,
+   * and had no way to ask without walking a whole neighbourhood and filtering
+   * it back down.
+   *
+   * The default matters more here than it looks. A merge that carried COLD
+   * edges onto the survivor would resurrect what decay set aside, and one that
+   * carried SUPPRESSED edges would overrule the Commander's rejection by tidying
+   * — so the tiers a caller asks for are the tiers it is choosing to move, and
+   * asking for the hot ones is choosing to move only what is live.
+   *
+   * @throws {GraphError} `unknown_node`.
+   */
+  edgesTouching(nodeId: string, tiers: readonly MemoryTier[] = [SCANNED_TIER]): MemoryEdge[] {
+    this.#requireNode(nodeId, "The node an edge lookup is about");
+    return this.#edgesTouching(
+      nodeId,
+      tiers.map((tier) => nodePartition(tier, "fact").tier),
+    );
   }
 
   /**
@@ -1055,6 +1415,10 @@ export class MemoryGraph {
    * decay law and the relevance floor that produced those instants belong to
    * `syl-005.3.2`; the statement belongs here, in one place, because it is the
    * one that must clear the stamp. See {@link DEMOTE_SWEEP_SQL}.
+   *
+   * **An edge touching an `instruction` node is exempt** and is not counted in
+   * the return value, because it did not move (`syl-024.3`). The reasoning is
+   * on the statement.
    *
    * @returns how many edges moved.
    * @throws {GraphError} `bad_instant`.

@@ -78,7 +78,9 @@ An npm monorepo. `ios/` is Swift and deliberately **not** an npm workspace.
 backend/                          the Node 22 service (npm workspace)
   src/harness/protocol.ts         pure codec — JSON lines <-> typed events. Zero I/O.
   src/harness/session.ts          runTurn(): one subprocess per turn
-  src/harness/agent.ts            SylAgent: per-lane continuity + stale-session recovery
+  src/harness/agent.ts            SylAgent: per-lane continuity, one turn at a time
+                                  per lane, stale-session recovery. LANES, and why
+                                  her unattended turns are the Commander's own.
   src/harness/reader.ts           runReaderTurn(): untrusted text, no tools
   src/services/conversation-service.ts  the seam that makes her answer: both write
                                   paths append + accept here; one turn at a time
@@ -98,7 +100,10 @@ frontend/                         web admin — Vite + React (npm workspace)
 shared/                           THE CONTRACT — OpenAPI, generated types, fixtures (npm workspace)
 ios/                              SylKit (SPM) + the app target — Swift, not a workspace
 tsconfig.base.json                strict + noUncheckedIndexedAccess; every workspace extends it
-vitest.shared.ts                  base vitest config; every workspace merges it
+vitest.shared.ts                  base vitest config, the heavy-file set, and the two timeout budgets
+vitest.config.ts                  the LIGHT pass — every test EXCEPT the ones that spawn
+vitest.heavy.config.ts            the HEAVY pass — acceptance + integration, serial, alone
+scripts/run-tests.mjs             both passes, one command; there is no way to run one
 SOUL.md                           Syl's standing orders, appended to the system prompt
 docs/CONTEXT.md                   exploration record and decision log
 ```
@@ -134,6 +139,24 @@ keeping them testable without spawning a process is worth the seam.
   Adjutant project.
 - **Communicate through Adjutant MCP.** Terminal output alone is invisible to the
   Commander; `send_message` reaches his dashboard and phone.
+- **`git add -A` and a bare `git commit` are repo-global too, and they take
+  other people's work under YOUR message.** The stash rule below is one instance
+  of a wider hazard: in a worktree several agents write to, any command with no
+  pathspec sweeps whatever anyone else has on disk or staged. **Always
+  `git add <explicit paths>` and `git commit -- <paths>`.**
+
+  It has happened twice in one day. A `git add -A` intended for three test
+  changes committed 1,041 insertions — another agent's entire feature, its
+  route, its middleware entry and four test files — under a message about a
+  budget assertion. The code was fine; the commit message was a false statement
+  about its own contents, and the argument for the most consequential decision
+  in that epic is not in the history because of it.
+
+  **Do not fix it by rewriting.** Once pushed, history surgery to recover a
+  message costs more than the message. Write the design record where a reader
+  actually stands — the module header and `docs/CONTEXT.md` — and take the loss.
+  Using a pathspec yourself is not enough; it only protects you from your own
+  sweep, not from someone else's.
 - **Never `git stash` while other worktrees are live.** Worktrees share one
   object store, and the stash is a REPO-GLOBAL stack: `pop` takes the top entry,
   not *your* entry. Two agents stashing concurrently means one pops the other's
@@ -162,13 +185,28 @@ keeping them testable without spawning a process is worth the seam.
 All of these run from the repo root and cover every workspace.
 
 ```sh
-npm test          # every workspace's unit tests, one pass
+npm test          # every workspace's tests, in TWO passes — see below
 npm run typecheck # root tooling + tsc --noEmit per workspace
 npm run verify    # typecheck + test — run this before pushing
-npm test -w backend             # one workspace, focused
+npm test -w backend             # one workspace, focused (one pass, everything)
 npm run ping -- "your prompt"   # live end-to-end check
 npm run deploy -- --dry-run     # what a deploy would do, touching nothing
 ```
+
+**The suite runs in two passes, and both of them are the gate.**
+`scripts/run-tests.mjs` runs the cheap majority first, then everything under
+`tests/acceptance/` and `tests/integration/` alone in a second vitest process.
+Vitest dispatches its pools with `Promise.all`, so the old `poolMatchGlobs`
+split stopped those files starving *each other* and did nothing about the three
+worker threads and five thousand unit tests beside them: six files were timing
+out at 20 000ms under fleet load, and the test that stops an unattended turn
+waking the Commander at 3am passed with **282ms of headroom**.
+
+There is no way to run one pass. `npm run verify` — and therefore
+`npm run deploy` — runs both, and `check-expected-failures.mjs` enumerates the
+test files on disk and fails if any of them was run by neither. If you run a
+heavy file by path, pass `--config vitest.heavy.config.ts`; the root config
+excludes them, so a bare `vitest run <path>` matches nothing.
 
 **Adding a workspace**: create `<name>/package.json` and a `<name>/tsconfig.json`
 extending `tsconfig.base.json`, then add `<name>` to `workspaces` in the root
@@ -210,12 +248,35 @@ to add is about *additional* surfaces and blocks nothing.
   (`syl-acr`); each time an agent caught it, and each time the guard reported a
   duplicate version loudly with both filenames rather than silently skipping a
   migration. That guard is why these stay ten-minute problems.
+- **Checking ORIGIN is necessary and NOT sufficient — ask two questions, not
+  one.** The rule below answers *which number is free*. It says nothing about
+  *which numbers your branch can hold*. A branch that is behind cannot satisfy
+  contiguity at the number origin says is free: take it, and you leave a gap
+  under it, and `readMigrations` hard-fails on a gap — reddening every
+  database-backed test for a reason its author did not cause. Origin was at
+  `0024` while a branch sat at `0023`, so both obvious moves were wrong.
+
+      git ls-tree --name-only origin/main backend/src/migrations/   # what is free
+      ls backend/src/migrations/                                    # what you can hold
+
+  The second is the one-liner nobody was running. If your branch is missing a
+  number origin has, import that one file byte-identical (`git checkout
+  origin/main -- <path>`) to restore contiguity rather than fast-forwarding a
+  shared tree under other agents.
 - **Before claiming an id or a number in a shared namespace — a bead root, a
   spec directory, a migration — fetch and look at ORIGIN, not at your branch.**
   Five collisions in one day all had this single cause: creating from a stale
   local view into a namespace someone else was actively extending. A colliding
   create can also wire itself into another epic's dependency graph, which is
   invisible unless you look for the edges rather than the rows.
+  **Re-check the number immediately before you COMMIT, not only before you
+  write.** Twice now a number was correct when it was chosen and stale by the
+  time the work landed, because origin gained migrations while the agent was
+  still working. Checking origin is necessary and not sufficient: it answers
+  which number is free *now*, and cannot tell you origin will move before you
+  finish. The check costs one command
+  (`git ls-tree --name-only origin/main backend/src/migrations/`) and the
+  failure costs everyone's test suite.
 - **Any command carrying PROSE takes a quoted heredoc, never a `-m`/`--flag=`
   string.** `git commit -m`, `bd create --description`, `bd update --notes`,
   `bd close --reason` — all of them. A double-quoted argument is expanded by the
@@ -273,9 +334,59 @@ to add is about *additional* surfaces and blocks nothing.
   between spawn and init used to strand a conversation that existed on disk.
 - `runTurn` kills a turn that produces no result within `timeoutMs`
   (`DEFAULT_TURN_TIMEOUT_MS`, 10 minutes) and throws `TurnTimeoutError`.
-- Session continuity is **per lane** — `commander`, `heartbeat`, `agenda`,
-  `consolidation` — each in its own file under `.syl/sessions/`. One shared id
-  would interleave Syl's inner monologue with talking to the Commander.
+- **Her unattended turns run in the Commander's own thread.** The hourly
+  check-in, the render review and the morning brief all resume `commander`; only
+  `consolidation` and `extraction` keep lanes of their own, and those are not
+  conversation. His ruling, 2026-08-11: *"running the hourly checkin on a
+  different thread is wrong for now — resume the same session — there will be
+  things in the chat session that might invoke a reason to send a message and
+  how it should appear — a new lane invalidates that entirely… much of her
+  personality lives in that thread"*, extended the same day to the brief.
+  **The bloat is accepted, not overlooked** — *"if it causes bloat on that
+  thread we can solve it later"* — so the answer when it bites is summarisation
+  inside that thread, not a second thread beside it. Three consequences, each of
+  which cost something to find:
+  - **Nothing may `reset` that lane.** Every one of those jobs used to start a
+    fresh thread for a good reason of its own; on his lane the same call deletes
+    his conversation. None of their `Voice` types offers the method any more.
+  - **Being on his lane is no longer evidence that HE SPOKE.** That distinction
+    is what stopped an unattended turn piercing quiet hours, and re-keying it is
+    the load-bearing half of the merge — see the note below.
+  - **Two turns can now want one session id**, which the separate lanes used to
+    make impossible. `SylAgent` serialises per lane; the hourly check-in asks
+    `SylAgent.busy()` and stands aside rather than queueing behind him or ahead
+    of the morning brief (`OUTRANKS_THE_HOUR`).
+- **Quiet hours bound what may REACH him, never what may run.** The dream at
+  03:00 and the brief at 06:45 both run inside his 23:00–07:00 window on
+  purpose, and he asked to keep the overnight hours: *"I think she should be
+  able to file things over night."* Anything that starts reading the window as
+  "do not run" silently takes those with it.
+- **There is ONE quiet window and it lives in `backend/src/config.ts`.** The
+  value, the zone, and the `SYL_QUIET_*` fallbacks are all that one constant;
+  `presence.ts`, `harness/cli/when.ts` and `tools/time.ts` import it. It ends at
+  **07:00**, and `isWithinQuietHours` is start-inclusive and **end-exclusive**,
+  which is what lets the 07:00 announcement of the 06:45 brief go out at 07:00
+  instead of waiting a cycle — an 08:00 end held his brief for seventy-five
+  minutes on 2026-08-12. Anything defined *relative to* the window is computed
+  from it (`PART_OF_DAY.morning` is its end; `night` is an hour before its
+  start), never written down beside it: there were three windows in the tree,
+  two under the same exported name with different values, plus a constant
+  restating the end with a comment asserting they agreed.
+  `tests/unit/quiet-window.test.ts` scans `backend/src` and fails if a second
+  window literal appears anywhere. A module may *use* the window; a module that
+  writes one down is declaring a second one.
+- **An unattended turn must never be recordable as words the Commander said.**
+  `harness/urgency.ts` grants the quiet-hours bypass only for a phrase he
+  actually wrote, checked against a file `index.ts` writes from a turn's prompt
+  — so which turns write that file is the whole protection. That condition has
+  been wrong twice, the same way both times: `mcpConfig !== undefined` was exact
+  until a second lane got hands, and `lane === commander` was exact until the
+  merge above. **It is now `AskOptions.hisWords`**, set only by
+  `conversation-service.ts`, which holds a message he authenticated to send;
+  absent means no, and `SylAgent` writes it after the caller's overrides so a
+  turn cannot award itself the bypass.
+  `tests/acceptance/an-unattended-turn-cannot-wake-him.test.ts` drives it to the
+  `urgent` column and goes red the moment it is inferred again.
 - Node **22** is required (`.nvmrc` pins 22.23.1). Node 20 is end-of-life and
   lacks `node:sqlite`. Verified on 22.23.1: `node:sqlite` imports without a flag
   (SQLite 3.51.3) and **FTS5 is compiled in**, so keyword search needs no native

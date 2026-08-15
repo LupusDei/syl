@@ -25,6 +25,15 @@ struct HomeScreen: View {
     /// render is a sky with no stars rather than a crash.
     var sky: SkySource = { .empty }
 
+    /// Where the From Syl door leads.
+    ///
+    /// Handed in for the same reason `sky` is, and defaulted to nil so a preview, a test
+    /// or an offscreen render opens the screen against the disk alone rather than
+    /// crashing or reaching for a network. `HomeScreen` has no backend of its own to
+    /// build a live gateway from, and giving it one would hand this view the object
+    /// graph the split exists to keep out of it.
+    var sendings: SendingSource?
+
     @Environment(\.scenePhase) private var scenePhase
 
     /// Whether the list is up.
@@ -63,6 +72,7 @@ struct HomeScreen: View {
         NavigationStack(path: $path) {
             HomeView(
                 snapshot: model.snapshot,
+                loadFailure: model.loadFailure,
                 presence: model.presence,
                 presenceIntensity: model.intensity,
                 now: model.now,
@@ -93,6 +103,12 @@ struct HomeScreen: View {
                     // The seam the two squads left. Without a source the door opens onto a
                     // permanently empty field that looks exactly like the truth.
                     MemoryScreen(source: sky)
+                case .fromSyl:
+                    // Without a live source this still opens — on the disk, which is
+                    // where From Syl reads from first anyway. What it loses is the
+                    // refresh, not the keepsakes.
+                    FromSylScreen(
+                        source: sendings ?? SendingSource(store: model.store, gateway: .offline))
                 case .today: EmptyView()
                 }
             }

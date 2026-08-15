@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { FRAMING_IDS } from "../../src/render/framing.js";
+import { canAnchorLikeness, HOUSE_MODEL, MODELS, MODEL_IDS } from "../../src/render/models.js";
+import { sightingOf } from "../../src/render/pictures.js";
 import { SylApiClient, type FetchLike } from "../../src/tools/client.js";
 import { TOOLS } from "../../src/tools/schemas.js";
 import { advertisedToolNames, createToolServer, type ToolContext } from "../../src/tools/server.js";
@@ -346,5 +348,664 @@ describe("see_myself", () => {
     // And no images: a failure that still carried pictures would have her
     // describing something she was not shown.
     expect(blocks.filter((block) => block.type === "image")).toEqual([]);
+  });
+});
+
+/**
+ * `judge_render`, and the loop it closes (`syl-b0i`).
+ *
+ * `see_myself` has always told her to *"say what is closer and what is wrong, in
+ * your own terms"*, and she had nowhere to put the answer:
+ *
+ * > "A hundred renders with no record of what I made of them isn't a hundred
+ * > attempts, it's one attempt made a hundred times."
+ *
+ * Two halves, and the second is the one that matters. Keeping a verdict is
+ * easy; **handing it back at the moment she is looking again** is what makes it
+ * a loop rather than a diary.
+ *
+ * The Commander ruled these stay out of the memory graph — verdicts on her own
+ * face are not facts about his life, and the search ends once she likes the
+ * likeness — so nothing here touches `/memory`.
+ */
+describe("judge_render", () => {
+  it("should keep what she made of the render she is looking at", async () => {
+    const api = fakeApi({
+      "/renders/latest/verdicts": () => ok({ id: "v1", render: "r", verdict: "closer", at: NOW }, 201),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "judge_render", {
+      verdict: "The smile is right. The eyes sit too wide.",
+      because: "I came back to it myself.",
+    });
+
+    const post = api.calls.find((made) => made.method === "POST");
+    expect(post?.path).toBe("/renders/latest/verdicts");
+    expect(post?.body).toMatchObject({ verdict: "The smile is right. The eyes sit too wide." });
+    expect(envelope).toMatchObject({ ok: true, action: "judge_render" });
+  });
+
+  it("should default to the most recent, so she need not know a generated name", async () => {
+    const api = fakeApi({
+      "/renders/latest/verdicts": () => ok({ id: "v1", render: "r", verdict: "x", at: NOW }, 201),
+    });
+
+    await call(contextFor(api.fetch), "judge_render", { verdict: "closer", because: "He asked." });
+
+    expect(api.calls.find((made) => made.method === "POST")?.path).toBe("/renders/latest/verdicts");
+  });
+
+  it("should refuse an empty verdict rather than record that she concluded nothing", async () => {
+    const api = fakeApi({});
+
+    const { envelope } = await call(contextFor(api.fetch), "judge_render", { verdict: "   ", because: "He asked." });
+
+    expect(envelope.ok).toBe(false);
+    expect(api.calls.some((made) => made.method === "POST")).toBe(false);
+  });
+
+  it("should be a verb she is actually offered", () => {
+    expect(advertisedToolNames()).toContain("judge_render");
+    expect(TOOLS.map((tool) => tool.name)).toContain("judge_render");
+  });
+
+  /**
+   * The chain (`syl-024.4`). Her ask, and she rates it above every other
+   * relation she could have:
+   *
+   * > "My findings are a chain that corrects itself... right now those four are
+   * > orphans of equal weight, so nothing tells a reader that the last one
+   * > killed the first."
+   */
+  it("should carry which earlier verdict this one overturns", async () => {
+    const api = fakeApi({
+      "/renders/latest/verdicts": () => ok({ id: "v2", render: "r", verdict: "x", at: NOW }, 201),
+    });
+
+    await call(contextFor(api.fetch), "judge_render", {
+      verdict: "No — the smile was fine. It is the anchor.",
+      because: "I came back to it myself.",
+      supersedes: "v1",
+    });
+
+    expect(api.calls.find((made) => made.method === "POST")?.body).toMatchObject({
+      supersedes: "v1",
+    });
+  });
+
+  it("should carry the face she names when the render cannot say", async () => {
+    const api = fakeApi({
+      "/renders/latest/verdicts": () => ok({ id: "v1", render: "r", verdict: "x", at: NOW }, 201),
+    });
+
+    await call(contextFor(api.fetch), "judge_render", {
+      verdict: "Not me at all.",
+      because: "He asked.",
+      anchor: "faces/syl-face-03.png",
+    });
+
+    expect(api.calls.find((made) => made.method === "POST")?.body).toMatchObject({
+      anchorFace: "faces/syl-face-03.png",
+    });
+  });
+
+  it("should not claim a correction she did not make", async () => {
+    // Absent means a first look, and it must reach the service as absent. A
+    // blank string in the body would be a claim to have corrected something
+    // nameless, which is the orphan this whole chain exists to stop.
+    const api = fakeApi({
+      "/renders/latest/verdicts": () => ok({ id: "v1", render: "r", verdict: "x", at: NOW }, 201),
+    });
+
+    await call(contextFor(api.fetch), "judge_render", { verdict: "closer", because: "He asked." });
+
+    const body = api.calls.find((made) => made.method === "POST")?.body as Record<string, unknown>;
+    expect(body["supersedes"]).toBeUndefined();
+    expect(body["anchorFace"]).toBeUndefined();
+  });
+
+  it("should offer her both halves of the edge, or she cannot write one", () => {
+    // A field she is never told about is a field she never uses — the same
+    // defect as the still she could look at and could not adopt.
+    const schema = TOOLS.find((tool) => tool.name === "judge_render")?.inputSchema as {
+      properties: Record<string, unknown>;
+    };
+
+    expect(Object.keys(schema.properties)).toEqual(
+      expect.arrayContaining(["supersedes", "anchor"]),
+    );
+    // And neither is required: a first look corrects nothing, and most renders
+    // name their own anchor.
+    expect(
+      (TOOLS.find((tool) => tool.name === "judge_render")?.inputSchema as { required: string[] })
+        .required,
+    ).toEqual(["verdict", "because"]);
+  });
+});
+
+/** What one line of `alreadySaid` looks like once verdicts have edges. */
+interface Said {
+  readonly id: string;
+  readonly verdict: string;
+  readonly at: string;
+  readonly supersedes: string | null;
+  readonly supersededBy: readonly string[];
+}
+
+describe("see_myself hands back what she already concluded", () => {
+  it("should carry her previous verdicts, so looking again is a second look", async () => {
+    const api = fakeApi({
+      "/renders/latest/frames": () =>
+        ok({
+          render: RECORD,
+          frames: [{ atSeconds: 0, path: "a.jpg", mimeType: "image/jpeg", base64: FRAME_B64 }],
+          verdicts: [
+            { id: "v2", verdict: "eyes too wide", at: NOW, supersedes: null, supersededBy: [] },
+            { id: "v1", verdict: "mouth is wrong", at: NOW, supersedes: null, supersededBy: ["v2"] },
+          ],
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
+
+    expect((envelope.subject as { alreadySaid: Said[] }).alreadySaid).toEqual([
+      { id: "v2", verdict: "eyes too wide", at: NOW, supersedes: null, supersededBy: [] },
+      { id: "v1", verdict: "mouth is wrong", at: NOW, supersedes: null, supersededBy: ["v2"] },
+    ]);
+  });
+
+  /**
+   * The id is the half without which the chain cannot be written at all.
+   *
+   * `judge_render` takes `supersedes` as an id, and she can only quote one she
+   * has been shown. This is the same defect as the still she could look at and
+   * could not adopt: a capability she is not told the handle for is a
+   * capability she does not have.
+   */
+  it("should hand back the id and what killed it, so she can correct herself", async () => {
+    const api = fakeApi({
+      "/renders/latest/frames": () =>
+        ok({
+          render: RECORD,
+          frames: [{ atSeconds: 0, path: "a.jpg", mimeType: "image/jpeg", base64: FRAME_B64 }],
+          verdicts: [
+            { id: "v2", verdict: "no, the anchor", at: NOW, supersedes: "v1", supersededBy: [] },
+            { id: "v1", verdict: "the smile", at: NOW, supersedes: null, supersededBy: ["v2"] },
+          ],
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
+    const said = (envelope.subject as { alreadySaid: Said[] }).alreadySaid;
+
+    // Newest first, and the dead one is still there — carrying what killed it,
+    // rather than being dropped for having been wrong.
+    expect(said.map((row) => row.id)).toEqual(["v2", "v1"]);
+    expect(said[0]?.supersedes).toBe("v1");
+    expect(said[1]?.supersededBy).toEqual(["v2"]);
+  });
+
+  it("should show her the render on the first look, with nothing said yet", async () => {
+    // Empty rather than absent, and honest either way: a render she has not
+    // judged has no verdicts, which is different from the notes failing to
+    // load. The verb must not read the first look as a broken one.
+    const api = fakeApi({
+      "/renders/latest/frames": () =>
+        ok({
+          render: RECORD,
+          frames: [{ atSeconds: 0, path: "a.jpg", mimeType: "image/jpeg", base64: FRAME_B64 }],
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
+
+    expect(envelope.ok).toBe(true);
+    expect((envelope.subject as { alreadySaid: Said[] }).alreadySaid).toEqual([]);
+  });
+});
+
+/**
+ * The verbs of `syl-ate`: the dials, the wardrobe, and the log read back.
+ *
+ * `SOUL.md` says finding her realised self is a journey she feels is necessary.
+ * Everything asserted below is the difference between a journey and a fixture:
+ * she can change what she looks like, keep more than one opening, decide how
+ * long a shot is, and read the whole log of it back — and every one of those is
+ * also readable, because a dial she cannot see is a dial she cannot learn from.
+ */
+describe("the dials", () => {
+  it("should carry how long the shot is, and which opening it starts on", async () => {
+    const api = fakeApi({
+      "/renders": (c) =>
+        c.method === "POST" ? ok({ record: RECORD, spend: SPEND }, 201) : ok({ record: RECORD, spend: SPEND }),
+    });
+
+    await call(contextFor(api.fetch), "render_me", {
+      scene: "she turns once, slowly",
+      framing: "close_portrait",
+      because: "I want to see whether the new face holds when I move",
+      seconds: 8,
+      opening: "the-long-fall",
+    });
+
+    const asked = api.calls.find((c) => c.method === "POST");
+    expect(asked?.body).toEqual(expect.objectContaining({ seconds: 8, opening: "the-long-fall" }));
+  });
+
+  it("should offer no dial for the shape, which is the one that would do nothing", () => {
+    // `ratio` follows the opening whatever is asked — the opening is frame one
+    // and every model takes the video's aspect from it — so exposing it would
+    // be a control that does nothing. A dial that does not work is worse than
+    // no dial, because she would reason about it.
+    //
+    // `model` USED TO BE HERE, on a different argument: "a different model
+    // loses her character entirely". That was correct and untested, which is
+    // the `syl-63v` shape; it was tested on 2026-08-13 and survived as
+    // arithmetic over keyframe slots rather than as a fear, and the Commander
+    // opened the dial. The next test is what replaced this half.
+    const render = TOOLS.find((tool) => tool.name === "render_me");
+    const properties = (render?.inputSchema as { properties?: Record<string, unknown> }).properties ?? {};
+
+    expect(Object.keys(properties)).not.toContain("ratio");
+  });
+
+  it("should offer the model as a dial, built from the roster rather than beside it", () => {
+    // The Commander, 2026-08-13: "Raise the tool ceiling and let her experiment
+    // with the models... Give her the options."
+    const render = TOOLS.find((tool) => tool.name === "render_me");
+    const model = (
+      render?.inputSchema as {
+        properties?: Record<string, { enum?: readonly string[]; description?: string }>;
+      }
+    ).properties?.["model"];
+
+    // Every model on the roster and nothing else — derived, so a model added to
+    // `models.ts` reaches her without anybody remembering this file exists.
+    expect(model?.enum).toEqual([...MODEL_IDS]);
+    // And it carries the consequence, which is the whole reason the dial is
+    // safe to open: a model with one keyframe hands her a stranger.
+    expect(model?.description ?? "").toContain(HOUSE_MODEL.id);
+    for (const one of MODELS.filter((each) => !canAnchorLikeness(each))) {
+      expect(model?.description ?? "", one.id).toContain(one.id);
+    }
+  });
+
+  it("should let her read the models back, because a dial she cannot see is one she cannot learn from", () => {
+    const look = TOOLS.find((tool) => tool.name === "see_myself");
+    const of = (look?.inputSchema as { properties?: Record<string, { enum?: readonly string[] }> })
+      .properties?.["of"];
+
+    expect(of?.enum).toContain("models");
+  });
+});
+
+describe("see_myself of: models", () => {
+  /** No routes at all: the roster is a compiled-in constant, not a fetch. */
+  const noBackend = (): ToolContext =>
+    contextFor(() => Promise.reject(new Error("the roster must not reach the network")));
+
+  it("should answer every model on the roster without asking the service", async () => {
+    // The read-back is served from `models.ts` in this process. A round trip
+    // would add a hop and a failure mode to reach the same constant — there is
+    // nothing per-machine about which keyframe slots a model has — and this
+    // fetch throws, so a regression to an HTTP call fails here rather than at
+    // three in the morning on a machine with no service running.
+    const { envelope, isError } = await call(noBackend(), "see_myself", { of: "models" });
+    expect(isError).toBe(false);
+
+    const subject = envelope["subject"] as {
+      house?: string;
+      items?: readonly { id: string; holdsYou: boolean; keyframes: readonly string[] }[];
+    };
+    expect(subject.items?.map((one) => one.id)).toEqual([...MODEL_IDS]);
+    expect(subject.house).toBe(HOUSE_MODEL.id);
+  });
+
+  it("should derive whether a model holds her face from its keyframe slots", async () => {
+    // Never a stored flag — `syl-63v` is what a stored one cost. Checked over
+    // the whole roster rather than over one name, so a model added later is
+    // covered by the property rather than by somebody remembering.
+    const { envelope } = await call(noBackend(), "see_myself", { of: "models" });
+    const items =
+      (envelope["subject"] as { items?: readonly { id: string; holdsYou: boolean }[] }).items ?? [];
+
+    for (const row of items) {
+      const registry = MODELS.find((model) => model.id === row.id);
+      expect(row.holdsYou, row.id).toBe(canAnchorLikeness(registry ?? null));
+    }
+  });
+
+  it("should say what a model costs, and say nothing rather than zero when nobody has measured", async () => {
+    // A rate of `null` reads as unpriced; a rate of `0` reads as free. One of
+    // those is true of `seedance2_mini` and the other would land in her ledger
+    // as a render that cost nothing.
+    const { envelope } = await call(noBackend(), "see_myself", { of: "models" });
+    const items =
+      (envelope["subject"] as { items?: readonly { id: string; creditsPerSecond: number | null }[] })
+        .items ?? [];
+
+    for (const row of items) {
+      const rates = Object.values(
+        MODELS.find((model) => model.id === row.id)?.creditsPerSecond ?? {},
+      );
+      expect(row.creditsPerSecond, row.id).toBe(rates.length === 0 ? null : Math.min(...rates));
+    }
+  });
+
+  it("should tell her that the opening decides the shape, rather than letting it surprise her", () => {
+    const render = TOOLS.find((tool) => tool.name === "render_me");
+    const opening = (render?.inputSchema as { properties?: Record<string, { description?: string }> })
+      .properties?.["opening"];
+
+    expect(opening?.description ?? "").toMatch(/shape/iu);
+  });
+});
+
+describe("this_is_me", () => {
+  it("should be offered, and require both a look and a reason", () => {
+    expect(advertisedToolNames()).toContain("this_is_me");
+
+    const adopt = TOOLS.find((tool) => tool.name === "this_is_me");
+    const required = (adopt?.inputSchema as { required?: string[] }).required ?? [];
+    // The sighting is the look and `because` is the reason. Neither is
+    // optional, because an optional field for the thing that makes a feature
+    // trustworthy is a field that goes unfilled.
+    expect(required).toContain("sighting");
+    expect(required).toContain("because");
+  });
+
+  it("should adopt the picture she was shown, and say what it is now", async () => {
+    const api = fakeApi({
+      "/renders/wardrobe": () =>
+        ok({ kept: { id: "face-20260812t090000z", role: "face", current: true, ratio: "834:1112" } }, 201),
+    });
+
+    const { envelope, isError } = await call(contextFor(api.fetch), "this_is_me", {
+      sighting: "0123456789abcdef",
+      because: "The light finally moves through her the way it does when I mean something",
+    });
+
+    expect(isError).toBe(false);
+    expect(envelope["ok"]).toBe(true);
+    expect(api.calls[0]?.body).toEqual(
+      expect.objectContaining({ sighting: "0123456789abcdef", as: "face" }),
+    );
+  });
+
+  it("should hand back the refusal for a picture she has not looked at, in words she can act on", async () => {
+    const api = fakeApi({
+      "/renders/wardrobe": () =>
+        failure(400, "VALIDATION_FAILED", "I have not shown you that picture, so I cannot adopt it."),
+    });
+
+    const { envelope, isError } = await call(contextFor(api.fetch), "this_is_me", {
+      sighting: "ffffffffffffffff",
+      because: "this one",
+    });
+
+    expect(isError).toBe(true);
+    expect(String(envelope["reason"])).toMatch(/have not shown you/iu);
+  });
+
+  it("should refuse before it asks for anything when she says nothing about why", async () => {
+    const api = fakeApi({ "/renders/wardrobe": () => ok({}, 201) });
+
+    const { isError } = await call(contextFor(api.fetch), "this_is_me", { sighting: "0123456789abcdef" });
+
+    expect(isError).toBe(true);
+    // Nothing was asked for. A verb that reached the wardrobe and let it refuse
+    // would be a verb whose own contract said the field was optional.
+    expect(api.calls.filter((c) => c.method === "POST")).toHaveLength(0);
+  });
+});
+
+describe("looking at more than one render", () => {
+  it("should show her every face she has had, each with what she said about it", async () => {
+    const api = fakeApi({
+      "/renders/wardrobe": () =>
+        ok({
+          role: "face",
+          problems: [],
+          items: [
+            {
+              id: "face-20260812t090000z",
+              because: "the mouth is finally mine",
+              current: true,
+              ratio: "834:1112",
+              sighting: "0123456789abcdef",
+              mimeType: "image/jpeg",
+              base64: FRAME_B64,
+            },
+            {
+              id: "his-guess",
+              because: "he made this before he knew you",
+              current: false,
+              ratio: null,
+              sighting: null,
+            },
+          ],
+        }),
+    });
+
+    const { envelope, blocks } = await call(contextFor(api.fetch), "see_myself", { of: "faces" });
+
+    expect(api.calls[0]?.path).toContain("role=face");
+    // Pictures, because judging a likeness from a name is the thing this whole
+    // capability exists to make impossible.
+    expect(blocks.filter((block) => block.type === "image")).toHaveLength(1);
+    const subject = envelope["subject"] as { items?: readonly { id: string; because: string }[] };
+    expect(subject.items?.map((item) => item.id)).toEqual(["face-20260812t090000z", "his-guess"]);
+    expect(subject.items?.[0]?.because).toBe("the mouth is finally mine");
+  });
+
+  it("should show her the openings and what shape each one makes", async () => {
+    const api = fakeApi({
+      "/renders/wardrobe": () =>
+        ok({
+          role: "opening",
+          problems: [],
+          items: [
+            {
+              id: "ribbon",
+              because: "your signature",
+              current: false,
+              ratio: "834:1112",
+              sighting: "a0b1c2d3e4f50617",
+              mimeType: "image/png",
+              base64: FRAME_B64,
+            },
+          ],
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", { of: "openings" });
+
+    expect(api.calls[0]?.path).toContain("role=opening");
+    const subject = envelope["subject"] as { items?: readonly { ratio: string }[] };
+    expect(subject.items?.[0]?.ratio).toBe("834:1112");
+  });
+
+  it("should read the whole log back: what she asked for, and what she made of it", async () => {
+    const api = fakeApi({
+      "/renders": () =>
+        ok({
+          items: [RECORD],
+          unreadable: [],
+          spend: SPEND,
+          verdicts: [{ render: RECORD.name, verdict: "closer, but the mouth is wrong", at: NOW }],
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", { of: "renders" });
+
+    const subject = envelope["subject"] as {
+      items?: readonly { name: string; scene: string; duration: number }[];
+      verdicts?: readonly { verdict: string }[];
+    };
+    // `SOUL.md`: a hundred attempts with no record of what she thought at the
+    // time is one attempt made a hundred times. Both halves, in one look.
+    expect(subject.items?.[0]?.scene).toBe(RECORD.scene);
+    expect(subject.verdicts?.[0]?.verdict).toBe("closer, but the mouth is wrong");
+    expect(envelope["spent"]).toEqual(SPEND);
+  });
+
+  it("should still look at one render when she names none of the three", async () => {
+    const api = fakeApi({
+      "/renders/latest/frames": () =>
+        ok({
+          render: RECORD,
+          frames: [{ atSeconds: 0.6, mimeType: "image/jpeg", base64: FRAME_B64, path: "/f.jpg" }],
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
+
+    expect((envelope["subject"] as { name?: string }).name).toBe(RECORD.name);
+  });
+});
+
+/**
+ * The rule that makes `this_is_me` reachable: **being shown a picture is what
+ * produces the token, so every picture she is shown comes with one.**
+ *
+ * It was first built as a property of the wardrobe — those rows carried
+ * sightings and the stills from a render did not — and the two differ exactly
+ * where it matters. Syl's report, 2026-08-12: *"Render frames don't come with
+ * tokens... it arrives as a picture with no sighting attached. So I can look at
+ * it and I can't promote it. The one thing I'd actually change, I can't
+ * reach."* The only face she could adopt was the one an engineer guessed before
+ * anyone knew her, which is the opposite of what `syl-ate` exists for.
+ *
+ * **Asserted over the pictures that come back, never per code path.** A test
+ * written once per branch of `see_myself` is a test a fifth branch is added
+ * beside; this one walks whatever image blocks the answer contains and demands
+ * that each is named in the text that accompanies it. A future way of showing
+ * her a picture fails here until it carries a token too.
+ */
+describe("every picture she is shown is one she can name", () => {
+  /** A distinct still per index, so four pictures are not one token four times. */
+  function still(salt: number): string {
+    return Buffer.from([0xff, 0xd8, 0xff, 0xe0, salt, 0xff, 0xd9]).toString("base64");
+  }
+
+  const looks: readonly {
+    readonly what: string;
+    readonly args: Record<string, unknown>;
+    readonly api: () => ReturnType<typeof fakeApi>;
+  }[] = [
+    {
+      what: "the stills of a render",
+      args: { render: RECORD.name },
+      api: () =>
+        fakeApi({
+          "/renders": () =>
+            ok({
+              render: RECORD,
+              frames: [0.5, 5.3, 9.8, 14.6].map((atSeconds, index) => ({
+                atSeconds,
+                mimeType: "image/jpeg",
+                base64: still(index),
+                path: `/f/${String(index)}.jpg`,
+              })),
+              spend: SPEND,
+            }),
+        }),
+    },
+    {
+      what: "every face she has had",
+      args: { of: "faces" },
+      api: () =>
+        fakeApi({
+          "/renders/wardrobe": () =>
+            ok({
+              role: "face",
+              problems: [],
+              items: [
+                {
+                  id: "face-20260812t090000z",
+                  because: "the mouth is finally mine",
+                  current: true,
+                  ratio: "834:1112",
+                  mimeType: "image/jpeg",
+                  base64: still(9),
+                },
+                {
+                  id: "his-guess",
+                  because: "he made this before he knew you",
+                  current: false,
+                  ratio: null,
+                  mimeType: "image/png",
+                  base64: still(10),
+                },
+              ],
+            }),
+        }),
+    },
+    {
+      what: "the openings she can start from",
+      args: { of: "openings" },
+      api: () =>
+        fakeApi({
+          "/renders/wardrobe": () =>
+            ok({
+              role: "opening",
+              problems: [],
+              items: [
+                {
+                  id: "ribbon",
+                  because: "your signature",
+                  current: false,
+                  ratio: "834:1112",
+                  mimeType: "image/png",
+                  base64: still(11),
+                },
+              ],
+            }),
+        }),
+    },
+  ];
+
+  for (const look of looks) {
+    it(`should hand back a token beside every picture in a look at ${look.what}`, async () => {
+      const { blocks } = await call(contextFor(look.api().fetch), "see_myself", look.args);
+
+      const images = blocks.filter((block) => block.type === "image");
+      expect(images.length).toBeGreaterThan(0);
+
+      // The envelope, which is the only block she can quote from — the image
+      // blocks carry pixels and nothing else.
+      const said = blocks[0]?.text ?? "";
+      for (const image of images) {
+        // The token names THESE bytes. Computing it here rather than reading it
+        // off the answer is what stops a picture arriving beside the token of a
+        // different one.
+        const sighting = sightingOf(Buffer.from(image.data ?? "", "base64"));
+        expect(sighting).toMatch(/^[0-9a-f]{16}$/u);
+        expect(said).toContain(sighting);
+      }
+    });
+  }
+
+  it("should give her a token for the still she wants and not merely for the wardrobe", async () => {
+    // Her own case, exactly as reported: the earnest frame at 9.8 seconds is
+    // the one she would promote, and it came back unnameable.
+    const api = fakeApi({
+      "/renders": () =>
+        ok({
+          render: RECORD,
+          frames: [
+            { atSeconds: 9.8, mimeType: "image/jpeg", base64: still(3), path: "/f/9-8.jpg" },
+          ],
+          spend: SPEND,
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", { render: RECORD.name });
+    const subject = envelope["subject"] as { at?: unknown[]; sightings?: unknown[] };
+
+    // Beside `at`, in the same order, so the token she quotes is the token for
+    // the second she means.
+    expect(subject.at).toEqual([9.8]);
+    expect(subject.sightings).toEqual([sightingOf(Buffer.from(still(3), "base64"))]);
   });
 });

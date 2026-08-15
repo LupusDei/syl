@@ -670,10 +670,6 @@ export class MockStore {
         return this.device(id);
       case "delivery":
         return this.delivery(id);
-      case "job":
-        return this.job(id);
-      case "run":
-        return this.run(id);
     }
   }
 

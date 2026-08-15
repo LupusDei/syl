@@ -614,4 +614,73 @@ export class Outbox {
       .run(input.ackedAt, input.engagement ?? "delivered", id);
     return this.get(id);
   }
+
+  /**
+   * How each class of message has actually been received.
+   *
+   * `syl-t9tj.5.2`. The master plan asks for this in one sentence and it had
+   * never been readable:
+   *
+   * > "Every proactive message is recorded with whether it was engaged with. If
+   * > a class of message is consistently ignored — the evening review, say —
+   * > that is data saying stop sending it, not a prompt to write it more
+   * > persuasively."
+   *
+   * Both halves of that were already here: `message_class` on every row and
+   * `engagement` written at acknowledgement. **Nothing read them together**, so
+   * "is this class being ignored?" was a question the system held the answer to
+   * and could not be asked. A record nobody can query is a record that only
+   * looks like accountability.
+   *
+   * It matters most for health, which is why it is being built now. He granted
+   * two things at once — *"she can interrupt often when it comes to health
+   * data"* and permission to break through Focus — and **this is the only
+   * counterweight to either.** Without it the first bad class of health message
+   * trains him to swipe past the good ones, and nothing measures that
+   * happening; the calibration would be his irritation, discovered late.
+   *
+   * The vocabulary is `0005_outbox.sql`'s, not a new one: `opened` and
+   * `acted_on` are engagement, `dismissed` and `ignored` are its absence, and
+   * **`delivered` is neither.** That last one is the honest gap — it means the
+   * message arrived and the phone never said what became of it, which is not
+   * evidence either way and must not be counted as rejection. A bad afternoon
+   * of connectivity would otherwise read as him going off a whole class.
+   */
+  reception(since: string): readonly ClassReception[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT message_class AS class,
+                count(*) AS sent,
+                sum(CASE WHEN engagement IN ('opened', 'acted_on') THEN 1 ELSE 0 END) AS engaged,
+                sum(CASE WHEN engagement IN ('dismissed', 'ignored') THEN 1 ELSE 0 END) AS ignored
+           FROM deliveries
+          WHERE created_at >= ?
+          GROUP BY message_class
+          ORDER BY message_class`,
+      )
+      .all(since);
+
+    return (rows as unknown as ClassReception[]).map((row) => ({
+      class: row.class,
+      sent: row.sent,
+      engaged: row.engaged,
+      ignored: row.ignored,
+    }));
+  }
+}
+
+/** How one class of message landed. See {@link Outbox.reception}. */
+export interface ClassReception {
+  readonly class: string;
+  /** Delivered to him, whatever he did next. */
+  readonly sent: number;
+  /** He read it, acted on it, or affirmed it. */
+  readonly engaged: number;
+  /**
+   * It reached him and he did nothing with it.
+   *
+   * The number the rule turns on. A class where this dominates is a class to
+   * stop sending, and saying so is the whole point of counting.
+   */
+  readonly ignored: number;
 }

@@ -48,6 +48,11 @@
       "why": "Same defect in probe(): the fact whose entity is Grace ranks FIRST for probe('Ada'), ahead of both facts that actually carry Ada. related() and contradict() are the two kernels that work today; the nightly sweep (syl-005.4.2) must use those and not these."
     },
     {
+      "test": "a conclusion is hers, never his should keep its reasoning even when it names nothing she already knows",
+      "bead": "syl-1ozc",
+      "why": "remember() puts her reasoning on the inferred EDGE, which is correct — memory_provenance needs a digest, a said_in message and a quote copied from it, and a conclusion from fourteen nights has none of the three. But an edge needs a target, and `about` resolves against entities that already exist and mints nothing, so a memory that names nobody has NO EDGES and `because` is validated non-blank and then never written anywhere. Health is the first class of memory that is routinely about nobody: 'your sleep has been short for five nights' names no person, no goal and no place. Measured end to end against his real data shape on 2026-08-13: two conclusions written, two memory nodes, one edge. health/review.ts deliberately does not work around it — putting the window in the THOUGHT writes machine text into what he reads, inventing an anchor entity guesses at a label nothing marks, and discarding an unattached conclusion is a bar at the door against his explicit ruling. The fix is a decision about the graph."
+    },
+    {
       "test": "deploy — a rollback after a migration should restore the schema the restored build expects",
       "bead": "syl-dep1.7",
       "why": "A health-gated rollback restores the CODE and leaves the SCHEMA forward. Migrations run on the way up and there is no down path, so after a failed deploy the restored build runs against a database it has never seen. Additive migrations usually survive that and a destructive one does not, and nothing today tells the two apart. The deploy reports the migrations involved and reports schemaRestored: false rather than pretending — but 'the code is back' and 'the system is back' are different claims, and only the first is true. Fixing it needs either down-migrations or a snapshot of the SQLite file taken before the deploy."

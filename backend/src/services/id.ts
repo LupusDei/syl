@@ -39,6 +39,13 @@ export type IdType =
   // shape must never address two different stores.
   | "memory_node"
   | "memory_edge"
+  // An ENTITY, as opposed to a node that mentions one (`syl-zdf.3`). Two
+  // `person` rows for one woman share a `memory_subject`; neither row is
+  // deleted and neither is the "real" one. Its own namespace rather than
+  // reusing `memory_node`, because `subject_id` pointing at a node would say
+  // "this node is a handle for that node", which is a different claim from
+  // "these nodes are the same thing" and is one `projection.ts` already owns.
+  | "memory_subject"
   // The supersession ledger (`0017_supersession_ledger.sql`). A row is a CLAIM
   // with a validity interval, not a node: facts are never deleted, they are
   // retired, and the closed rows are what answers "what did I believe in
@@ -54,10 +61,30 @@ export type IdType =
   // write that made it — the video lands minutes after the words do, and the
   // surface that lists them is not the conversation.
   | "sending"
+  // A render she started and has not looked at yet (`0026_render_watches.sql`).
+  // Its own id rather than the render's name, because the name addresses a file
+  // on disk and this addresses the promise to come back to it — the two have
+  // different lifetimes, and the file outlives the decision.
+  | "render_watch"
+  // What she made of a render after looking at it (`0030_render_verdicts.sql`).
+  // Deliberately NOT a `memory_node`: the Commander's ruling that a verdict on
+  // her own face is not a fact about his life, and that the whole exercise ends
+  // once she settles on a likeness. A separate id shape is what keeps that
+  // store droppable.
+  | "render_verdict"
   // Telemetry, not memory. A dream session is a row in the dream log
   // (`0013_dream_log.sql`) and never a node in the graph — see the header of
   // that migration for why the two must not touch.
-  | "dream_session";
+  | "dream_session"
+  // A question she put to another agent, and the thing an answer is matched
+  // against (`agents/answers.ts`, `syl-j8fa.5`). It addresses NO ROW IN ANY
+  // TABLE HERE, which is the unusual part and is deliberate: the question lives
+  // in Adjutant's message store, because that is where the answer lives too.
+  // Minting it as an ordinary id anyway buys the thing a bare token would not —
+  // it is self-describing in a log line, it cannot be confused with a reminder
+  // or a goal id that happened to be quoted back, and `isId(value,
+  // "agent_question")` is the whole of the matcher's validation.
+  | "agent_question";
 
 /**
  * `syl:<type>:<uuid>`, matching the contract's `Id` pattern exactly.

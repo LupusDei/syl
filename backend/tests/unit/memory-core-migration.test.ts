@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  MEMORY_NODE_KINDS,
   newMemoryEdgeId,
   newMemoryNodeId,
   type MemoryEdgeSpecies,
@@ -184,10 +185,17 @@ describe("0012_memory_core — the tables exist and are STRICT", () => {
 
 describe("memory_nodes", () => {
   it("should accept a well-formed node of every kind it covers", () => {
-    for (const kind of ["fact", "memory", "person", "source", "event", "goal", "decision"]) {
+    // Driven by `MEMORY_NODE_KINDS` rather than a hand-kept list. The two must
+    // agree — a kind TypeScript admits and the CHECK refuses is a write that
+    // fails at runtime only, and a kind the CHECK admits and TypeScript does not
+    // is a row nothing ever queries. `0027` added one to both, and a literal
+    // list here would have gone on passing while covering six of seven.
+    for (const kind of MEMORY_NODE_KINDS) {
       expect(() => addNode({ kind, label: `a ${kind}` })).not.toThrow();
     }
-    expect(db.prepare("SELECT count(*) AS n FROM memory_nodes").get()).toEqual({ n: 7 });
+    expect(db.prepare("SELECT count(*) AS n FROM memory_nodes").get()).toEqual({
+      n: MEMORY_NODE_KINDS.length,
+    });
   });
 
   it("should refuse a node id from another namespace", () => {
@@ -568,5 +576,420 @@ describe("nothing inferred is ever deleted", () => {
     addEdge({ sourceNode: a, targetNode: b });
 
     expect(() => db.prepare("DELETE FROM memory_nodes WHERE id = ?").run(a)).toThrow();
+  });
+});
+
+/**
+ * `0029_memory_places.sql` widens `memory_nodes.kind`, and SQLite has no way to
+ * widen a CHECK. So the table is dropped and re-created under the same name,
+ * inside the runner's own transaction, with foreign keys deferred to the commit.
+ *
+ * That is the most dangerous shape of migration this project has: five other
+ * tables point at `memory_nodes`, an FTS index shadows it, and every failure
+ * mode is silent. A rebuild that loses the FTS rows still passes a row count; a
+ * rebuild that leaves the references naming a scratch table still passes
+ * `foreign_key_check` at that moment. So the assertions below are about the
+ * things that would NOT announce themselves.
+ */
+describe("memory_places — the rebuild kept everything it was standing on", () => {
+  /**
+   * The version the rebuild lives at, found BY NAME.
+   *
+   * A migration number is not stable while it is in flight. This file was
+   * written against `0027`; origin reached `0028` the same afternoon and the
+   * file became `0029`. The prose references were updated and these numbers
+   * were not — which would have left the definition diff below comparing two
+   * migrations that do not contain the rebuild, and **passing**. A guard that
+   * a renumber can silently defang is worse than no guard, because it goes on
+   * reporting success.
+   *
+   * So the boundary is derived from the migration's NAME, which is the part
+   * that does not move.
+   */
+  function rebuildVersion(): number {
+    const found = readMigrations(MIGRATIONS_DIR).find(
+      (migration) => migration.name === "memory_places",
+    );
+    if (found === undefined) throw new Error("no migration named memory_places");
+    return found.version;
+  }
+
+  /** A database migrated to just before the rebuild, seeded, then carried the rest of the way. */
+  function acrossTheRebuild(): Database {
+    const scoped = new DatabaseSync(IN_MEMORY);
+    applyPragmas(scoped, { busyTimeoutMs: 100, requireWal: false });
+    const all = readMigrations(MIGRATIONS_DIR);
+
+    applyMigrations(
+      scoped,
+      all.filter((migration) => migration.version < rebuildVersion()),
+    );
+
+    const source = newMemoryNodeId();
+    const fact = newMemoryNodeId();
+    for (const [id, kind, label] of [
+      [source, "source", "a conversation"],
+      [fact, "fact", "Illinois — parents' home and birthplace"],
+    ] as const) {
+      scoped
+        .prepare(
+          "INSERT INTO memory_nodes (id, tier, kind, label, body, created_at, updated_at) " +
+            "VALUES (?, 'hot', ?, ?, 'a body', ?, ?)",
+        )
+        .run(id, kind, label, NOW, NOW);
+    }
+    scoped
+      .prepare(
+        "INSERT INTO memory_edges (id, tier, kind, source_node, target_node, relation, weight, " +
+          "asserted_by, last_touched_at, created_at, updated_at) " +
+          "VALUES (?, 'hot', 'observed', ?, ?, 'stated', 1.0, ?, ?, ?, ?)",
+      )
+      .run(newMemoryEdgeId(), source, fact, source, NOW, NOW, NOW);
+
+    applyMigrations(scoped, all);
+    return scoped;
+  }
+
+  it("should carry every node and edge across", () => {
+    const scoped = acrossTheRebuild();
+    expect(scoped.prepare("SELECT count(*) AS n FROM memory_nodes").get()).toEqual({ n: 2 });
+    expect(scoped.prepare("SELECT count(*) AS n FROM memory_edges").get()).toEqual({ n: 1 });
+    scoped.close();
+  });
+
+  it("should leave the foreign keys naming memory_nodes, not a scratch table", () => {
+    // The failure this catches is invisible: `ALTER TABLE ... RENAME` rewrites
+    // every REFERENCES clause when foreign keys are on — `legacy_alter_table`
+    // does NOT stop it, measured — so a rebuild done by renaming leaves the
+    // edges pointing at a table that no longer exists. Nothing fails until the
+    // next write, and then it fails somewhere else entirely.
+    const scoped = acrossTheRebuild();
+    const sql = String(
+      (
+        scoped
+          .prepare("SELECT sql FROM sqlite_schema WHERE name = 'memory_edges'")
+          .get() as { sql: string }
+      ).sql,
+    );
+    expect(sql).toContain("REFERENCES memory_nodes");
+    expect(sql).not.toContain("memory_nodes_rebuild");
+    expect(scoped.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    scoped.close();
+  });
+
+  it("should not empty the search index on the way through", () => {
+    // `DROP TABLE` runs an implicit `DELETE FROM` under foreign keys. If that
+    // fired `memory_nodes_fts_ad` — it does not, and this is the assertion that
+    // says so — every node would survive with nothing findable by keyword, and
+    // no count of nodes or edges would notice.
+    const scoped = acrossTheRebuild();
+    expect(scoped.prepare("SELECT count(*) AS n FROM memory_nodes_fts").get()).toEqual({ n: 2 });
+    expect(
+      scoped
+        .prepare("SELECT count(*) AS n FROM memory_nodes_fts WHERE memory_nodes_fts MATCH ?")
+        .get("Illinois"),
+    ).toEqual({ n: 1 });
+    scoped.close();
+  });
+
+  it("should not index every row twice, either", () => {
+    // The other half of the same trap: re-creating the insert trigger BEFORE
+    // copying the rows back would index each node a second time. A duplicated
+    // FTS row is not an error and does not change a node count; it just makes
+    // keyword search rank one memory as two.
+    const scoped = acrossTheRebuild();
+    expect(
+      scoped.prepare("SELECT count(*) AS n FROM memory_nodes_fts WHERE node_id IS NOT NULL").get(),
+    ).toEqual({ n: 2 });
+    scoped.close();
+  });
+
+  it("should put back every index and trigger the table had, DEFINITION and all", () => {
+    // Names are not enough, and this is not a hypothetical: the first draft of
+    // `0027` re-created `memory_nodes_handle_idx` without its `kind IN ('goal',
+    // 'source')` predicate. Right name, right columns, right table — and a
+    // unique index that forbade the graph from knowing two things about one
+    // goal. So the comparison is between the DEFINITIONS on either side of the
+    // rebuild, normalised for whitespace and nothing else, which is a claim
+    // nothing can satisfy by accident.
+    const all = readMigrations(MIGRATIONS_DIR);
+    const definitions = (upTo: number): Map<string, string> => {
+      const scoped = new DatabaseSync(IN_MEMORY);
+      applyPragmas(scoped, { busyTimeoutMs: 100, requireWal: false });
+      applyMigrations(
+        scoped,
+        all.filter((migration) => migration.version <= upTo),
+      );
+      const rows = scoped
+        .prepare(
+          "SELECT name, type, sql FROM sqlite_schema WHERE tbl_name = 'memory_nodes' " +
+            "AND type IN ('index', 'trigger') AND sql IS NOT NULL",
+        )
+        .all()
+        .map((row) => row as { name: string; type: string; sql: string });
+      scoped.close();
+      return new Map(
+        rows.map((row) => [`${row.type} ${row.name}`, row.sql.replace(/\s+/gu, " ").trim()]),
+      );
+    };
+
+    const before = definitions(rebuildVersion() - 1);
+    const after = definitions(rebuildVersion());
+
+    expect(before.size).toBeGreaterThan(0);
+    expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
+    for (const [name, sql] of before) expect(after.get(name)).toBe(sql);
+  });
+
+  it("should keep the trust column and its bounds", () => {
+    const scoped = acrossTheRebuild();
+    expect(scoped.prepare("SELECT count(*) AS n FROM memory_nodes WHERE trust = 0.8").get()).toEqual(
+      { n: 2 },
+    );
+    expect(() =>
+      scoped.prepare("UPDATE memory_nodes SET trust = 0.0").run(),
+    ).toThrow();
+    scoped.close();
+  });
+
+  it("should admit a place and still refuse a kind nobody declared", () => {
+    const scoped = acrossTheRebuild();
+    const insert = (kind: string): void => {
+      scoped
+        .prepare(
+          "INSERT INTO memory_nodes (id, tier, kind, label, created_at, updated_at) " +
+            "VALUES (?, 'hot', ?, 'Illinois', ?, ?)",
+        )
+        .run(newMemoryNodeId(), kind, NOW, NOW);
+    };
+    expect(() => { insert("place"); }).not.toThrow();
+    expect(() => { insert("pizzeria"); }).toThrow();
+    scoped.close();
+  });
+});
+
+describe("memory_entity_mentions", () => {
+  it("should refuse a mention with no claim waiting on it", () => {
+    // `from_node NOT NULL` is the rule and not a convenience: a place nothing is
+    // about is a word in a sentence, and every row hanging off a node is also
+    // what lets the Commander's "forget this" reach the residue by CASCADE.
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO memory_entity_mentions (kind, label, digest, from_node, said_in, quote, " +
+            "why, body, created_at) VALUES ('place', 'Illinois', ?, NULL, ?, 'q', 'w', 'b', ?)",
+        )
+        .run("f".repeat(64), "syl:message:01991b2f-0000-7000-8000-0000000000ab", NOW),
+    ).toThrow();
+  });
+
+  it("should refuse a promotion that cannot say when it happened", () => {
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO memory_entity_mentions (kind, label, digest, from_node, said_in, quote, " +
+            "why, body, node_id, promoted_at, created_at) " +
+            "VALUES ('place', 'Illinois', ?, ?, ?, 'q', 'w', 'b', ?, NULL, ?)",
+        )
+        .run(
+          "f".repeat(64),
+          newMemoryNodeId(),
+          "syl:message:01991b2f-0000-7000-8000-0000000000ab",
+          newMemoryNodeId(),
+          NOW,
+        ),
+    ).toThrow();
+  });
+
+  it("should refuse a mention of a kind that is not an entity", () => {
+    // A `fact` is a claim. There is nothing here for one to be — a mention is
+    // deferred evidence of a THING, and `about` refuses to point at a claim.
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO memory_entity_mentions (kind, label, digest, from_node, said_in, quote, " +
+            "why, body, created_at) VALUES ('fact', 'Illinois', ?, ?, ?, 'q', 'w', 'b', ?)",
+        )
+        .run(
+          "f".repeat(64),
+          newMemoryNodeId(),
+          "syl:message:01991b2f-0000-7000-8000-0000000000ab",
+          NOW,
+        ),
+    ).toThrow();
+  });
+});
+
+/**
+ * `0034_kinds_and_verdict_chain.sql` widens `memory_nodes.kind` a second time,
+ * and it is the same table rebuild `0029` had to do — SQLite still has no way
+ * to widen an inline CHECK.
+ *
+ * A second rebuild is not a cheaper rebuild. Everything `0029`'s block says
+ * about silent failure applies again, unchanged: five tables reference this
+ * one, an FTS index shadows it, and a rebuild that loses the search rows or
+ * re-creates an index without its predicate still passes every count. So the
+ * guards are repeated against THIS version rather than assumed to have been
+ * inherited from the last one — a rebuild is dangerous per rebuild, not per
+ * project.
+ */
+describe("self and instruction — the second rebuild kept everything too", () => {
+  /**
+   * Found BY NAME, for the reason `0029`'s block gives: a migration number is
+   * not stable while it is in flight, and a guard a renumber can defang goes on
+   * reporting success.
+   */
+  function rebuildVersion(): number {
+    const found = readMigrations(MIGRATIONS_DIR).find(
+      (migration) => migration.name === "kinds_and_verdict_chain",
+    );
+    if (found === undefined) throw new Error("no migration named kinds_and_verdict_chain");
+    return found.version;
+  }
+
+  /** A database seeded just before this rebuild, then carried the rest of the way. */
+  function acrossTheRebuild(): Database {
+    const scoped = new DatabaseSync(IN_MEMORY);
+    applyPragmas(scoped, { busyTimeoutMs: 100, requireWal: false });
+    const all = readMigrations(MIGRATIONS_DIR);
+
+    applyMigrations(
+      scoped,
+      all.filter((migration) => migration.version < rebuildVersion()),
+    );
+
+    const person = newMemoryNodeId();
+    const fact = newMemoryNodeId();
+    for (const [id, kind, label] of [
+      [person, "person", "the Commander"],
+      [fact, "fact", "Illinois — parents' home and birthplace"],
+    ] as const) {
+      scoped
+        .prepare(
+          "INSERT INTO memory_nodes (id, tier, kind, label, body, created_at, updated_at) " +
+            "VALUES (?, 'hot', ?, ?, 'a body', ?, ?)",
+        )
+        .run(id, kind, label, NOW, NOW);
+    }
+    scoped
+      .prepare(
+        "INSERT INTO memory_edges (id, tier, kind, source_node, target_node, relation, weight, " +
+          "asserted_by, last_touched_at, created_at, updated_at) " +
+          "VALUES (?, 'hot', 'observed', ?, ?, 'about', 1.0, ?, ?, ?, ?)",
+      )
+      .run(newMemoryEdgeId(), fact, person, person, NOW, NOW, NOW);
+
+    applyMigrations(scoped, all);
+    return scoped;
+  }
+
+  it("should carry every node and edge across", () => {
+    const scoped = acrossTheRebuild();
+    expect(scoped.prepare("SELECT count(*) AS n FROM memory_nodes").get()).toEqual({ n: 2 });
+    expect(scoped.prepare("SELECT count(*) AS n FROM memory_edges").get()).toEqual({ n: 1 });
+    scoped.close();
+  });
+
+  it("should leave the foreign keys naming memory_nodes, not a scratch table", () => {
+    const scoped = acrossTheRebuild();
+    const sql = String(
+      (
+        scoped
+          .prepare("SELECT sql FROM sqlite_schema WHERE name = 'memory_edges'")
+          .get() as { sql: string }
+      ).sql,
+    );
+    expect(sql).toContain("REFERENCES memory_nodes");
+    expect(sql).not.toContain("memory_nodes_rebuild");
+    expect(scoped.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    scoped.close();
+  });
+
+  it("should neither empty the search index nor index every row twice", () => {
+    const scoped = acrossTheRebuild();
+    expect(scoped.prepare("SELECT count(*) AS n FROM memory_nodes_fts").get()).toEqual({ n: 2 });
+    expect(
+      scoped
+        .prepare("SELECT count(*) AS n FROM memory_nodes_fts WHERE memory_nodes_fts MATCH ?")
+        .get("Illinois"),
+    ).toEqual({ n: 1 });
+    scoped.close();
+  });
+
+  it("should put back every index and trigger the table had, DEFINITION and all", () => {
+    // The comparison is between the DEFINITIONS on either side of the rebuild,
+    // normalised for whitespace and nothing else. `0029`'s first draft dropped
+    // the `kind IN ('goal', 'source')` predicate from a UNIQUE index — right
+    // name, right columns, right table, and the graph forbidden from knowing
+    // two things about one goal.
+    const all = readMigrations(MIGRATIONS_DIR);
+    const definitions = (upTo: number): Map<string, string> => {
+      const scoped = new DatabaseSync(IN_MEMORY);
+      applyPragmas(scoped, { busyTimeoutMs: 100, requireWal: false });
+      applyMigrations(
+        scoped,
+        all.filter((migration) => migration.version <= upTo),
+      );
+      const rows = scoped
+        .prepare(
+          "SELECT name, type, sql FROM sqlite_schema WHERE tbl_name = 'memory_nodes' " +
+            "AND type IN ('index', 'trigger') AND sql IS NOT NULL",
+        )
+        .all()
+        .map((row) => row as { name: string; type: string; sql: string });
+      scoped.close();
+      return new Map(
+        rows.map((row) => [`${row.type} ${row.name}`, row.sql.replace(/\s+/gu, " ").trim()]),
+      );
+    };
+
+    const before = definitions(rebuildVersion() - 1);
+    const after = definitions(rebuildVersion());
+
+    expect(before.size).toBeGreaterThan(0);
+    expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
+    for (const [name, sql] of before) expect(after.get(name)).toBe(sql);
+  });
+
+  it("should admit a self finding and a standing order, and still refuse a kind nobody declared", () => {
+    const scoped = acrossTheRebuild();
+    const insert = (kind: string): void => {
+      scoped
+        .prepare(
+          "INSERT INTO memory_nodes (id, tier, kind, label, created_at, updated_at) " +
+            "VALUES (?, 'hot', ?, 'a label', ?, ?)",
+        )
+        .run(newMemoryNodeId(), kind, NOW, NOW);
+    };
+    expect(() => { insert("self"); }).not.toThrow();
+    expect(() => { insert("instruction"); }).not.toThrow();
+    expect(() => { insert("vibe"); }).toThrow();
+    scoped.close();
+  });
+
+  it("should let a self finding keep its edges to his life", () => {
+    // The whole of `syl-024`, at the layer this bead owns. The separation the
+    // Commander asked for is a READ-TIME FILTER, and a filter needs the edges
+    // to still be there — "her memories about herself still need notes and
+    // edges, and even the ability to connect to memories about me and my life
+    // and my preferences". A kind that could not be an edge endpoint would have
+    // rebuilt the isolation this epic exists to replace.
+    const self = addNode({ kind: "self", label: "I hedge when I am unsure" });
+    const him = addNode({ kind: "person", label: "the Commander" });
+    const order = addNode({ kind: "instruction", label: "renders should have a face" });
+
+    expect(() => {
+      addEdge({ sourceNode: self, targetNode: him, relation: "about" });
+      addEdge({ sourceNode: self, targetNode: order, relation: "about" });
+    }).not.toThrow();
+
+    expect(
+      db
+        .prepare(
+          "SELECT count(*) AS n FROM memory_edges e JOIN memory_nodes n ON n.id = e.source_node " +
+            "WHERE n.kind = 'self'",
+        )
+        .get(),
+    ).toEqual({ n: 2 });
   });
 });

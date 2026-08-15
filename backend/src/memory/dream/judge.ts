@@ -2,9 +2,20 @@ import { LANES, type Lane, type SessionStore } from "../../harness/agent.js";
 import { newSessionId, type TurnOptions, type TurnResult, type TurnRunner } from "../../harness/session.js";
 import { systemClock, type Clock } from "../../services/clock.js";
 import { autoMemoryOff } from "../auto-memory.js";
+import {
+  canonicalRelation,
+  ESCAPE_RELATION,
+  INFERRED_RELATION_SPECS,
+} from "../relations.js";
 
 import { DreamLog, type DreamSessionOutcome } from "./log.js";
-import { DreamSweep, SweepError, type CandidateKernel, type SweepCandidate } from "./sweep.js";
+import {
+  DreamSweep,
+  SweepError,
+  type CandidateKernel,
+  type RelationSubject,
+  type SweepCandidate,
+} from "./sweep.js";
 
 import type { MemoryNode } from "../graph.js";
 
@@ -212,6 +223,11 @@ export function buildJudgePrompt(items: readonly JudgeItem[]): string {
     }
   }
 
+  const vocabulary = INFERRED_RELATION_SPECS.map((spec) => {
+    const direction = spec.symmetric ? "either way round" : "A is the subject";
+    return `      ${spec.relation.padEnd(12)} (${direction}) — A ${spec.gloss}`;
+  });
+
   const blocks = items.map((item, index) => {
     const kernel = kernelExplanation(item.candidate.kernel);
     const already =
@@ -232,7 +248,8 @@ export function buildJudgePrompt(items: readonly JudgeItem[]): string {
     .map(
       (_, index) =>
         `    {"id": ${index + 1}, "connect": false, "confidence": 0.0, ` +
-        `"reasoning": "one sentence", "surface": null}`,
+        `"reasoning": "one sentence", "relation": "${ESCAPE_RELATION}", ` +
+        `"subject": null, "surface": null}`,
     )
     .join(",\n");
 
@@ -243,6 +260,20 @@ export function buildJudgePrompt(items: readonly JudgeItem[]): string {
     "way worth remembering. Set `connect` to false unless you can say why in one",
     "sentence. Set `surface` to a short summary ONLY if the Commander would want",
     "to be told about it; otherwise leave it null. Most should be null.",
+    "",
+    "Then NAME the connection. `relation` must be one of these, and every one of",
+    "them reads \"A <relation> B\", so A is always the subject:",
+    "",
+    ...vocabulary,
+    "",
+    `Use \`${ESCAPE_RELATION}\` whenever nothing more precise is warranted. That is a`,
+    "correct answer, not a failure — a relation stretched to fit says something",
+    "the memories do not, and it says it in a form that looks precise.",
+    "",
+    "For a relation where A is the subject, `subject` says WHICH memory is A:",
+    '"A" for the first, "B" for the second. A directed relation with no subject',
+    `is discarded and the connection is filed as \`${ESCAPE_RELATION}\`, because a`,
+    "relation pointing the wrong way is not a vaguer claim, it is a false one.",
     "",
     "Answer with exactly this shape:",
     "",
@@ -281,6 +312,17 @@ export interface JudgeVerdict {
   readonly connect: boolean;
   readonly reasoning: string;
   readonly confidence?: number;
+  /**
+   * What the model called the connection, canonicalised but NOT yet checked
+   * against the vocabulary.
+   *
+   * Deliberately carried through unchecked: `resolveRelation` refuses it at the
+   * door of the graph and records the nomination in the dream log, and dropping
+   * it here would destroy the only evidence for widening `INFERRED_RELATIONS`.
+   */
+  readonly relation?: string;
+  /** Which of the two memories is the subject, for a directed relation. */
+  readonly subject?: RelationSubject;
   /** A short summary, when the model thinks the Commander wants to know. */
   readonly surface?: string;
 }
@@ -347,12 +389,23 @@ export function parseVerdicts(text: string, batchSize: number): JudgeVerdict[] {
     const surface =
       typeof rawSurface === "string" && rawSurface.trim() !== "" ? rawSurface.trim() : undefined;
 
+    // Canonicalised so `Parent_Of`, `parent of` and `parent-of` are one
+    // relation rather than three, and left unchecked so an unknown one reaches
+    // the log. Anything that is not one of the two labels the prompt offers is
+    // no direction at all, which `resolveRelation` treats as "declined".
+    const relation = canonicalRelation(raw["relation"]) ?? undefined;
+    const rawSubject = typeof raw["subject"] === "string" ? raw["subject"].trim().toUpperCase() : "";
+    const subject: RelationSubject | undefined =
+      rawSubject === "A" || rawSubject === "B" ? rawSubject : undefined;
+
     seen.add(id);
     verdicts.push({
       id,
       connect: raw["connect"] === true,
       reasoning,
       ...(confidence !== undefined ? { confidence } : {}),
+      ...(relation !== undefined ? { relation } : {}),
+      ...(subject !== undefined ? { subject } : {}),
       ...(surface !== undefined ? { surface } : {}),
     });
   }
@@ -478,6 +531,33 @@ export interface DreamJudgeOptions {
   readonly turnOptions?: Pick<TurnOptions, "cwd" | "model" | "claudeBin">;
   /** Fail if the CLI reported a non-empty tool surface. Defaults to true. */
   readonly requireEmptyToolSurface?: boolean;
+  /**
+   * Other unattended work that runs at the top of the night, inside this
+   * session and under this ceiling. `syl-t9tj.4.5`.
+   *
+   * There is one of these today: the nightly review of the Commander's health
+   * observations. It is here rather than on a loop of its own because the
+   * consolidation lane already runs unattended, already runs in the quiet gap,
+   * and already yields to him — and a second nightly loop would be a second
+   * thing competing for the one rate-limit pool with no idea the first exists.
+   *
+   * **It shares the ceiling, and that is why `dream_turns.subject` exists.** A
+   * second consumer quietly spending the night's budget is how a night starts
+   * failing to finish, invisibly, looking exactly like the dream getting
+   * slower. The reviewer declares its own share, refuses to start when the
+   * night cannot afford it, and books what it spends against `health` so
+   * `DreamLog.tokensSpentOn` can say where the night went.
+   *
+   * **Called first, before the sweep**, because the review is one turn against
+   * the judgment's ~180: last in the queue is never.
+   *
+   * A one-method structural type rather than an import: the memory layer has no
+   * business depending on `health/`, and that direction never reverses. See
+   * `0032_health_observations.sql`.
+   */
+  readonly nightlyReview?: {
+    review(input: { sessionId: string; night: string; tz: string }): Promise<void>;
+  };
 }
 
 export interface JudgeNight {
@@ -525,6 +605,7 @@ export class DreamJudge {
   readonly #budget: JudgeBudget;
   readonly #turnOptions: Pick<TurnOptions, "cwd" | "model" | "claudeBin">;
   readonly #requireEmptyToolSurface: boolean;
+  readonly #nightlyReview: DreamJudgeOptions["nightlyReview"];
 
   constructor(options: DreamJudgeOptions) {
     this.#sweep = options.sweep;
@@ -536,6 +617,7 @@ export class DreamJudge {
     this.#budget = { ...DEFAULT_JUDGE_BUDGET, ...options.budget };
     this.#turnOptions = options.turnOptions ?? {};
     this.#requireEmptyToolSurface = options.requireEmptyToolSurface ?? true;
+    this.#nightlyReview = options.nightlyReview;
   }
 
   get budget(): JudgeBudget {
@@ -558,6 +640,25 @@ export class DreamJudge {
     });
 
     try {
+      // First, and never on a resume: one bounded turn against the judgment's
+      // ~180, and last in the queue is never. It books its own tokens against
+      // `subject = 'health'` and refuses to start if the night cannot afford
+      // it. A failure here must not take the night with it — the graph is the
+      // thing he actually depends on — so it is caught and left in the log.
+      if (this.#nightlyReview !== undefined) {
+        try {
+          await this.#nightlyReview.review({
+            sessionId: session.id,
+            night: input.night,
+            tz: input.tz,
+          });
+        } catch {
+          // Already recorded as a failed turn of this session by the reviewer
+          // itself. Swallowed here so a bad reply about his step count cannot
+          // cost him a night of consolidation.
+        }
+      }
+
       const swept = await this.#sweep.run({
         sessionId: session.id,
         night: input.night,
@@ -841,6 +942,8 @@ export class DreamJudge {
             disposition: verdict.connect ? "created" : "rejected",
             reasoning: verdict.reasoning,
             ...(verdict.confidence !== undefined ? { confidence: verdict.confidence } : {}),
+            ...(verdict.relation !== undefined ? { relation: verdict.relation } : {}),
+            ...(verdict.subject !== undefined ? { subject: verdict.subject } : {}),
           },
         });
       } catch (error) {

@@ -56,6 +56,9 @@ struct ChatTurn: View {
     }
 
     var body: some View {
+        // The one place a transcript row is counted. See `ChatRowCensus` for why this
+        // question needs a counter when the parse cost next door needed a stopwatch.
+        let _ = ChatRowCensus.recordRowBuild()
         Group {
             if isFromCommander {
                 commanderTurn

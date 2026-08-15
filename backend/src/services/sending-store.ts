@@ -30,6 +30,28 @@ import type { Database } from "./sqlite.js";
  * `messages` and `attachments` so a sending cannot be gutted from either end.
  * This class is merely the shape that never needs to argue with them.
  *
+ * ## `pending` is a row nothing here will ever move
+ *
+ * The correction to a claim this table's own documentation used to make, and
+ * it belongs beside the CHECK that allows the state. Nothing in `0024` moves a
+ * row off `pending` — no trigger, no default, no constraint — and neither does
+ * this class. The only thing that ends it is a caller reaching `attachVideo`
+ * or `markFailed`, and the caller that does so is a **promise held in one
+ * process's memory**. So `pending` outlives that process, and a crash between
+ * `create` and the settlement leaves a row saying a video is coming with
+ * nothing left that intends to bring one.
+ *
+ * That is the state {@link SendingStore.pending} exists to enumerate and
+ * `SendingService.resume` exists to end, at boot, for every row. Read as one
+ * thing: the schema makes the state expressible, and only the service makes it
+ * temporary.
+ *
+ * `0024_sendings.sql` is not edited to say so. A shipped migration's contents
+ * are checksummed into `schema_migrations`, and `applyMigrations` refuses to
+ * boot a database whose ledger disagrees with the file — a comment fixed there
+ * would take the Commander's service down on the next start. Edit forward,
+ * never backward; this is where the correction lives instead.
+ *
  * ## Why `video` is hydrated rather than stored
  *
  * The row keeps an attachment id; the wire shape carries the whole
@@ -45,6 +67,13 @@ export class SendingStoreError extends Error {
     | "empty_words"
     | "empty_because"
     | "empty_reason"
+    // Named here rather than in `sending-service.ts` because a caller catching
+    // a refusal from `compose` should not have to import two error types to
+    // find out what it caught. Both are refusals about the RENDER, and both
+    // happen before a message is appended: `unknown_render` is a name she got
+    // wrong, `render_not_ready` is a clip that is still going or that failed.
+    | "unknown_render"
+    | "render_not_ready"
     | "unknown_message"
     | "unknown_sending"
     | "unknown_attachment"
@@ -246,6 +275,57 @@ export class SendingStore {
   get(id: string): Sending | null {
     const row = this.#db.prepare(`SELECT ${COLUMNS} FROM sendings WHERE id = ?`).get(id);
     return row === undefined ? null : this.#hydrate(row as unknown as SendingRow);
+  }
+
+  /**
+   * Every sending still waiting on a video, oldest first.
+   *
+   * What the boot-time recovery pass reads, and it answers exactly one
+   * question: which rows did the last process fail to settle. Oldest first
+   * because the longest-stranded row is the one he has been waiting on
+   * longest.
+   *
+   * **Unpaged, deliberately.** `list` pages because a surface scrolls; this
+   * has no reader that could ask for more, so a page here would leave the
+   * fifty-first stranded row `pending` forever with nothing to notice — which
+   * is the silence the pass exists to end. The set is bounded by what one
+   * process failed to settle before it died, and a row leaves it the moment
+   * its video lands or fails.
+   */
+  pending(): readonly Sending[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT ${COLUMNS} FROM sendings
+          WHERE state = 'pending'
+          ORDER BY created_at ASC, id ASC`,
+      )
+      .all();
+
+    return rows.map((row) => this.#hydrate(row as unknown as SendingRow));
+  }
+
+  /**
+   * Has anything already been sent from this render?
+   *
+   * The idempotency guard on the deferred wake. `jobs/render-review-job.ts`
+   * wakes her to decide about one render, and a wake that ran, sent, and then
+   * died before it could settle its watch would come back to a render she has
+   * already given him — a second decision about one thing, and if she says yes
+   * twice he gets two notifications for one video. The push's own
+   * `sending:<id>` key cannot help there, because the second send is a
+   * different sending with a different id.
+   *
+   * Deliberately a question about the RENDER rather than about a watch, so it
+   * is true of a sending composed by any path — the review turn, an hour, or
+   * the Commander's own conversation.
+   */
+  existsForRender(renderName: string): boolean {
+    const name = renderName.trim();
+    if (name === "") return false;
+    return (
+      this.#db.prepare("SELECT 1 FROM sendings WHERE render_name = ? LIMIT 1").get(name) !==
+      undefined
+    );
   }
 
   /**

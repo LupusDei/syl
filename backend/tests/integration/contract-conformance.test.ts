@@ -62,11 +62,35 @@ const UNIMPLEMENTED: readonly string[] = [];
  * of that debt, because a second client would have to guess at the body.
  */
 const UNDECLARED: readonly string[] = [
+  // `syl-r1t` changed what this debt costs, without changing its size. Intake
+  // used to be reachable only by the Share Extension and a job somebody had
+  // configured; `read_this` made SYL a caller, over her own credential, through
+  // `tools/server.ts`. So these two join `/memory/recall` and `/renders` below
+  // as routes with an in-repo consumer typed against them — nothing is built
+  // against a guess today, and the shapes are pinned by `read-this.test.ts` and
+  // `intake-ceiling.test.ts` rather than by a fixture.
+  //
+  // What the spec would add is a SECOND client being able to reach them, and
+  // the response shape it would publish is `IntakeAnswer` from
+  // `connections/intake-view.ts` — deliberately not `IntakeSource`. Publishing
+  // the row would put the page's own `<title>` in the contract.
   "GET /intake/{sourceId}",
   "POST /intake",
   "GET /memory/graph",
   "GET /memory/metrics",
   "POST /memory/edges/{edgeId}/feedback",
+  // `syl-016.1`, and it joins the debt above rather than escaping it. It was
+  // once the only undeclared route SYL HERSELF called; `/renders` and, since
+  // `syl-r1t`, `/intake` call over the same credential through the same tool
+  // server. That consumer is in this repository and is typed against the route,
+  // so nothing is being built against a guess today — but these are the routes
+  // most likely to acquire a second caller, and `shared/openapi.yaml` is where
+  // that caller would look first.
+  "GET /memory/recall",
+  // `syl-016.7` — and the one that most needs the spec to catch up, for the
+  // same reason the feedback write does: it is a WRITE, so a second client
+  // would have to guess at the body.
+  "POST /memory/remember",
   // `/renders` joins them, and with the smallest debt of the three: nothing
   // else consumes this surface. Her tool server is the only client, it lives in
   // this repository, and its request and response shapes are pinned by
@@ -78,6 +102,67 @@ const UNDECLARED: readonly string[] = [
   "POST /renders",
   "GET /renders/{name}",
   "GET /renders/{name}/frames",
+  // `syl-b0i` — what she made of a render after looking at it. Joins the render
+  // debt above and inherits its argument: her tool server is the only client,
+  // it lives in this repository, and both shapes are pinned by
+  // `tests/unit/render-verbs.test.ts` and `tests/unit/render-verdicts.test.ts`.
+  //
+  // The GET is not a separate route in practice — verdicts also ride on
+  // `GET /renders/{name}/frames`, because handing them back at the moment she
+  // is looking again is what makes the write a loop rather than a diary. It
+  // exists on its own for a surface that wants the notes without the pictures.
+  //
+  // The POST is the write, and the one to publish first if a phone screen ever
+  // shows her renders: a second client would otherwise have to guess the body.
+  "POST /renders/{name}/verdicts",
+  "GET /renders/{name}/verdicts",
+  // `syl-t9tj` — his health. Joins the debt above, and it is the entry on this
+  // list most likely to acquire a second client: the phone is the only writer
+  // today, but the admin view (`syl-t9tj.3`) reads the series, and anything that
+  // charts his body later would look for these here first.
+  //
+  // Note which one is the WRITE, and note what its body carries: a per-type
+  // authorisation report that the server REFUSES to default. A second client
+  // guessing at that shape would guess the one field the whole feature exists to
+  // make un-guessable.
+  //
+  // Deliberately NOT joined by `GET /health` — that is liveness, it is published,
+  // and it is the one unauthenticated route in the contract. Two files share the
+  // prefix and nothing else.
+  "POST /health/samples",
+  // `syl-8ys9.4` — his date of birth, his sex and his height. A WRITE, and one
+  // whose body deliberately looks nothing like `POST /health/samples`: no
+  // `startedAt`, no `endedAt`, no unit, because a characteristic is a fact and
+  // not a measurement. That difference is the whole of the phase, so it is the
+  // one a second client must not have to guess at — and the reply carries which
+  // source she is using per characteristic, which is the field a screen showing
+  // his birthday would have to respect.
+  "POST /health/characteristics",
+  "GET /health/watermarks",
+  "GET /health/series",
+  // syl-t9tj.5.4 -- the only health route on HER credential, and the one most
+  // deserving of publication: it is what a phone screen showing his health would
+  // read, and its payload carries silenceIsEvidence, the field any client must
+  // respect before reporting a gap as a behaviour.
+  "GET /health/summary",
+  // `syl-ate` — every face she has adopted and every opening she can choose.
+  // Joins the render debt above rather than escaping it, and for the same
+  // reason: her tool server is the only client, it lives in this repository,
+  // and both shapes are pinned by `tests/unit/render-verbs.test.ts` and
+  // `tests/unit/renders.test.ts` against the same fakes.
+  //
+  // They are listed here rather than published because publishing them alone
+  // would put a child in the contract whose parent surface is not in it — a
+  // phone able to read her faces and unable to list the renders they came out
+  // of. When `/renders` is published these go with it, in one pass.
+  //
+  // **The POST is the one to publish first, ahead of every other write on this
+  // surface.** It is the only one that changes what she LOOKS LIKE, its
+  // `sighting` field is meaningless to a client that has not been handed the
+  // matching picture, and `because` is required on the Commander's ruling. A
+  // second client guessing at that body would be guessing at her likeness.
+  "GET /renders/wardrobe",
+  "POST /renders/wardrobe",
 ];
 
 /** Path parameters that are syntactically valid but name nothing. */

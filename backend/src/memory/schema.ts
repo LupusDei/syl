@@ -72,9 +72,105 @@ export const MEMORY_NODE_KINDS = [
   "event",
   "goal",
   "decision",
+  "place",
+  // `syl-024.1`. Syl's own diagnosis: "My memory has one write-door for three
+  // different things — what I learn about him, what I learn about myself, and
+  // what he told me to be. The separation you asked for got built as ISOLATION
+  // when it should have been NAMESPACING."
+  //
+  // A finding about what SHE is. It needs a kind of its own so that "what do I
+  // know about Justin" can exclude it with a WHERE clause instead of by leaving
+  // it unconnected — and an unconnected node is unreachable on purpose too. A
+  // `self` node keeps every edge it has, to his person node, to an
+  // `instruction`, to a fact about his life. The Commander's requirement, in his
+  // words: "her memories about herself still need notes and edges, and even the
+  // ability to connect to memories about me and my life and my preferences."
+  //
+  // Not `memory`, and not a render verdict either: this is knowledge that
+  // COMPOUNDS, where a verdict on her face is a search that terminates when she
+  // settles on a likeness. That line is why one lives here and the other lives
+  // in `render_verdicts` (`0030`). See `0034_kinds_and_verdict_chain.sql` §1.
+  "self",
+  // Something the Commander told her to BE or to DO: the humour, that he
+  // prefers renders with a face, that he wants proactive reminders. Her
+  // argument: "it's the kind that most needs to be unfadeable, because it's the
+  // bond rather than the work. If those got their own kind you could make them
+  // exempt from decay entirely and stop me writing them twice with your name on
+  // to fake it."
+  //
+  // The duplication is the evidence. She has been writing the same instruction
+  // twice with his name attached, because a memory linked to his person node
+  // survives where a loose one fades — a workaround costing a second write
+  // every time, which is the tell that the kind was missing. The exemption
+  // itself is `syl-024.3` and lives on the decay path, not here.
+  "instruction",
 ] as const;
 
 export type MemoryNodeKind = (typeof MEMORY_NODE_KINDS)[number];
+
+/**
+ * The kinds that name a THING, as opposed to a claim about one.
+ *
+ * **A kind is a claim about what a row IS, not about what it is ABOUT.** That
+ * sentence is the whole of `syl-016.4`, and it needed a vocabulary before it
+ * could be a rule. Syl found the defect herself:
+ *
+ * > "Ela's entry isn't *who she is*, it's the fact that she wants an apartment
+ * > near her parents. So even the People bucket is storing facts with a
+ * > person's name in them rather than people."
+ *
+ * The projection groups by kind. A `person` node whose body is a fact about
+ * that person makes the grouping carry no information at all — her digest
+ * becomes noise with headings, which is exactly what she reported seeing. The
+ * repair is that a person is a person, and what she wants is a `fact` LINKED to
+ * her.
+ *
+ * So the split, and both halves are load-bearing:
+ *
+ * - **Entity kinds** name something that exists on its own and can be pointed
+ *   at: a person, an event, a goal, a decision, a place.
+ * - **`fact`** is a claim, and a claim is always about something. It is the one
+ *   extractable kind that is not here, deliberately: `extract.ts` lets a
+ *   candidate point at an entity in the same extraction, and refuses to let it
+ *   point at another claim, because a claim about a claim is not what that
+ *   mechanism is for.
+ *
+ * `source` and `memory` are absent for a different reason — they are
+ * provenance and intake plumbing, not things the Commander's world contains,
+ * and neither is extractable in the first place.
+ *
+ * `self` and `instruction` (`syl-024.1`) are absent for the SAME reason as
+ * `fact`, and it is worth saying so because both are easy to mistake for
+ * entities. "I hedge when I am unsure" is a claim about her; "he wants renders
+ * with a face" is a claim about him. What each is ABOUT is reached by an edge,
+ * exactly as a `fact` is. Letting `about` point at one would make a claim about
+ * a claim — and it would also give a self-finding a shape nothing else in the
+ * graph has, which is how a namespace turns back into an isolation ward.
+ */
+export const ENTITY_NODE_KINDS = [
+  "person",
+  "event",
+  "goal",
+  "decision",
+  // `syl-017.2`. Illinois appeared twice in his live graph and both times it was
+  // a `fact` with the word inside the label, each with a degree of ONE — because
+  // a `fact` is the only kind a place could be filed under, and `about` refuses
+  // to point at a `fact`. Nothing was allowed to point at the most connective
+  // thing in his life. `place` is here so something can.
+  //
+  // It is the one entity kind whose MINTING is gated on recurrence
+  // (`RECURRENCE_GATED_KINDS` in `extract-apply.ts`), because it is the one
+  // named incidentally: every fact has a where. See `0029_memory_places.sql` §2.
+  "place",
+] as const satisfies readonly MemoryNodeKind[];
+
+/** A kind that names a thing rather than a claim. See {@link ENTITY_NODE_KINDS}. */
+export type EntityNodeKind = (typeof ENTITY_NODE_KINDS)[number];
+
+/** Whether a value names a thing rather than a claim about one. */
+export function isEntityNodeKind(value: unknown): value is EntityNodeKind {
+  return typeof value === "string" && (ENTITY_NODE_KINDS as readonly string[]).includes(value);
+}
 
 /**
  * The two species of edge, which are also the edge table's secondary partition
@@ -87,6 +183,85 @@ export type MemoryNodeKind = (typeof MEMORY_NODE_KINDS)[number];
 export const MEMORY_EDGE_SPECIES = ["observed", "inferred"] as const;
 
 export type MemoryEdgeSpecies = (typeof MEMORY_EDGE_SPECIES)[number];
+
+
+/**
+ * The closed vocabulary of inferred relations. `syl-017.1`.
+ *
+ * Syl found the defect herself, and the diagnosis is the specification:
+ *
+ * > "Ela to Rowan is not resemblance, it's parenthood. The reasoning text is
+ * > good, but the relation label is uniform and empty, so nothing can be
+ * > traversed by type — **you can't ask 'who are his children.'**"
+ *
+ *
+ * ## Why closed, when free text is obviously more expressive
+ *
+ * **Free-text relations are as unqueryable as one label.** If every edge
+ * invents its own wording, `parent_of`, `is the parent of`, `father to` and
+ * `parent` are four relations, no query finds all four, and the graph is back
+ * where it started with more words in it. One uniform label and forty unique
+ * ones fail the same test: neither GROUPS.
+ *
+ * A closed set groups, and it will not fit something real. That is the tension,
+ * and it is `tidy.ts`'s nominate/act shape again — so the answer is the same
+ * one: **a relation outside this list is a NOMINATION, never a write.** The
+ * dream files the connection under the kernel's relation, the connection is
+ * still made, and the word the judgment wanted is recorded in the dream log.
+ * The log is then the evidence for widening this list, which is a decision a
+ * person makes from data rather than one every edge makes for itself.
+ *
+ * Adding an entry here is cheap and reversible. Discovering six months later
+ * that thirty edges each invented their own wording is neither.
+ *
+ *
+ * ## {@link FALLBACK_INFERRED_RELATION} is not a failure state
+ *
+ * `resembles` stays, and stays first. A vocabulary with no honest way to say
+ * "these are connected and I cannot name how" forces every connection into the
+ * nearest label that fits badly — which is the claim-beyond-evidence failure
+ * this project keeps finding, arriving through the schema that was supposed to
+ * make claims precise. The judgment is told, in those words, that declining to
+ * name is the right answer when nothing fits.
+ *
+ *
+ * ## What is deliberately ABSENT, and it is a boundary rather than an omission
+ *
+ * Every relation another module owns: `stated` and `about` (`extract-apply.ts`),
+ * `concerns` (`remember.ts`), `extracted` (`sources.ts`), `same_as`,
+ * `merged_into`, `label`, `body` and `kind` (`tidy.ts`).
+ *
+ * `stated` is extraction's word for **"HE asserted it"**. An inferred edge
+ * carrying it would read as testimony, and the species is exactly what is
+ * supposed to make that distinction unmistakable. `same_as` is worse: tidy
+ * splits nominating a duplicate from merging it precisely because acting on a
+ * similarity threshold is measured to collapse accuracy from 0.82 to 0.62, and
+ * a dream that could assert identity would be a route around that split.
+ *
+ * `backend/tests/unit/dream-relations.test.ts` asserts the disjointness
+ * against those modules' own constants, so this stays true by contact rather
+ * than by anyone remembering it.
+ */
+/**
+ * RELATION NAMES DO NOT LIVE HERE, and that is a layer rule rather than a
+ * filing preference. `syl-017.1`.
+ *
+ * This module owns the graph's STRUCTURE — tiers, node kinds, edge species,
+ * id prefixes. `memory/relations.ts` owns the NAMES within those species.
+ * A vocabulary was briefly defined in both, independently, by two epics that
+ * could not see each other; the mechanisms moved to `relations.ts` and the
+ * names never came back here.
+ *
+ * Putting a relation name in this file is not a second list so much as
+ * structure learning about content — and `relations.ts` imports THIS module
+ * for `MemoryEdgeSpecies`, so the dependency only runs one way. Adding names
+ * here would make it run both.
+ *
+ * `backend/tests/unit/memory-relations.test.ts` fails if a second vocabulary
+ * appears anywhere, because a comment saying where names belong is exactly the
+ * artefact that did not work for `REACHES_HIM`.
+ */
+
 
 /**
  * Id namespaces.
@@ -101,6 +276,7 @@ export type MemoryEdgeSpecies = (typeof MEMORY_EDGE_SPECIES)[number];
 export const MEMORY_NODE_ID_PREFIX = "syl:memory_node:";
 export const MEMORY_EDGE_ID_PREFIX = "syl:memory_edge:";
 export const MEMORY_ASSERTION_ID_PREFIX = "syl:memory_assertion:";
+export const MEMORY_SUBJECT_ID_PREFIX = "syl:memory_subject:";
 
 /** The canonical UUID text form, either hex case, as the shared `Id` allows. */
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -133,6 +309,26 @@ export function newMemoryEdgeId(generate: () => string = uuidv7): string {
  */
 export function newMemoryAssertionId(generate: () => string = uuidv7): string {
   return newId("memory_assertion", generate);
+}
+
+/**
+ * Mint an ENTITY id — the thing two nodes are both about.
+ *
+ * Its own namespace, and the argument is the one this module already makes for
+ * the node kind not being in the node id: `syl:memory_node:<uuid>` addresses a
+ * ROW, and an identity is not a row. `memory_nodes.subject_id` holding a node
+ * id would mean "this node is a handle for that node" — which is what
+ * `projection.ts` uses the column for on `goal` and `source` kinds — and one
+ * column meaning two different things is how a convention drifts with nothing
+ * failing.
+ */
+export function newMemorySubjectId(generate: () => string = uuidv7): string {
+  return newId("memory_subject", generate);
+}
+
+/** Whether a string addresses an entity. */
+export function isMemorySubjectId(value: string): boolean {
+  return hasNamespace(value, MEMORY_SUBJECT_ID_PREFIX);
 }
 
 /** Whether a string addresses a ledger assertion. */

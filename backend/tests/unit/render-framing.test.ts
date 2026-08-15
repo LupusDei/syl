@@ -39,6 +39,82 @@ describe("the framings she can ask for", () => {
     expect([...holds].sort()).toEqual(["close_portrait", "face_turned_away"]);
   });
 
+  it("should hold a likeness only where there is no face to get wrong or a picture pinning it", () => {
+    // The invariant `syl-63v` exists because nothing enforced. `holdsLikeness`
+    // was a boolean written by hand beside each framing, so when `promptImage`
+    // stopped being her headshot on 2026-08-11 the flag on `close_portrait`
+    // went on claiming an anchor that had been taken away, and the schema went
+    // on teaching it to her.
+    //
+    // Derived rather than asserted, so the same removal cannot happen quietly
+    // again: a framing that shows her face holds its likeness exactly when
+    // something pins that face, and no hand-written flag can disagree.
+    for (const framing of FRAMINGS) {
+      expect(framing.holdsLikeness, `${framing.id} claims something its inputs do not`).toBe(
+        !framing.facesCamera || framing.anchor !== "none",
+      );
+    }
+  });
+
+  it("should pin her face at the join for the one framing whose subject is her face", () => {
+    // Measured on seedance2, 2026-08-11: `promptImage` accepts an array of
+    // `{uri, position}` with position first|last, and the model honours both.
+    // Probed again on the same day: `first` and `last` are the ENTIRE position
+    // vocabulary — the 400 enumerates them — and seedance2's whole request body
+    // is `model`, `promptImage`, `promptText`, `ratio`, `duration`. There is no
+    // reference image, no character and no seed. Two slots, and nothing else.
+    //
+    // So a clip that opens AND closes on the bare ribbon has both slots spent
+    // and no room left for her face. The likeness moves to the JOIN instead:
+    // two generations, the first ending on her portrait and the second starting
+    // from the same picture, cut together on a frame they were both pinned to.
+    // The Commander's ruling, 2026-08-11: his renders must end on the ribbon.
+    expect(framingNote("close_portrait")?.anchor).toBe("joined_halves");
+    expect(framingNote("close_portrait")?.facesCamera).toBe(true);
+    expect(framingNote("close_portrait")?.holdsLikeness).toBe(true);
+  });
+
+  it("should leave no framing that ends the clip anywhere but the bare ribbon", () => {
+    // The Commander, 2026-08-11: *"it's no longer ending on the ribbon of light…
+    // the version that you generated a while ago started on the ribbon of light
+    // and ended on the ribbon of light."* Pinning her portrait as the LAST frame
+    // is what took that away, and it was a considered trade rather than an
+    // oversight — which is why the reversal is stated as an invariant here
+    // rather than left to whoever writes the next framing.
+    //
+    // Every anchor this type admits must therefore keep both ends of the clip
+    // free for the ribbon. A `closing_frame` anchor cannot, so there is no such
+    // anchor to reach for.
+    for (const framing of FRAMINGS) {
+      expect(["none", "joined_halves"], `${framing.id} ends somewhere the reel cannot follow`).toContain(
+        framing.anchor,
+      );
+    }
+  });
+
+  it("should anchor nothing for the reel framing, which needs no anchor to hold", () => {
+    // The template, and every one of the Commander's eight favourites. It holds
+    // because her face is never toward the camera: identity is carried by
+    // silhouette, hair and gown. Pinning a closing frame here would also break
+    // the loop, whose whole trick is that the clip ends where it began.
+    expect(framingNote("face_turned_away")?.facesCamera).toBe(false);
+    expect(framingNote("face_turned_away")?.anchor).toBe("none");
+    expect(framingNote("face_turned_away")?.holdsLikeness).toBe(true);
+  });
+
+  it("should leave the two mid-band framings unanchored, because the anchor is the wrong distance", () => {
+    // `docs/VIDEO.md` option 2: the reference must be framed like the shot it
+    // anchors. The picture on hand is a close portrait, so pinning it to the
+    // last frame of a wide or mid shot does not anchor that shot — it ends it
+    // somewhere else. These two stay honest at `false` until there is a
+    // full-body and a mid-shot portrait of her to pin them with.
+    for (const id of ["wide_face_visible", "mid_face_visible"] as const) {
+      expect(framingNote(id)?.facesCamera).toBe(true);
+      expect(framingNote(id)?.anchor).toBe("none");
+      expect(framingNote(id)?.holdsLikeness).toBe(false);
+    }
+  });
+
   it("should mark the band in between as the one that stops being her", () => {
     // `7-twin` and `8-descent` — the two the Commander liked and the two that
     // came out as somebody else. Both are still offered: he ruled that trying
@@ -70,6 +146,31 @@ describe("the framings she can ask for", () => {
     // And the two halves distinguishable without reading `docs/VIDEO.md`.
     expect(guidance).toMatch(/holds your likeness/iu);
     expect(guidance).toMatch(/drift|somebody else|different woman/iu);
+  });
+
+  it("should not tell her the picture she is sent is a close portrait, because it is the ribbon", () => {
+    // The guidance said "the only picture of you is a close portrait, so it
+    // anchors a close shot" — true while `promptImage` was her headshot and
+    // false from the moment it became the opening ribbon. It is the same
+    // sentence `syl-63v` was filed about, in the text she actually reads.
+    const guidance = framingGuidance();
+
+    expect(guidance).not.toMatch(/the only picture of you is a close portrait/iu);
+    // What replaces it has to say where the anchor now comes from, or she is
+    // being asked to trust a flag with no account behind it.
+    expect(guidance).toMatch(/ribbon/iu);
+    expect(guidance).toMatch(/join|halves|between/iu);
+  });
+
+  it("should not promise her a shot that ends on her face, because none of them do", () => {
+    // The guidance told her a close portrait "does not end on the bare ribbon,
+    // so it will not cut against the eight". That was true of the anchor it
+    // described and is false of the one that replaced it — the same shape of
+    // stale claim as `syl-63v`, in the text she actually reads.
+    const guidance = framingGuidance();
+
+    expect(guidance).not.toMatch(/pinned to the last frame/iu);
+    expect(guidance).toMatch(/every clip .*(opens and closes|closes).*ribbon|both ends/iu);
   });
 });
 

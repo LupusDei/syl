@@ -35,8 +35,9 @@ struct ConstellationView: View {
     /// What clock the sky is on. See ``ConstellationTime``.
     var time: ConstellationTime = .live
 
-    /// Reports the size the sky must be laid out for.
-    var onSize: (CGSize) -> Void = { _ in }
+    /// Reports the glass the sky must be laid out for — its size **and** what the app's own
+    /// chrome takes off it. See ``ConstellationGlass``.
+    var onGlass: (ConstellationGlass) -> Void = { _ in }
 
     /// What he touched. Seeded from `opensWith` so an offscreen render can be handed a
     /// selection — a `Canvas` with a card over it is one of the two pictures on this screen
@@ -66,13 +67,13 @@ struct ConstellationView: View {
         time: ConstellationTime = .live,
         opensWith: ConstellationHit? = nil,
         opensAt: ConstellationTransform = .identity,
-        onSize: @escaping (CGSize) -> Void = { _ in }
+        onGlass: @escaping (ConstellationGlass) -> Void = { _ in }
     ) {
         self.sky = sky
         self.hasRead = hasRead
         self.unreachable = unreachable
         self.time = time
-        self.onSize = onSize
+        self.onGlass = onGlass
         _selection = State(initialValue: opensWith)
         _transform = State(initialValue: opensAt)
     }
@@ -102,41 +103,35 @@ struct ConstellationView: View {
     }
 
     var body: some View {
-        ZStack {
-            SylTheme.Veil()
-                .ignoresSafeArea()
+        // **The one measurement, and it is taken here on purpose.**
+        //
+        // A `GeometryReader` reports the size it was *proposed*; nothing laid out inside it
+        // can change that. So a reader at the root of the screen is a measurement of the
+        // glass, full stop — and the sky's layout, which is a function of that number, is a
+        // function of the screen and of nothing that is drawn on it.
+        //
+        // It used to be measured by a reader **inside** the `ZStack`, which is a measurement
+        // of the stack rather than of the screen. The card was a member of that stack and
+        // reserved its band out of the sky's own height, so the stack grew, the reader
+        // reported the larger number, the sky was laid out for it, and the band grew again:
+        // fifty-two points a pass, without limit, reproduced in `ConstellationRunawayTests`
+        // at 852 → 904 → 956 → … → 1164. `ConstellationLayout`'s field is half the height, so
+        // the whole star field spread as it went. **That was the endless zoom**, and nothing
+        // in ``ConstellationTransform`` was ever involved — `maximumScale` is four, and what
+        // he photographed was spread ten times.
+        GeometryReader { proxy in
+            let chrome = ConstellationChrome(
+                top: proxy.safeAreaInsets.top, bottom: proxy.safeAreaInsets.bottom)
+            let glass = ConstellationGlass(
+                size: CGSize(
+                    width: proxy.size.width
+                        + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing,
+                    height: proxy.size.height + chrome.top + chrome.bottom),
+                chrome: chrome)
 
-            deepening
-
-            // Air. Fewer and fainter than on home, because here the field is not the only
-            // thing suspended in it — the stars are doing that job, and a mote field at
-            // full strength would compete with the faintest of them for exactly the same
-            // pixels.
-            MoteField(count: 22, presence: 0.55)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-
-            GeometryReader { geometry in
-                Constellation(
-                    sky: sky,
-                    time: time,
-                    transform: live,
-                    emphasis: emphasis,
-                    onSelect: select
-                )
-                .contentShape(Rectangle())
-                .onTapGesture { location in touch(at: location) }
-                .gesture(SimultaneousGesture(drag, pinch))
-                .onAppear { onSize(geometry.size) }
-                .onChange(of: geometry.size) { _, size in onSize(size) }
-            }
-            .ignoresSafeArea()
-
-            if hasRead && sky.isEmpty {
-                nothingYet
-            }
-
-            card
+            sky(on: glass)
+                .onAppear { onGlass(glass) }
+                .onChange(of: glass) { _, measured in onGlass(measured) }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -151,6 +146,49 @@ struct ConstellationView: View {
             }
         }
         .toolbarBackground(.hidden, for: .navigationBar)
+    }
+
+    /// Everything on the glass. Every drawn layer reaches the edges; only the card is held
+    /// inside the safe area, because it is the one thing here made of words.
+    private func sky(on glass: ConstellationGlass) -> some View {
+        ZStack {
+            SylTheme.Veil()
+                .ignoresSafeArea()
+
+            deepening
+
+            // Air. Fewer and fainter than on home, because here the field is not the only
+            // thing suspended in it — the stars are doing that job, and a mote field at
+            // full strength would compete with the faintest of them for exactly the same
+            // pixels.
+            MoteField(count: 22, presence: 0.55)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+
+            Constellation(
+                sky: self.sky,
+                time: time,
+                transform: live,
+                emphasis: emphasis,
+                onSelect: select
+            )
+            .contentShape(Rectangle())
+            // **The tap is in the same space the stars were laid out in**, which is the
+            // whole glass: this layer ignores the safe area, so its local origin is the
+            // top-left corner of the screen, exactly where a `PreparedSky`'s origin is.
+            .onTapGesture { location in touch(at: location) }
+            .gesture(SimultaneousGesture(drag, pinch))
+            .ignoresSafeArea()
+
+            if hasRead && self.sky.isEmpty {
+                nothingYet
+            }
+        }
+        // **An overlay, not a member of the stack.** An overlay is proposed its host's size
+        // and can never change it, which is the property that makes the ring above
+        // impossible rather than merely unlikely. It is also what a card *is*: something
+        // drawn over the sky, not something added to it.
+        .overlay(alignment: .bottom) { card(on: glass) }
     }
 
     // MARK: - Wandering
@@ -235,10 +273,18 @@ struct ConstellationView: View {
             point = [filament.from, filament.to, apex].max(by: { $0.y < $1.y }) ?? apex
         }
 
-        transform = live.revealing(
+        // **`transform`, never `live`.** `live` is the stored transform with whatever gesture
+        // is in flight composed on top of it, and writing that back stores the gesture — so
+        // the next read of `live` composes it a *second* time, and every read after that
+        // composes it again. A pinch that is still under his fingers when the card measures
+        // itself would be applied twice, then four times. `ConstellationSelectionTests`
+        // asserts the invariant this restores: **selecting something never changes the
+        // scale.** Selection pans; only his fingers zoom.
+        transform = transform.revealing(
             point,
-            between: ConstellationBand.headroom,
-            and: ConstellationBand.skyline(forCardOf: cardHeight, in: sky.size),
+            between: ConstellationBand.headroom(sky.chrome),
+            and: ConstellationBand.skyline(
+                forCardOf: cardHeight, in: sky.size, chrome: sky.chrome),
             within: sky.contentBounds,
             viewSize: sky.size)
     }
@@ -246,31 +292,42 @@ struct ConstellationView: View {
     // MARK: - The card
 
     @ViewBuilder
-    private var card: some View {
+    private func card(on glass: ConstellationGlass) -> some View {
         if let subject {
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                ConstellationCard(
-                    subject: subject,
-                    // Where it starts scrolling inside itself rather than growing — and it
-                    // is not a taste decision. See ``ConstellationBand/tallestCard(in:)``:
-                    // past this the sky physically cannot pan a selection out from under
-                    // the card, because the deepest any star can be brought is the middle
-                    // of the glass.
-                    ceiling: ConstellationBand.tallestCard(in: sky.size),
-                    onDismiss: { select(nil) },
-                    onHeight: { height in
-                        // A tolerance, for the same reason `resize` uses one: a sub-pixel
-                        // difference cannot move anything on screen, and acting on it here
-                        // restarts the settle spring on a sky that had already arrived.
-                        guard abs(height - cardHeight) >= 1 else { return }
-                        cardHeight = height
-                        withAnimation(reduceMotion ? nil : SylTheme.Motion.settle) { makeRoom() }
-                    }
-                )
-                .padding(.horizontal, SylTheme.Metric.step)
-                .padding(.bottom, SylTheme.Metric.step)
-            }
+            let ceiling = ConstellationBand.tallestCard(
+                in: glass.size, chrome: glass.chrome)
+
+            ConstellationCard(
+                subject: subject,
+                // Where it starts scrolling inside itself rather than growing — and it is
+                // not a taste decision. See ``ConstellationBand/tallestCard(in:chrome:)``:
+                // past this the sky physically cannot pan a selection out from under the
+                // card, because the deepest any star can be brought is the middle of the
+                // glass.
+                ceiling: ceiling,
+                onDismiss: { select(nil) },
+                onHeight: { height in
+                    // A tolerance, for the same reason `resize` uses one: a sub-pixel
+                    // difference cannot move anything on screen, and acting on it here
+                    // restarts the settle spring on a sky that had already arrived.
+                    guard abs(height - cardHeight) >= 1 else { return }
+                    cardHeight = height
+                    withAnimation(reduceMotion ? nil : SylTheme.Motion.settle) { makeRoom() }
+                }
+            )
+            .padding(.horizontal, SylTheme.Metric.step)
+            // **The cap, enforced by giving the card nothing more to grow into.**
+            //
+            // A `maxHeight` here would make it *flexible* rather than bounded and hand it
+            // every one of those points — the mistake that cost two renders, documented on
+            // ``ConstellationCard``. A **fixed** band of exactly the ceiling, with the card
+            // hugging its own words at the foot of it, is a cap: `ViewThatFits` is proposed
+            // the ceiling and takes the scrolling branch exactly when it should.
+            //
+            // It used to be reserved with `.padding(.top, sky.size.height − ceiling)` on a
+            // card inside the `ZStack`, which is where the runaway lived.
+            .frame(height: ceiling, alignment: .bottom)
+            .padding(.bottom, SylTheme.Metric.step)
             // **Reduce Motion keeps the pan and drops the rise.** Pan and zoom are his own
             // fingers and stay exactly as they are at every setting; a card that flies up on
             // its own is automatic motion nobody asked for, so it fades instead.
@@ -278,15 +335,6 @@ struct ConstellationView: View {
                 reduceMotion
                     ? .opacity
                     : .move(edge: .bottom).combined(with: .opacity))
-            // **The cap, enforced by giving the card nothing more to grow into.**
-            //
-            // A `maxHeight` on the card would make it *flexible* rather than bounded and
-            // the `VStack` would hand it every one of those points. Reserving the space
-            // above instead means the card is never even offered more than
-            // ``ConstellationBand/tallestCard(in:)``, so `ViewThatFits` takes the scrolling
-            // branch exactly when it should — and a short card still hugs its own words,
-            // because the `Spacer` absorbs whatever it does not want.
-            .padding(.top, max(0, sky.size.height - ConstellationBand.tallestCard(in: sky.size)))
         }
     }
 
@@ -363,21 +411,21 @@ struct MemoryScreen: View {
         _model = StateObject(wrappedValue: ConstellationViewModel(source: source))
     }
 
-    /// The size the sky was last asked to fill.
-    @State private var size: CGSize = .zero
+    /// The glass the sky was last asked to fill.
+    @State private var glass: ConstellationGlass = .none
 
     var body: some View {
         ConstellationView(
             sky: model.sky,
             hasRead: model.hasRead,
             unreachable: model.sky.unreachable,
-            onSize: { size = $0 }
+            onGlass: { glass = $0 }
         )
-        .task(id: size) {
+        .task(id: glass) {
             if model.hasRead {
-                await model.resize(to: size)
+                await model.resize(to: glass)
             } else {
-                await model.read(size: size)
+                await model.read(glass: glass)
             }
         }
     }

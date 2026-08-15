@@ -46,15 +46,40 @@ import type { MemoryNodeKind } from "./schema.js";
  *
  * ## The budget, and the cliff underneath it
  *
- * {@link WORKING_MEMORY_MAX_BYTES} is 4,000 bytes — roughly 1,000 tokens —
+ * {@link WORKING_MEMORY_MAX_BYTES} is 32,000 bytes — roughly 8,000 tokens —
  * across at most {@link WORKING_MEMORY_MAX_LINES} lines.
  *
  * The number is chosen against what it is spent on: this is prepended to
  * *every* turn on every lane, so it is paid for on the morning agenda, the
- * evening review, every heartbeat and every message. At ~1k tokens it is a
- * rounding error against a turn's context and still holds on the order of
- * fifty distilled lines, which is more than a person could recite about
- * their own week. Doubling it would buy little and cost it every single turn.
+ * evening review, every heartbeat and every message. It is the one cost in
+ * the system that recurs on literally every turn, which is why it is written
+ * down here rather than left to grow.
+ *
+ * ### Why it was 4,000 and is now 32,000
+ *
+ * The original argument was sound and its arithmetic was not. It reasoned that
+ * 4,000 bytes "still holds on the order of fifty distilled lines" — but
+ * {@link WORKING_MEMORY_ENTRY_MAX_CHARS} is 160, so the real ceiling was
+ * 4,000/160 ≈ **25 entries**, and {@link WORKING_MEMORY_MAX_LINES} at 60 bound
+ * even earlier. Measured against the live graph on 2026-08-11 it admitted 23
+ * of 30 nodes and dropped the Commander's own name, his wife, his son and his
+ * daughter (`syl-ulf`). A budget that cannot hold thirty memories was sized
+ * for a corpus of fifty thousand.
+ *
+ * The word doing the work in that sentence was **distilled**, and nothing
+ * distils: {@link renderEntry} emits the label plus the raw body and truncates
+ * mid-sentence. The digest is supposed to be *written* by the nightly
+ * consolidation ("consolidation writes a compact digest of the current state
+ * of play"), which has never run, so the budget was sized for an artefact that
+ * has never been produced.
+ *
+ * Raised to 32,000 on the Commander's explicit order, 2026-08-11, with the
+ * cost accepted: *"I'm fine with it burning extra tokens. I want more context
+ * in memory and if it ever gets too expensive, we can start rolling that
+ * back."* This is a STOPGAP and is documented as one — it buys room while the
+ * two real fixes land (distillation, and a salience signal that is not a
+ * constant). A larger budget filled by a broken ranker is more of the wrong
+ * things, in recency order.
  *
  * The reason it is enforced rather than aspired to is `syl-03d`: Claude Code's
  * `MEMORY.md` loads its first 200 lines / 25 KB and **silently ignores the
@@ -120,13 +145,26 @@ import type { MemoryNodeKind } from "./schema.js";
  */
 
 /** The most bytes the projection may occupy. See the header for the argument. */
-export const WORKING_MEMORY_MAX_BYTES = 4_000;
+export const WORKING_MEMORY_MAX_BYTES = 32_000;
 
-/** The most lines it may occupy. */
-export const WORKING_MEMORY_MAX_LINES = 60;
+/**
+ * The most lines it may occupy.
+ *
+ * Raised with the byte budget and for the same reason. These two are a PAIR:
+ * whichever binds first is the real budget, so raising bytes alone would have
+ * moved the ceiling nowhere. At 4,000/60 the line cap bound at 51 entries
+ * before a single byte of the byte budget was at risk.
+ */
+export const WORKING_MEMORY_MAX_LINES = 480;
 
-/** How many hot nodes are considered before the budget is applied. */
-export const WORKING_MEMORY_SCAN_LIMIT = 200;
+/**
+ * How many hot nodes are considered before the budget is applied.
+ *
+ * Raised with the budget: this is the candidate pool the ranker sorts, so a
+ * pool smaller than the budget can hold is a cap the budget cannot see. At 200
+ * against 32,000 bytes the scan would have become the binding constraint.
+ */
+export const WORKING_MEMORY_SCAN_LIMIT = 1_000;
 
 /** Longest rendered entry, label and detail together. */
 export const WORKING_MEMORY_ENTRY_MAX_CHARS = 160;
@@ -170,23 +208,145 @@ export const WORKING_MEMORY_EMPTY =
  * decided, which comes before loose facts. Sources come last: a handle to an
  * article is the least useful thing to carry into every turn, and it is the
  * easiest thing to go and look up.
+ *
+ * Places sit next to people because they are the same sort of thing — a hub
+ * several facts hang off rather than a claim. A `place` only ever reaches this
+ * list after a second exchange has named it (`syl-017.2`), so a section here is
+ * evidence that somewhere recurred, never that somewhere was mentioned.
  */
 export const WORKING_MEMORY_SECTIONS: readonly {
   readonly kind: MemoryNodeKind;
   readonly heading: string;
 }[] = [
+  // What he told her to be, first. `syl-024.1` gave standing orders a kind of
+  // their own; they lead because they are the one section she is meant to obey
+  // rather than merely know. Whether they SURVIVE to be rendered is `syl-024.3`
+  // (nothing automatic may fade one), and where `self` is filtered out is
+  // `syl-024.2` — this list is section order and nothing else.
+  { kind: "instruction", heading: "## Standing orders" },
   { kind: "person", heading: "## People" },
+  { kind: "place", heading: "## Places" },
   { kind: "goal", heading: "## Goals" },
   { kind: "decision", heading: "## Decisions" },
   { kind: "fact", heading: "## Facts" },
   { kind: "event", heading: "## Recently" },
   { kind: "memory", heading: "## Memories" },
+  // No `self` section, and the absence is the feature — see
+  // {@link WORKING_MEMORY_EXCLUDED_KINDS}. `syl-024.1` gave it one on the
+  // general rule that a hot node with nowhere to render is chosen and then
+  // invisible, and said in the same breath that `syl-024.2` decides the filter.
+  // The filter is here now, so the heading would be a claim this projection
+  // never makes good on.
   { kind: "source", heading: "## Sources" },
 ];
+
+/**
+ * Kinds this projection does not answer with, however hot they are.
+ *
+ * **This document answers one question — *what do I know about him?* — and a
+ * finding about what SHE is is not an answer to it.** Syl's own diagnosis of
+ * the first attempt: *"what you wanted was NAMESPACING, and what got built was
+ * ISOLATION. Separate them at read time with a kind filter, not at write time
+ * by cutting the edges. A render note should be absent from 'what do I know
+ * about Justin' because the query excludes it, not because it's connected to
+ * nothing."*
+ *
+ * So this is a WHERE clause and not a wall, and the difference is everything a
+ * `self` node can still do. It keeps every edge it has — to his person node, to
+ * an `instruction`, to a fact about his life — and stays reachable by
+ * traversal, by `recall`, by id. The Commander's requirement, in his words:
+ * *"her memories about herself still need notes and edges, and even the ability
+ * to connect to memories about me and my life and my preferences."* An
+ * unconnected node is unreachable to everyone, which is what the isolation
+ * version cost.
+ *
+ * Applied in {@link buildWorkingMemory} rather than in the graph read, so a
+ * `self` node is neither admitted nor **counted in the overflow**. The notice
+ * is part of this projection's answer: *"…and 2 notes about myself"* would leak
+ * back exactly what the filter removed, and hand him a count he cannot open
+ * from here.
+ *
+ * `instruction` is deliberately NOT here. A standing order is something he
+ * told her, so it belongs in the answer to what she knows about him — it is
+ * pinned rather than filtered (`syl-024.3`).
+ *
+ * `source` is not here either, and that is not an oversight: a handle renders
+ * under `## Sources`, and what it is excluded from is the emptiness test in
+ * {@link render} — a projection holding nothing but handles is empty however
+ * many rows it has.
+ */
+export const WORKING_MEMORY_EXCLUDED_KINDS: readonly MemoryNodeKind[] = ["self"];
+
+const EXCLUDED_KINDS = new Set<MemoryNodeKind>(WORKING_MEMORY_EXCLUDED_KINDS);
+
+/**
+ * Kinds this projection may never drop for want of room — `syl-024.3`.
+ *
+ * **Section order is RENDERING and nothing else, and that is the trap this
+ * constant exists to close.** `## Standing orders` leads
+ * {@link WORKING_MEMORY_SECTIONS}, which reads like protection and is not:
+ * admission is greedy in SALIENCE order and stops at the first entry that does
+ * not fit, so an instruction could survive the night at full strength, keep
+ * every edge, and simply never reach her because something outranked it and the
+ * budget filled. Nothing looks wrong afterwards — the node is hot, the graph is
+ * intact, and there is no error anywhere. That is the worse of the two ways an
+ * order disappears; the other is decay, and `DEMOTE_SWEEP_SQL` closes it.
+ *
+ * Her requirement was "unfadeable", and an order dropped at admission has faded
+ * whatever the tier column says. So pinned candidates are admitted BEFORE the
+ * greedy loop runs and are never part of what it can break on. A high
+ * {@link KIND_FLOOR_SQL} floor is not a substitute: a floor decides the ORDER
+ * things are considered in, and this decides whether there was room at all.
+ *
+ * The consequence, stated plainly because it is a real cost: standing orders
+ * spend the budget first, so a large enough set of them squeezes what he told
+ * her ABOUT HIMSELF out of the same document. That is the right way round — he
+ * can see what he told her and revise it, and no amount of reading can recover
+ * what was silently withheld — and past the point where they do not fit at all
+ * this fails loudly rather than choosing for him. See
+ * {@link WorkingMemoryPinnedOverflowError}.
+ */
+export const WORKING_MEMORY_PINNED_KINDS: readonly MemoryNodeKind[] = ["instruction"];
+
+const PINNED_KINDS = new Set<MemoryNodeKind>(WORKING_MEMORY_PINNED_KINDS);
 
 const SECTION_RANK = new Map<MemoryNodeKind, number>(
   WORKING_MEMORY_SECTIONS.map((section, index) => [section.kind, index]),
 );
+
+/**
+ * What each kind is called in the overflow notice, singular and plural.
+ *
+ * Prose rather than the enum values, because the notice is read by Syl and
+ * turned into a sentence for him. "3 memories" is a sentence; "3 memory" is a
+ * schema leaking into the one document she reads on every turn.
+ */
+const KIND_NOUNS: Readonly<Record<MemoryNodeKind, readonly [one: string, many: string]>> = {
+  instruction: ["standing order", "standing orders"],
+  self: ["note about myself", "notes about myself"],
+  person: ["person", "people"],
+  place: ["place", "places"],
+  goal: ["goal", "goals"],
+  decision: ["decision", "decisions"],
+  fact: ["fact", "facts"],
+  event: ["event", "events"],
+  memory: ["memory", "memories"],
+  source: ["source", "sources"],
+};
+
+/** One kind, and how many of it are in the overflow. */
+export interface OverflowKindCount {
+  readonly kind: MemoryNodeKind;
+  readonly count: number;
+}
+
+/** Kind counts over a set of candidates, in section order, empties omitted. */
+export function countByKind(candidates: readonly WorkingMemoryCandidate[]): OverflowKindCount[] {
+  return WORKING_MEMORY_SECTIONS.map((section) => ({
+    kind: section.kind,
+    count: candidates.filter((candidate) => candidate.kind === section.kind).length,
+  })).filter((entry) => entry.count > 0);
+}
 
 /** One hot node, reduced to what the projection can use. */
 export interface WorkingMemoryCandidate {
@@ -229,6 +389,29 @@ export interface WorkingMemoryRow {
   readonly generatedAt: string;
 }
 
+/** How many overflow items are returned when nobody says. */
+export const DEFAULT_OVERFLOW_LIMIT = 20;
+
+/** Which part of the overflow to open. Both narrow; neither changes the set. */
+export interface OverflowQuery {
+  /** One kind, as the notice names them. Omit for all of them. */
+  readonly kind?: MemoryNodeKind;
+  /** How many to return. Defaults to {@link DEFAULT_OVERFLOW_LIMIT}. */
+  readonly limit?: number;
+}
+
+/** Everything the projection could not fit, and what it is made of. */
+export interface WorkingMemoryOverflow {
+  /** The items themselves, most salient first. Capped by `limit`. */
+  readonly items: readonly WorkingMemoryCandidate[];
+  /** The whole overflow, before `kind` and `limit`. */
+  readonly total: number;
+  /** How many matched `kind`, before `limit`. */
+  readonly matched: number;
+  /** Kind counts over the whole overflow, in section order. */
+  readonly byKind: readonly OverflowKindCount[];
+}
+
 /** What one regeneration did. */
 export interface WorkingMemoryRegeneration {
   readonly row: WorkingMemoryRow;
@@ -250,6 +433,44 @@ export class WorkingMemoryOverflowError extends Error {
         `the auto-memory index (syl-03d). Failing here is the whole point.`,
     );
     this.name = "WorkingMemoryOverflowError";
+    this.bytes = bytes;
+    this.maxBytes = maxBytes;
+  }
+}
+
+/**
+ * What he told her to be does not fit in what she is handed — `syl-024.3`.
+ *
+ * The one honest end of the pinning guarantee. {@link WORKING_MEMORY_PINNED_KINDS}
+ * promises a standing order is never dropped for want of room, and a promise
+ * with no failure mode is a promise that quietly breaks: past some number of
+ * orders the only alternatives are to drop one anyway or to say so.
+ *
+ * It says so, and the cost of that is understood — regeneration fails, so the
+ * projection freezes at the last good one until someone looks. That is the
+ * right trade in both directions. Frozen is stale and recoverable; a silently
+ * dropped standing order is neither, and it is invisible from the graph, from
+ * the log and from the document itself. Same argument as
+ * {@link WorkingMemoryOverflowError} one level up, and as constraint 4: the
+ * system does not get to decide on its own to stop carrying something.
+ */
+export class WorkingMemoryPinnedOverflowError extends Error {
+  /** How many pinned entries there were. */
+  readonly pinned: number;
+  readonly bytes: number;
+  readonly maxBytes: number;
+
+  constructor(pinned: number, bytes: number, maxBytes: number) {
+    super(
+      `Refusing to build a working-memory projection: ${String(pinned)} standing orders render ` +
+        `to ${String(bytes)} bytes against a budget of ${String(maxBytes)}, so there is no ` +
+        `projection that carries all of them. A standing order is what the Commander told Syl ` +
+        `to BE, and it is never dropped to make room (syl-024.3) — an order cut at admission ` +
+        `has faded whatever the graph says, and nothing anywhere reports it. Raise the budget ` +
+        `or retire an order; both are his call, and neither is this function's.`,
+    );
+    this.name = "WorkingMemoryPinnedOverflowError";
+    this.pinned = pinned;
     this.bytes = bytes;
     this.maxBytes = maxBytes;
   }
@@ -278,10 +499,42 @@ export function renderEntry(candidate: WorkingMemoryCandidate): string {
   return `- ${truncate(full, WORKING_MEMORY_ENTRY_MAX_CHARS)}`;
 }
 
-function renderOverflow(count: number): string {
+/**
+ * What was left out — how many, **of what**, and the move that opens it.
+ *
+ * `syl-016.2`. This used to say only *"…and 10 more in the hot region, not
+ * shown here. Search deep memory for anything specific."* Two things were wrong
+ * with that, and the second is the worse one:
+ *
+ * 1. **A bare count tells her she is deciding with a known gap and gives her
+ *    nothing to weigh.** Ten dropped sources and ten dropped people are very
+ *    different situations — the first is a handful of articles she can look up,
+ *    the second is people in his life she is about to talk to him without. She
+ *    could not tell which, so every count read as the alarming one.
+ * 2. **"Search deep memory" was a capability she did not have.** She said so
+ *    herself: *"I have no tool in my hands to search, query or traverse any of
+ *    it."* An instruction and the capability it assumes are one decision, and
+ *    this document had the instruction for months with nothing behind it —
+ *    which is the failure mode that makes a model act the instruction out in
+ *    prose. `recall` (`syl-016.1`) is what makes the sentence true.
+ *
+ * It names `recall` rather than describing a search in the abstract, and that
+ * is safe in the direction that matters: on a lane with no tools attached,
+ * `harness/capability.ts` derives NO_HANDS_YET from the surface itself and
+ * tells her plainly she cannot act. A derived sentence outranks a stored one,
+ * so this notice cannot become the stale half of that pair.
+ */
+export function renderOverflow(dropped: readonly WorkingMemoryCandidate[]): string {
+  const counted = countByKind(dropped)
+    .map((entry) => {
+      const [one, many] = KIND_NOUNS[entry.kind];
+      return `${String(entry.count)} ${entry.count === 1 ? one : many}`;
+    })
+    .join(", ");
+
   return (
-    `_…and ${String(count)} more in the hot region, not shown here. ` +
-    `Search deep memory for anything specific._`
+    `_…and ${String(dropped.length)} more in the hot region, not shown here: ${counted}. ` +
+    `Use recall with no query to open them, or search for anything specific._`
   );
 }
 
@@ -301,8 +554,19 @@ function rank(a: WorkingMemoryCandidate, b: WorkingMemoryCandidate): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-/** Render a set of admitted candidates, grouped into sections. */
-function render(admitted: readonly WorkingMemoryCandidate[], remaining: number): string {
+/**
+ * Render a set of admitted candidates, grouped into sections.
+ *
+ * `remaining` is the dropped candidates themselves rather than a count, because
+ * the overflow notice names their kinds. That makes every trial render in
+ * {@link buildWorkingMemory} measure the notice it would really carry, which is
+ * what keeps the budget arithmetic honest — a notice sized from a count and
+ * printed from a list is two answers to one question.
+ */
+function render(
+  admitted: readonly WorkingMemoryCandidate[],
+  remaining: readonly WorkingMemoryCandidate[],
+): string {
   const lines: string[] = [WORKING_MEMORY_TITLE, "", WORKING_MEMORY_NOTE, ""];
 
   // A SOURCE IS A HANDLE, NOT A FACT, and a projection holding nothing but
@@ -317,7 +581,7 @@ function render(admitted: readonly WorkingMemoryCandidate[], remaining: number):
   // already has a source.
   const knowledge = admitted.filter((candidate) => candidate.kind !== "source");
 
-  if (knowledge.length === 0 && remaining === 0) {
+  if (knowledge.length === 0 && remaining.length === 0) {
     // Nothing is admitted at all in this case: an unearned handle is worse than
     // no handle, because it is read as content.
     return `${[WORKING_MEMORY_TITLE, "", WORKING_MEMORY_NOTE, "", WORKING_MEMORY_EMPTY].join("\n")}\n`;
@@ -331,7 +595,7 @@ function render(admitted: readonly WorkingMemoryCandidate[], remaining: number):
     lines.push("");
   }
 
-  if (remaining > 0) lines.push(renderOverflow(remaining));
+  if (remaining.length > 0) lines.push(renderOverflow(remaining));
 
   return `${lines.join("\n").replace(/\s+$/u, "")}\n`;
 }
@@ -349,6 +613,18 @@ function render(admitted: readonly WorkingMemoryCandidate[], remaining: number):
  * trial renders the WHOLE text — including the overflow notice sized for the
  * count it would carry — so the budget check is measured against the real
  * output rather than an estimate that could drift from it.
+ *
+ * {@link WORKING_MEMORY_EXCLUDED_KINDS} is applied first, before ranking, so an
+ * excluded kind is neither admitted nor reported as dropped: it is not part of
+ * this question at all.
+ *
+ * {@link WORKING_MEMORY_PINNED_KINDS} is applied next, and it is what makes
+ * "a standing order is never dropped" true rather than intended: pinned
+ * candidates are admitted BEFORE the loop and are not among the entries it can
+ * break on, so the greedy tail is drawn only from what may be dropped.
+ *
+ * @throws {WorkingMemoryPinnedOverflowError} when the pinned entries alone do
+ * not fit — the one case where the guarantee cannot be kept, said out loud.
  */
 export function buildWorkingMemory(
   candidates: readonly WorkingMemoryCandidate[],
@@ -356,18 +632,38 @@ export function buildWorkingMemory(
 ): WorkingMemoryPlan {
   const maxBytes = options.maxBytes ?? WORKING_MEMORY_MAX_BYTES;
   const maxLines = options.maxLines ?? WORKING_MEMORY_MAX_LINES;
+  const overBudget = (trial: string): boolean =>
+    byteLength(trial) > maxBytes || trial.split("\n").length > maxLines;
 
-  const ordered = [...candidates].sort(rank);
-  const admitted: WorkingMemoryCandidate[] = [];
+  const asked = candidates.filter((candidate) => !EXCLUDED_KINDS.has(candidate.kind));
+  const ordered = [...asked].sort(rank);
+  const pinned = ordered.filter((candidate) => PINNED_KINDS.has(candidate.kind));
+  const optional = ordered.filter((candidate) => !PINNED_KINDS.has(candidate.kind));
 
-  for (const candidate of ordered) {
-    const trial = render([...admitted, candidate], ordered.length - admitted.length - 1);
-    if (byteLength(trial) > maxBytes || trial.split("\n").length > maxLines) break;
-    admitted.push(candidate);
+  // The smallest projection this input HAS: everything pinned, nothing else,
+  // and the notice naming the rest. If that does not fit, no plan exists — so
+  // say which half could not be given up rather than dropping it and reporting
+  // a healthy build. Skipped when nothing is pinned, because then there is no
+  // guarantee to fail and the store's own guard is the right place to refuse.
+  const floor = render(pinned, optional);
+  if (pinned.length > 0 && overBudget(floor)) {
+    throw new WorkingMemoryPinnedOverflowError(pinned.length, byteLength(floor), maxBytes);
   }
 
-  const dropped = ordered.slice(admitted.length);
-  const text = render(admitted, dropped.length);
+  const admittedOptional: WorkingMemoryCandidate[] = [];
+
+  for (const candidate of optional) {
+    const trial = render(
+      [...pinned, ...admittedOptional, candidate],
+      optional.slice(admittedOptional.length + 1),
+    );
+    if (overBudget(trial)) break;
+    admittedOptional.push(candidate);
+  }
+
+  const admitted = [...pinned, ...admittedOptional];
+  const dropped = optional.slice(admittedOptional.length);
+  const text = render(admitted, dropped);
 
   // Rendered order, not admission order: `included` is what a caller shows
   // next to the text, and the two disagreeing would be its own small lie.
@@ -465,6 +761,61 @@ export class WorkingMemory {
    */
   preamble(): string {
     return this.current()?.text ?? "";
+  }
+
+  /**
+   * What the projection could not fit — the items the notice counts.
+   *
+   * `syl-016.2`. The digest says *"and 10 more"* and would not say which, which
+   * is worse than a shorter list: it tells her she is deciding with a known gap
+   * and hands her no move. This is the move.
+   *
+   * **Recomputed from the graph through {@link buildWorkingMemory}, on the same
+   * bounds, rather than read from a stored list of ids.** Two reasons, and the
+   * first is the one that makes it correct rather than merely convenient:
+   *
+   * - It cannot drift from what the digest actually hid. There is one admission
+   *   rule, in one function, and both the text she reads and this list come out
+   *   of it. A stored `dropped` column would be a second answer to the same
+   *   question, going stale the moment the graph moved — the same second-source
+   *   -of-truth failure `projection.ts` exists to prevent.
+   * - The stored row keeps only a COUNT (`0017`), so there is no list to read.
+   *   Adding one would be a migration in service of the drift above.
+   *
+   * It is deliberately NOT a search: this reaches the hot region through
+   * salience, exactly as the projection does, so it answers "what is being kept
+   * from me" rather than "what matches these words". Searching is `Retriever`'s
+   * job and there is only one of those.
+   *
+   * @throws {GraphError} `bad_limit` on a scan limit below 1.
+   */
+  overflow(options: OverflowQuery = {}): WorkingMemoryOverflow {
+    const candidates = this.#graph.listSalientNodes(this.#scanLimit).map(toCandidate);
+    const plan = buildWorkingMemory(candidates, {
+      maxBytes: this.#maxBytes,
+      maxLines: this.#maxLines,
+    });
+
+    const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+    const dropped = plan.dropped
+      .map((id) => byId.get(id))
+      .filter((candidate): candidate is WorkingMemoryCandidate => candidate !== undefined);
+
+    const matching =
+      options.kind === undefined
+        ? dropped
+        : dropped.filter((candidate) => candidate.kind === options.kind);
+
+    // A limit is applied last and reported beside `matched`, so "there are more
+    // than I showed you" is a number she can say rather than something she has
+    // to infer from a full page. Same rule as the notice it opens.
+    const limit = options.limit ?? DEFAULT_OVERFLOW_LIMIT;
+    return {
+      items: limit >= matching.length ? matching : matching.slice(0, limit),
+      total: dropped.length,
+      matched: matching.length,
+      byKind: countByKind(dropped),
+    };
   }
 
   /**
