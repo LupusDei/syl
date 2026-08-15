@@ -559,3 +559,86 @@ describe("Outbox", () => {
     expect(TEST_NOW).toBe(OVERNIGHT);
   });
 });
+
+/**
+ * How each class of message actually landed (`syl-t9tj.5.2`).
+ *
+ * The master plan asks for exactly this and it had never been readable:
+ *
+ * > "If a class of message is consistently ignored — the evening review, say —
+ * > that is data saying stop sending it, not a prompt to write it more
+ * > persuasively."
+ *
+ * Both halves were already in the schema: `message_class` on every row,
+ * `engagement` written at acknowledgement. Nothing read them together, so the
+ * one question the rule turns on could not be asked of a system that held the
+ * answer. A record nobody can query is a record that only looks like
+ * accountability.
+ *
+ * It matters most for health, which is why it is built now: the Commander
+ * granted "she can interrupt often" AND permission to break through Focus, and
+ * this is the only counterweight to either.
+ */
+describe("Outbox.reception", () => {
+  let db: SylDatabase;
+  let outbox: Outbox;
+
+  beforeEach(() => {
+    db = testDatabase();
+    outbox = new Outbox({ db: db.handle, clock: () => AFTERNOON, jitter: () => 0 });
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  const sent = (messageClass: string, key: string): string =>
+    outbox.enqueue(reminderDelivery({ messageClass, idempotencyKey: key })).delivery.id;
+
+  it("should tell a class he engages with apart from one he ignores", () => {
+    const read = sent("health_finding", "h1");
+    const skipped = sent("health_finding", "h2");
+    const alsoSkipped = sent("health_finding", "h3");
+
+    outbox.acknowledge(read, { ackedAt: "2026-08-15T09:00:00.000Z", engagement: "acted_on" });
+    outbox.acknowledge(skipped, { ackedAt: "2026-08-15T09:00:00.000Z", engagement: "ignored" });
+    outbox.acknowledge(alsoSkipped, { ackedAt: "2026-08-15T09:00:00.000Z", engagement: "ignored" });
+
+    const health = outbox.reception("2000-01-01T00:00:00.000Z").find((r) => r.class === "health_finding");
+
+    expect(health).toMatchObject({ sent: 3, engaged: 1, ignored: 2 });
+  });
+
+  it("should count each class on its own, because the rule stops ONE kind of message", () => {
+    // The whole point is that he can go on wanting reminders while wanting the
+    // health notes to stop. A single global engagement rate cannot say that.
+    outbox.acknowledge(sent("reminder_delivery", "r1"), {
+      ackedAt: "2026-08-15T09:00:00.000Z",
+      engagement: "acted_on",
+    });
+    outbox.acknowledge(sent("health_finding", "h1"), { ackedAt: "2026-08-15T09:00:00.000Z", engagement: "ignored" });
+
+    const byClass = outbox.reception("2000-01-01T00:00:00.000Z");
+
+    expect(byClass.find((r) => r.class === "reminder_delivery")).toMatchObject({ engaged: 1, ignored: 0 });
+    expect(byClass.find((r) => r.class === "health_finding")).toMatchObject({ engaged: 0, ignored: 1 });
+  });
+
+  it("should not count a message the phone never delivered as one he ignored", () => {
+    // `delivered` means it arrived and the phone never said what became of it.
+    // Neither evidence for nor against, and counting it as rejection would make
+    // a bad afternoon of connectivity read as him going off a whole class.
+    const arrived = sent("health_finding", "arrived-silently");
+    outbox.acknowledge(arrived, { ackedAt: "2026-08-15T09:00:00.000Z" });
+
+    const health = outbox.reception("2000-01-01T00:00:00.000Z").find((r) => r.class === "health_finding");
+
+    expect(health).toMatchObject({ sent: 1, engaged: 0, ignored: 0 });
+  });
+
+  it("should answer for a window, so an old opinion does not outvote a recent one", () => {
+    outbox.acknowledge(sent("health_finding", "h1"), { ackedAt: "2026-08-15T09:00:00.000Z", engagement: "ignored" });
+
+    expect(outbox.reception("2099-01-01T00:00:00.000Z")).toEqual([]);
+  });
+});
