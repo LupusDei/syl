@@ -1201,8 +1201,12 @@ final class ChatViewModelTests: XCTestCase {
         // Traversal follows the stack, and the stack follows `snapshot.rows`. This is the
         // check that would have caught an inverted transcript: `syl-025.2.2` considered
         // flipping the scroll view and every row inside it, which reverses reading order
-        // for VoiceOver as a side effect of a scrolling fix. The anchor was kept, so
-        // nothing inverted -- confirmed here rather than assumed.
+        // for VoiceOver as a side effect of a scrolling fix.
+        //
+        // **This asserts the code as it currently stands, not a decision.** The anchor
+        // question is with the Commander and unanswered; if he rules for the inverted
+        // transcript, this test is what protects him from the traversal regression that
+        // comes with it, and it should go red rather than be relaxed.
         try store.upsert(longConversation(120))
         let model = makeModel()
 
