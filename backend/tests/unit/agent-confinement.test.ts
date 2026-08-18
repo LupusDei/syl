@@ -426,6 +426,12 @@ describe("everything the agent scope cannot reach, swept from the router", () =>
     // here would make this sweep agree that the phone's upload endpoint is
     // hers, and she has no business writing a measurement of his body.
     "/health/summary",
+    // `syl-0x1h`. Her unprompted voice with no render on it — the second door
+    // on this list that REACHES him, beside `/sendings`. It is a WRITE and
+    // nothing more: the route publishes no `GET`, deliberately, because a
+    // telling's record is a message and reading one back by id would hand her
+    // a read into his conversation history that `/conversations` withholds.
+    "/tellings",
   ];
 
   /**
@@ -675,6 +681,17 @@ describe("AGENT_SURFACE", () => {
     // be narrated. `/health` here rather than `/health/summary` would have
     // handed her the write endpoint along with it, which is the same mistake
     // `/memory` would have been two entries up.
+    //
+    // `syl-0x1h` added `/tellings`, and it is the second entry that REACHES
+    // him — her words into his own thread plus a notification, which is the
+    // reach `/sendings` already had minus the requirement to have made a video
+    // first. It widens nothing else: the route is a single `POST`, and the
+    // `GET` that would have made a telling readable by id is deliberately
+    // absent, because a telling's record is a message and `/conversations`
+    // stays out of her reach. Quiet hours gate it in the outbox, and
+    // `REACHES_HIM` counts it against the same daily ceiling `show_him` spends
+    // from — neither of which is this list's job, and both of which are the
+    // reason widening it here is safe.
     expect([...AGENT_SURFACE].sort()).toEqual([
       "/goals",
       "/health/summary",
@@ -684,6 +701,7 @@ describe("AGENT_SURFACE", () => {
       "/reminders",
       "/renders",
       "/sendings",
+      "/tellings",
       "/todos",
     ]);
   });

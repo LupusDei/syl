@@ -41,6 +41,7 @@ import { PresenceService } from "../../src/services/presence.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
 import { SendingService, type RenderSource } from "../../src/services/sending-service.js";
 import { SendingStore } from "../../src/services/sending-store.js";
+import { TellingService } from "../../src/services/telling-service.js";
 import { RenderWatchStore } from "../../src/services/render-watch-store.js";
 import { SyncService } from "../../src/services/sync-service.js";
 import { TodoService } from "../../src/services/todo-service.js";
@@ -421,6 +422,7 @@ export function testDeps(db: SylDatabase): {
   readonly wardrobe: Wardrobe;
   readonly sendings: SendingStore;
   readonly composer: SendingService;
+  readonly teller: TellingService;
   readonly renderWatches: RenderWatchStore;
   readonly presence: PresenceService;
   readonly intakeQueue: IntakeQueue;
@@ -515,6 +517,11 @@ export function testDeps(db: SylDatabase): {
       }),
       log: () => undefined,
     }),
+    // Her words with no face on them, over the SAME chat and outbox the
+    // composer publishes through — exactly as `bootstrap` builds it. Two of
+    // these would be two ways to reach him, and the one nobody looks at is the
+    // one that drifts.
+    teller: new TellingService({ chat, outbox, log: () => undefined }),
     // The promises to come back and look at a render. Real, on the same
     // database: nothing in a route test creates one, and a store that refused
     // to exist would make the review job untestable through the seam that

@@ -142,11 +142,17 @@ export const MORNING_AGENDA_WALL_TIME = agendaWallTime();
  *
  * `remind_me` puts her words in front of him at a time, composed in her voice
  * and read back verbatim; `show_him` is the sending, which lands in his
- * conversation and on his lock screen. Reading (`whats_outstanding`) is not
- * composing, and a morning that only read is a morning with no brief in it —
- * which is precisely the state this job was written to end.
+ * conversation and on his lock screen; `tell_him` is the same landing with no
+ * render on it (`syl-0x1h`), which is the likeliest shape for a brief that is a
+ * paragraph rather than a list. Reading (`whats_outstanding`) is not composing,
+ * and a morning that only read is a morning with no brief in it — which is
+ * precisely the state this job was written to end.
  */
-export const PUTS_IT_IN_FRONT_OF_HIM: readonly string[] = ["remind_me", "show_him"];
+export const PUTS_IT_IN_FRONT_OF_HIM: readonly string[] = [
+  "remind_me",
+  "show_him",
+  "tell_him",
+];
 
 /**
  * The verbs whose effect is that something he had is no longer there.

@@ -23,6 +23,7 @@ import { MessageStore } from "../../src/services/message-store.js";
 import { Outbox } from "../../src/services/outbox.js";
 import { ReminderService } from "../../src/services/reminder-service.js";
 import { SendingService } from "../../src/services/sending-service.js";
+import { TellingService } from "../../src/services/telling-service.js";
 import { SendingStore } from "../../src/services/sending-store.js";
 import { HealthCharacteristics } from "../../src/health/characteristics.js";
 import { HealthSamples } from "../../src/health/samples.js";
@@ -187,6 +188,9 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
           compress: async () => ({ ok: false, reason: "no ffmpeg in tests" }),
           log: () => undefined,
         }),
+        // Over the same chat and outbox the composer publishes through, as
+        // `bootstrap` builds it.
+        teller: new TellingService({ chat, outbox, log: () => undefined }),
         renderWatches: new RenderWatchStore({ db: db.handle, clock }),
         renderVerdicts: new RenderVerdicts({ db: db.handle, clock }),
         health: new HealthSamples({ db: db.handle, clock }),

@@ -700,9 +700,18 @@ export const TOOLS: readonly ToolSchema[] = [
       type: "object",
       // `renderName` is required, and that is the DEFINITION rather than a
       // validation choice. A sending is her saying something in her own face;
-      // words with no face is an ordinary message, and she already has a
-      // conversation for those. `CreateSendingRequest` says the same, and the
-      // handler refuses in a sentence before anything is written.
+      // words with no face is a `tell_him`, which is the verb below.
+      // `CreateSendingRequest` says the same, and the handler refuses in a
+      // sentence before anything is written.
+      //
+      // **The requirement was always right and its justification used to be
+      // false** — `syl-0x1h`. This comment said "words with no face is an
+      // ordinary message, and she already has a conversation for those", and
+      // she did not: she could write into the conversation only by REPLYING.
+      // The lock was correct; the door it assumed had never been built. So the
+      // fix was the door, not a relaxation here — a sending with no face would
+      // stop being a sending, and she would have lost the one verb that means
+      // *this, in my own face*.
       required: ["words", "because", "renderName"],
       properties: {
         words: {
@@ -722,6 +731,53 @@ export const TOOLS: readonly ToolSchema[] = [
             "Which render he sees you in, by its own name — the one you looked at with see_myself " +
             "and thought was you. A sending keeps that name forever, so choose it rather than " +
             "taking whatever was made last.",
+        },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
+    // THE DOOR `show_him` ASSUMED AND NOBODY HAD BUILT — `syl-0x1h`.
+    //
+    // Her own diagnosis, 2026-08-17: *"my unprompted voice arrives wearing a
+    // reminder's clothes, and the one door into the actual conversation has a
+    // video-shaped lock on it."* She could reach him unprompted and did it
+    // often, and every one of those landed as a REMINDER on his list, because
+    // the only verb that wrote into the conversation required a render. She
+    // could not say a paragraph about his insurance without also making a
+    // fifteen-second film about it. The Commander raised it twice.
+    //
+    // Named `tell_him`, beside `show_him`, and the pair is the whole boundary:
+    // **show is with her face, tell is with her words.** A name like
+    // `say_something` would describe her rather than him and would break the
+    // header's rule; `message_him` would name the transport. What she is doing
+    // is telling him a thing he does not know.
+    //
+    // The boundary against `remind_me` is in the description because that is
+    // where she reads it: a reminder is for a MOMENT that has not arrived, and
+    // a telling is now. Filing "your policy renews on the 3rd" as a reminder
+    // for the 3rd is a different act from saying it to him today, and only one
+    // of them is a conversation.
+    name: "tell_him",
+    description:
+      "Say something to him now, in your own words — it lands in your conversation and on his " +
+      "phone. This is how you start something rather than answer it. Use it when you have " +
+      "worked a thing out and he should have it: remind_me is for a moment that has not come " +
+      "yet, and show_him is this same thing arriving in your own face, which needs a render.",
+    inputSchema: {
+      type: "object",
+      // No render, no time, no flag for urgency — and the last of those is
+      // deliberate rather than an omission. A verb that could declare itself
+      // urgent could wake him at three on her own judgement, which is exactly
+      // what `syl-j55` took away from `remind_me`. Quiet hours hold this the
+      // way they hold everything else that reaches his phone.
+      required: ["words", "because"],
+      properties: {
+        words: {
+          type: "string",
+          description:
+            "What you want to say, in your own words. A sentence or a paragraph — this is what " +
+            "he reads in the conversation and what his phone shows him.",
         },
         because: BECAUSE,
       },

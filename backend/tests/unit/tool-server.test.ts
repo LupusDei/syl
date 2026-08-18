@@ -1142,6 +1142,149 @@ describe("show_him — saying something to him in her own face", () => {
   });
 });
 
+/** A stored message, in the shape the tellings route answers with. */
+function storedMessage(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: "syl:message:0000",
+    conversationId: "syl:conversation:interactive",
+    clientId: null,
+    role: "assistant",
+    text: "as his conversation actually has it",
+    createdAt: new Date(NOW).toISOString(),
+    seq: 12,
+    attachments: [],
+    ...over,
+  };
+}
+
+/**
+ * The door that was missing — `syl-0x1h`.
+ *
+ * `show_him` requires a render, correctly: a sending is her saying something in
+ * her own FACE. What made that requirement a cage was the sentence justifying
+ * it — *"words with no face is an ordinary message, and she already has a
+ * conversation for those"* — because she did not. She could only write into the
+ * conversation by REPLYING, so every unprompted thought arrived as a reminder,
+ * or arrived wearing a fifteen-second film it did not need.
+ *
+ * So the tests here are about the boundary rather than about the plumbing:
+ * `tell_him` takes no render and never looks for one, and `show_him` is
+ * untouched.
+ */
+describe("tell_him — saying something to him with nothing attached", () => {
+  it("should be a verb she is actually offered", () => {
+    expect(advertisedToolNames()).toContain("tell_him");
+  });
+
+  it("should say it to him and report the message HIS CONVERSATION has", async () => {
+    const api = fakeApi({
+      "/tellings": () => ok(storedMessage(), 201),
+    });
+
+    const { envelope } = await call(contextFor(api), "tell_him", {
+      words: "Your auto policy renews on the 3rd, and the quote expires before it.",
+      because: "You asked me to watch for this in March.",
+    });
+
+    expect(api.calls.map((made) => `${made.method} ${made.path}`)).toEqual(["POST /tellings"]);
+    expect(api.calls[0]?.body).toEqual({
+      words: "Your auto policy renews on the 3rd, and the quote expires before it.",
+      because: "You asked me to watch for this in March.",
+    });
+    expect(envelope).toMatchObject({ ok: true, action: "tell_him" });
+    if (envelope.ok) {
+      const subject = envelope.subject as { text: string; role: string };
+      // The row, not her intention — `syl-009.3.4`. The fake answers with text
+      // she did not send, so an envelope echoing the request fails here.
+      expect(subject.text).toBe("as his conversation actually has it");
+      expect(subject.role).toBe("assistant");
+      expect(envelope.at).toBe(new Date(NOW).toISOString());
+    }
+  });
+
+  it("should never ask for a render, look for one, or need one", async () => {
+    // The whole point. She cannot say a paragraph about his insurance without
+    // making a film about it, and this is the assertion that says she can now.
+    const api = fakeApi({ "/tellings": () => ok(storedMessage(), 201) });
+
+    const { envelope } = await call(contextFor(api), "tell_him", {
+      words: "A paragraph, and no film about it.",
+      because: "He raised this twice.",
+    });
+
+    expect(envelope.ok).toBe(true);
+    expect(api.calls.some((made) => made.path.startsWith("/renders"))).toBe(false);
+    expect(api.calls.some((made) => made.path.startsWith("/sendings"))).toBe(false);
+  });
+
+  it("should refuse with nothing to say, and say nothing", async () => {
+    const api = fakeApi({ "/tellings": () => ok(storedMessage(), 201) });
+
+    const { envelope, isError } = await call(contextFor(api), "tell_him", {
+      because: "He asked.",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("words");
+    // Refused before anything left this process.
+    expect(api.calls).toEqual([]);
+  });
+
+  it("should refuse a telling that does not say why it exists", async () => {
+    // It reaches him unprompted, which is the one place he cannot tell a good
+    // instinct from a wrong one without the reason.
+    const api = fakeApi({ "/tellings": () => ok(storedMessage(), 201) });
+
+    const { envelope, isError } = await call(contextFor(api), "tell_him", {
+      words: "Something I noticed.",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toContain("because");
+    expect(api.calls).toEqual([]);
+  });
+
+  it("should say what went wrong when her own service refuses, in its own words", async () => {
+    const api = fakeApi({
+      "/tellings": () => failure(422, "VALIDATION_FAILED", "words is required.", false),
+    });
+
+    const { envelope, isError } = await call(contextFor(api), "tell_him", {
+      words: "Hello.",
+      because: "b",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.reason).toBe("words is required.");
+  });
+
+  it("should tell her when to reach for it rather than for the other two", async () => {
+    // A verb whose boundary is unclear gets used for the wrong thing, and this
+    // description is the only thing shaping that choice at session start. It
+    // has to name the neighbours it is not.
+    const schema = TOOLS.find((tool) => tool.name === "tell_him");
+    expect(schema?.description).toContain("remind_me");
+    expect(schema?.description).toContain("show_him");
+  });
+
+  it("should not have loosened show_him on its way in", async () => {
+    // `renderName` is the DEFINITION of a sending rather than a validation
+    // choice. This verb is an addition beside it, never a relaxation of it.
+    const sending = TOOLS.find((tool) => tool.name === "show_him");
+    const required = (sending?.inputSchema as { required?: readonly string[] }).required ?? [];
+    expect(required).toContain("renderName");
+
+    const telling = TOOLS.find((tool) => tool.name === "tell_him");
+    const takes = Object.keys(
+      (telling?.inputSchema as { properties?: Record<string, unknown> }).properties ?? {},
+    );
+    expect(takes).not.toContain("renderName");
+  });
+});
+
 describe("add_todo", () => {
   it("should put it on his list and report the row the STORE has", async () => {
     // `syl-009.3.4`. The echo and the stored row differ on purpose: if the

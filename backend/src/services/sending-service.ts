@@ -9,8 +9,8 @@ import type { ConversationService } from "./conversation-service.js";
 import { INTERACTIVE_CONVERSATION_ID } from "./database.js";
 import type { Outbox } from "./outbox.js";
 import { compressForSending, type CompressOptions, type CompressResult } from "./sending-media.js";
-import type { AppendResult } from "./message-store.js";
 import { SendingStore, SendingStoreError } from "./sending-store.js";
+import { TellingService } from "./telling-service.js";
 
 /**
  * Composing a sending: her words, then her face.
@@ -104,29 +104,14 @@ export interface RenderSource {
 export type Compressor = (options: CompressOptions) => Promise<CompressResult>;
 
 /**
- * What the notification says.
+ * Deliveries from this path, so the outbox can be read by cause.
  *
- * `title` is her name and `body` is exactly what she said — no prefix, no
- * count, no "sent you a video". The spec is explicit and the reason is worth
- * keeping next to the code: a notification about the app is not a notification
- * from her, and the whole point of a sending is that she thought of him.
- *
- * Same shape a reminder uses, deliberately. He should not be able to tell from
- * the lock screen which subsystem produced a sentence she meant.
+ * The notification's shape is not decided here any more. `TellingService`
+ * carries `HER_PUSH_TITLE` and `HER_PUSH_LEVEL` and does the enqueueing for
+ * both verbs, because a sending and a telling arriving on his lock screen
+ * differently would be the subsystem showing through — he should not be able to
+ * tell which one produced a sentence she meant. See `services/telling-service.ts`.
  */
-const PUSH_TITLE = "Syl";
-
-/**
- * How a sending interrupts.
- *
- * `active` rather than `time-sensitive`. A commitment breaks through Focus
- * because he undertook to do something at a time; a sending is a gift, and a
- * gift that overrides Do Not Disturb is not a gift. It also respects quiet
- * hours by taking the outbox's default release instant.
- */
-const PUSH_LEVEL = "active" as const;
-
-/** Deliveries from this path, so the outbox can be read by cause. */
 export const SENDING_MESSAGE_CLASS = "sending";
 
 export interface SendingServiceOptions {
@@ -134,18 +119,10 @@ export interface SendingServiceOptions {
   /**
    * How the words reach the conversation AND the wire.
    *
-   * `ConversationService` rather than `MessageStore`, and the difference is
-   * the whole of gap 1's delivery half. The socket **subscribes itself** to
-   * this object (`ws-server.ts` calls `chat.setSink`), so appending through it
-   * and calling `accept` puts her words in front of an attached client with no
-   * new wiring at all. A second sink of this module's own would be one
-   * bootstrap edit away from `syl-vls` — a message stored and never broadcast,
-   * leaving every client showing a conversation missing a message until it
-   * reloaded.
-   *
-   * `accept` is safe here: it publishes, then returns without queueing a turn
-   * for anything that is not `role: "user"`. A sending must not make Syl
-   * answer herself.
+   * Used to build the {@link TellingService} this service composes through, so
+   * the words of a sending arrive by exactly the path the words of a telling
+   * do. See `services/telling-service.ts` for why the socket wiring makes
+   * `ConversationService` the right object rather than `MessageStore`.
    */
   readonly chat: ConversationService;
   readonly attachments: AttachmentStore;
@@ -173,9 +150,15 @@ export interface ComposeSending {
 
 export class SendingService {
   readonly #sendings: SendingStore;
-  readonly #chat: ConversationService;
+  /**
+   * Her voice, shared with `tell_him`.
+   *
+   * Built here rather than injected, so the constructor's shape is unchanged
+   * and nothing can hand this service a *different* way of reaching him. One
+   * implementation of "her words arrive"; a sending is that plus a face.
+   */
+  readonly #voice: TellingService;
   readonly #attachments: AttachmentStore;
-  readonly #outbox: Outbox;
   readonly #renders: RenderSource;
   readonly #workDir: string;
   readonly #conversationId: string;
@@ -187,9 +170,7 @@ export class SendingService {
 
   constructor(options: SendingServiceOptions) {
     this.#sendings = options.sendings;
-    this.#chat = options.chat;
     this.#attachments = options.attachments;
-    this.#outbox = options.outbox;
     this.#renders = options.renders;
     this.#workDir = options.workDir;
     this.#conversationId = options.conversationId ?? INTERACTIVE_CONVERSATION_ID;
@@ -201,6 +182,12 @@ export class SendingService {
         if (error === undefined) console.error(`[syl] ${line}`);
         else console.error(`[syl] ${line}`, error);
       });
+    this.#voice = new TellingService({
+      chat: options.chat,
+      outbox: options.outbox,
+      conversationId: this.#conversationId,
+      log: this.#log,
+    });
   }
 
   /**
@@ -251,18 +238,11 @@ export class SendingService {
     // about a video that does not exist yet.
     const record = this.#resolve(renderName);
 
-    // ---- 1. The words reach the conversation. ------------------------------
-    const appended = this.#chat.append({
-      conversationId: this.#conversationId,
-      // Null for anything Syl originated: there is no optimistic bubble on the
-      // client to reconcile against.
-      clientId: null,
-      role: "assistant",
-      text: words,
-    });
-
-    // ---- 2. And the wire. --------------------------------------------------
-    this.#announce(appended);
+    // ---- 1/2. The words reach the conversation, and the wire. --------------
+    //
+    // Through the same object `tell_him` uses, so there is one path her words
+    // travel whether or not a face follows them.
+    const appended = this.#voice.say(words);
 
     // ---- 3. The row the surface reads. -------------------------------------
     const sending = this.#sendings.create({
@@ -334,22 +314,6 @@ export class SendingService {
   // ------------------------------------------------------------- internals ---
 
   /**
-   * Put the message on the wire.
-   *
-   * `accept` never throws — it is called after a write has already been
-   * committed, and there is nothing useful a caller could do with a failure
-   * from it. Wrapped anyway, because "the socket was gone" must not be able to
-   * cost a sending whose words are already persisted.
-   */
-  #announce(appended: AppendResult): void {
-    try {
-      this.#chat.accept(appended);
-    } catch (error) {
-      this.#log(`failed to publish the words of a sending (message ${appended.message.id})`, error);
-    }
-  }
-
-  /**
    * The render this sending is made from, or a refusal.
    *
    * Every branch out of here that is not `ready` throws, and that is the point:
@@ -408,22 +372,14 @@ export class SendingService {
    * missing notification for a row left claiming a video is coming.
    */
   #notify(sending: Sending): void {
-    try {
-      this.#outbox.enqueue({
-        channel: "apns",
-        messageClass: SENDING_MESSAGE_CLASS,
-        payload: {
-          title: PUSH_TITLE,
-          // Her sentence, verbatim. Not a summary and not a notice about the
-          // app — see the constant.
-          body: sending.words,
-          interruptionLevel: PUSH_LEVEL,
-        },
-        idempotencyKey: `sending:${sending.id}`,
-      });
-    } catch (error) {
-      this.#log(`failed to enqueue the notification for sending ${sending.id}`, error);
-    }
+    // Her sentence, verbatim, in the one shape every push she starts takes.
+    // `TellingService.push` swallows its own failure and never passes `urgent`,
+    // so quiet hours hold this exactly as they hold a telling.
+    this.#voice.push({
+      body: sending.words,
+      messageClass: SENDING_MESSAGE_CLASS,
+      idempotencyKey: `sending:${sending.id}`,
+    });
   }
 
   /** Chase the video without anybody awaiting it. */

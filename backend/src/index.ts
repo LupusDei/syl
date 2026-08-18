@@ -99,6 +99,7 @@ import { createHealthDataRouter } from "./routes/health-data.js";
 import { createRenderRouter } from "./routes/renders.js";
 import { createSendingRouter } from "./routes/sendings.js";
 import { createSyncRouter } from "./routes/sync.js";
+import { createTellingRouter } from "./routes/tellings.js";
 import { createTodoRouter } from "./routes/todos.js";
 import {
   fileSessionStore,
@@ -148,6 +149,7 @@ import { Outbox } from "./services/outbox.js";
 import { PresenceService } from "./services/presence.js";
 import { ReminderService } from "./services/reminder-service.js";
 import { SendingService } from "./services/sending-service.js";
+import { TellingService } from "./services/telling-service.js";
 import { RenderWatchStore } from "./services/render-watch-store.js";
 import { SendingStore } from "./services/sending-store.js";
 import { SyncService, type SyncResolvers } from "./services/sync-service.js";
@@ -383,6 +385,15 @@ export interface AppDependencies {
   readonly sendings: SendingStore;
   readonly composer: SendingService;
   /**
+   * Her unprompted voice with nothing attached to it — `syl-0x1h`.
+   *
+   * The same delivery `composer` uses, minus the video leg: `SendingService`
+   * builds one of these internally and composes through it, so a sending and a
+   * telling reach his conversation and his phone by one code path. This one is
+   * on `AppDeps` because `POST /tellings` needs it directly.
+   */
+  readonly teller: TellingService;
+  /**
    * The promises to come back and look at a render she started.
    *
    * On `AppDeps` rather than kept inside the boot function because the render
@@ -471,6 +482,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     wardrobe,
     sendings,
     composer,
+    teller,
     probes,
     clock,
   } = deps;
@@ -553,6 +565,10 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // What she has already given him. Unlike `/renders` this is his surface, so
   // it takes an ordinary `device` token.
   api.use(createSendingRouter({ sendings, composer, idempotency, authenticate }));
+  // The same reach with no render on it. `messages` is here for the read-back,
+  // not for a read route: there is no `GET /tellings`, deliberately — see
+  // `routes/tellings.ts`.
+  api.use(createTellingRouter({ teller, messages, idempotency, authenticate }));
   // Read-only, so no idempotency ledger: there is nothing here to run twice.
   api.use(createSyncRouter({ sync, authenticate }));
   api.use(createJobRouter({ jobs, authenticate }));
@@ -1711,6 +1727,11 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // constraint 4, one noun along from `renders.resume()` above.
   composer.resume();
 
+  // The same reach, minus the video leg — `syl-0x1h`. Built from the same two
+  // objects `composer` is, and there is nothing to resume: a telling has
+  // nothing outstanding the moment it is written.
+  const teller = new TellingService({ chat, outbox });
+
   const intakeQueue = new IntakeQueue();
   const intakeStore = new IntakeStore({ db: database.handle, clock });
   // **The graft sink, supplied at last (`syl-022`).** Without it `ArticleIntake` ran
@@ -1759,6 +1780,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       wardrobe,
       sendings,
       composer,
+      teller,
       renderWatches,
       presence,
       intakeQueue,

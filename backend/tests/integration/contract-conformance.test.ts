@@ -163,6 +163,20 @@ const UNDECLARED: readonly string[] = [
   // second client guessing at that body would be guessing at her likeness.
   "GET /renders/wardrobe",
   "POST /renders/wardrobe",
+  // `syl-0x1h` — her unprompted voice, with nothing attached to it. Joins the
+  // debt above with the same argument and one difference worth stating: this
+  // one REACHES HIM, so it is the undeclared route whose behaviour a second
+  // client would most need described rather than guessed.
+  //
+  // Its response is a `Message`, which the contract already publishes — so
+  // publishing this is a path and a request body rather than a new schema, and
+  // it is a small pass whenever `/sendings`' neighbours are next looked at.
+  // The body is `{ words, because }` and both are required.
+  //
+  // There is deliberately no `GET` to declare. A telling's record is a message
+  // in his conversation, and a read-by-id here would hand Syl's own credential
+  // a read of his chat history that `/conversations` withholds from her.
+  "POST /tellings",
 ];
 
 /** Path parameters that are syntactically valid but name nothing. */

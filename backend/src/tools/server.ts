@@ -1975,6 +1975,59 @@ const showHim: ToolHandler = async (input, context) => {
 };
 
 /**
+ * Say something to him, with nothing attached to it.
+ *
+ * `syl-0x1h`, and the verb `show_him`'s own comment assumed already existed.
+ * That comment justified requiring a render by saying *"words with no face is
+ * an ordinary message, and she already has a conversation for those"* — and she
+ * did not. Everything she started arrived as a reminder on his list, because
+ * writing into the conversation meant replying to something.
+ *
+ * ## It is the same delivery, minus the video leg
+ *
+ * `POST /tellings` goes to `TellingService`, which is the object
+ * `SendingService` also composes through: the words are appended to his thread,
+ * published to whatever client is attached, and a notification carrying her
+ * sentence is enqueued in the outbox. Nothing here is a second mechanism, which
+ * is why nothing here has to re-decide quiet hours.
+ *
+ * ## What it deliberately cannot do
+ *
+ * It cannot pick a time, cannot claim urgency, and cannot ask for a render. The
+ * first two are `remind_me`'s and were taken off it for a reason (`syl-j55`);
+ * the third is `show_him`, which is untouched.
+ */
+const tellHim: ToolHandler = async (input, context) => {
+  const words = text(input, "words");
+  if (words === null) {
+    return missing("tell_him", "words", "I did not catch what you wanted to say to him.");
+  }
+  const because = text(input, "because");
+  if (because === null) {
+    return missing(
+      "tell_him",
+      "because",
+      "This reaches him unprompted, so it has to say why — that is the difference between a gift and a machine acting on his behalf.",
+    );
+  }
+
+  // No read-back leg here, unlike every other write, and the absence is the
+  // decision rather than an oversight: a telling's record is a message in his
+  // conversation, and `/conversations` is outside her credential's reach on
+  // purpose. The route does the read-back against the store and answers with
+  // the row, so what lands in `subject` is still what he actually has —
+  // `syl-009.3.4` honoured one layer down rather than skipped. See
+  // `routes/tellings.ts`.
+  const said = await context.client.post<{ readonly id: string; readonly createdAt: string }>(
+    "/tellings",
+    { words, because },
+  );
+  if (!said.ok) return refused("tell_him", said.failure);
+
+  return { ok: true, action: "tell_him", subject: said.data, at: said.data.createdAt };
+};
+
+/**
  * A reading, as the intake route hands it over.
  *
  * Declared here rather than imported from `connections/intake-view.ts`, like
@@ -2145,6 +2198,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   judge_render: judgeRender,
   see_myself: seeMyself,
   show_him: showHim,
+  tell_him: tellHim,
   read_this: readThis,
   whats_outstanding: whatsOutstanding,
 };

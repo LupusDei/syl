@@ -381,6 +381,20 @@ export const AGENT_SURFACES: readonly AgentSurface[] = [
   { path: "/health/summary", says: "his health" },
   { path: "/renders", says: "her own renders" },
   { path: "/sendings", says: "the things she has sent him" },
+  // HER UNPROMPTED VOICE, WITH NOTHING ATTACHED TO IT — `syl-0x1h`.
+  //
+  // The second surface on this list that REACHES him, and it is the same reach
+  // `/sendings` already has rather than a wider one: her words into his own
+  // thread, and a notification through the outbox that quiet hours gate. What
+  // it adds is that she no longer has to make a video in order to say a
+  // paragraph.
+  //
+  // **POST only, and there is no read.** A telling's record is a message, so a
+  // `GET` here would be a read into his conversation history — which
+  // `/conversations` deliberately withholds from her credential. See
+  // `routes/tellings.ts`; the route offers no such verb, and this entry
+  // therefore widens nothing beyond the one write.
+  { path: "/tellings", says: "her own words, said to him unprompted" },
   // THE FIRST SURFACE THAT REACHES OFF THIS MACHINE — `syl-r1t`, and the entry
   // on this list whose argument is least like the others'.
   //

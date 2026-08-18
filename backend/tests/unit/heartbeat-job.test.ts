@@ -234,6 +234,16 @@ describe("REACHES_HIM", () => {
     }
     expect(REACHES_HIM.length).toBeGreaterThan(0);
   });
+
+  it("should count every door into his phone, including the one with no video on it", () => {
+    // `syl-0x1h`. A verb missing from this list means the hour it is used in is
+    // counted as an hour that reached nobody, so the ceiling bounds nothing —
+    // which is exactly what happened to `show_him` (`syl-7ci`). Naming the
+    // three explicitly is what stops the fourth arriving unlisted.
+    expect(REACHES_HIM).toContain("remind_me");
+    expect(REACHES_HIM).toContain("show_him");
+    expect(REACHES_HIM).toContain("tell_him");
+  });
 });
 
 describe("the prompt she is woken with", () => {
@@ -408,6 +418,45 @@ describe("the hour itself", () => {
 
     expect(result.spoke).toBe(true);
     expect(result.outcome).toBe("success");
+  });
+
+  it("should record an hour she merely SPOKE in as one that reached him", async () => {
+    // `syl-0x1h`. The words-only door counts exactly as the other two do: the
+    // hour is spent, and it is spent from the same day.
+    const { jobs, job } = ready();
+    const handler = createHeartbeatHandler({
+      voice: voice(said("Told him about the policy.", [mcpToolName("tell_him")])),
+      jobs,
+      tz: TZ,
+      quiet: QUIET,
+    });
+
+    const result = await handler(contextFor(jobs, job, MORNING));
+
+    expect(result.spoke).toBe(true);
+    expect(result.outcome).toBe("success");
+  });
+
+  it("should spend the SAME day's allowance on a telling as on anything else", async () => {
+    // Not a second allowance beside the first. The hour that overspends is a
+    // failed hour whichever verb spent it, which is what gives the ceiling its
+    // teeth — five in a row take the hour away.
+    const { jobs, job } = ready();
+    for (let spent = 0; spent < SENDINGS_PER_DAY; spent += 1) {
+      pastRun(jobs, job, MORNING - (spent + 1) * 60 * 60_000, true);
+    }
+    const handler = createHeartbeatHandler({
+      voice: voice(said("One more thing.", [mcpToolName("tell_him")])),
+      jobs,
+      tz: TZ,
+      quiet: QUIET,
+    });
+
+    const result = await handler(contextFor(jobs, job, MORNING));
+
+    expect(result.spoke).toBe(true);
+    expect(result.outcome).toBe("failure");
+    expect(result.error ?? "").toMatch(/ceiling|allowance/iu);
   });
 
   it("should not count reading or rendering as reaching him", async () => {

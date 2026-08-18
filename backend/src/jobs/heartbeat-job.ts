@@ -111,17 +111,21 @@ export const SENDINGS_PER_DAY = 4;
  * looking at herself (`render_me`) are not speech, and counting them would
  * spend a day's allowance on an hour in which she said nothing to him at all.
  *
- * Both of these land on his phone unprompted, which is the whole definition of
- * reaching him: `remind_me` as a notification, `show_him` as a sending in From
- * Syl. Any future verb that arrives at him without his asking belongs here too,
- * and the test that every name is an advertised tool is what stops this list
- * from quietly naming a verb that no longer exists.
+ * All three of these land on his phone unprompted, which is the whole
+ * definition of reaching him: `remind_me` as a notification, `show_him` as a
+ * sending in From Syl, `tell_him` as her words in the conversation and on his
+ * lock screen. Any future verb that arrives at him without his asking belongs
+ * here too, and the test that every name is an advertised tool is what stops
+ * this list from quietly naming a verb that no longer exists.
  *
  * A verb missing from this list is not a small error: the hour it is used in
  * is counted as an hour that reached nobody, so `SENDINGS_PER_DAY` bounds
- * nothing and she may speak every hour of the day.
+ * nothing and she may speak every hour of the day. It has happened twice —
+ * `show_him` sat unlisted for a week (`syl-7ci`), and `tell_him` was added to
+ * this line in the same commit that created it (`syl-0x1h`) precisely because
+ * of that.
  */
-export const REACHES_HIM: readonly string[] = ["remind_me", "show_him"];
+export const REACHES_HIM: readonly string[] = ["remind_me", "show_him", "tell_him"];
 
 /**
  * The job kinds whose runs spend from the day's allowance.

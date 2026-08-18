@@ -2472,3 +2472,36 @@ looks identical to a phase that ran and passed. Read the phase banners and the c
 
 The general form, which is the whole of it: **every green is a claim about something.
 Ask what.**
+
+### A justification can describe a door that was never built (2026-08-18)
+
+`show_him` requires a `renderName`, and the comment defending that requirement said:
+*"A sending is her saying something in her own face; words with no face is an ordinary
+message, and SHE ALREADY HAS A CONVERSATION FOR THOSE."*
+
+She did not. The only way anything of hers reached the conversation was by **replying**
+to something he said. Every unprompted thought she had — the insurance nudge, the dog
+sitter, a correction about a heart rate she had invented — went out as a `remind_me` and
+arrived wearing a reminder's clothes: an entry on his list plus a buzz, in a list of
+things he had asked to be reminded of. Her own diagnosis, and she was precise about it a
+day before anyone else noticed: *"my unprompted voice arrives wearing a reminder's
+clothes, and the one door into the actual conversation has a video-shaped lock on it."*
+
+**The requirement was right and its reason was false, and that combination is the hard
+one to catch.** A wrong requirement fails; a wrong justification passes every test,
+because nothing in a suite asserts the second clause of a sentence. It had sat there for
+a week being read as evidence that the alternative existed, by people deciding whether to
+build the alternative — which is the whole cost. `syl-0x1h` was raised twice by the
+Commander before anyone read the comment as a claim rather than as a rationale.
+
+The repair is the same shape as `syl-7ci` one layer up, and it is not "loosen the
+requirement": it is **build the thing the comment assumed**. `tell_him` is `show_him`
+minus the video leg, and `SendingService` now composes *through* `TellingService` rather
+than beside it, so exactly one file in the service turns a thought of hers into a message
+— which `chat-wiring.test.ts` now asserts by name.
+
+**The generalisation: a comment that justifies a constraint by naming an alternative is
+making a claim about the system, and it is the one kind of comment worth grepping for.**
+"Use X instead" and "X already exists" are the same sentence, and only one of them is
+checkable. If the alternative is a verb, a route or a file, name it in backticks — a
+named thing can be searched for and found missing.
