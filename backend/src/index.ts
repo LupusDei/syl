@@ -113,8 +113,11 @@ import {
   SylAgent,
   type Lane,
 } from "./harness/agent.js";
-import { runTurn, type TurnOptions, type TurnRunner } from "./harness/session.js";
+import { createLaneWarmer } from "./harness/keep-warm.js";
+import type { WarmStatus } from "./harness/persistent-session.js";
+import { type TurnOptions, type TurnRunner } from "./harness/session.js";
 import type { Contributor } from "./harness/turn-context.js";
+import { WarmLanes } from "./harness/warm-lanes.js";
 import {
   mcpToolName,
   toolConfigPath,
@@ -931,7 +934,8 @@ export interface BootstrapOptions {
    */
   readonly turn?: TurnOptions;
   /**
-   * What actually runs a turn. Defaults to `runTurn` — a real subprocess.
+   * What actually runs a turn. Defaults to the warm-lane router — real
+   * subprocesses, one held open for the Commander's lane.
    *
    * The seam exists because a turn is the one dependency in this service that
    * is a *process*: most suites want Syl present and answering nothing, and
@@ -939,6 +943,10 @@ export interface BootstrapOptions {
    * acquires load-dependent flakiness. The tests that are about her answering
    * use `turn.claudeBin` and the real runner instead, so the wire format is
    * still exercised against a captured transcript.
+   *
+   * **Supplying one takes the warm path out of the picture entirely** — there
+   * is then no live process for anything to be warm *about*, which is why the
+   * face's cold-lane predicate is only wired when this is absent. See there.
    */
   readonly runner?: TurnRunner;
   /** Standing orders. Defaults to `SOUL.md` at the repo root, when there is one. */
@@ -970,6 +978,25 @@ export interface Bootstrapped {
    * in the test, which is the one thing a wiring test must not do.
    */
   readonly agent: SylAgent;
+  /**
+   * The warm-lane router, and therefore **a process to close** — `syl-u72z`.
+   *
+   * Returned rather than hidden because it is the one thing `bootstrap` builds
+   * that can outlive the process that built it. `WarmLanes` spawns lazily, so a
+   * caller that never takes a warm turn owns nothing; a caller that does and
+   * never calls `close()` leaves a resident `claude` on the Commander's machine
+   * with nothing on this side holding it. `startSyl` closes it after the chat
+   * has drained.
+   *
+   * It is also what the face's cold-lane precondition reads (`status`), and
+   * what an admin view can ask how many turns a live process has served — the
+   * number that says whether the lane is warm in name only.
+   *
+   * **NOT a field on `ServiceDependencies`**, for the reason `agentKey` is not:
+   * everything there is destructured into routers, and the authority to end her
+   * conversation's process is not a route's business.
+   */
+  readonly warmLanes: WarmLanes;
   /**
    * Syl's own credential, minted here and held nowhere else.
    *
@@ -1174,6 +1201,38 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // apart. See `tests/integration/mcp-config-wiring.test.ts`.
   const { mcpConfig: overriddenHands, ...turnOverrides } = options.turn ?? {};
   const commanderHands = overriddenHands ?? handsPath;
+
+  /**
+   * **THE WARM PATH, CONSTRUCTED AT LAST** — `syl-u72z`.
+   *
+   * `syl-per1` built `WarmLanes` and deliberately did not wire it, which was the
+   * right call for that commit and left the third instance of this epic's
+   * recurring defect: a component that is complete, unit-tested, and reached by
+   * nothing. `face.start()`/`face.stop()` was the second.
+   *
+   * What it changes: the Commander's lane — his conversation and the three
+   * unattended turns that now resume it — runs on ONE `claude` process instead
+   * of one per turn. Every other lane is untouched, and `runReaderTurn` cannot
+   * reach here at all (it imports `runTurn` directly and takes no runner).
+   *
+   * Why it stopped being optional: her live face rides on this lane, and
+   * Runway's `BackendRPCTool` caps `timeoutSeconds` at **8**. A cold spawn with
+   * the real turn shape measured 8,073ms — over the ceiling before the network
+   * and Runway's own round trip. A cold face does not answer late, it does not
+   * answer.
+   *
+   * **The wrappers go OUTSIDE this, not around its fallback.** That is what
+   * `WarmLanesOptions.fallback` is for and it is the whole reason this line is
+   * where it is: `withMemoryIndex` and `recordHisWords` must apply to warm and
+   * cold turns alike, and a guarantee holding on only half the turns would be
+   * worse than none — `recordHisWords` is the sole structural protection on his
+   * sleep, and it protects nothing if his own lane slips past it.
+   *
+   * Lifecycle: this object owns processes, so whoever constructs it must
+   * `close()` it. `startSyl` does, after the chat has drained. A `bootstrap`
+   * caller that takes warm turns and never closes leaks a resident CLI.
+   */
+  const warmLanes = new WarmLanes();
 
   /**
    * The declaration a lane is given by name, or nothing at all.
@@ -1423,7 +1482,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     // not about which runner ran. Whether a memory can be found again is a
     // guarantee this service holds; leaving it to the model lost the
     // Commander's canary on a haiku turn (`syl-03d`).
-    runner: withMemoryIndex(recordHisWords(options.runner ?? runTurn)),
+    runner: withMemoryIndex(recordHisWords(options.runner ?? warmLanes.runner)),
   });
   // How conversation becomes graph.
   //
@@ -1711,10 +1770,52 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // The vendor package is imported lazily the first time a face opens — see
   // `face/rpc-transport.ts` for why, and for what a machine missing it looks
   // like (a face that appears and is mute, logged as `face.rpc.attach_failed`).
+  //
+  // AND IT IS FINALLY GIVEN THE THREE SEAMS IT HAS ALWAYS DECLARED
+  // (`syl-chzl.2.2`, `syl-chzl.2.3`). `isLaneWarm`, `laneRail` and the warmer
+  // are the face's whole relationship with the warm lane, and until `syl-u72z`
+  // none of them could be supplied because there was no warm lane to ask —
+  // `FaceRuntimeOptions` named `WarmLanes.status(commander)` in its own doc
+  // comment and no call site passed anything. So the cold-lane refusal never
+  // fired in the live service and the per-turn rail check on a face turn never
+  // ran. They land together with the wiring, and they have to: the predicate
+  // alone would refuse every face (the lane is cold until something warms it),
+  // and the warmer alone would warm a lane nothing was gating on.
+  //
+  // ONLY WHEN THE WARM PATH IS ACTUALLY IN USE. A caller that supplied its own
+  // runner has routed past `WarmLanes` entirely, so "is her lane warm?" has no
+  // subject — the honest answer is not "no", it is that the question does not
+  // apply, and answering "no" would refuse every face in every suite that
+  // injects a runner. Absence of the predicate means "do not check", which is
+  // exactly the behaviour those callers had before this line existed.
+  const warmPath = options.runner === undefined;
+  const commanderWarmth = (): WarmStatus | undefined => warmLanes.status(LANES.commander);
   const face = createFaceRuntime({
     db: database.handle,
     conversations: chat,
     clock,
+    ...(warmPath
+      ? {
+          isLaneWarm: (): boolean => commanderWarmth()?.warm === true,
+          laneRail: (): string | undefined => commanderWarmth()?.apiKeySource,
+          // One cheap turn at the moment the long press opens a session, so the
+          // first real question does not pay the cold cost. Preferred over a
+          // background ping on the bead's own reasoning: a ping running all day
+          // to serve a feature used twice is waste.
+          warmLane: createLaneWarmer({
+            voice: agent,
+            isWarm: (): boolean => commanderWarmth()?.warm === true,
+            lane: LANES.commander,
+            ...(log === undefined
+              ? {}
+              : {
+                  log: (event, fields): void => {
+                    log.info(event, fields);
+                  },
+                }),
+          }),
+        }
+      : {}),
     transport: ({ ingress, broker }) =>
       createRunwayFaceTransport({
         ingress,
@@ -1811,6 +1912,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     database,
     agent,
     agentKey,
+    warmLanes,
     // What was decided, not what was intended — the boot notice is derived from
     // this and from nothing else. See `Bootstrapped.hands` and `syl-009.9`.
     hands: commanderHands,
@@ -2121,7 +2223,10 @@ export async function startSyl(
   config: SylConfig,
   options: StartSylOptions = {},
 ): Promise<RunningSyl> {
-  const { database, deps: bootstrapped, agent, agentKey, hands } = bootstrap(config, options);
+  const { database, deps: bootstrapped, agent, agentKey, hands, warmLanes } = bootstrap(
+    config,
+    options,
+  );
   const delivery = options.delivery ?? {};
   const clock = delivery.clock ?? options.clock ?? systemClock;
 
@@ -2162,6 +2267,10 @@ export async function startSyl(
     // The store was opened by `bootstrap` a few lines up. Leaving it open on a
     // refused start leaks a WAL and, in a test suite, a file handle per case.
     database.close();
+    // Nothing has taken a turn yet, so there is no child to kill — but the
+    // router is closed anyway rather than relying on that remaining true. A
+    // refused start is exactly where a half-built service gets abandoned.
+    await warmLanes.close();
     throw error;
   }
 
@@ -2394,6 +2503,17 @@ export async function startSyl(
       // and only the provider's cap would end it.
       await deps.face.stop();
       await service.close();
+      // HER WARM PROCESS, LAST — `syl-u72z`. Order is the whole of it: the line
+      // above drains the chat, so a turn that is one second from finishing
+      // still finishes. Killing the process first would fail his last message
+      // to save two seconds of shutdown.
+      //
+      // And it must happen at all. A `claude` held open across turns is a child
+      // of THIS process; without this line a stop leaves it resident on his
+      // machine, reparented to init, holding his conversation, answering
+      // nobody — and launchd's `KeepAlive` starts another service beside it a
+      // moment later. One leak per restart, invisible to every check we have.
+      await warmLanes.close();
     },
   };
 }

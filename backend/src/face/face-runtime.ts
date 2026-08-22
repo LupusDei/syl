@@ -82,6 +82,15 @@ export interface FaceRuntimeOptions {
   /** `syl-chzl.2.2`'s predicate — `WarmLanes.status(commander)?.warm`. */
   readonly isLaneWarm?: () => boolean;
   /**
+   * `syl-chzl.2.3` — one cheap turn taken when a session opens, so the first
+   * real question does not pay the cold cost. `harness/keep-warm.ts` builds it.
+   *
+   * Handed to the broker rather than called here, because the moment that
+   * matters is `startSession`, before its cold gate: everything else in this
+   * runtime happens after a session already exists.
+   */
+  readonly warmLane?: () => Promise<unknown>;
+  /**
    * What the warm lane's live process last reported as `apiKeySource`.
    * `WarmLanes.status(commander)?.apiKeySource`. See `face-conversation.ts`.
    */
@@ -144,6 +153,7 @@ export function createFaceRuntime(options: FaceRuntimeOptions): FaceRuntime {
     ...(options.client === undefined ? {} : { client: options.client }),
     ...(options.avatarId === undefined ? {} : { avatarId: options.avatarId }),
     ...(options.isLaneWarm === undefined ? {} : { isLaneWarm: options.isLaneWarm }),
+    ...(options.warmLane === undefined ? {} : { warmLane: options.warmLane }),
     ...(options.log === undefined ? {} : { log: options.log }),
   });
 

@@ -28,7 +28,8 @@ import {
  * {@link FaceSessionStore} (durability).
  *
  * ```
- * startSession()      warm gate → cost gate → create → charge → poll to READY
+ * startSession()      WARM HER UP → warm gate → cost gate → create → charge
+ *                     → poll to READY
  *                     → one-shot client credentials + a per-session credential
  * renewSession()      the same path again; a realtime session cannot be
  *                     extended, so a renew is a fresh, re-gated, re-charged create
@@ -197,6 +198,26 @@ export interface FaceSessionBrokerOptions {
   readonly tools?: readonly RunwayRpcToolDef[];
   /** `syl-chzl.2.2`'s predicate. Omitted means "do not check". */
   readonly isLaneWarm?: () => boolean;
+  /**
+   * `syl-chzl.2.3` — make the lane warm, before {@link isLaneWarm} judges it.
+   *
+   * A **preparation, not a gate.** It is awaited before the cold refusal below,
+   * so the ordinary case — he has not spoken to her for fifteen minutes, the
+   * idle reaper took the process, and he long-presses her face — costs one
+   * cheap turn rather than a refusal. It is only called when the lane is
+   * actually cold and there is budget to open a session at all: warming a lane
+   * for a face today's ceiling will refuse is a turn spent on nothing.
+   *
+   * It must resolve rather than reject whatever happens; `harness/keep-warm.ts`
+   * is the implementation and never throws. A rejection here is swallowed and
+   * logged anyway, because a warm-up that failed is a question for the gate,
+   * not a 500 for the phone.
+   *
+   * Omitted means the lane is taken as it is found — which is what every caller
+   * did before this existed, and what a suite injecting its own runner still
+   * wants: there is no warm process for anything to be warm about.
+   */
+  readonly warmLane?: () => Promise<unknown>;
   readonly pollIntervalMs?: number;
   readonly timeoutMs?: number;
   readonly renewLeadMs?: number;
@@ -214,6 +235,7 @@ export class FaceSessionBroker {
   readonly #avatarId: string;
   readonly #tools: readonly RunwayRpcToolDef[];
   readonly #isLaneWarm: (() => boolean) | null;
+  readonly #warmLane: (() => Promise<unknown>) | null;
   readonly #pollIntervalMs: number;
   readonly #timeoutMs: number;
   readonly #renewLeadMs: number;
@@ -230,6 +252,7 @@ export class FaceSessionBroker {
     this.#avatarId = options.avatarId ?? process.env["SYL_FACE_AVATAR_ID"] ?? SYL_AVATAR_ID;
     this.#tools = options.tools ?? [AskSylIngress.toolDefinition()];
     this.#isLaneWarm = options.isLaneWarm ?? null;
+    this.#warmLane = options.warmLane ?? null;
     this.#pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_CREATE_TIMEOUT_MS;
     this.#renewLeadMs = options.renewLeadMs ?? DEFAULT_RENEW_LEAD_MS;
@@ -263,6 +286,39 @@ export class FaceSessionBroker {
   }
 
   /**
+   * Take a keep-warm turn if — and only if — one would be worth taking.
+   *
+   * Three refusals, in the order that spends least:
+   *
+   * - **no warmer supplied**: the lane is taken as found, as it always was;
+   * - **already warm**: the process is live and has handshaken, so a turn here
+   *   would buy nothing and would race the reaper for no reason;
+   * - **no budget**: today's ceiling is spent, so the gate below is going to
+   *   refuse this session anyway. Warming for a face that cannot open is a
+   *   subscription turn burned on a refusal. The cheap check runs first even
+   *   though the *gate* order stays lane-then-ceiling, which is asserted in
+   *   `face-session-broker.test.ts` and unaffected: this is not a gate.
+   *
+   * Never rethrows. `harness/keep-warm.ts` already resolves on failure; this is
+   * the belt for a caller that supplies something else, because a preparation
+   * that can fail an open is not a preparation.
+   */
+  async #warmUp(): Promise<void> {
+    if (this.#warmLane === null) return;
+    if (this.#isLaneWarm !== null && this.#isLaneWarm()) return;
+    if (!this.#guard.canStartSession()) return;
+
+    try {
+      const outcome = await this.#warmLane();
+      this.#log("face.lane.warmed", { outcome });
+    } catch (error) {
+      this.#log("face.lane.warm_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
    * Open a face: gate, create, charge, poll, hand back credentials.
    *
    * @throws {FaceColdLaneError} her lane cannot answer inside the tool ceiling.
@@ -271,6 +327,15 @@ export class FaceSessionBroker {
    *   became usable. The row is settled `failed` and the spend is recorded.
    */
   async startSession(): Promise<OpenedFaceSession> {
+    // 0. WARM HER, BEFORE THE GATE JUDGES HER. `syl-chzl.2.3`: the lane goes
+    //    cold after fifteen idle minutes and there is no free pre-warm — the
+    //    CLI emits nothing until a frame arrives, so a lane becomes warm only
+    //    by taking a turn. Without this, the ordinary case (he has not spoken
+    //    to her in a while and long-presses her face) hits the refusal below
+    //    every single time, which is a correct gate answering a question
+    //    nobody had to lose.
+    await this.#warmUp();
+
     // 1. The free gates, cheapest first. Neither makes an HTTP call.
     if (this.#isLaneWarm !== null && !this.#isLaneWarm()) throw new FaceColdLaneError();
     if (!this.#guard.canStartSession()) {

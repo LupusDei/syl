@@ -462,10 +462,19 @@ describe("US2 — he can talk to her", () => {
       syl = await startLiveService({ claude: answeringClaude() });
     });
 
-    it("should answer over a real subprocess, and resume the same session next turn", async () => {
+    it("should answer over a real subprocess, and keep the same conversation next turn", async () => {
       // Two turns in one test rather than two, because each one is a process
       // and this file is not the place to spend them. Everything asserted here
       // is a fact about the harness underneath the service.
+      //
+      // **HOW CONTINUITY IS HELD CHANGED UNDER THIS TEST** — `syl-u72z`. His
+      // lane is warm now: one `claude` process serves both turns instead of two
+      // processes joined by `--resume`. The story is unchanged and the property
+      // is stronger — there is no window in which a second process could resume
+      // a transcript the first is still writing — but the mechanism this test
+      // reads is a different one, so what it looks at had to move with it.
+      // Respawn-and-resume is still exactly how a dead process recovers, and
+      // `persistent-session.test.ts` is where that lives.
       const { client } = await connect();
 
       const first = await exchange(
@@ -495,27 +504,35 @@ describe("US2 — he can talk to her", () => {
 
       await exchange(client, "syl:message:00000000-0000-7000-8000-00000000b003", "Second thing.");
 
-      // Continuity is `--resume <sessionId>` against the id stored for this
-      // lane, and it is also why turns must not overlap: two subprocesses
-      // resuming one id interleave two halves of one transcript.
-      // THE SECOND TURN OF HIS CONVERSATION, named rather than assumed to be
-      // the newest spawn.
+      // ONE PROCESS, TWO FRAMES. Continuity used to be `--resume <sessionId>`
+      // against the id stored for this lane; on the warm path it is the process
+      // itself, and both frames go down the one still-open stdin against the
+      // one session id. The turns still must not overlap, and they still do not
+      // — `SylAgent` serialises per lane and `ConversationService` per
+      // conversation, and `PersistentSession` refuses a concurrent turn loudly
+      // rather than adding a third queue that could disagree with them.
       //
-      // This is the line that failed intermittently for weeks and passed 15/15
-      // in isolation, and the cause was never timing. Every spawn wrote to one
-      // record file, and an EXTRACTION READER TURN fires between his two
-      // messages — sealed, never resumed, so it carries no `--resume` at all.
-      // Whenever that reader was the last thing to write, this assertion read
-      // it and failed, and the failure was indistinguishable from continuity
-      // being broken. One record per spawn plus a filter for his own lane
-      // makes it say what it always meant.
-      // Exactly two turns of HIS CONVERSATION. There are three spawns: an
-      // extraction reader fires between them, which is the whole reason this
-      // assertion has to name what it wants.
-      expect(hisTurns(syl).length, "the second turn never spawned").toBe(2);
-      const resuming = hisTurns(syl)[1]?.argv ?? [];
-      expect(flagValue(resuming, "--resume")).toBeDefined();
-      expect(resuming).not.toContain("--session-id");
+      // The assertion this replaced failed intermittently for weeks and passed
+      // 15/15 in isolation, and the cause was never timing: an EXTRACTION
+      // READER TURN fires between his two messages, and whenever that reader
+      // was the last spawn to write, the assertion read it. The filter for his
+      // own lane is what fixed that and is why this one can still count.
+      //
+      // That the reader still spawns COLD — its own process, never resumed — is
+      // the other half of this and is asserted in
+      // `unit/warm-lane-wiring.test.ts`, deterministically. It does not belong
+      // here: when the extraction turn fires relative to this line is not
+      // something this test controls, and an assertion whose truth depends on
+      // that is the intermittent failure above wearing a new hat.
+      expect(hisTurns(syl).length, "his lane spawned more than once").toBe(1);
+      const his = hisTurns(syl)[0];
+      const frames = (his?.stdin ?? "").trimEnd().split("\n");
+      expect(frames, "the second turn never reached the warm process").toHaveLength(2);
+      expect(frames[1]).toContain("Second thing.");
+      // The conversation is the one the first turn opened; nothing re-minted.
+      expect(flagValue(his?.argv ?? [], "--session-id")).toBe(
+        flagValue(opening?.argv ?? [], "--session-id"),
+      );
 
       const page = await expectData<{ items: { role: string }[] }>(
         await syl.api(`/conversations/${encodeURIComponent(INTERACTIVE_CONVERSATION_ID)}/messages`),

@@ -202,6 +202,65 @@ session id; the fingerprint is only about the turn's *shape*, and it is derived
 from `turnShapeArgs` — **the same array the CLI is actually invoked with** — so a
 `TurnOptions` field added next month is covered with nothing to remember.
 
+### Wiring it — `syl-u72z`, 2026-08-22, and the third "built but never wired"
+
+`syl-per1` deliberately stopped short of construction. `syl-u72z` is the one
+line, plus the two things that make a one-line change safe.
+
+```ts
+runner: withMemoryIndex(recordHisWords(options.runner ?? warmLanes.runner))
+```
+
+**The wrappers go outside the router, never round its fallback.** That is what
+`WarmLanesOptions.fallback` exists for. `recordHisWords` is the only structural
+protection on the Commander's sleep — `harness/urgency.ts` lets a reminder
+pierce quiet hours solely because she quoted a phrase he actually wrote, and
+that file is written by the wrapper. Wrap the fallback and warm turns slip past
+it silently, with no line of code mentioning quiet hours. A guarantee holding on
+half the turns is worse than none, because the half that works is what you test.
+
+**Shutdown closes it, last, after the chat has drained.** `runtime.stop()` →
+`face.stop()` → `service.close()` (which drains in-flight turns) →
+`warmLanes.close()`. Killing the process first would fail his last message to
+save two seconds; not killing it at all leaves a `claude` reparented to init,
+holding his conversation, answering nobody — one leak per restart, and
+`KeepAlive` restarts a lot.
+
+**The third instance of this epic's recurring defect was found while looking for
+it.** `FaceRuntimeOptions` has declared `isLaneWarm` and `laneRail` since
+`syl-chzl.2.2`, each documented as `WarmLanes.status(commander)`, and `index.ts`
+passed **neither** — because there was no `WarmLanes` to ask. So the cold-lane
+refusal never fired in the live service and the per-turn rail check on a face
+turn never ran. `WarmLanes` itself was the first, `face.start()`/`face.stop()`
+the second. The shape is always the same: a complete, unit-tested component
+whose only defect is that its call site does not exist, which no unit suite can
+see and no integration test looks for.
+
+They had to land WITH the warmer (`harness/keep-warm.ts`, `syl-chzl.2.3`).
+The predicate alone refuses every face, because the lane is cold until something
+warms it and **there is no free pre-warm** — the CLI emits nothing until a frame
+arrives, so a lane goes warm only by taking a turn. So `startSession` takes one
+cheap turn *before* its own gate, and only when the lane is cold and the day's
+ceiling has not already refused the session. That turn writes no message, no
+run, and no `his-message.txt`: it is not a thought she had.
+
+Measured immediately after, against the real CLI, the real 41,695-byte turn
+shape, and a **TOOL-USING** prompt — the row that actually breaks the ceiling,
+since a face question that consults her service pays an MCP round trip the
+earlier no-tool numbers never did. Ten warm follow-ups over two runs:
+
+```
+warm follow-up, tool-using   3182 3386 4041 4171 4199 4355 4389 5331 5483 6215 7034 ms
+                             min 3182   median ~4372   avg 4759   max 7034
+cold, same shape (syl-chzl.2.3)   2496 3461 5192 7102 8073 ms
+```
+
+**Every warm turn cleared Runway's 8s `BackendRPCTool` ceiling; the worst cold
+one did not.** But the margin at the top is 966ms before the network and
+Runway's own round trip, so the covering behaviour still carries real weight and
+`syl-chzl` should not read this as comfortable. `apiKeySource === "none"` on all
+twelve turns.
+
 ### `git add -A` in a shared checkout, the second time — 2026-08-22
 
 `CLAUDE.md` already says "`-A` and `.` are how you steal work without noticing",

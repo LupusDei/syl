@@ -49,12 +49,25 @@ export const inertTimers: Timers = { set: () => 0, clear: () => undefined };
  * A fake `claude` that answers, replaying a real captured transcript.
  *
  * Pass it as `claude` to make a live service actually spawn a subprocess per
- * turn, through `runTurn`, exactly as production does. That is the shape US2
- * needs and it costs a node spawn per message — which is why it is opt-in
- * rather than the default. See {@link StartLiveServiceOptions.claude}.
+ * turn, exactly as production does. That is the shape US2 needs and it costs a
+ * node spawn per message — which is why it is opt-in rather than the default.
+ * See {@link StartLiveServiceOptions.claude}.
+ *
+ * **PERSISTENT, since `syl-u72z`, and it had to change.** It used to answer at
+ * stdin EOF, which is what `runTurn` produces and what the CLI needed until
+ * 2026-08-09. The Commander's lane now runs on `PersistentSession`, which
+ * deliberately never closes stdin — so an EOF-shaped fake on that lane does not
+ * answer wrongly, it does not answer at all, and the turn sits until its
+ * ten-minute deadline. Answering each frame as it lands is also simply what the
+ * real CLI does on 2.1.226: a `result` arrives with stdin still open.
+ *
+ * One entry, so it repeats forever — the same process answers every turn. Cold
+ * lanes (the reader, the dream) still spawn their own copy of this and get the
+ * same reply from it, because a fresh process's first frame is answered exactly
+ * the same way.
  */
 export function answeringClaude(): FakeClaudeConfig {
-  return { after: loadFixture("turn-pong"), exitCode: 0 };
+  return { turns: [{ lines: loadFixture("turn-pong") }], exitCode: 0 };
 }
 
 /**
