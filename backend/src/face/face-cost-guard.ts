@@ -73,16 +73,26 @@ export const DEFAULT_COST_MODEL: CostModel = {
 };
 
 /**
- * The default per-day ceiling: 300 credits, about **$3/day**, about fifteen
+ * The default per-day ceiling: 1,000 credits, about **$10/day**, about fifty
  * minutes of face.
  *
- * Deliberately low. This is a number a human should raise on purpose once he
- * knows what he uses, not one that quietly permits an afternoon of billing
- * because nobody thought about it. Fifteen minutes is generous for the thing it
- * is for — talking to her — and a ceiling that trips is a message she can say,
- * which is a far better outcome than an invoice.
+ * **Raised from 300 by the Commander, on purpose**, which is exactly the event
+ * the original number was chosen to provoke. It started deliberately low — not
+ * as a guess at the right figure, but so that the first person to find it
+ * restrictive would have to think about what he actually uses and say a number
+ * out loud. He has, so this is his.
+ *
+ * The property that matters is unchanged and is the reason a ceiling exists at
+ * all: a ceiling that trips is A MESSAGE SHE CAN SAY. An absent one is an
+ * invoice discovered later. Fifty minutes is a real bound rather than a
+ * gesture, and it still cannot quietly permit an afternoon of billing because
+ * nobody thought about it.
+ *
+ * If this is raised again, raise it the same way — deliberately, by someone who
+ * knows what a minute costs, and never to silence a ceiling that is doing its
+ * job.
  */
-export const DEFAULT_DAILY_CREDIT_CEILING = 300;
+export const DEFAULT_DAILY_CREDIT_CEILING = 1_000;
 
 /** Default idle timeout: cut a face that has been quiet for two minutes. */
 export const DEFAULT_IDLE_TIMEOUT_MS = 120_000;
