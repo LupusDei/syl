@@ -179,6 +179,39 @@ export interface SettledExchange {
  */
 export type AfterExchange = (exchange: SettledExchange) => void | Promise<void>;
 
+/**
+ * One turn, as reported back to a caller that WAITED for it — `syl-chzl.4.2`.
+ *
+ * Every existing write path is fire-and-forget: it accepts the message,
+ * answers immediately, and the reply arrives later on the socket. Her live
+ * face cannot work that way. The avatar's tool call is a request/response with
+ * a hard eight-second ceiling on it, so something has to hand the words back.
+ *
+ * {@link ConversationService.ask} is that something, and it is deliberately the
+ * **same queue** rather than a second path into `SylAgent`. Two routes to a
+ * turn is how one of them ends up without `SOUL.md`, without her memory, or
+ * without the per-conversation serialisation that stops two subprocesses
+ * resuming one session id. There is one seam; the face waits on it.
+ */
+export interface AnsweredTurn {
+  /** What she said, trimmed. Empty when a turn succeeded with nothing to say. */
+  readonly spoken: string;
+  /** True when `spoken` is {@link turnFailureText} rather than her words. */
+  readonly failed: boolean;
+  /**
+   * The credential the CLI resolved, off the init frame — or `null` when no
+   * turn ran (the service was closing) or the turn threw before reporting one.
+   *
+   * Surfaced so a caller can refuse to SPEAK an answer that came back on the
+   * metered rail. Constraint 3 is enforced upstream in `runTurn`, which strips
+   * the variable and asserts on it; this is the second lock, one layer out,
+   * for the one caller whose output is a voice rather than a row.
+   */
+  readonly apiKeySource: string | null;
+  /** The persisted assistant message, or `null` if there was nothing to store. */
+  readonly reply: Message | null;
+}
+
 export interface ConversationServiceOptions {
   readonly messages: MessageStore;
   /** Syl herself. One agent, many lanes. */
@@ -201,8 +234,12 @@ export class ConversationService {
   readonly #drainTimeoutMs: number;
   readonly #clock: Clock;
   readonly #afterExchange: AfterExchange | null;
-  /** One promise chain per conversation. Its presence means work is pending. */
-  readonly #queues = new Map<string, Promise<void>>();
+  /** One promise chain per conversation. Its presence means work is pending.
+   *
+   * Typed loosely because `ask` needs the chain's value and `accept` does not;
+   * what the map is FOR is knowing a conversation is busy, and that question
+   * does not care what the turn produced. */
+  readonly #queues = new Map<string, Promise<unknown>>();
   /**
    * Follow-up work in flight, off the queues on purpose.
    *
@@ -291,7 +328,42 @@ export class ConversationService {
 
     this.#publish(result.message);
     if (result.message.role !== "user") return;
-    this.#enqueue(result.message);
+    void this.#enqueue(result.message);
+  }
+
+  /**
+   * Say something to her and **wait for the answer** — `syl-chzl.4.2`.
+   *
+   * Same store, same queue, same lane, same `SylAgent` as {@link accept}; the
+   * only difference is that the caller gets the words back instead of reading
+   * them off the socket later. Her live face is the one caller that needs that,
+   * because a `backend_rpc` tool call is a request/response and the provider
+   * stops waiting after eight seconds.
+   *
+   * **It queues behind whatever the conversation is already doing**, which is
+   * the point rather than a side effect: a face turn and a message from his
+   * phone are two turns on one conversation, and two subprocesses resuming one
+   * session id corrupt the transcript in Claude Code's own store where we
+   * cannot repair it. The second one waits.
+   *
+   * Rejects only if the append is refused. A turn that fails resolves with
+   * `failed: true` and {@link turnFailureText} in `spoken`, because silence is
+   * never how a failure is reported.
+   */
+  async ask(input: AppendMessage): Promise<AnsweredTurn> {
+    const result = this.append(input);
+    if (result.message.role !== "user") {
+      throw new Error("ConversationService.ask takes something HE said, not something she did.");
+    }
+
+    if (result.replayed) {
+      // The first send already ran this turn and published its reply. Running
+      // it again would charge for and store a second answer to one question.
+      return { spoken: "", failed: false, apiKeySource: null, reply: null };
+    }
+
+    this.#publish(result.message);
+    return this.#enqueue(result.message);
   }
 
   /** Resolve once nothing is running or queued, follow-up work included. */
@@ -356,10 +428,10 @@ export class ConversationService {
    * settles, so `pending` and `idle` describe what is actually happening rather
    * than what has ever happened.
    */
-  #enqueue(message: Message): void {
+  #enqueue(message: Message): Promise<AnsweredTurn> {
     if (this.#closed) {
       this.#log(`not answering message ${message.id}: the conversation service has stopped.`);
-      return;
+      return Promise.resolve({ spoken: "", failed: true, apiKeySource: null, reply: null });
     }
 
     // Stamped on the way in AND on the way out. In, so the dream yields the
@@ -371,21 +443,30 @@ export class ConversationService {
     const previous = this.#queues.get(key) ?? Promise.resolve();
     // `#turn` settles rather than rejecting, so one failure cannot poison the
     // chain and leave a conversation permanently unanswered.
-    const chain = previous.then(() => this.#turn(message));
+    // `previous` cannot reject — `#turn` settles rather than throwing — but the
+    // rejection handler is stated rather than assumed, because `ask` now awaits
+    // this chain and a rejection escaping here would surface as a face that
+    // threw rather than a face that apologised.
+    const chain = previous.then(
+      () => this.#turn(message),
+      () => this.#turn(message),
+    );
     this.#queues.set(key, chain);
     void chain.finally(() => {
       this.#lastActiveAt = this.#clock();
       if (this.#queues.get(key) === chain) this.#queues.delete(key);
     });
+    return chain;
   }
 
   /** One turn: ask, then persist and publish whatever came back. */
-  async #turn(message: Message): Promise<void> {
-    if (this.#closed) return;
+  async #turn(message: Message): Promise<AnsweredTurn> {
+    if (this.#closed) return { spoken: "", failed: true, apiKeySource: null, reply: null };
 
     const lane = laneFor(message.conversationId);
     let reply: string;
     let failed = false;
+    let apiKeySource: string | null = null;
 
     this.#presence?.turnStarted();
     try {
@@ -398,6 +479,11 @@ export class ConversationService {
       // only words he actually wrote can grant a reminder the right to pierce
       // quiet hours. See `AskOptions.hisWords`.
       const result = await this.#agent.ask(message.text, lane, { hisWords: true });
+      // Read off the init frame, not off what we asked for. `runTurn` strips
+      // `ANTHROPIC_API_KEY` and asserts on this; carrying it out lets the one
+      // caller whose output is a VOICE refuse to speak an answer that came back
+      // on the metered rail. See `AnsweredTurn.apiKeySource`.
+      apiKeySource = result.init.apiKeySource;
       // `spoken`, not `text`. The CLI's result field carries only the prose after the
       // last tool call, so the moment she could create a reminder mid-answer her replies
       // began arriving with everything before the tool removed. `text` stays the raw
@@ -414,10 +500,10 @@ export class ConversationService {
       this.#presence?.turnEnded();
     }
 
-    if (reply === "") return;
+    if (reply === "") return { spoken: "", failed, apiKeySource, reply: null };
     if (this.#closed) {
       this.#log(`dropping a reply on lane ${lane}: the conversation service stopped mid-turn.`);
-      return;
+      return { spoken: reply, failed, apiKeySource, reply: null };
     }
 
     try {
@@ -440,8 +526,10 @@ export class ConversationService {
           reply: appended.message,
         });
       }
+      return { spoken: reply, failed, apiKeySource, reply: appended.message };
     } catch (error) {
       this.#log(`failed to store a reply on lane ${lane}`, error);
+      return { spoken: reply, failed: true, apiKeySource, reply: null };
     }
   }
 
