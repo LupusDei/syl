@@ -279,6 +279,59 @@ public enum SylAPI {
         .get("/sendings/\(id)")
     }
 
+    // MARK: - Her face, live
+
+    /// Open a live session with her face (`syl-chzl.7.1`, T021).
+    ///
+    /// **This call costs real money the moment it succeeds** — roughly twenty cents a
+    /// minute — which is why the gesture that reaches it is a deliberate long press
+    /// rather than a button, and why the caller must close what it opens.
+    ///
+    /// It answers a ``FaceSession``: a short-lived session key and, when the broker
+    /// minted native join credentials, a room to subscribe to. **It never answers a
+    /// vendor secret**, and there is nowhere in ``FaceSession`` to put one.
+    ///
+    /// A refusal — the day's ceiling, a cold lane — arrives as an ordinary error
+    /// envelope; read it with ``FaceRefusal/from(_:)`` rather than showing the raw
+    /// message, because "rate limited" is the wrong sentence for "today's money is
+    /// spent".
+    ///
+    /// The idempotency key matters more here than almost anywhere else in this
+    /// catalogue: the retry policy retries by design, and a duplicated *face* is a
+    /// second session billing in parallel behind one nobody can see.
+    public static func openFaceSession(
+        _ body: OpenFaceSessionRequest = OpenFaceSessionRequest(),
+        idempotencyKey: String
+    ) throws -> Endpoint<FaceSession> {
+        try .write(.post, "/face/sessions", body: body, idempotencyKey: idempotencyKey)
+    }
+
+    /// This session's state and its live meter.
+    ///
+    /// A read, and a device may make it: this is his money and his data, so the phone
+    /// gets to show the number rather than being told to trust the tap.
+    public static func faceSession(_ id: String) -> Endpoint<FaceSessionReport> {
+        .get("/face/sessions/\(id)")
+    }
+
+    /// Close a session and settle its accounting.
+    ///
+    /// **The client closes what it opened, always, and does not wait for a reaper to
+    /// notice.** The server-side reaper exists for the cases the client cannot cover —
+    /// a crash, a killed app, a dead tailnet — and every one of those is a session that
+    /// went on billing for as long as the reaper's interval. The instant close is free
+    /// and the reaper is the backstop, never the mechanism.
+    ///
+    /// Idempotent on the server, which is what makes it safe to call from the two places
+    /// that both mean "he has left": the screen disappearing and the app backgrounding
+    /// can race, and neither may be the one that is skipped.
+    public static func closeFaceSession(
+        _ id: String,
+        idempotencyKey: String
+    ) -> Endpoint<FaceSessionReport> {
+        .write(.delete, "/face/sessions/\(id)", idempotencyKey: idempotencyKey)
+    }
+
     // MARK: - Devices
 
     public static func devices(cursor: String? = nil, limit: Int? = nil) -> Endpoint<DevicePage> {

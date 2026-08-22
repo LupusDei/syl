@@ -59,6 +59,13 @@ struct HomeView: View {
     /// Opens everything he owes — the list the day cannot show, because the day can only
     /// show things with a time.
     var onOpenList: () -> Void = {}
+    /// He held her face down (`syl-chzl.7`). Nil where there is no live face to open —
+    /// a preview, an offscreen render, a device with no object graph behind it.
+    ///
+    /// **Additive, and it has to stay additive.** Every closure above keeps doing exactly
+    /// what it did; this one is reached by a gesture none of them use. See ``doors()``
+    /// for the assertion that says so.
+    var onAwaken: (() -> Void)?
 
     /// Where an orb goes.
     ///
@@ -201,7 +208,7 @@ struct HomeView: View {
             // The hero art alone. What she is *doing* used to be drawn across it, as a
             // ribbon — see ``SylHalo`` for why it moved, and for why the ribbon was
             // right in chat and wrong here.
-            SylHero(presence: presence, intensity: presenceIntensity, prefersStill: !scrolls)
+            figure
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .animation(SylTheme.Motion.breathe, value: presence)
 
@@ -220,6 +227,23 @@ struct HomeView: View {
         // has none — falls back to the raw viewport. That path has no tab bar either, so
         // there is nothing for it to get wrong.
         .modifier(OneScreenTall(active: scrolls, fallback: viewport.height))
+    }
+
+    /// Her, as a value.
+    ///
+    /// A property rather than an expression inside ``hero(viewport:)`` so a test can hold
+    /// the hero this screen actually builds and check what reached it. That is not
+    /// ceremony: the long press is a `UIGestureRecognizer` behind a `UIViewRepresentable`
+    /// inside a `GeometryReader` inside a `ScrollView`, and none of that is reachable
+    /// from a test — but *"did the home screen hand its hero a way to wake her"* is the
+    /// question that actually goes wrong, and this makes it answerable.
+    var figure: SylHero {
+        SylHero(
+            presence: presence,
+            intensity: presenceIntensity,
+            prefersStill: !scrolls,
+            onAwaken: onAwaken
+        )
     }
 
     /// Her name, her line, and the three doors — over a glossy fade.
@@ -298,20 +322,39 @@ struct HomeView: View {
     /// doors and still fits at four, on every device, with no number to revisit.
     private var orbs: some View {
         HStack(alignment: .top, spacing: 0) {
-            SylOrb(title: "Goals", symbol: "sparkle") { onOpen(.goals) }
-                .frame(maxWidth: .infinity)
+            ForEach(doors(), id: \.title) { door in
+                door.frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    /// The four doors, as values.
+    ///
+    /// ## Why this is a function and not four expressions in a stack
+    ///
+    /// **So that "a plain tap still does what it did today" is a test rather than a
+    /// hope.** `syl-chzl.7` adds a long press to this screen and is explicit that
+    /// regressing tap-to-open would be a worse outcome than not shipping the gesture at
+    /// all — and a snapshot cannot catch a lost tap handler, because a door whose action
+    /// went nowhere renders pixel-identical to one that works. This project has the scar:
+    /// the Memory orb shipped looking exactly like its neighbours and doing nothing, and
+    /// the Commander reasonably concluded the app was broken.
+    ///
+    /// Returning the orbs lets a test press each one and assert where it goes. Nothing
+    /// about what is drawn changed.
+    func doors() -> [SylOrb] {
+        [
+            SylOrb(title: "Goals", symbol: "sparkle") { onOpen(.goals) },
             // Open since `syl-ryp.2`. It was dimmed because an orb identical to the two
             // beside it that does nothing when tapped is worse than one visibly not
             // ready — he tapped it and reasonably concluded the app was broken. It now
             // leads to the constellation, so the dimming would be the lie instead.
-            SylOrb(title: "Memory", symbol: "cloud") { onOpen(.memory) }
-                .frame(maxWidth: .infinity)
+            SylOrb(title: "Memory", symbol: "cloud") { onOpen(.memory) },
             // An envelope rather than a play triangle, and that is the same ruling the
             // screen's title carries: what arrives there is not a video, it is her. A
             // file-format glyph would name the wrong thing on the one door where the
             // sender is the point.
-            SylOrb(title: "From Syl", symbol: "envelope") { onOpen(.fromSyl) }
-                .frame(maxWidth: .infinity)
+            SylOrb(title: "From Syl", symbol: "envelope") { onOpen(.fromSyl) },
             SylOrb(
                 title: "Today",
                 symbol: "sun.horizon",
@@ -319,9 +362,8 @@ struct HomeView: View {
                 // the system — it is the count of things still waiting on him, and it is
                 // absent entirely when there are none.
                 detail: snapshot.isClear ? nil : "\(snapshot.remaining) left"
-            ) { scrollToDay &+= 1 }
-            .frame(maxWidth: .infinity)
-        }
+            ) { scrollToDay &+= 1 },
+        ]
     }
 
     // MARK: - The day

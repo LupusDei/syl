@@ -61,10 +61,14 @@ as one subprocess per turn, with continuity via `--resume`.
 
 One process per turn **is no longer forced** (re-measured 2026-08-09 on CLI
 2.1.226). A `result` now arrives with stdin still open, so one process can serve
-many turns. Follow-up turns cost **~1.4s** against **~5.5-9.7s** for a fresh
-spawn — 4-7x, on every turn Syl takes. `runTurn` has not been changed yet:
-`syl-per1`. Reproduce with `node scripts/experiments/persistent-session.mjs`;
-details in `docs/CONTEXT.md` §3.
+many turns.
+
+**`syl-per1` built the warm path and it is a LANE SPLIT, not a replacement.**
+`harness/persistent-session.ts` is one process serving many turns on one lane;
+`harness/warm-lanes.ts` decides which lane gets one. `runTurn` is unchanged and
+still spawns per turn for everything else. Measured 2026-08-22 through the real
+harness against the real CLI: per-turn **avg 4541ms**, warm follow-up **avg
+965ms** — **4.7x**. Details in `docs/CONTEXT.md` §3.
 
 The old note said the opposite, was correctly measured, and had silently decided
 the whole architecture. **Load-bearing measurements against someone else's binary
@@ -78,6 +82,8 @@ An npm monorepo. `ios/` is Swift and deliberately **not** an npm workspace.
 backend/                          the Node 22 service (npm workspace)
   src/harness/protocol.ts         pure codec — JSON lines <-> typed events. Zero I/O.
   src/harness/session.ts          runTurn(): one subprocess per turn
+  src/harness/persistent-session.ts  ONE process, MANY turns, ONE lane — the warm path
+  src/harness/warm-lanes.ts       THE LANE SPLIT: which turns go warm, which spawn and die
   src/harness/agent.ts            SylAgent: per-lane continuity, one turn at a time
                                   per lane, stale-session recovery. LANES, and why
                                   her unattended turns are the Commander's own.
@@ -333,7 +339,24 @@ to add is about *additional* surfaces and blocks nothing.
   onSessionId` fires pre-spawn so the id can be persisted first — a crash
   between spawn and init used to strand a conversation that existed on disk.
 - `runTurn` kills a turn that produces no result within `timeoutMs`
-  (`DEFAULT_TURN_TIMEOUT_MS`, 10 minutes) and throws `TurnTimeoutError`.
+  (`DEFAULT_TURN_TIMEOUT_MS`, 10 minutes) and throws `TurnTimeoutError`. The
+  warm path enforces the same deadline and **kills the process with the turn** —
+  a wedged CLI is indistinguishable from a busy one except by that clock, and a
+  late result arriving during somebody else's turn is worse than a respawn.
+- **THERE IS NO FREE PRE-WARM. The CLI does nothing at all until a prompt
+  arrives.** Measured 2026-08-22: stdin held open against a spawned process for
+  30 seconds produced *no init frame* and no output of any kind. So spawning
+  early does not warm a lane — **a lane becomes warm by taking a turn**, and
+  `WarmStatus.warm` is derived from having seen an init rather than from holding
+  a pid. Anyone who builds a "spawn ahead of time to hide the startup cost"
+  optimisation will find it does nothing, and nothing will fail to say so.
+- **The CLI emits a FRESH `init` frame on EVERY turn**, 4-6ms after the frame,
+  carrying `apiKeySource` each time — not once per session, as the name and the
+  protocol comment both suggest. This is load-bearing in the good direction: the
+  worry about a long-lived process was that it asserts subscription rails once
+  and then trusts them for hours, and the wire format removes it.
+  `PersistentSession` asserts on each turn's own init, so constraint 3 is
+  exactly as strong on the warm path as on the per-turn one.
 - **Her unattended turns run in the Commander's own thread.** The hourly
   check-in, the render review and the morning brief all resume `commander`; only
   `consolidation` and `extraction` keep lanes of their own, and those are not

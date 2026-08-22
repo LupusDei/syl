@@ -104,11 +104,46 @@ export interface FakeClaudeInvocation {
   readonly sawAuthToken: boolean;
 }
 
+/**
+ * One response in {@link FakeClaudeConfig.turns} — what the fake does when the
+ * *n*-th user frame arrives, without waiting for stdin EOF.
+ */
+export interface FakeClaudeTurn {
+  /** Lines written to stdout for this frame. */
+  readonly lines?: readonly string[];
+  /** Wait this long before emitting them, to model a slow-but-alive CLI. */
+  readonly delayMs?: number;
+  /**
+   * Emit `lines`, then stop answering forever while staying alive with the
+   * pipes open. The wedged-persistent-process case: indistinguishable from a
+   * busy one except by the clock.
+   */
+  readonly hang?: boolean;
+  /**
+   * Die instead of answering, with this exit code. The mid-turn crash: the
+   * caller is waiting on a result that is never coming.
+   */
+  readonly die?: number;
+}
+
 export interface FakeClaudeConfig {
   /** Lines written to stdout as soon as the process starts, before stdin EOF. */
   readonly before?: readonly string[];
   /** Lines written after stdin reaches EOF — where the real CLI does its work. */
   readonly after?: readonly string[];
+  /**
+   * Persistent mode: answer **each user frame as it arrives**, without waiting
+   * for stdin EOF.
+   *
+   * This is the behaviour re-measured on CLI 2.1.226 that `syl-per1` is built
+   * on — a `result` arrives with stdin still open, and further frames can be
+   * sent down the same process. `turns[i]` answers the i-th frame; the **last
+   * entry repeats** for every frame after it, so a two-entry array is "one
+   * cold turn, then this forever".
+   *
+   * Mutually exclusive with `after`, which is the EOF-shaped path.
+   */
+  readonly turns?: readonly FakeClaudeTurn[];
   /**
    * Exit without reading stdin at all, the way the CLI does when it rejects its
    * own arguments. The parent's write then lands on a closed pipe.
@@ -224,11 +259,18 @@ const record = () => {
 // its argv is exactly what the timeout tests need to assert on.
 record();
 
-const sessionIdIndex = argv.indexOf("--session-id");
-const sessionId = sessionIdIndex === -1 ? undefined : argv[sessionIdIndex + 1];
+// \`--resume\` as the fallback, because a resumed session reports the id it was
+// resumed onto — the same thing \`--session-id\` does at the other end. A
+// persistent process that respawns after a crash carries only \`--resume\`, and
+// a fake that echoed the captured fixture's id there would have the harness
+// persist the WRONG conversation id and never notice.
+const flag = (name) => {
+  const at = argv.indexOf(name);
+  return at === -1 ? undefined : argv[at + 1];
+};
+const sessionId = flag("--session-id") ?? flag("--resume");
 
-const settingsIndex = argv.indexOf("--settings");
-const settingsRaw = settingsIndex === -1 ? undefined : argv[settingsIndex + 1];
+const settingsRaw = flag("--settings");
 
 // What the real CLI would report in \`memory_paths\` for this argv: a directory,
 // or nothing at all when auto-memory is switched off. \`null\` means the setting
@@ -280,6 +322,66 @@ const emit = (lines) => {
   for (let i = 0; i < out.length; i += size) process.stdout.write(out.slice(i, i + size));
 };
 
+// PERSISTENT MODE. Answer each frame as it lands, never waiting for EOF.
+//
+// Captured on 2.1.226: the real CLI emits a FRESH init frame per turn, four to
+// six milliseconds after the frame arrives, carrying \`apiKeySource\` every time.
+// A test's \`turns[i].lines\` should therefore include an init line, because a
+// persistent turn that produced no init is not a shape the CLI produces.
+const runPersistently = () => {
+  const turns = config.turns ?? [];
+  let index = 0;
+  let wedged = false;
+  let pending = "";
+
+  const answer = (turn) => {
+    // Lines FIRST, then the death — so \`{ lines: [init], die: 1 }\` is a process
+    // that handshook and then crashed mid-turn, which is a different failure
+    // from one that never started. The harness tells them apart by whether an
+    // init was ever seen.
+    emit(turn.lines ?? []);
+    if (turn.die !== undefined) {
+      // Straight out, mid-turn, with the caller still waiting on a result.
+      // setImmediate so the lines above reach the pipe first.
+      setImmediate(() => process.exit(turn.die));
+      return;
+    }
+    if (turn.hang) {
+      wedged = true;
+      setInterval(() => {}, 1000);
+    }
+  };
+
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    stdin += chunk;
+    pending += chunk;
+    let at;
+    while ((at = pending.indexOf("\\n")) !== -1) {
+      const line = pending.slice(0, at);
+      pending = pending.slice(at + 1);
+      if (line.trim() === "") continue;
+      record();
+      if (wedged) continue;
+      // The LAST entry repeats, so "one cold turn then this forever" is a
+      // two-entry array rather than a padded one.
+      const turn = turns[Math.min(index, turns.length - 1)] ?? {};
+      index += 1;
+      if (turn.delayMs) setTimeout(() => answer(turn), turn.delayMs);
+      else answer(turn);
+    }
+  });
+  // Nothing else keeps the loop alive between turns; the real CLI sits waiting.
+  const alive = setInterval(() => {}, 1000);
+  process.stdin.on("end", () => {
+    record();
+    if (config.stderr) process.stderr.write(config.stderr);
+    if (wedged) return;
+    clearInterval(alive);
+    process.exitCode = config.exitCode ?? 0;
+  });
+};
+
 const finish = () => {
   emit(config.after ?? []);
   if (config.stderr) process.stderr.write(config.stderr);
@@ -301,7 +403,9 @@ const finish = () => {
 
 emit(config.before ?? []);
 
-if (config.ignoreStdin) {
+if (config.turns) {
+  runPersistently();
+} else if (config.ignoreStdin) {
   finish();
 } else {
   process.stdin.setEncoding("utf8");

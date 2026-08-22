@@ -123,7 +123,11 @@ revisit without new information.
 > against someone else's binary need re-running, and the note should say which
 > version it was taken on. This one did, which is what made it re-testable.
 >
-> Not yet acted on: `runTurn` still spawns per turn. See `syl-per1`.
+> **Acted on 2026-08-22 by `syl-per1`, as a LANE SPLIT rather than a
+> replacement.** `harness/persistent-session.ts` serves many turns from one
+> process on one lane; `harness/warm-lanes.ts` decides which lane gets one.
+> `runTurn` is untouched and still spawns per turn for everything else. See
+> "The warm path" below.
 
 The original finding, on an earlier CLI:
 
@@ -139,6 +143,64 @@ prompt, close stdin, read to completion. Continuity comes from
 is no daemon to supervise, a crash costs at most the turn in flight, and a
 scheduled heartbeat is simply another turn. It deletes a whole category of
 supervision work that the tmux approach forces on Adjutant.
+
+### The warm path — `syl-per1`, and the three costs it had to pay
+
+Persistence gives back exactly what the original decision was praised for
+avoiding, and `syl-per1` was explicit that those costs "must be DESIGNED, not
+stumbled into". Each is answered in `harness/persistent-session.ts`, and each
+answer has a test named for it in `tests/unit/persistent-session.test.ts`.
+
+| the cost | how it is paid |
+|---|---|
+| **a process to supervise** | One object owns one child. Spawned **lazily by a turn that needs it** — no supervisor loop, so a CLI that cannot start does not become a restart storm. Death is noticed by `close`/`error` handlers that **fail the in-flight turn** rather than let it hang. Idle processes are reaped on a timer. `close()` is the owner's end. |
+| **a crash costing more than one turn** | It costs one turn, because the *conversation* does not live in the process. The id is announced through `onSessionId` **before the spawn** and persisted by `SylAgent`; the next turn respawns with `--resume` and the Commander sees nothing. If the id itself is dead it throws in the exact shape `SylAgent.isResumeFailure` already matches — **its recovery reused, not a second one invented.** |
+| **backpressure** | **No queue, deliberately.** `SylAgent` serialises per lane and `ConversationService` per conversation; a third queue could disagree with both, and "two locking schemes over one session id" is the bug `harness/agent.ts` already warns about. A concurrent turn is *refused* with `ConcurrentTurnError`. An assertion cannot disagree with a queue — it can only detect that the queue failed. |
+
+**The lane split is the deliverable, not the persistence.** Warm: the Commander's
+lane, where a person is waiting. Per-turn, unchanged: scheduled jobs, the hourly
+ping, the morning brief, the dream, the render review. **Never warm:
+`runReaderTurn`** — its security property *is* the fresh, never-resumed,
+tool-less, auto-memory-off process, and a warm reader session is a quarantine
+with a door in it. That is held structurally rather than by the router's
+judgement: `reader.ts` imports `runTurn` directly and has no injectable runner,
+and the router keys on `TurnOptions.lane`, which a reader turn never sets — so
+**absence routes cold**, the safe direction. Both asserted in
+`tests/unit/warm-lanes.test.ts`.
+
+Measured 2026-08-22 through the real harness against the real CLI (haiku, no MCP,
+trivial prompts — so treat the *ratio* as the finding and re-take the absolutes
+against the real turn shape):
+
+```
+per-turn path (every turn spawns)  6553ms, 3702ms, 3367ms   avg 4541ms
+warm  first turn (pays the spawn)  2940ms
+warm  follow-ups (no spawn)         970ms, 842ms, 1058ms, 989ms   avg 965ms   → 4.7x
+```
+
+Two things measured the same day that each killed a design, and both are the
+`consistency is not correspondence` shape — the plausible mechanism was wrong:
+
+- **There is no free pre-warm.** The CLI produces *nothing* until a prompt
+  arrives; stdin was held open against a spawned process for 30 seconds and no
+  init frame came. So "spawn early to hide the startup cost" does nothing, and
+  nothing fails to say so. A lane becomes warm **by taking a turn**, which is why
+  `WarmStatus.warm` is derived from having seen an init and not from holding a
+  pid. `syl-chzl.2.2` should read it that way.
+- **The CLI emits a fresh `init` on every turn**, 4-6ms after the frame, carrying
+  `apiKeySource` each time. The stated worry about a long-lived process was that
+  constraint 3 gets asserted once and then trusted for hours. The wire format
+  removes it: the guard runs against a *new* frame on every single turn.
+
+And one wrong turn worth keeping, because it would have shipped as a performance
+regression with nothing red: the spawn fingerprint initially included **which
+flag carries the conversation**. Turn one mints (`--session-id`) and turn two
+resumes (`--resume`) *the same conversation*, so every warm process became a
+one-turn process — persistence present, benefit zero, seven tests red at once.
+The conversation question belongs to `#usable`, which asks it about the live
+session id; the fingerprint is only about the turn's *shape*, and it is derived
+from `turnShapeArgs` — **the same array the CLI is actually invoked with** — so a
+`TurnOptions` field added next month is covered with nothing to remember.
 
 ### What stdio buys over tmux
 

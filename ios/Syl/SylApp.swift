@@ -87,7 +87,11 @@ struct RootView: View {
                         // the Memory door opens onto an empty field that looks exactly
                         // like the truth.
                         sky: SkyFromMemory.source(appDelegate.constellation),
-                        sendings: appDelegate.sendings
+                        sendings: appDelegate.sendings,
+                        // What a long press on her face reaches. Wired here rather than
+                        // defaulted, because the default is `.offline` and an offline
+                        // gateway would refuse every press on a perfectly paired phone.
+                        face: appDelegate.face
                     )
                 } else {
                     unopenableStore

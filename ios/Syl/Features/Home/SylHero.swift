@@ -62,6 +62,20 @@ struct SylHero: View {
     /// the resulting image proves nothing about the layout it exists to check.
     var prefersStill: Bool = false
 
+    /// Hold her, and she is here (`syl-chzl.7`). Nil means the surface above has no live
+    /// face to open — a preview, an offscreen render, a device that is not paired.
+    ///
+    /// **This is the whole opening mechanism and it is deliberately not a control.** The
+    /// Commander's ruling: the clips are already her face, so pressing and holding one
+    /// brings that face to life, and nothing new has to be explained because the target
+    /// is the most obvious thing on the screen. See ``LiveFace`` for why the press is
+    /// long, and ``LivingFaceTouchView`` for why nothing a tap used to do changed.
+    ///
+    /// Optional rather than a defaulted empty closure, because the difference is
+    /// load-bearing: with no handler there is **no touch layer at all**, so a hero
+    /// rendered offscreen or in a preview is exactly the view it was before this existed.
+    var onAwaken: (() -> Void)?
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     /// The appearance this hero is actually being painted in — already resolved by
@@ -131,10 +145,29 @@ struct SylHero: View {
             // overflow from painting under the day below.
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
+            // Over the whole figure, still or clip alike. Both are her, and a gesture
+            // that worked on the video and not on the daylight still would be a gesture
+            // that stops existing when he turns on Low Power Mode.
+            //
+            // Inside the `GeometryReader` and outside `figure(in:…)` on purpose: the
+            // figure carries the buoyancy, roll and breath transforms, and a touch
+            // target that drifts a centimetre on a nine-second cycle is a touch target
+            // that misses.
+            .overlay {
+                if let onAwaken {
+                    LivingFaceTouch(onPress: onAwaken)
+                }
+            }
         }
         .accessibilityElement()
         .accessibilityLabel("Syl")
         .accessibilityValue(HomeSnapshot.phrase(for: presence) ?? "Not present")
+        // **VoiceOver cannot perform a long press**, so without this the one way into
+        // her live face would be unreachable to the one person most likely to want to
+        // talk rather than read. A named action is the same intent through the rotor —
+        // and it is absent, not inert, when there is nothing to open, for the reason
+        // `SylOrb.isReady` exists: an affordance that does nothing reads as broken.
+        .modifier(AwakenAction(onAwaken: onAwaken))
     }
 
     private func figure(in size: CGSize, drift: Double, roll: Double, breath: Double) -> some View {
@@ -243,6 +276,22 @@ struct SylHero: View {
         case .concerned: return 0.30
         case .alert, .delighted, .manifest: return 0.9 + 0.1 * intensity
         default: return 0.6 + 0.3 * intensity
+        }
+    }
+}
+
+/// The rotor's way in, present only when there is a way in.
+///
+/// Its own modifier because `accessibilityAction` cannot be applied conditionally
+/// inline — each branch would be a different view type.
+private struct AwakenAction: ViewModifier {
+    let onAwaken: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        if let onAwaken {
+            content.accessibilityAction(named: Text("Bring her here"), onAwaken)
+        } else {
+            content
         }
     }
 }

@@ -20,22 +20,33 @@ import {
 } from "./protocol.js";
 
 /**
- * Runs a single conversational turn against Claude Code.
+ * Runs a single conversational turn against Claude Code: spawn, send one
+ * prompt, close stdin, read to completion, die.
  *
- * ## Why one process per turn
+ * ## One process per turn is a CHOICE now, and it used to be a constraint
  *
- * Measured behaviour on Claude Code 2.1.226: in `-p` (print) mode with
- * `--input-format stream-json`, the CLI does not finish a turn until stdin
- * reaches EOF. Holding the pipe open to send a second message simply stalls —
- * verified by holding stdin open for 25s and watching the turn complete only
- * on close.
+ * This comment used to say the CLI does not finish a turn until stdin reaches
+ * EOF — measured honestly, correct at the time, and **false since 2.1.226**. A
+ * `result` now arrives with the pipe still open. The old claim had quietly
+ * decided the whole architecture, which is why `CLAUDE.md` demands a version
+ * stamp and a re-run on any load-bearing measurement against someone else's
+ * binary.
  *
- * So a turn is: spawn, send one prompt, close stdin, read to completion.
- * Continuity across turns comes from `--resume <sessionId>`, using Claude
- * Code's own session store rather than a process we have to keep alive.
+ * `harness/persistent-session.ts` is what that re-measurement bought, and it is
+ * a **lane split rather than a replacement** (`harness/warm-lanes.ts` draws the
+ * line). This path is still correct — and still the default — for everything
+ * where nobody is waiting on the seconds:
  *
- * That trade lands well for an assistant: there is no daemon to supervise, a
- * crash costs at most one turn, and a heartbeat is just another turn.
+ * - **scheduled work**: a spawn costs a few seconds nobody is counting, and a
+ *   crash costs exactly the job that caused it;
+ * - **anything reading untrusted content**: `runReaderTurn` is a *security*
+ *   boundary made of this process. Fresh, never resumed, no tools, auto-memory
+ *   off. A warm reader session would be a quarantine with a door in it.
+ *
+ * So the virtue the original note claimed is real and is kept, deliberately,
+ * for the turns that want it: nothing to supervise, and a crash that costs at
+ * most the turn in flight. Continuity comes from `--resume <sessionId>` against
+ * Claude Code's own session store.
  */
 export interface TurnOptions {
   /** Working directory for the agent. Defaults to the current process cwd. */
@@ -215,6 +226,81 @@ export function newSessionId(): string {
   return randomUUID();
 }
 
+/** The flags every turn carries whatever else is true of it. */
+const BASE_ARGS: readonly string[] = [
+  "-p",
+  "--input-format",
+  "stream-json",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+];
+
+/**
+ * Everything in a turn's argv **except which conversation it belongs to**.
+ *
+ * Split out for `harness/persistent-session.ts`, and the split is the whole
+ * mechanism rather than a tidy-up. A persistent process is spawned once and
+ * serves many turns, so its argv is fixed for its lifetime — but a turn's
+ * `systemPrompt` is **not** fixed: `SylAgent` composes it fresh every time, and
+ * the nightly consolidation rewrites the memory projection inside it.
+ *
+ * So the warm path fingerprints exactly this array and respawns when it moves.
+ * That makes "the running process matches what this turn asked for" a DERIVED
+ * property: there is no second list of which options are spawn-affecting to
+ * keep in step with this one, and a `TurnOptions` field added next month is
+ * covered the moment it appears here. A remembered list would have gone stale
+ * silently, serving yesterday's identity under today's flags.
+ */
+export function turnShapeArgs(options: TurnOptions): string[] {
+  const args: string[] = [];
+  if (options.model) args.push("--model", options.model);
+  if (options.systemPrompt) args.push("--append-system-prompt", options.systemPrompt);
+  if (options.mcpConfig) args.push("--mcp-config", options.mcpConfig);
+  if (options.strictMcpConfig ?? options.mcpConfig !== undefined) args.push("--strict-mcp-config");
+  // Checked against `undefined`, not for truthiness: `""` is the whole point of
+  // the flag, and `if (options.settingSources)` would silently drop it.
+  if (options.settingSources !== undefined) args.push("--setting-sources", options.settingSources);
+  if (options.autoMemory) args.push("--settings", autoMemorySettingsFlag(options.autoMemory));
+  if (options.permissionMode) args.push("--permission-mode", options.permissionMode);
+  if (options.tools !== undefined) args.push("--tools", options.tools);
+  return args;
+}
+
+/**
+ * The one flag that says which conversation a process is for.
+ *
+ * Deliberately not part of {@link turnShapeArgs}: it is the field that changes
+ * between two turns of the *same* conversation on the per-turn path (turn one
+ * mints, turn two resumes), so folding it into the fingerprint would make every
+ * warm process a one-turn process.
+ */
+export function conversationArgs(sessionId: string, resume: string | undefined): string[] {
+  return resume ? ["--resume", resume] : ["--session-id", sessionId];
+}
+
+/** The complete argv for one turn. The per-turn and warm paths share it. */
+export function buildTurnArgv(options: TurnOptions, sessionId: string): string[] {
+  return [...BASE_ARGS, ...turnShapeArgs(options), ...conversationArgs(sessionId, options.resume)];
+}
+
+/**
+ * The environment a `claude` child is given — with the credentials removed.
+ *
+ * Anthropic's precedence puts a set API key ahead of the claude.ai login
+ * unconditionally, so a stale key silently reroutes billing to the metered API
+ * (`adj-t64m9`, non-negotiable constraint 3). Shared with the warm path because
+ * a LONG-LIVED child makes this matter more, not less: the per-turn path strips
+ * the key every few seconds, and a persistent one strips it once and then lives
+ * for hours on that decision.
+ */
+export function childEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env["ANTHROPIC_API_KEY"];
+  delete env["ANTHROPIC_AUTH_TOKEN"];
+  return env;
+}
+
 export interface TurnResult {
   /** Session id to feed back as `resume` on the next turn. */
   readonly sessionId: string;
@@ -247,9 +333,7 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
   // Anthropic's credential precedence puts a set API key ahead of the
   // claude.ai login unconditionally, so a stale key silently reroutes billing
   // to the metered API. Strip both (adj-t64m9).
-  const env = { ...process.env };
-  delete env["ANTHROPIC_API_KEY"];
-  delete env["ANTHROPIC_AUTH_TOKEN"];
+  const env = childEnv();
 
   // The id is settled before the spawn, not learned from the init event.
   // Learning it means a crash between spawn and init loses a conversation that
@@ -259,19 +343,7 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
   const sessionId = options.resume ?? options.sessionId ?? newSessionId();
   options.onSessionId?.(sessionId);
 
-  const args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"];
-  if (options.model) args.push("--model", options.model);
-  if (options.systemPrompt) args.push("--append-system-prompt", options.systemPrompt);
-  if (options.mcpConfig) args.push("--mcp-config", options.mcpConfig);
-  if (options.strictMcpConfig ?? options.mcpConfig !== undefined) args.push("--strict-mcp-config");
-  // Checked against `undefined`, not for truthiness: `""` is the whole point of
-  // the flag, and `if (options.settingSources)` would silently drop it.
-  if (options.settingSources !== undefined) args.push("--setting-sources", options.settingSources);
-  if (options.autoMemory) args.push("--settings", autoMemorySettingsFlag(options.autoMemory));
-  if (options.permissionMode) args.push("--permission-mode", options.permissionMode);
-  if (options.tools !== undefined) args.push("--tools", options.tools);
-  if (options.resume) args.push("--resume", options.resume);
-  else args.push("--session-id", sessionId);
+  const args = buildTurnArgv(options, sessionId);
 
   const claudeBin = options.claudeBin ?? resolveClaudeBinFromProcess();
   const child = spawn(claudeBin, args, {

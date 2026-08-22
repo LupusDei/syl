@@ -46,6 +46,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     /// graph.
     private(set) var sendings: SendingSource?
 
+    /// How a long press on her face reaches the session broker (`syl-chzl.7`).
+    ///
+    /// Computed rather than stored, for the reason ``attachmentContext`` is: the paired
+    /// base URL lives in `UserDefaults` and can change under the app, and a captured
+    /// gateway would go on asking the previous server for a face. Building one is three
+    /// closures over a `SylBackend` that resolves its URL per call.
+    ///
+    /// Unlike the sources above it needs no database, so it is available whether or not
+    /// the store opened.
+    var face: FaceGateway { .live(backend: backend) }
+
     /// Whether this device holds a credential at all.
     ///
     /// The gate on the whole app: without a token every request goes out with no

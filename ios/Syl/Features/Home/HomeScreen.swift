@@ -34,7 +34,36 @@ struct HomeScreen: View {
     /// graph the split exists to keep out of it.
     var sendings: SendingSource?
 
+    /// How a long press on her face reaches the broker (`syl-chzl.7`).
+    ///
+    /// Defaulted to ``FaceGateway/offline`` for the reason `sendings` is defaulted: this
+    /// screen has no backend of its own to build one from, and a preview, a test or an
+    /// offscreen render must open without an object graph. Offline *refuses*, which is
+    /// the correct behaviour rather than a stub — a long press with nothing behind it
+    /// says "I cannot reach you", which is exactly what it means.
+    var face: FaceGateway = .offline
+
     @Environment(\.scenePhase) private var scenePhase
+
+    /// Her live face. `@StateObject` because it owns a billable session and must survive
+    /// this view being re-evaluated — a model rebuilt mid-session would leave the old one
+    /// open with nobody holding it.
+    @StateObject private var liveFace: LiveFaceModel
+
+    init(
+        model: HomeViewModel,
+        list: TodoListViewModel,
+        sky: @escaping SkySource = { .empty },
+        sendings: SendingSource? = nil,
+        face: FaceGateway = .offline
+    ) {
+        self.model = model
+        self.list = list
+        self.sky = sky
+        self.sendings = sendings
+        self.face = face
+        _liveFace = StateObject(wrappedValue: LiveFaceModel(gateway: face))
+    }
 
     /// Whether the list is up.
     ///
@@ -90,7 +119,10 @@ struct HomeScreen: View {
                     path.append(destination)
                 },
                 onCapture: capture,
-                onOpenList: { showingList = true }
+                onOpenList: { showingList = true },
+                // The whole opening mechanism. It reaches the hero and nothing else —
+                // every closure above still does exactly what it did.
+                onAwaken: { Task { await liveFace.awaken() } }
             )
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: HomeView.Destination.self) { destination in
@@ -113,6 +145,27 @@ struct HomeScreen: View {
                 }
             }
         }
+        // Her live face, over everything.
+        //
+        // A cover rather than a sheet, and not for taste: a sheet can be dragged
+        // half-down and left there, which on a surface billing twenty cents a minute is
+        // a session he believes he has dismissed. A cover has exactly one way out, and
+        // that way out closes the session.
+        //
+        // `isPresented` is derived from the model rather than held here, so there is one
+        // answer to "is a face open" and the screen cannot disagree with the thing that
+        // is paying for it.
+        .fullScreenCover(
+            isPresented: Binding(
+                get: { liveFace.isPresented },
+                set: { shown in
+                    guard !shown else { return }
+                    Task { await liveFace.withdraw() }
+                }
+            )
+        ) {
+            LiveFaceView(model: liveFace)
+        }
         .sheet(isPresented: $showingList) {
             TodoListView(
                 snapshot: list.snapshot,
@@ -134,6 +187,13 @@ struct HomeScreen: View {
             await list.refresh()
         }
         .onChange(of: scenePhase) { _, phase in
+            // **Before the day, because this one costs money.** A live face in a
+            // backgrounded app is a silent leak — this project's signature defect — and
+            // the reaper that would eventually find it is a backstop, not the mechanism.
+            // Foregrounding deliberately does not reopen anything; see rule 3 on
+            // `LiveFaceModel`.
+            Task { await liveFace.scenePhaseChanged(to: phase) }
+
             // Returning to the app is the moment the day is most likely to be stale —
             // reminders may have fired while it was backgrounded. The minute loop would
             // catch up eventually; waiting up to a minute to find out you are late is
