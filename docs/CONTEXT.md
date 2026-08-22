@@ -202,6 +202,36 @@ session id; the fingerprint is only about the turn's *shape*, and it is derived
 from `turnShapeArgs` — **the same array the CLI is actually invoked with** — so a
 `TurnOptions` field added next month is covered with nothing to remember.
 
+### `git add -A` in a shared checkout, the second time — 2026-08-22
+
+`CLAUDE.md` already says "`-A` and `.` are how you steal work without noticing",
+and it happened again while `syl-per1` was being built. Commit **`d6b67d8`**,
+subject *"feat(syl-chzl.7): hold her face on the home screen and she is here"*,
+carries the entire warm-lane implementation: `harness/persistent-session.ts`,
+`harness/warm-lanes.ts`, the `session.ts` argv refactor, both new test files,
+the `fake-claude` persistent mode, and the `CLAUDE.md` / `CONTEXT.md` edits.
+Twenty-one files, 4102 insertions, from two agents, under one subject line
+describing neither.
+
+Three things worth keeping about it, because the shape recurs:
+
+- **Nothing was lost and nothing was mangled.** The committed content matched
+  the working tree byte for byte. That is what makes this failure so quiet:
+  there is no corruption to find, only a `git log` that lies about provenance.
+- **The correct response was NOT to fix it.** Rewriting another agent's commit
+  while they are actively committing to the branch — two commits in the
+  preceding four minutes — trades a wrong subject line for a lost-work race.
+  A misleading record you can read is better than a clean one you raced for.
+- **`git blame` and `git log -- <path>` are the casualties**, and they are
+  exactly what the next person debugging the warm lane will reach for. The
+  reason this entry exists is that the commit message cannot be trusted to lead
+  anybody here.
+
+The same worktree also had its **branch switched underneath a running agent**
+(`agent/artanis` → `feat/from-syl-backend`) and its **index staged by someone
+else** mid-task. A branch name read at session start has the same shelf life as
+a merge-status claim: minutes. Re-read it at the moment you commit.
+
 ### What stdio buys over tmux
 
 Adjutant drives Claude Code by typing into a terminal (`set-buffer` →
