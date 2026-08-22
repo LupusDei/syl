@@ -263,6 +263,22 @@ describe("FaceSessionStore", () => {
       expect(opened.askExpiresAt).toBe("2026-08-21T12:05:00.000Z");
     });
 
+    it("should leave the provider cap NULL until the provider reports one", () => {
+      // NULL is the honest record of "it did not say", and the reaper depends
+      // on being able to tell that from a cap that has passed.
+      expect(open().providerCapAt).toBeNull();
+    });
+
+    it("should record the provider cap separately from the credential expiry", () => {
+      open();
+
+      sessions.adoptProviderExpiry("rts_one", now + 600_000);
+
+      const session = sessions.get("rts_one");
+      expect(session?.providerCapAt).toBe("2026-08-21T12:10:00.000Z");
+      expect(session?.askExpiresAt).toBe("2026-08-21T12:10:00.000Z");
+    });
+
     it("should adopt the provider's real cap once the session reports one", () => {
       open();
 

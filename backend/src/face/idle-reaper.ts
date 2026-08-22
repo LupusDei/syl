@@ -199,9 +199,23 @@ export class IdleReaper {
 
   // ------------------------------------------------------------- internals ---
 
-  /** Whether the session is past the cap the provider reported for it. */
+  /**
+   * Whether the session is past the cap **the provider itself reported**.
+   *
+   * `providerCapAt === null` means the provider never told us when the session
+   * ends, and that is answered `false`: **a missing cap means "there is nothing
+   * to renew against", never "expired"**. Read the other way this is expensive
+   * in both directions — it settles a healthy session seconds after it opens,
+   * and anything renewing on the signal loops at twenty cents a lap, each new
+   * session instantly "expired" again.
+   *
+   * Deliberately NOT `askExpiresAt`. That column always holds a value, so
+   * reading it here would make the NULL case unreachable and the bug above
+   * unavoidable. This module had exactly that defect.
+   */
   #isPastCap(session: FaceSession): boolean {
-    const cap = parseInstant(session.askExpiresAt);
+    if (session.providerCapAt === null) return false;
+    const cap = parseInstant(session.providerCapAt);
     return cap !== null && this.#now() >= cap;
   }
 

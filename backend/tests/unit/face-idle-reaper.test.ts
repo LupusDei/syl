@@ -160,6 +160,39 @@ describe("IdleReaper", () => {
       expect(sessions.get(opened.credentials.sessionId)?.ended).toBe("expired");
     });
 
+    it("should NEVER treat a session with no reported cap as expired", async () => {
+      // The inversion this guards against killed a healthy session seconds
+      // after it opened, and would make anything renewing on the signal loop
+      // at twenty cents a lap. A missing cap means "nothing to renew against".
+      const capless = new FakeRunway();
+      capless.getRealtimeSession = (id: string): Promise<RealtimeSessionRow> =>
+        // READY, and deliberately silent about when it ends.
+        Promise.resolve({ id, status: "READY", sessionKey: "stk_x" });
+      const brokerWithoutCap = new FaceSessionBroker({
+        client: capless,
+        guard,
+        sessions,
+        avatarId: "48cbc73d-f47f-41de-bed8-58a532b3b84b",
+        now: clock,
+        sleep: () => Promise.resolve(),
+        pollIntervalMs: 1,
+        timeoutMs: 10,
+        log: () => undefined,
+      });
+      const opened = await brokerWithoutCap.startSession();
+      expect(sessions.get(opened.credentials.sessionId)?.providerCapAt).toBeNull();
+
+      // Far past any local floor, and past the provider cap the OTHER fake
+      // reports — so a reaper reading the credential column would settle it.
+      now += 60 * 60 * 1_000;
+      const report = await reaper({ broker: brokerWithoutCap }).sweep();
+
+      expect(report.expired).toEqual([]);
+      // It is still cut, for idleness, which is the correct reason.
+      expect(report.reaped).toEqual([opened.credentials.sessionId]);
+      expect(sessions.get(opened.credentials.sessionId)?.ended).toBe("reaped");
+    });
+
     it("should not double-count an expired session as reaped as well", async () => {
       await broker.startSession();
       now += 6 * 60 * 1_000;

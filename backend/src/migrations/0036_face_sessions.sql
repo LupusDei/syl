@@ -109,9 +109,27 @@ CREATE TABLE face_sessions (
 
   -- SHA-256 of the per-session ask_syl secret, hex. Never the secret itself.
   ask_secret_hash   TEXT NOT NULL CHECK (length(trim(ask_secret_hash)) > 0),
-  -- The credential's hard stop, independent of the row being settled. Belt and
-  -- braces: a session whose settle never ran must not leave a live credential.
+  -- The CREDENTIAL's hard stop, and only that. Belt and braces: a session whose
+  -- settle never ran must not leave a live credential. It always has a value --
+  -- a credential with no expiry is the thing this column exists to prevent.
   ask_expires_at    TEXT NOT NULL,
+
+  -- The PROVIDER's own session cap, and NULL when it did not report one.
+  --
+  -- Deliberately separate from `ask_expires_at`, which is a fact about our
+  -- credential rather than about the provider's session. Folding them into one
+  -- column is a real bug and this schema had it: the credential column always
+  -- holds a value, so a reaper reading it as the cap concludes that a session
+  -- the provider said nothing about has EXPIRED -- and it concludes it as soon
+  -- as the local floor passes.
+  --
+  -- **A missing cap means "there is nothing to renew against", never
+  -- "expired".** Read the other way it is expensive in both directions: a
+  -- session killed seconds after opening, or -- if anything ever renews on this
+  -- signal -- a renew loop at twenty cents a lap, each one immediately
+  -- "expired" again. NULL has to stay distinguishable, so it gets its own
+  -- nullable column rather than a sentinel in a NOT NULL one.
+  provider_cap_at   TEXT,
 
   -- `closed_at` and `ended` are one fact written in two columns, so the schema
   -- refuses the two states where they disagree: a row closed without saying how,

@@ -76,6 +76,22 @@ const DEFAULT_CREATE_TIMEOUT_MS = 30_000;
 const DEFAULT_RENEW_LEAD_MS = 30_000;
 
 /**
+ * How long the `ask_syl` credential lives when the provider reports no cap.
+ *
+ * A floor, not a guess at the provider's behaviour. It used to be the CREATE
+ * TIMEOUT — 30 seconds — which is a number about how long we are willing to
+ * wait for a session to become ready and has nothing to do with how long one
+ * lasts. A session whose cap Runway did not report therefore lost its
+ * credential half a minute in, and the avatar went mute on a face that was
+ * still billing.
+ *
+ * Five minutes matches the observed cap. When the provider DOES report one,
+ * `adoptProviderExpiry` replaces this with the real value, so this is only ever
+ * reached on the path where we know nothing.
+ */
+const DEFAULT_CREDENTIAL_TTL_MS = 5 * 60 * 1_000;
+
+/**
  * Her avatar on the Runway org: her own face, bound to her own custom voice.
  *
  * A constant with an env override rather than an env var with no default, and
@@ -289,10 +305,11 @@ export class FaceSessionBroker {
       credits: upfront,
       dollars: upfront * this.#guard.costModel.dollarsPerCredit,
       askSecretHash: minted.hash,
-      // The provider's cap when it reported one; otherwise the create timeout,
-      // which is a hard floor rather than a guess — a credential must never
-      // outlive the process's own patience for the session it belongs to.
-      askExpiresAt: this.#expiryOf(created) ?? this.#now() + this.#timeoutMs,
+      // The provider's cap when it reported one at create; otherwise a floor,
+      // replaced by the real cap at READY. `provider_cap_at` stays NULL until
+      // the provider actually says something, so "no cap" and "capped" remain
+      // distinguishable — see the migration.
+      askExpiresAt: this.#expiryOf(created) ?? this.#now() + DEFAULT_CREDENTIAL_TTL_MS,
     });
     this.#log("face.session.opened", { sessionId, avatarId: this.#avatarId, credits: upfront });
 

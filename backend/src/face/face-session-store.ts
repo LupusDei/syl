@@ -50,8 +50,16 @@ export interface FaceSession {
   readonly lastActivityAt: string;
   /** SHA-256 of the per-session `ask_syl` secret, hex. Never the secret. */
   readonly askSecretHash: string;
-  /** The credential's hard stop, independent of the row being settled. */
+  /** The CREDENTIAL's hard stop, independent of the row being settled. */
   readonly askExpiresAt: string;
+  /**
+   * The PROVIDER's own session cap, or `null` when it never reported one.
+   *
+   * **`null` means "there is nothing to renew against", never "expired".** See
+   * the migration: reading it the other way kills a session seconds after it
+   * opens, and anything renewing on the signal loops at twenty cents a lap.
+   */
+  readonly providerCapAt: string | null;
 }
 
 /**
@@ -121,11 +129,12 @@ interface FaceSessionRow {
   readonly last_activity_at: string;
   readonly ask_secret_hash: string;
   readonly ask_expires_at: string;
+  readonly provider_cap_at: string | null;
 }
 
 const COLUMNS =
   "id, avatar_id, opened_at, closed_at, credits, dollars, ended, last_activity_at, " +
-  "ask_secret_hash, ask_expires_at";
+  "ask_secret_hash, ask_expires_at, provider_cap_at";
 
 function toSession(row: FaceSessionRow): FaceSession {
   return {
@@ -141,6 +150,7 @@ function toSession(row: FaceSessionRow): FaceSession {
     lastActivityAt: row.last_activity_at,
     askSecretHash: row.ask_secret_hash,
     askExpiresAt: row.ask_expires_at,
+    providerCapAt: row.provider_cap_at,
   };
 }
 
@@ -207,7 +217,7 @@ export class FaceSessionStore {
     try {
       this.#db
         .prepare(
-          `INSERT INTO face_sessions (${COLUMNS}) VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, ?, ?)`,
+          `INSERT INTO face_sessions (${COLUMNS}) VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, ?, ?, NULL)`,
         )
         .run(
           id,
@@ -300,8 +310,14 @@ export class FaceSessionStore {
    *
    * A session row is written the instant the create succeeds, which is before
    * the provider has told us when the session ends — `expiresAt` only appears
-   * on the READY poll. So `open` writes a short, conservative floor and this
-   * replaces it with the real cap once it is known.
+   * on the READY poll. So `open` writes a floor into `ask_expires_at` and
+   * leaves `provider_cap_at` NULL; this sets **both** once the real cap is
+   * known.
+   *
+   * A session where the provider never reports a cap therefore keeps
+   * `provider_cap_at IS NULL` forever, which is the honest record and the one
+   * the reaper needs — see the migration on why NULL must never read as
+   * "expired".
    *
    * **Only while the session is open**, so a settled session can never have its
    * credential brought back to life, and only from the value the provider
@@ -311,8 +327,11 @@ export class FaceSessionStore {
    */
   adoptProviderExpiry(id: string, expiresAt: number): void {
     this.#db
-      .prepare("UPDATE face_sessions SET ask_expires_at = ? WHERE id = ? AND closed_at IS NULL")
-      .run(instant(expiresAt), id);
+      .prepare(
+        "UPDATE face_sessions SET ask_expires_at = ?, provider_cap_at = ? " +
+          "WHERE id = ? AND closed_at IS NULL",
+      )
+      .run(instant(expiresAt), instant(expiresAt), id);
   }
 
   /**
