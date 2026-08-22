@@ -70,6 +70,17 @@ still spawns per turn for everything else. Measured 2026-08-22 through the real
 harness against the real CLI: per-turn **avg 4541ms**, warm follow-up **avg
 965ms** — **4.7x**. Details in `docs/CONTEXT.md` §3.
 
+**And `syl-u72z` WIRED IT.** `index.ts` constructs `WarmLanes` and the
+Commander's lane runs on it, so his conversation — and the hourly ping, the
+morning brief and the render review that resume his thread — share one live
+`claude`. The wrappers sit OUTSIDE the router
+(`withMemoryIndex(recordHisWords(warmLanes.runner))`), so `recordHisWords`
+still covers every turn; put them round the *fallback* and his own lane slips
+past the only structural protection on his sleep. `startSyl` closes the router
+after the chat has drained, or a resident CLI outlives every restart.
+`runReaderTurn` cannot reach any of this: it imports `runTurn` directly, and the
+router keys on a lane a reader turn never sets, so **absence routes cold**.
+
 The old note said the opposite, was correctly measured, and had silently decided
 the whole architecture. **Load-bearing measurements against someone else's binary
 need a version stamp and a re-run.**
@@ -84,6 +95,7 @@ backend/                          the Node 22 service (npm workspace)
   src/harness/session.ts          runTurn(): one subprocess per turn
   src/harness/persistent-session.ts  ONE process, MANY turns, ONE lane — the warm path
   src/harness/warm-lanes.ts       THE LANE SPLIT: which turns go warm, which spawn and die
+  src/harness/keep-warm.ts        one cheap turn so her first sentence is not her last
   src/harness/agent.ts            SylAgent: per-lane continuity, one turn at a time
                                   per lane, stale-session recovery. LANES, and why
                                   her unattended turns are the Commander's own.
@@ -185,6 +197,30 @@ keeping them testable without spawning a process is worth the seam.
   your name, in a commit whose message describes something else entirely. Stage
   the paths you touched, by name, every time. `-A` and `.` are how you steal work
   without noticing.
+- **Staging explicit paths is NOT enough when two agents share ONE worktree —
+  the INDEX is shared too.** This is the refinement that cost a real incident:
+  an agent staged only its own `ios/` files, and between its `git add` and its
+  `git commit` another agent in the same directory staged `persistent-session.ts`,
+  `warm-lanes.ts`, `session.ts`, `CLAUDE.md` and `docs/CONTEXT.md`. All of it
+  went out in a commit whose message described an iOS gesture. Nothing was lost,
+  and that is precisely why it is dangerous: the other agent finds its work gone
+  from `git status` and reasonably concludes it was destroyed.
+
+  **The fix is a pathspec on the COMMIT, not on the add:**
+
+  ```sh
+  git commit -F - -- ios/Syl/Features/Face/LiveFace.swift ios/SylTests/LiveFaceTests.swift
+  ```
+
+  A pathspec after `--` commits exactly those files and **ignores the index
+  entirely**, so whatever anyone else has staged cannot ride along.
+
+  **Scope it correctly, because the obvious generalisation is wrong.** Each git
+  worktree has its OWN index at `.git/worktrees/<name>/index`, so agents in
+  DIFFERENT worktrees cannot collide this way at all. The hazard is two agents in
+  the SAME directory — which is the cheap arrangement, and therefore the common
+  one. If you are sharing a worktree, commit by pathspec; if you are in your own,
+  `git add` by name is sufficient.
 
 ## Commands
 
