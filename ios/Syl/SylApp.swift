@@ -91,7 +91,12 @@ struct RootView: View {
                         // What a long press on her face reaches. Wired here rather than
                         // defaulted, because the default is `.offline` and an offline
                         // gateway would refuse every press on a perfectly paired phone.
-                        face: appDelegate.face
+                        face: appDelegate.face,
+                        // And what draws her once it opens: a web view over the page Syl
+                        // serves. Wired here for the same reason the gateway is — the
+                        // default is the honest "this build cannot draw her", which was
+                        // the truth until `syl-chzl.7.5` and would now be a lie.
+                        renderer: appDelegate.faceRenderer
                     )
                 } else {
                     unopenableStore

@@ -53,6 +53,7 @@ import {
 } from "./connections/intake-job.js";
 import { createIntakeRouter } from "./connections/intake-route.js";
 import { ADMIN_BASE_PATH, createAdminRouter } from "./routes/admin.js";
+import { FACE_PAGE_PATH, createFacePageRouter } from "./routes/face-page.js";
 import { describeAdmin, inspectAdminBundle } from "./ops/admin-bundle.js";
 import { readBuildInfo, selfBuildStampPath } from "./ops/build-info.js";
 import { MemoryGraft } from "./connections/graft.js";
@@ -97,6 +98,7 @@ import { createReminderRouter } from "./routes/reminders.js";
 // the contract. See the header of `routes/health-data.ts`.
 import { createHealthDataRouter } from "./routes/health-data.js";
 import { createFaceRuntime, type FaceRuntime } from "./face/face-runtime.js";
+import { createRunwayFaceTransport } from "./face/rpc-transport.js";
 import { createFaceRouter } from "./routes/face.js";
 import { createRenderRouter } from "./routes/renders.js";
 import { createSendingRouter } from "./routes/sendings.js";
@@ -645,6 +647,12 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // stops a catch-all answering `/api/v1/anything` with an HTML page. See
   // `routes/admin.ts`, and the ordering cases in `tests/unit/admin.test.ts`.
   app.use(ADMIN_BASE_PATH, createAdminRouter({ root: config.adminDir }));
+
+  // The page her live face is drawn on, on the same terms and for the same
+  // reasons: after the contract, scoped to its own prefix, and unauthenticated
+  // because the document holds nothing. The `WKWebView` that opens it has no
+  // device token by design — see `routes/face-page.ts`.
+  app.use(FACE_PAGE_PATH, createFacePageRouter());
 
   app.use(notFound);
   app.use(onError);
@@ -1697,12 +1705,23 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // `SOUL.md`, her memory and the reader fence stop applying to the one surface
   // that has a voice.
   //
-  // No transport is wired yet, so the avatar has no `ask_syl` to call and a
-  // face opens mute; see `NO_TRANSPORT` for why that still closes honestly.
+  // THE TRANSPORT IS THE REAL ONE (`syl-chzl.7.5`). It dials OUT to the
+  // session's LiveKit room and registers `ask_syl` on our own participant, so
+  // the avatar has something to call and there is still no inbound exposure.
+  // The vendor package is imported lazily the first time a face opens — see
+  // `face/rpc-transport.ts` for why, and for what a machine missing it looks
+  // like (a face that appears and is mute, logged as `face.rpc.attach_failed`).
   const face = createFaceRuntime({
     db: database.handle,
     conversations: chat,
     clock,
+    transport: ({ ingress, broker }) =>
+      createRunwayFaceTransport({
+        ingress,
+        // Through the broker, so `RunwayClient` stays the one holder of the org
+        // secret and the RPC library only ever sees a room-scoped token.
+        connectBackend: (sessionId) => broker.connectBackend(sessionId),
+      }),
   });
   // His date of birth, his sex and his height. Built from the GRAPH and her own
   // write verb, and from no sample store at all — that absence is what makes
@@ -2288,6 +2307,19 @@ export async function startSyl(
   });
   await runtime.runner.start();
 
+  // HER FACE'S OWN LIFECYCLE, WHICH NOTHING HAD EVER STARTED. `createFaceRuntime`
+  // has exposed `start()`/`stop()` since `syl-chzl.3`, and no call site called
+  // either — so in the live service the idle reaper never ran and the guard
+  // never learned what today had already cost. It mattered less while the
+  // transport was `NO_TRANSPORT` and there was no room to leave; with a real
+  // one (`syl-chzl.7.5`) the reaper is the backstop that actually disconnects,
+  // and the ledger seed is what stops a restart re-opening the day's budget.
+  //
+  // The backstop, not the mechanism: the phone closes the session when he
+  // leaves, and everything the reaper catches billed for the length of its
+  // interval.
+  deps.face.start();
+
   // A pairing code is only printed when there is nothing paired. Printing one
   // on every boot would train the Commander to ignore it, and a code shown
   // repeatedly is a code that is eventually shown to somebody else.
@@ -2356,6 +2388,11 @@ export async function startSyl(
       // The loop first. A tick that begins while the socket is closing has
       // nothing to gain and a database underneath it that may be going away.
       await runtime.stop();
+      // Then her face: stop the reaper and LEAVE EVERY ROOM. A shutdown that
+      // leaves a participant of ours in a live LiveKit room is the idle leak
+      // wearing its last hat — nothing on this machine is holding it any more,
+      // and only the provider's cap would end it.
+      await deps.face.stop();
       await service.close();
     },
   };

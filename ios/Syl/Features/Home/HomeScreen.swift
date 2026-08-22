@@ -43,6 +43,14 @@ struct HomeScreen: View {
     /// says "I cannot reach you", which is exactly what it means.
     var face: FaceGateway = .offline
 
+    /// What actually draws her once the session is open (`syl-chzl.7.5`).
+    ///
+    /// Defaulted to ``FaceRenderer/notInThisBuild`` for the reason `face` is defaulted to
+    /// offline: a preview or an offscreen render has no origin to point a web view at,
+    /// and the honest default says so rather than showing a spinner over a session that
+    /// is already billing.
+    var renderer: FaceRenderer = .notInThisBuild
+
     @Environment(\.scenePhase) private var scenePhase
 
     /// Her live face. `@StateObject` because it owns a billable session and must survive
@@ -55,13 +63,15 @@ struct HomeScreen: View {
         list: TodoListViewModel,
         sky: @escaping SkySource = { .empty },
         sendings: SendingSource? = nil,
-        face: FaceGateway = .offline
+        face: FaceGateway = .offline,
+        renderer: FaceRenderer = .notInThisBuild
     ) {
         self.model = model
         self.list = list
         self.sky = sky
         self.sendings = sendings
         self.face = face
+        self.renderer = renderer
         _liveFace = StateObject(wrappedValue: LiveFaceModel(gateway: face))
     }
 
@@ -164,7 +174,7 @@ struct HomeScreen: View {
                 }
             )
         ) {
-            LiveFaceView(model: liveFace)
+            LiveFaceView(model: liveFace, renderer: renderer)
         }
         .sheet(isPresented: $showingList) {
             TodoListView(

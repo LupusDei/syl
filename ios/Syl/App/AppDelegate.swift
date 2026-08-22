@@ -57,6 +57,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     /// the store opened.
     var face: FaceGateway { .live(backend: backend) }
 
+    /// What draws her once the session is open (`syl-chzl.7.5`).
+    ///
+    /// A web view over `/face/live`, which Syl serves from the same origin as `/api/v1`.
+    /// The phone runs no realtime SDK — the page does the WebRTC — which is how `SylKit`
+    /// keeps its zero-dependency rule and the app target keeps its two dependencies.
+    ///
+    /// The origin is a closure over `backend` for exactly the reason the gateway above
+    /// is: a stored URL is the previous server's the moment the profile changes.
+    var faceRenderer: FaceRenderer {
+        let resolve = backend
+        return .web(origin: { resolve.baseURL })
+    }
+
     /// Whether this device holds a credential at all.
     ///
     /// The gate on the whole app: without a token every request goes out with no

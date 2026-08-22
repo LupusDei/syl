@@ -34,6 +34,15 @@ export interface FaceTransport {
   attach(input: { readonly sessionId: string; readonly askSecret: string }): Promise<void>;
   /** Leave the room, which is what stops the stream. */
   close(sessionId: string): Promise<void>;
+  /**
+   * Leave EVERY room. The service's half of the lifecycle, at shutdown.
+   *
+   * Optional so a transport that holds nothing — {@link NO_TRANSPORT}, and every
+   * fake in the tests — needs no ceremony. A transport that DOES hold rooms and
+   * omits this leaves participants of ours in live sessions that only the
+   * provider's cap will end.
+   */
+  closeAll?(): Promise<void>;
 }
 
 /**
@@ -51,6 +60,19 @@ export const NO_TRANSPORT: FaceTransport = {
   close: () => Promise.resolve(),
 };
 
+/**
+ * What a transport needs from the runtime it is being built into.
+ *
+ * The real transport (`face/rpc-transport.ts`) binds the `ask_syl` handler to
+ * the ingress and fetches room credentials through the broker — both of which
+ * are constructed *here*. So a caller cannot hand in a finished transport
+ * without duplicating the assembly, and a factory is the seam that avoids it.
+ */
+export interface FaceTransportDeps {
+  readonly ingress: AskSylIngress;
+  readonly broker: FaceSessionBroker;
+}
+
 export interface FaceRuntimeOptions {
   readonly db: Database;
   /** The seam a face turn runs through. See `face-conversation.ts`. */
@@ -64,7 +86,14 @@ export interface FaceRuntimeOptions {
    * `WarmLanes.status(commander)?.apiKeySource`. See `face-conversation.ts`.
    */
   readonly laneRail?: () => string | undefined;
-  readonly transport?: FaceTransport;
+  /**
+   * How a session is cut and how the avatar's tool loop is attached.
+   *
+   * A **factory** as well as a value, because the real one needs the ingress and
+   * the broker this function builds. Defaults to {@link NO_TRANSPORT}, which
+   * opens a mute face — see the note on it for why that still closes honestly.
+   */
+  readonly transport?: FaceTransport | ((deps: FaceTransportDeps) => FaceTransport);
   /** Injected Runway client. Defaults to a real one, built lazily by the broker. */
   readonly client?: RunwaySessionApi;
   readonly dailyCreditCeiling?: number;
@@ -84,13 +113,19 @@ export interface FaceRuntime {
   readonly transport: FaceTransport;
   /** Start the reaper and put today's spend back into the guard. */
   start(): void;
-  /** Stop the reaper. Does not settle live sessions — the ledger keeps them. */
-  stop(): void;
+  /**
+   * Stop the reaper and leave every room.
+   *
+   * Does **not** settle live sessions — the ledger keeps them, and
+   * `liveSessions()` is how the next boot finds what a dead process left
+   * running. Leaving the rooms is a different thing from settling the rows:
+   * one stops us paying attention, the other stops us being in the call.
+   */
+  stop(): Promise<void>;
 }
 
 export function createFaceRuntime(options: FaceRuntimeOptions): FaceRuntime {
   const clock = options.clock ?? systemClock;
-  const transport = options.transport ?? NO_TRANSPORT;
 
   const sessions = new FaceSessionStore({ db: options.db, clock });
   const guard = new FaceCostGuard({
@@ -126,6 +161,13 @@ export function createFaceRuntime(options: FaceRuntimeOptions): FaceRuntime {
     ...(options.log === undefined ? {} : { log: options.log }),
   });
 
+  // Built AFTER the ingress and the broker, because the real transport binds to
+  // both. A plain value is still accepted — every test passes one.
+  const transport =
+    typeof options.transport === "function"
+      ? options.transport({ ingress, broker })
+      : (options.transport ?? NO_TRANSPORT);
+
   const reaper = new IdleReaper({
     broker,
     sessions,
@@ -148,8 +190,9 @@ export function createFaceRuntime(options: FaceRuntimeOptions): FaceRuntime {
       broker.seedFromLedger();
       reaper.start();
     },
-    stop(): void {
+    async stop(): Promise<void> {
       reaper.stop();
+      await transport.closeAll?.();
     },
   };
 }

@@ -35,8 +35,25 @@
     "Keyword search (FTS5, built into node:sqlite) keeps working without it;",
     "vector search does not. See syl-005.2.2."
   ],
+  "//@runwayml/avatars-node-rpc": [
+    "The avatar's tool loop: it dials OUT to the session's LiveKit room and",
+    "registers `ask_syl` on our own participant, which is why that ingress needs",
+    "no inbound exposure and no tunnel. Proven in Adjutant's backend at the same",
+    "version.",
+    "",
+    "It pulls @livekit/rtc-node, a platform-specific NATIVE binary, into a",
+    "service that deploys from a plain `tsc` build. So it is imported LAZILY",
+    "through a variable specifier in backend/src/face/rpc-transport.ts: the",
+    "typecheck, the unit tests and the build all pass on a machine where it is",
+    "not installed, and only the first face session resolves it.",
+    "",
+    "That laziness is a convenience, not a licence to skip it. A machine that",
+    "never ran `npm install` after this landed opens a face that APPEARS and is",
+    "MUTE — logged as `face.rpc.attach_failed`, naming the module."
+  ],
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
+    "@runwayml/avatars-node-rpc": "^0.1.0",
     "@syl/shared": "*",
     "express": "^5.2.1",
     "onnxruntime-node": "1.23.0",

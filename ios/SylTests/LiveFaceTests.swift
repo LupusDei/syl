@@ -1,6 +1,7 @@
 import SwiftUI
 import SylKit
 import UIKit
+import WebKit
 import XCTest
 
 @testable import Syl
@@ -518,15 +519,122 @@ final class LiveFaceTests: XCTestCase {
 
     // MARK: - The surface's own honesty
 
-    /// A broker that minted only browser credentials has opened something this phone
-    /// cannot draw. That is a state with its own sentence, not a spinner.
-    func testShouldKnowWhenTheSessionItWasGivenCannotBeRenderedHere() async {
-        let broker = broker { _ in aSession(native: false) }
-        let face = model(broker)
+    /// A build with no way to draw her says so, and that is what the surface shows.
+    ///
+    /// This used to ask ``LiveFaceModel`` — a `canRender` reading `FaceSession.canJoin`,
+    /// which asks whether the broker minted NATIVE join credentials. `syl-chzl.7.5` moved
+    /// the answer to the renderer, because it is a property of the renderer: the web view
+    /// draws a session with no native credentials at all, and a native room client could
+    /// not draw one that has none. The requirement is unchanged and is what is asserted
+    /// here — **a session that cannot be drawn is a sentence, never a spinner.**
+    func testShouldKnowWhenTheSessionItWasGivenCannotBeRenderedHere() {
+        XCTAssertFalse(
+            FaceRenderer.notInThisBuild.canDraw(aSession(native: false)),
+            "a build with no renderer must not claim it can draw her")
+        XCTAssertFalse(
+            FaceRenderer.notInThisBuild.canDraw(aSession(native: true)),
+            "native credentials do not help a build that cannot use them")
+    }
 
-        await face.awaken()
+    // MARK: - The web renderer (`syl-chzl.7.5`)
 
-        XCTAssertFalse(face.canRender)
+    /// **The zero-dependency rule, expressed as a test.** The phone draws her by pointing
+    /// a web view at a page Syl serves, so a session it can draw is one with a session
+    /// key and an origin — not one with native LiveKit credentials, which this app never
+    /// asks for and could not use.
+    func testShouldDrawAnyLiveSessionOnceThereIsAnOriginToDrawItFrom() {
+        let renderer = FaceRenderer.web(origin: { URL(string: "https://syl.example/api/v1") })
+
+        XCTAssertTrue(
+            renderer.canDraw(aSession(native: false)),
+            "the page turns a session key into a room; native credentials are not needed")
+        XCTAssertTrue(renderer.canDraw(aSession(native: true)))
+    }
+
+    /// And refuses when there is nowhere to point it. A web view loading nothing over a
+    /// session that is already billing is the spinner this surface is forbidden to show.
+    func testShouldRefuseToDrawWhenThereIsNoOriginToDrawFrom() {
+        XCTAssertFalse(FaceRenderer.web(origin: { nil }).canDraw(aSession()))
+    }
+
+    /// The page lives beside the contract, not inside it — same origin, so there is no
+    /// CORS, no second certificate and no ATS exception.
+    func testShouldBuildThePageURLFromTheApiOriginAndNotUnderTheApiPrefix() {
+        let base = URL(string: "https://syl.example:8888/api/v1")!
+
+        XCTAssertEqual(
+            LiveFacePage.url(apiBaseURL: base)?.absoluteString,
+            "https://syl.example:8888/face/live")
+    }
+
+    /// A base URL with nothing to build an origin from produces no page, rather than a
+    /// URL that will fail to load in front of a running meter.
+    func testShouldProduceNoPageURLWhenThereIsNoOrigin() {
+        XCTAssertNil(LiveFacePage.url(apiBaseURL: URL(string: "/api/v1")!))
+    }
+
+    /// **The credential reaches the page and reaches nothing else.**
+    ///
+    /// It is injected as a document-start script, so it appears in no address bar, no
+    /// access log, no proxy log and no `Referer` header — which is the whole reason the
+    /// host does not use the page's URL-fragment path.
+    func testShouldHandTheSessionToThePageWithoutPuttingItInAURL() throws {
+        let script = try XCTUnwrap(LiveFacePage.handoff(for: aSession()))
+
+        XCTAssertTrue(script.hasPrefix("window.__sylFaceSession = "))
+        XCTAssertTrue(script.contains("sk_short_lived"), "the page needs the session key")
+        XCTAssertNil(
+            LiveFacePage.url(apiBaseURL: URL(string: "https://syl.example/api/v1")!)?.query,
+            "nothing about the session may travel in a query the server would log")
+    }
+
+    /// A session id is a value off the network, and a value off the network pasted into a
+    /// script literal is script injection into the one document holding a live
+    /// credential. It is JSON-encoded, so a hostile id is an inert string.
+    func testShouldNotLetASessionIdBreakOutOfTheHandoffScript() throws {
+        let hostile = FaceSession(
+            sessionId: "\";window.stolen=window.__sylFaceSession;//",
+            sessionKey: "sk_short_lived",
+            expiresAt: nil
+        )
+
+        let script = try XCTUnwrap(LiveFacePage.handoff(for: hostile))
+
+        // **The proof is that everything after the assignment parses as ONE JSON object.**
+        // Asserting the hostile text is absent would be the wrong test — it is supposed to
+        // be there, as data. What must not have happened is it ending the string literal,
+        // and had it done so the remainder would no longer be a single JSON value.
+        let prefix = "window.__sylFaceSession = "
+        let literal = String(script.dropFirst(prefix.count).dropLast())
+        let decoded = try JSONSerialization.jsonObject(with: Data(literal.utf8)) as? [String: String]
+
+        XCTAssertEqual(
+            decoded?["sessionId"], hostile.sessionId,
+            "the id survives as data, and only as data")
+        XCTAssertTrue(script.contains("\\\""), "the quote that would have closed it is escaped")
+    }
+
+    /// **The microphone, and only the microphone.** He talks to her; he is not on camera,
+    /// and a camera grant would be a permission prompt for a capability this surface
+    /// never uses.
+    func testShouldGrantTheMicrophoneAndRefuseTheCamera() {
+        XCTAssertEqual(FaceWebPage.Coordinator.decision(for: .microphone), .grant)
+        XCTAssertEqual(FaceWebPage.Coordinator.decision(for: .camera), .deny)
+        XCTAssertEqual(FaceWebPage.Coordinator.decision(for: .cameraAndMicrophone), .deny)
+    }
+
+    /// The page's own report of what it is doing reaches the host. A web view that
+    /// renders nothing and says nothing is the stalled face this epic exists to prevent,
+    /// and the host cannot see inside the document.
+    func testShouldRelayWhatThePageSaysAboutItselfAndIgnoreNoise() {
+        var heard: [String] = []
+        let coordinator = FaceWebPage.Coordinator { state, _ in heard.append(state) }
+
+        coordinator.receive(state: "connected", detail: "")
+        coordinator.receive(state: "", detail: "nothing to say")
+        coordinator.receive(state: "ended", detail: "")
+
+        XCTAssertEqual(heard, ["connected", "ended"])
     }
 
     /// The meter line is a pure function, so what he reads can be asserted without a

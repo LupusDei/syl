@@ -97,10 +97,16 @@ struct LiveFaceView: View {
 
     // MARK: - Here
 
-    @ViewBuilder
+    @ViewBuilder @MainActor
     private func here(_ session: FaceSession) -> some View {
         VStack(spacing: 0) {
-            if session.canJoin {
+            // **The renderer decides, not the session.** `canJoin` asks whether the broker
+            // minted NATIVE join credentials, which is the right question for a client that
+            // joins a room itself and the wrong one for the client this app actually has: a
+            // web view over the page Syl serves needs the session key and nothing else.
+            // Asking the session would leave `FaceRenderer.web` permanently refusing to draw
+            // a session it can draw perfectly well.
+            if renderer.canDraw(session) {
                 renderer.view(session)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -246,19 +252,32 @@ struct LiveFaceView: View {
 /// injected is a single function, and a struct of closures keeps the whole surface
 /// `View`-shaped without a generic parameter running through every call site.
 struct FaceRenderer {
-    var view: (FaceSession) -> AnyView
+    /// Whether this renderer can draw *this* session.
+    ///
+    /// Its own function rather than a property of ``FaceSession`` because it is a
+    /// property of the RENDERER: what a session needs to be drawable depends entirely on
+    /// what is doing the drawing. A native room client needs `roomName`/`serverURL`/
+    /// `token`; the web view needs the session key, because the page turns that into a
+    /// room itself. One type cannot answer for both, and the surface must never show a
+    /// spinner over a session that is already costing money — see ``LiveFaceView``.
+    var canDraw: (FaceSession) -> Bool = { _ in true }
+    /// `@MainActor` because a renderer may build a `UIViewRepresentable`, whose
+    /// initialiser is main-actor isolated — the web view is exactly that. Forming the
+    /// closure stays free anywhere; only calling it needs the main actor, which every
+    /// call site is: a SwiftUI `body`.
+    var view: @MainActor (FaceSession) -> AnyView
 
     /// The honest default: this build has no realtime client, so it does not pretend to
     /// be loading one.
     ///
-    /// Reached only when the broker minted native join credentials, which is the case
-    /// where a spinner would be most convincing and most wrong.
+    /// ``canDraw`` is false, so ``LiveFaceView`` shows the sentence rather than this —
+    /// the view below is the last resort for a call site that renders anyway.
     ///
     /// Computed rather than a `static let`: a stored one would be shared mutable state
     /// holding a non-`Sendable` closure, which Swift 6 refuses — correctly, since the
     /// closure builds views and views belong to the main actor.
     static var notInThisBuild: FaceRenderer {
-        FaceRenderer { _ in
+        FaceRenderer(canDraw: { _ in false }) { _ in
             AnyView(
                 VStack(spacing: SylTheme.Metric.step) {
                     Image(systemName: "person.crop.circle.badge.questionmark")

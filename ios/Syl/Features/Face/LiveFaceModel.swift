@@ -90,15 +90,16 @@ final class LiveFaceModel: ObservableObject {
         return refusal.isWorthAnotherPress
     }
 
-    /// Whether this device can actually render the session it was given.
-    ///
-    /// A broker that mints only a browser session key has opened something this phone
-    /// cannot join. That is not a failure to hide behind a spinner — it is a state with
-    /// its own sentence. See ``FaceSession/canJoin``.
-    var canRender: Bool {
-        guard case .here(let session) = standing else { return false }
-        return session.canJoin
-    }
+    // **"Can this device draw her" is not a question the model can answer, and it used
+    // to try.** `canRender` lived here and read `FaceSession.canJoin`, which asks whether
+    // the broker minted NATIVE join credentials. `syl-chzl.7.5` made the answer depend on
+    // the RENDERER instead: a web view over the page Syl serves draws a session that has
+    // no native credentials at all, and a native room client could not draw one that
+    // does. Two answers to one question eventually disagree, so there is one, and it
+    // lives on ``FaceRenderer/canDraw`` where the drawing does.
+    //
+    // What the model still owes this surface is unchanged and is above: a session that
+    // cannot be drawn is a state with its own SENTENCE, never a spinner.
 
     // MARK: - The press
 
