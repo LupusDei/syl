@@ -32,21 +32,33 @@ import type { FaceAnswerer } from "./ask-syl.js";
  * - The memory index and his-words recording wrap the runner once, for every
  *   caller, rather than once per caller.
  *
- * ## The rail is checked twice, in both directions
+ * ## The rail is checked twice, and NOT in the obvious place
  *
  * Constraint 3: `ANTHROPIC_API_KEY` must be stripped from any child process and
  * `apiKeySource === "none"` asserted, because a set key silently outranks the
  * claude.ai login and reroutes billing to the metered API.
  *
- * `runTurn` enforces that at the spawn. This module adds the two locks that
- * only matter for a caller whose output is a **voice**:
+ * `runTurn` already does both at the spawn — `delete env["ANTHROPIC_API_KEY"]`
+ * on the child, and `assertSubscriptionAuth` on the init frame. This module
+ * adds the two locks that only matter for a caller whose output is a **voice**:
  *
- * 1. **Before**: if the variable is set in *this* process, the turn is refused
- *    and never run. "Refused rather than run" is the bead's wording and it is
- *    the right way round — a turn already spawned has already been billed.
+ * 1. **Before**: if the **warm lane's live process** last reported anything but
+ *    `none`, the turn is refused and never run. That is the pre-flight signal,
+ *    and it is a real one: a warm lane holds a long-lived child, so what it
+ *    reported at its last init is what the next turn will bill against.
  * 2. **After**: if the CLI reports any source but `none`, the answer is not
  *    spoken. It stays in the transcript, because it happened; it does not come
  *    out of her mouth.
+ *
+ * **What is deliberately NOT checked is this process's own environment.** The
+ * obvious guard — refuse if `ANTHROPIC_API_KEY` is set here — is wrong, and it
+ * was written that way first. `runTurn` strips the variable from the child, so
+ * a key in the parent's environment does not reach Claude Code and does not
+ * change what is billed. Refusing on it would take her face offline on every
+ * machine whose shell happens to export one, which is most developer machines
+ * and was in fact this very agent's own environment. A guard that fires on a
+ * condition the system already handles is not caution, it is an outage with a
+ * good excuse.
  */
 
 /** Her own thread, by default. `laneFor` maps it to the `commander` lane. */
@@ -65,8 +77,8 @@ export class FaceRailRefusedError extends Error {
   constructor(apiKeySource: string, when: "before" | "after") {
     super(
       when === "before"
-        ? `ANTHROPIC_API_KEY is set in this process, so a spawned turn would bill the metered ` +
-          `API rather than the claude.ai subscription. Refusing to run the turn at all.`
+        ? `Her warm lane is running on "${apiKeySource}", so the next turn would bill the ` +
+          `metered API rather than the claude.ai subscription. Refusing to run it at all.`
         : `Refusing to speak a turn billed through "${apiKeySource}": Syl runs on subscription ` +
           `rails and requires apiKeySource === "none".`,
     );
@@ -95,23 +107,26 @@ export interface FaceConversationOptions {
    */
   readonly conversationId?: string;
   /**
-   * Reads `ANTHROPIC_API_KEY`. Injected so the pre-flight refusal is testable
-   * without mutating the real environment out from under a parallel test file.
+   * What the warm lane's live process last reported as `apiKeySource`.
+   *
+   * `WarmLanes.status(LANES.commander)?.apiKeySource`. `undefined` means there
+   * is no live process to have reported anything, which is not evidence of a
+   * problem — the turn runs and the post-flight lock catches it.
    */
-  readonly readEnv?: () => string | undefined;
+  readonly laneRail?: () => string | undefined;
   readonly log?: (event: string, fields: Record<string, unknown>) => void;
 }
 
 export class FaceConversation {
   readonly #conversations: FaceConversationSeam;
   readonly #conversationId: string | undefined;
-  readonly #readEnv: () => string | undefined;
+  readonly #laneRail: (() => string | undefined) | null;
   readonly #log: (event: string, fields: Record<string, unknown>) => void;
 
   constructor(options: FaceConversationOptions) {
     this.#conversations = options.conversations;
     this.#conversationId = options.conversationId ?? HIS_CONVERSATION;
-    this.#readEnv = options.readEnv ?? ((): string | undefined => process.env["ANTHROPIC_API_KEY"]);
+    this.#laneRail = options.laneRail ?? null;
     this.#log =
       options.log ??
       ((event, fields) => {
@@ -133,11 +148,17 @@ export class FaceConversation {
       throw new FaceTurnSilentError("there was nothing in the question to answer");
     }
 
-    // LOCK ONE, before anything is spawned. See the header.
-    const key = this.#readEnv();
-    if (key !== undefined && key !== "") {
-      this.#log("face.turn.refused", { sessionId: input.sessionId, why: "api_key_set" });
-      throw new FaceRailRefusedError("ANTHROPIC_API_KEY", "before");
+    // LOCK ONE, before anything is spawned. See the header for why the signal
+    // is the warm lane's last init frame and not this process's environment.
+    const rail = this.#laneRail?.();
+    if (rail !== undefined && rail !== "none") {
+      this.#log("face.turn.refused", {
+        sessionId: input.sessionId,
+        why: "wrong_rail",
+        when: "before",
+        apiKeySource: rail,
+      });
+      throw new FaceRailRefusedError(rail, "before");
     }
 
     const turn: AnsweredTurn = await this.#conversations.ask({

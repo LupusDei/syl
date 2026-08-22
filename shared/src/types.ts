@@ -1136,6 +1136,85 @@ export type WsError = {
 };
 
 /**
+ * Everything a client needs to join her live face, and deliberately
+ * nothing more.
+ *
+ * The server's provider secret is not here and never crosses this
+ * boundary. Neither is the per-session credential the avatar presents
+ * when it calls back to ask her something — a client holding that could
+ * speak as the avatar.
+ */
+export type FaceSessionCredentials = {
+  readonly sessionId: string;
+  readonly sessionKey: string;
+  readonly avatarId: string;
+  readonly expiresAt?: Instant | null;
+};
+
+/**
+ * How a face session ended, and the four are genuinely different facts.
+ * `closed` is he hung up. `reaped` is the idle auto-disconnect cutting a
+ * session nobody was using — a month of `closed` and no `reaped` means
+ * either he is diligent or the reaper is dead, and those must not look
+ * the same. `expired` is the provider's own cap. `failed` is a session
+ * that was created, charged for, and never became usable.
+ */
+export type FaceSessionEnd = "closed" | "reaped" | "expired" | "failed";
+
+/**
+ * One face session as the ledger holds it. Carries no credential material
+ * of any kind.
+ */
+export type FaceSession = {
+  readonly sessionId: string;
+  readonly avatarId: string;
+  readonly openedAt: Instant;
+  readonly closedAt?: Instant | null;
+  readonly ended?: FaceSessionEnd | null;
+  readonly credits: number;
+  readonly dollars: number;
+  readonly lastActivityAt: Instant;
+};
+
+/**
+ * What a session has cost so far.
+ *
+ * **Partial blocks bill UP**: a started six-second block costs a full two
+ * credits, because that is how the provider bills. The meter can
+ * over-report and can never under-report — a meter that under-counts
+ * reports a safety nobody verified.
+ */
+export type FaceMeter = {
+  readonly elapsedSeconds: number;
+  readonly blocks: number;
+  readonly credits: number;
+  readonly dollars: number;
+};
+
+/**
+ * The day's spend against the ceiling. Resets at midnight UTC — an
+ * accounting bucket, not a wall-clock moment that means anything to him,
+ * which is why this one is UTC and reminders are not.
+ */
+export type FaceBudget = {
+  readonly creditsSpentToday: number;
+  readonly creditCeiling: number;
+  readonly creditsRemaining: number;
+  readonly dollarsSpentToday: number;
+};
+
+/**
+ * A session, what it has cost, and what today has cost. One read rather
+ * than three, because a live session whose cost needs a second request is
+ * a cost nobody looks at.
+ */
+export type FaceSessionState = {
+  readonly session: FaceSession;
+  readonly meter: FaceMeter;
+  readonly budget: FaceBudget;
+};
+
+/**
  * Every frame a client may send.
  */
 export type WsClientFrame = WsAuthResponse | WsClientChatMessage | WsSync | WsPing;

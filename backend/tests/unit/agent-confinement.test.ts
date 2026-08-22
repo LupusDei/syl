@@ -435,13 +435,24 @@ describe("everything the agent scope cannot reach, swept from the router", () =>
   ];
 
   /**
-   * The two operations that answer without a token, and why each must.
+   * The operations that answer without a bearer token, and why each must.
    *
-   * `security: []` in the contract. They never reach `confineAgent`, because
-   * `requireBearerToken` is what runs it — so they are excluded from the sweep
-   * and accounted for by name here instead. Both are checked below.
+   * They never reach `confineAgent`, because `requireBearerToken` is what runs
+   * it — so they are excluded from the sweep and accounted for by name here
+   * instead. All three are checked below.
+   *
+   * The first two are `security: []` in the contract. The third, `syl-chzl.3.5`,
+   * is not in the contract at all: it is authenticated by a credential minted
+   * per face session, which is a different system with a different lifetime and
+   * no `Principal` behind it. It gives her nothing for the strongest possible
+   * reason — its gate does not consult `api_keys`, so her key is not a wrong
+   * key there, it is not a key at all.
    */
-  const UNAUTHENTICATED: readonly string[] = ["GET /health", "POST /auth/pair"];
+  const UNAUTHENTICATED: readonly string[] = [
+    "GET /health",
+    "POST /auth/pair",
+    "POST /face/sessions/{faceSessionId}/ask",
+  ];
 
   /** Every route the app dispatches that is not hers and not unauthenticated. */
   function beyondHer(): readonly MountedRoute[] {
@@ -483,7 +494,7 @@ describe("everything the agent scope cannot reach, swept from the router", () =>
     expect(refused).toEqual([]);
   });
 
-  it("should leave the two unauthenticated operations giving her nothing", async () => {
+  it("should leave the unauthenticated operations giving her nothing", async () => {
     // They are outside the confinement by construction, so they are the only
     // places the sweep above cannot speak for. Both are safe, and for reasons
     // rather than by accident:
@@ -505,6 +516,19 @@ describe("everything the agent scope cannot reach, swept from the router", () =>
     });
     expect(paired.status).not.toBe(200);
     expect(JSON.stringify(await paired.json())).not.toContain("syl:apikey");
+
+    // `POST /face/sessions/{id}/ask` is the avatar's door (`syl-chzl.3.5`).
+    // Her credential is refused here the same way any other string would be:
+    // the gate reads the per-session credential off `face_sessions`, and no
+    // `api_keys` row of any scope is one. She also cannot obtain one — a face
+    // session's credential exists only because somebody paid for the session,
+    // and `POST /face/sessions` is inside the confinement above.
+    const asked = await call("POST", "/face/sessions/rts_nothing/ask", {
+      token: agentToken(),
+      body: { question: "What is on today?" },
+    });
+    expect(asked.status).toBe(401);
+    expect(JSON.stringify(await asked.json())).not.toContain("say");
   });
 
   it("should publish no operation that hands out a pairing code", () => {

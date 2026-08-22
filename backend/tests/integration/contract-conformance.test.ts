@@ -177,11 +177,34 @@ const UNDECLARED: readonly string[] = [
   // in his conversation, and a read-by-id here would hand Syl's own credential
   // a read of his chat history that `/conversations` withholds from her.
   "POST /tellings",
+  // `syl-chzl.3.5` — the avatar asking her a question, and the ONE entry on
+  // this list that is here on purpose rather than as debt.
+  //
+  // The three client-facing face routes ARE published, because `syl-chzl.7.1`
+  // generates SylKit against them and a Swift client outside this repository is
+  // exactly the second caller every note above says would justify publishing.
+  // This fourth route is different in kind: its caller is not a client at all.
+  //
+  // It is authenticated by a credential minted per session, living on the
+  // session row, expiring with it — deliberately NOT an `api_keys` scope, so it
+  // has no `Principal` and there is nothing for a `security` block in the spec
+  // to describe. Publishing it would advertise a door that no generated client
+  // can or should open, and would invite one to try: a phone holding a device
+  // token gets 401 here, and always will.
+  //
+  // It is also not the primary transport. A Runway `backend_rpc` call arrives
+  // over LiveKit on a socket WE dialled out on (`face/ask-syl.ts`), so nothing
+  // reaches this path from outside the tailnet today and no Funnel is open.
+  // This is a second door onto one gate, and the gate is what is tested —
+  // `face-ask-credential.test.ts` and `face-sessions.test.ts`.
+  "POST /face/sessions/{faceSessionId}/ask",
 ];
 
 /** Path parameters that are syntactically valid but name nothing. */
 const ABSENT_IDS: Readonly<Record<string, string>> = {
   conversationId: "syl:conversation:00000000-0000-7000-8000-0000000000ff",
+  // Not a `syl:` id: a face session is recorded by the PROVIDER's own id.
+  faceSessionId: "rts_00000000000000000000000000000000",
   attachmentId: "syl:attachment:00000000-0000-7000-8000-0000000000ff",
   reminderId: "syl:reminder:00000000-0000-7000-8000-0000000000ff",
   todoId: "syl:todo:00000000-0000-7000-8000-0000000000ff",

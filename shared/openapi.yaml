@@ -132,6 +132,7 @@ tags:
   - name: logs
   - name: sync
   - name: memory
+  - name: face
 
 paths:
   # -------------------------------------------------------------- health ---
@@ -1472,6 +1473,98 @@ paths:
                       data: { $ref: "#/components/schemas/MemoryConstellation" }
         default: { $ref: "#/components/responses/Error" }
 
+  # ---------------------------------------------------------------- face ---
+  /face/sessions:
+    post:
+      tags: [face]
+      operationId: openFaceSession
+      summary: Open a live face.
+      description: |
+        Create a realtime avatar session and hand back the short-lived
+        credentials a client needs to join it.
+
+        **Only `sessionKey` crosses this boundary**, and it is not the server's
+        provider secret — that never leaves the machine. The per-session
+        credential the avatar uses to call back is not here either; a client
+        holding it could speak as the avatar.
+
+        Two refusals a client must handle, and neither is a fault:
+
+        - `RATE_LIMITED` when the day's credit ceiling is reached. The details
+          carry `creditCeiling` and `creditsSpentToday`, so the message shown
+          can name the number rather than being a spinner.
+        - `CONFLICT` when her lane is cold. A cold turn takes about 7.5 seconds
+          and the avatar's tool call gives up at 8, so a face opened then would
+          bill about $0.20 a minute to be unable to answer.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "201":
+          description: The session is ready and the client may join it.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/FaceSessionCredentials" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /face/sessions/{faceSessionId}:
+    get:
+      tags: [face]
+      operationId: getFaceSession
+      summary: One face session, its live meter, and the day's spend.
+      description: |
+        A face bills by the second, so the meter is part of the read rather
+        than a separate call: an open session with no visible cost is the
+        silent leak this surface exists to prevent.
+
+        Readable by a paired device. It is his money and his data.
+      parameters:
+        - $ref: "#/components/parameters/FaceSessionId"
+      responses:
+        "200":
+          description: The session, what it has cost, and what today has cost.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/FaceSessionState" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [face]
+      operationId: closeFaceSession
+      summary: Close a face and settle what it cost.
+      description: |
+        Idempotent by design rather than by convention. Closing races the idle
+        reaper — he hangs up at the moment it decides the session is quiet —
+        and both are correct, so the second call returns the settled session
+        unchanged rather than charging again or refusing.
+      parameters:
+        - $ref: "#/components/parameters/FaceSessionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: The settled session, with how it ended and what it cost.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/OkEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/FaceSession" }
+        default: { $ref: "#/components/responses/Error" }
+
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1549,6 +1642,16 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/Id" }
+    FaceSessionId:
+      name: faceSessionId
+      in: path
+      required: true
+      description: |
+        The PROVIDER's realtime-session id, deliberately not a `syl:` id. The
+        row is a record of a session somebody else owns and bills for, and a
+        second identifier would put a translation table between every question
+        about money and its answer.
+      schema: { type: string, minLength: 1, maxLength: 200 }
 
   responses:
     Error:
@@ -3549,6 +3652,125 @@ components:
         type: { const: "error" }
         error: { $ref: "#/components/schemas/ApiError" }
         fatal: { type: boolean }
+
+    # ------------------------------------------------------------ face ---
+
+    FaceSessionCredentials:
+      type: object
+      required: [sessionId, sessionKey, avatarId]
+      description: |
+        Everything a client needs to join her live face, and deliberately
+        nothing more.
+
+        The server's provider secret is not here and never crosses this
+        boundary. Neither is the per-session credential the avatar presents
+        when it calls back to ask her something — a client holding that could
+        speak as the avatar.
+      properties:
+        sessionId:
+          type: string
+          description: The provider's realtime-session id. Not a `syl:` id.
+        sessionKey:
+          type: string
+          description: |
+            Short-lived and single-use. This is the ONLY credential that leaves
+            the server, and it is scoped to this one session.
+        avatarId:
+          type: string
+          description: Which avatar is speaking. Recorded because the likeness is still being chosen.
+        expiresAt:
+          description: |
+            The provider's session cap, when it reported one. Absent means it
+            did not, which a client must treat as unknown rather than as never.
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+
+    FaceSessionEnd:
+      type: string
+      description: |
+        How a face session ended, and the four are genuinely different facts.
+        `closed` is he hung up. `reaped` is the idle auto-disconnect cutting a
+        session nobody was using — a month of `closed` and no `reaped` means
+        either he is diligent or the reaper is dead, and those must not look
+        the same. `expired` is the provider's own cap. `failed` is a session
+        that was created, charged for, and never became usable.
+      enum: [closed, reaped, expired, failed]
+
+    FaceSession:
+      type: object
+      required: [sessionId, avatarId, openedAt, credits, dollars, lastActivityAt]
+      description: |
+        One face session as the ledger holds it. Carries no credential material
+        of any kind.
+      properties:
+        sessionId: { type: string }
+        avatarId: { type: string }
+        openedAt: { $ref: "#/components/schemas/Instant" }
+        closedAt:
+          description: Null while the session is live.
+          oneOf:
+            - { $ref: "#/components/schemas/Instant" }
+            - { type: "null" }
+        ended:
+          description: Null while the session is live.
+          oneOf:
+            - { $ref: "#/components/schemas/FaceSessionEnd" }
+            - { type: "null" }
+        credits:
+          type: integer
+          description: Everything charged for this session so far, the upfront included.
+          minimum: 0
+        dollars: { type: number, minimum: 0 }
+        lastActivityAt:
+          description: |
+            When the avatar last asked her something. What the idle reaper
+            reads, and therefore what keeps a live conversation alive.
+          $ref: "#/components/schemas/Instant"
+
+    FaceMeter:
+      type: object
+      required: [elapsedSeconds, blocks, credits, dollars]
+      description: |
+        What a session has cost so far.
+
+        **Partial blocks bill UP**: a started six-second block costs a full two
+        credits, because that is how the provider bills. The meter can
+        over-report and can never under-report — a meter that under-counts
+        reports a safety nobody verified.
+      properties:
+        elapsedSeconds: { type: number, minimum: 0 }
+        blocks:
+          type: integer
+          description: Six-second streaming blocks billed, rounded up.
+          minimum: 0
+        credits: { type: integer, minimum: 0 }
+        dollars: { type: number, minimum: 0 }
+
+    FaceBudget:
+      type: object
+      required: [creditsSpentToday, creditCeiling, creditsRemaining, dollarsSpentToday]
+      description: |
+        The day's spend against the ceiling. Resets at midnight UTC — an
+        accounting bucket, not a wall-clock moment that means anything to him,
+        which is why this one is UTC and reminders are not.
+      properties:
+        creditsSpentToday: { type: integer, minimum: 0 }
+        creditCeiling: { type: integer, minimum: 0 }
+        creditsRemaining: { type: integer, minimum: 0 }
+        dollarsSpentToday: { type: number, minimum: 0 }
+
+    FaceSessionState:
+      type: object
+      required: [session, meter, budget]
+      description: |
+        A session, what it has cost, and what today has cost. One read rather
+        than three, because a live session whose cost needs a second request is
+        a cost nobody looks at.
+      properties:
+        session: { $ref: "#/components/schemas/FaceSession" }
+        meter: { $ref: "#/components/schemas/FaceMeter" }
+        budget: { $ref: "#/components/schemas/FaceBudget" }
 
     WsClientFrame:
       description: Every frame a client may send.

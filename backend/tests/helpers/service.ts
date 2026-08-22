@@ -26,6 +26,7 @@ import { Wardrobe } from "../../src/render/wardrobe.js";
 import type { MemoryViews } from "../../src/routes/memory.js";
 import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api-key-service.js";
 import { AttachmentStore } from "../../src/services/attachment-store.js";
+import { createFaceRuntime, type FaceRuntime } from "../../src/face/face-runtime.js";
 import { fixedClock, type Clock } from "../../src/services/clock.js";
 import { ConversationService } from "../../src/services/conversation-service.js";
 import { IN_MEMORY, openDatabase, type SylDatabase } from "../../src/services/database.js";
@@ -417,6 +418,7 @@ export function testDeps(db: SylDatabase): {
   readonly attachments: AttachmentStore;
   readonly renders: RenderService;
   readonly renderVerdicts: RenderVerdicts;
+  readonly face: FaceRuntime;
   readonly health: HealthSamples;
   readonly characteristics: HealthCharacteristics;
   readonly wardrobe: Wardrobe;
@@ -537,8 +539,28 @@ export function testDeps(db: SylDatabase): {
     // the service depends on at boot, so a test getting the real object here
     // is a test exercising the real seam.
     memoryRuntime: new MemoryRuntime({ db: db.handle, graph: memory.graph, clock }),
+    // Her live face, real and on the same database. Nothing here reaches
+    // Runway: `FaceSessionBroker` builds its client lazily, so a runtime that
+    // is only asked about the ledger, the ceiling or a meter never needs
+    // `RUNWAYML_API_SECRET` -- which is also the property the admin's meter
+    // view and the reaper depend on in production.
+    //
+    // The reaper is NOT started. A test that wants a sweep calls `sweep()`
+    // itself; a background timer in every route test is a source of writes
+    // nobody asked for.
+    face: createFaceRuntime({
+      db: db.handle,
+      conversations: chat,
+      clock,
+      avatarId: TEST_AVATAR_ID,
+      log: () => undefined,
+      logError: () => undefined,
+    }),
   };
 }
+
+/** Her avatar, in a test. A real-looking uuid, deliberately not the live one. */
+export const TEST_AVATAR_ID = "00000000-face-7000-8000-00000000face";
 
 /** An `ApiKeyService` on a fixed clock and predictable entropy. */
 export function testKeys(db: SylDatabase, options: TestKeyOptions = {}): ApiKeyService {

@@ -403,6 +403,35 @@ export class MockServer {
       return found === undefined ? notFound("sending") : ok(found);
     },
 
+    // Her live face. The mock never has a provider secret to leak, which is
+    // the point of asserting on the VALUE in the backend test rather than here.
+    openFaceSession: ({ store }) => ok(store.openFaceSession().credentials, 201),
+    getFaceSession: ({ params, store }) => {
+      const found = store.faceSession(params["faceSessionId"] ?? "");
+      if (found === undefined) return notFound("face session");
+      const elapsedSeconds = Math.max(0, (Date.now() - Date.parse(found.openedAt)) / 1000);
+      const blocks = Math.ceil(elapsedSeconds / 6);
+      const credits = 2 + blocks * 2;
+      return ok({
+        session: found,
+        // Partial blocks bill UP, the same way the real meter does. A mock that
+        // rounded down would teach a client the cheaper arithmetic.
+        meter: { elapsedSeconds, blocks, credits, dollars: credits * 0.01 },
+        budget: {
+          creditsSpentToday: credits,
+          creditCeiling: 300,
+          creditsRemaining: Math.max(0, 300 - credits),
+          dollarsSpentToday: credits * 0.01,
+        },
+      });
+    },
+    // Idempotent, like the real one: a second close returns the settled
+    // session rather than refusing.
+    closeFaceSession: ({ params, store }) => {
+      const found = store.closeFaceSession(params["faceSessionId"] ?? "");
+      return found === undefined ? notFound("face session") : ok(found);
+    },
+
     listGoals: ({ store, query }) => {
       const status = query.get("status");
       const items = status === null ? store.goals : store.goals.filter((g) => g.status === status);

@@ -6,6 +6,8 @@ import type {
   Delivery,
   DeliveryConfirmation,
   Device,
+  FaceSession,
+  FaceSessionCredentials,
   Goal,
   HealthStatus,
   Job,
@@ -112,6 +114,7 @@ export class MockStore {
    * cases, and a client that only ever sees `ready` will hide them.
    */
   sendings: Sending[];
+  faceSessions: FaceSession[];
   private blobs = new Map<string, Buffer>();
   readonly principal: Principal;
   private changes: SyncLogEntry[] = [];
@@ -129,6 +132,7 @@ export class MockStore {
     this.logs = seedLogs();
     this.attachments = [];
     this.sendings = seedSendings();
+    this.faceSessions = [];
     this.principal = clone(data<Principal>("http/auth.whoami"));
   }
 
@@ -146,6 +150,7 @@ export class MockStore {
     this.runs = fresh.runs;
     this.logs = fresh.logs;
     this.sendings = fresh.sendings;
+    this.faceSessions = fresh.faceSessions;
     this.attachments = [];
     this.blobs.clear();
     this.changes = [];
@@ -521,6 +526,57 @@ export class MockStore {
     this.sendings.unshift(sending);
     this.record("sending", "upsert", sending.id, at);
     return sending;
+  }
+
+  // ---------------------------------------------------------------- face ---
+
+  /**
+   * Open a mock face session.
+   *
+   * The `sessionKey` is a visibly fake `stk_` value and there is no provider
+   * secret anywhere in this file, which is the property the mock has to
+   * preserve: a client generated against it must never learn that such a
+   * secret exists, let alone see one.
+   */
+  openFaceSession(): { credentials: FaceSessionCredentials; session: FaceSession } {
+    const at = nowIso();
+    const sessionId = `rts_mock_${String(this.faceSessions.length + 1)}`;
+    const session: FaceSession = {
+      sessionId,
+      avatarId: "00000000-face-7000-8000-00000000face",
+      openedAt: at,
+      closedAt: null,
+      ended: null,
+      // The upfront charge, which the provider takes at create.
+      credits: 2,
+      dollars: 0.02,
+      lastActivityAt: at,
+    };
+    this.faceSessions.unshift(session);
+    return {
+      credentials: {
+        sessionId,
+        sessionKey: `stk_mock_${sessionId}`,
+        avatarId: session.avatarId,
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+      },
+      session,
+    };
+  }
+
+  faceSession(sessionId: string): FaceSession | undefined {
+    return this.faceSessions.find((session) => session.sessionId === sessionId);
+  }
+
+  /** Settle a face session. Idempotent, exactly as the real route is. */
+  closeFaceSession(sessionId: string): FaceSession | undefined {
+    const found = this.faceSession(sessionId);
+    if (found === undefined || found.closedAt !== null) return found;
+    const settled: FaceSession = { ...found, closedAt: nowIso(), ended: "closed" };
+    this.faceSessions = this.faceSessions.map((session) =>
+      session.sessionId === sessionId ? settled : session,
+    );
+    return settled;
   }
 
   // -------------------------------------------------------------- goals ---

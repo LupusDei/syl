@@ -10,6 +10,7 @@ import {
   createReminderDeliveryHandler,
   defineReminderDeliveryJob,
 } from "../../src/jobs/reminder-delivery-job.js";
+import { createFaceRuntime } from "../../src/face/face-runtime.js";
 import { createApp, syncResolvers } from "../../src/index.js";
 import { IntakeStore } from "../../src/connections/intake-store.js";
 import { ArticleIntake } from "../../src/connections/intake.js";
@@ -152,12 +153,22 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
     // Hoisted so the characteristics seam below is built over the SAME graph
     // and the same `remember` verb, exactly as `bootstrap` builds them.
     const memory = testMemory(db, clock);
+    // Her live face, built the way `testDeps` builds it: real, on the same
+    // database, and reaching Runway for nothing (the client is lazy).
+    const face = createFaceRuntime({
+      db: db.handle,
+      conversations: chat,
+      clock,
+      log: () => undefined,
+      logError: () => undefined,
+    });
 
     running = await startTestApp(
       createApp(testConfig(), {
         keys,
         messages,
         chat,
+        face,
         devices,
         outbox,
         reminders,

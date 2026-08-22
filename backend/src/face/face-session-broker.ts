@@ -75,6 +75,23 @@ const DEFAULT_CREATE_TIMEOUT_MS = 30_000;
 /** How close to the cap counts as "expiring", so a caller can pre-empt it. */
 const DEFAULT_RENEW_LEAD_MS = 30_000;
 
+/**
+ * Her avatar on the Runway org: her own face, bound to her own custom voice.
+ *
+ * A constant with an env override rather than an env var with no default, and
+ * the reason is what the two failure modes look like. A missing default means
+ * every face request answers 500 on a machine where nobody remembered to set
+ * `SYL_FACE_AVATAR_ID` — a silent misconfiguration that presents as a broken
+ * feature. A wrong constant means she opens with the wrong face, which is
+ * visible in the first frame and impossible to miss.
+ *
+ * It is not a secret. It is an opaque handle to a row on an org that already
+ * requires `RUNWAYML_API_SECRET` to touch, so nothing is protected by leaving
+ * it out of the tree — and `syl-chzl.6` has not chosen a likeness yet, so this
+ * is explicitly the placeholder that phase replaces.
+ */
+export const SYL_AVATAR_ID = "48cbc73d-f47f-41de-bed8-58a532b3b84b";
+
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
@@ -158,7 +175,7 @@ export interface FaceSessionBrokerOptions {
   readonly clientOptions?: RunwayClientOptions;
   readonly guard: FaceCostGuard;
   readonly sessions: FaceSessionStore;
-  /** Her avatar. Defaults to `SYL_FACE_AVATAR_ID`. */
+  /** Her avatar. Defaults to `SYL_FACE_AVATAR_ID`, then {@link SYL_AVATAR_ID}. */
   readonly avatarId?: string;
   /** Tools declared at create. Defaults to `ask_syl` alone. */
   readonly tools?: readonly RunwayRpcToolDef[];
@@ -194,7 +211,7 @@ export class FaceSessionBroker {
     this.#clientOptions = options.clientOptions ?? {};
     this.#guard = options.guard;
     this.#sessions = options.sessions;
-    this.#avatarId = options.avatarId ?? process.env["SYL_FACE_AVATAR_ID"] ?? "";
+    this.#avatarId = options.avatarId ?? process.env["SYL_FACE_AVATAR_ID"] ?? SYL_AVATAR_ID;
     this.#tools = options.tools ?? [AskSylIngress.toolDefinition()];
     this.#isLaneWarm = options.isLaneWarm ?? null;
     this.#pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;

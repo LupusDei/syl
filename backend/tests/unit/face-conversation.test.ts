@@ -85,10 +85,6 @@ describe("FaceConversation", () => {
     return new FaceConversation({
       conversations,
       log: () => undefined,
-      // Injected rather than read: `ANTHROPIC_API_KEY` is genuinely set in some
-      // developer and agent environments, and a test suite whose result depends
-      // on that is a test suite that passes on one machine.
-      readEnv: () => undefined,
       ...overrides,
     });
   }
@@ -162,8 +158,8 @@ describe("FaceConversation", () => {
       ).rejects.toBeInstanceOf(FaceRailRefusedError);
     });
 
-    it("should refuse BEFORE running a turn when the variable is set in this process", async () => {
-      const refused = face({ readEnv: () => "sk-ant-something" });
+    it("should refuse BEFORE running a turn when the warm lane is on the wrong rail", async () => {
+      const refused = face({ laneRail: () => "ANTHROPIC_API_KEY" });
 
       await expect(
         refused.answer({ sessionId: "rts_1", question: "What is on today?" }),
@@ -174,7 +170,7 @@ describe("FaceConversation", () => {
     });
 
     it("should not put anything in the transcript for a turn it refused to run", async () => {
-      const refused = face({ readEnv: () => "sk-ant-something" });
+      const refused = face({ laneRail: () => "ANTHROPIC_API_KEY" });
 
       await expect(refused.answer({ sessionId: "rts_1", question: "Hello?" })).rejects.toThrow();
 
@@ -182,12 +178,40 @@ describe("FaceConversation", () => {
       expect(page.items).toHaveLength(0);
     });
 
-    it("should treat an empty variable as absent, not as set", async () => {
-      const allowed = face({ readEnv: () => "" });
+    it("should run normally when the warm lane reports the subscription rail", async () => {
+      const allowed = face({ laneRail: () => "none" });
 
       await expect(
         allowed.answer({ sessionId: "rts_1", question: "Hello?" }),
       ).resolves.toBeTypeOf("string");
+    });
+
+    it("should run when there is no live warm process to have reported anything", async () => {
+      // `undefined` is not evidence of a problem — it means the lane is cold.
+      // The post-flight lock is what catches a bad rail in that case, and
+      // refusing here would take her face offline whenever she is idle.
+      const allowed = face({ laneRail: () => undefined });
+
+      await expect(
+        allowed.answer({ sessionId: "rts_1", question: "Hello?" }),
+      ).resolves.toBeTypeOf("string");
+    });
+
+    it("should NOT refuse merely because this process has ANTHROPIC_API_KEY set", async () => {
+      // `runTurn` deletes it from the child, so the parent holding one changes
+      // nothing about what is billed. This assertion exists because the guard
+      // was written the wrong way round first and took the face offline on
+      // every machine with a key in its shell.
+      const previous = process.env["ANTHROPIC_API_KEY"];
+      process.env["ANTHROPIC_API_KEY"] = "sk-ant-in-the-parent";
+      try {
+        await expect(
+          face().answer({ sessionId: "rts_1", question: "Hello?" }),
+        ).resolves.toBeTypeOf("string");
+      } finally {
+        if (previous === undefined) delete process.env["ANTHROPIC_API_KEY"];
+        else process.env["ANTHROPIC_API_KEY"] = previous;
+      }
     });
 
     it("should name the rail in the refusal, so a log line says which one", async () => {

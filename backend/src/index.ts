@@ -96,6 +96,8 @@ import { createReminderRouter } from "./routes/reminders.js";
 // nothing else: `routes/health.ts` is LIVENESS, the one unauthenticated route in
 // the contract. See the header of `routes/health-data.ts`.
 import { createHealthDataRouter } from "./routes/health-data.js";
+import { createFaceRuntime, type FaceRuntime } from "./face/face-runtime.js";
+import { createFaceRouter } from "./routes/face.js";
 import { createRenderRouter } from "./routes/renders.js";
 import { createSendingRouter } from "./routes/sendings.js";
 import { createSyncRouter } from "./routes/sync.js";
@@ -349,6 +351,14 @@ export interface AppDependencies {
    */
   readonly renderVerdicts: RenderVerdicts;
   /**
+   * Her live face: the broker, the ceiling, the ledger, the reaper and the
+   * `ask_syl` gate, assembled (`face/face-runtime.ts`).
+   *
+   * One field rather than five because the parts are deliberately unaware of
+   * each other and this is the only place that has to know all of them.
+   */
+  readonly face: FaceRuntime;
+  /**
    * His health observations. Deliberately NOT reachable from the memory graph —
    * there is no path, by construction. See `0032_health_observations.sql`.
    */
@@ -477,6 +487,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     attachments,
     renders,
     renderVerdicts,
+    face,
     health,
     characteristics,
     wardrobe,
@@ -545,6 +556,21 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // herself rather than for him, and that it reaches nothing of his.
   api.use(
     createRenderRouter({ renders, idempotency, authenticate, verdicts: renderVerdicts, wardrobe }),
+  );
+  // Her live face. NOT on `AGENT_SURFACE`, and that absence is the guard: a
+  // face costs about $0.20 a minute, so an assistant able to open one can spend
+  // his money unprompted. `confineAgent` refuses her key here by default and
+  // keeps refusing it until somebody adds an entry on purpose.
+  api.use(
+    createFaceRouter({
+      broker: face.broker,
+      sessions: face.sessions,
+      guard: face.guard,
+      ingress: face.ingress,
+      idempotency,
+      authenticate,
+      attachRpc: (input) => face.transport.attach(input),
+    }),
   );
   // His body, as opposed to the service's. Auth is mounted on the three data
   // routes BY NAME inside this router, never on the `/health` prefix, so a
@@ -1665,6 +1691,19 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // the likeness. Isolated so that it drops in one migration when it does.
   const renderVerdicts = new RenderVerdicts({ db: database.handle, clock });
   const health = new HealthSamples({ db: database.handle, clock });
+  // Her live face (`syl-chzl.3`). Built AFTER `chat`, because a face turn runs
+  // through the same seam every other turn uses -- that is the whole of
+  // `syl-chzl.4.2`, and taking a second path to `SylAgent` here would be how
+  // `SOUL.md`, her memory and the reader fence stop applying to the one surface
+  // that has a voice.
+  //
+  // No transport is wired yet, so the avatar has no `ask_syl` to call and a
+  // face opens mute; see `NO_TRANSPORT` for why that still closes honestly.
+  const face = createFaceRuntime({
+    db: database.handle,
+    conversations: chat,
+    clock,
+  });
   // His date of birth, his sex and his height. Built from the GRAPH and her own
   // write verb, and from no sample store at all — that absence is what makes
   // "a characteristic never lands in `health_samples`" a property of the wiring
@@ -1775,6 +1814,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       attachments,
       renders,
       renderVerdicts,
+      face,
       health,
       characteristics,
       wardrobe,
