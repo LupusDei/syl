@@ -27,8 +27,31 @@ private func aSession(
     )
 }
 
-private func aMeter(elapsed: Double = 60) -> FaceMeter {
-    FaceMeter(elapsedSeconds: elapsed, dollars: 0.2, dollarsToday: 0.6, dailyCeilingDollars: 5)
+private func aRow(id: String = "face-1", ended: FaceSessionEnd? = nil) -> FaceSessionRow {
+    FaceSessionRow(
+        sessionId: id,
+        avatarId: "48cbc73d-f47f-41de-bed8-58a532b3b84b",
+        openedAt: anInstant,
+        closedAt: ended == nil ? nil : anInstant.addingTimeInterval(120),
+        ended: ended,
+        credits: 12,
+        dollars: 0.4,
+        lastActivityAt: anInstant
+    )
+}
+
+private func aReport(
+    id: String = "face-1",
+    elapsed: Double = 60,
+    ended: FaceSessionEnd? = nil
+) -> FaceSessionReport {
+    FaceSessionReport(
+        session: aRow(id: id, ended: ended),
+        meter: FaceMeter(elapsedSeconds: elapsed, blocks: 10, credits: 6, dollars: 0.2),
+        budget: FaceBudget(
+            creditsSpentToday: 18, creditCeiling: 100, creditsRemaining: 82,
+            dollarsSpentToday: 0.6)
+    )
 }
 
 /// Bringing her face to life, and everything that must not break doing it
@@ -70,6 +93,7 @@ final class LiveFaceTests: XCTestCase {
         var report: @Sendable (String) async throws -> FaceSessionReport = { _ in
             throw APIError.cancelled
         }
+        var closeAnswer: @Sendable (String) -> FaceSessionRow = { aRow(id: $0, ended: .closed) }
 
         var openCount: Int { lock.withLock { opens } }
         var closedIDs: [String] { lock.withLock { closes } }
@@ -86,13 +110,7 @@ final class LiveFaceTests: XCTestCase {
                 report: { [self] id in try await report(id) },
                 close: { [self] id in
                     lock.withLock { closes.append(id) }
-                    return FaceSessionReport(
-                        sessionId: id,
-                        standing: .closed,
-                        meter: FaceMeter(
-                            elapsedSeconds: 0, dollars: 0, dollarsToday: 0,
-                            dailyCeilingDollars: nil)
-                    )
+                    return closeAnswer(id)
                 }
             )
         }
@@ -284,7 +302,7 @@ final class LiveFaceTests: XCTestCase {
 
         XCTAssertEqual(broker.closedIDs, ["face-9"])
         XCTAssertEqual(face.standing, .dormant)
-        XCTAssertNil(face.meter, "the meter is not a souvenir")
+        XCTAssertNil(face.report, "the meter is not a souvenir")
     }
 
     /// **The leak this project is named for.** A face in a backgrounded app goes on
@@ -444,9 +462,7 @@ final class LiveFaceTests: XCTestCase {
         let broker = broker { ordinal in
             ordinal == 1 ? aSession(id: "first", expiresIn: 10) : aSession(id: "second")
         }
-        broker.report = { id in
-            FaceSessionReport(sessionId: id, standing: .live, meter: aMeter())
-        }
+        broker.report = { id in aReport(id: id) }
         let face = model(broker)
         await face.awaken()
 
@@ -460,9 +476,7 @@ final class LiveFaceTests: XCTestCase {
     /// A session with room to spare is left alone. Renewing early is money.
     func testShouldNotRenewASessionThatHasTimeLeft() async {
         let broker = broker { _ in aSession(expiresIn: 300) }
-        broker.report = { id in
-            FaceSessionReport(sessionId: id, standing: .live, meter: aMeter())
-        }
+        broker.report = { id in aReport(id: id) }
         let face = model(broker)
         await face.awaken()
 
@@ -474,32 +488,32 @@ final class LiveFaceTests: XCTestCase {
     /// The meter reaches the screen, because the money is his.
     func testShouldPublishTheMeterWhileSheIsHere() async {
         let broker = broker { _ in aSession() }
-        broker.report = { id in
-            FaceSessionReport(sessionId: id, standing: .live, meter: aMeter(elapsed: 94))
-        }
+        broker.report = { id in aReport(id: id, elapsed: 94) }
         let face = model(broker)
         await face.awaken()
 
         await face.tick(at: now)
 
-        XCTAssertEqual(face.meter?.elapsedSeconds, 94)
+        XCTAssertEqual(face.report?.meter.elapsedSeconds, 94)
+        XCTAssertEqual(face.report?.budget.dollarsSpentToday, 0.6)
     }
 
     /// **A face that has stopped must not look like a face that is loading.** When the
     /// broker says the session ended, the screen says so in the broker's words.
     func testShouldSayThatSheHasGoneRatherThanShowingAStalledFace() async {
         let broker = broker { _ in aSession() }
-        broker.report = { id in
-            FaceSessionReport(
-                sessionId: id, standing: .failed, meter: aMeter(),
-                reason: "The avatar service dropped the room.")
-        }
+        broker.report = { id in aReport(id: id, ended: .reaped) }
         let face = model(broker)
         await face.awaken()
 
         await face.tick(at: now)
 
-        XCTAssertEqual(face.visibleMessage, "The avatar service dropped the room.")
+        XCTAssertEqual(
+            face.visibleMessage, LiveFaceModel.sentence(for: .reaped),
+            "a reaped session is an admission, not an ordinary close")
+        XCTAssertNotEqual(
+            LiveFaceModel.sentence(for: .reaped), LiveFaceModel.sentence(for: .closed),
+            "the four ends are four different facts and must not read alike")
     }
 
     // MARK: - The surface's own honesty
@@ -519,15 +533,23 @@ final class LiveFaceTests: XCTestCase {
     /// screen. Unknown renders as unknown; it never renders as zero, which would be a
     /// confident false claim about a meter that is running.
     func testShouldNeverRenderAnUnknownCostAsFree() {
-        XCTAssertEqual(LiveFaceView.meterLine(nil), "Live · cost not known yet")
-
-        let uncapped = FaceMeter(
-            elapsedSeconds: 65, dollars: 0.22, dollarsToday: 0.22, dailyCeilingDollars: nil)
-        XCTAssertEqual(LiveFaceView.meterLine(uncapped), "Live · 1:05 · $0.22")
+        XCTAssertEqual(
+            LiveFaceView.meterLine(nil), "Live · cost not known yet",
+            "before the first report a $0.00 would be a false claim about a running meter")
 
         XCTAssertEqual(
-            LiveFaceView.meterLine(aMeter(elapsed: 125)),
-            "Live · 2:05 · $0.20 · today $0.60 of $5.00")
+            LiveFaceView.meterLine(aReport(elapsed: 125)),
+            "Live · 2:05 · $0.20 · today $0.60")
+
+        // No usable ceiling drops the day's figure rather than dividing by nothing.
+        let uncapped = FaceSessionReport(
+            session: aRow(),
+            meter: FaceMeter(elapsedSeconds: 65, blocks: 11, credits: 7, dollars: 0.22),
+            budget: FaceBudget(
+                creditsSpentToday: 7, creditCeiling: 0, creditsRemaining: 0,
+                dollarsSpentToday: 0.22)
+        )
+        XCTAssertEqual(LiveFaceView.meterLine(uncapped), "Live · 1:05 · $0.22")
     }
 
     // MARK: - The gateway that reaches nothing

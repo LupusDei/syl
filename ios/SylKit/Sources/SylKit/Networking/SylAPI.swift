@@ -328,7 +328,7 @@ public enum SylAPI {
     public static func closeFaceSession(
         _ id: String,
         idempotencyKey: String
-    ) -> Endpoint<FaceSessionReport> {
+    ) -> Endpoint<FaceSessionRow> {
         .write(.delete, "/face/sessions/\(id)", idempotencyKey: idempotencyKey)
     }
 

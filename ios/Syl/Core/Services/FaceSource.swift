@@ -25,7 +25,7 @@ struct FaceGateway: Sendable {
     /// Close one and settle it. Idempotent on the server, and must stay callable twice
     /// here: the screen going away and the app backgrounding both mean "he has left",
     /// and they race.
-    var close: @Sendable (_ sessionId: String) async throws -> FaceSessionReport
+    var close: @Sendable (_ sessionId: String) async throws -> FaceSessionRow
 
     /// A gateway that reaches nothing.
     ///

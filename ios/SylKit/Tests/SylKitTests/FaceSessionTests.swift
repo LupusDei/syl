@@ -62,6 +62,39 @@ final class FaceSessionTests: XCTestCase {
         return body
     }
 
+    /// One ledger row, exactly as `sessionView()` in `backend/src/routes/face.ts`
+    /// writes it — `id` renamed to `sessionId`, and no credential material anywhere.
+    private func sessionRowBody(ended: String? = nil) -> [String: Any] {
+        [
+            "sessionId": "s1",
+            "avatarId": "48cbc73d-f47f-41de-bed8-58a532b3b84b",
+            "openedAt": "2026-08-22T18:00:00.000Z",
+            "closedAt": ended == nil ? NSNull() : "2026-08-22T18:02:00.000Z",
+            "ended": ended ?? NSNull(),
+            "credits": 12.0,
+            "dollars": 0.4,
+            "lastActivityAt": "2026-08-22T18:01:30.000Z",
+        ] as [String: Any]
+    }
+
+    private func reportBody(ended: String? = nil) -> [String: Any] {
+        [
+            "session": sessionRowBody(ended: ended),
+            "meter": [
+                "elapsedSeconds": 94.5,
+                "blocks": 16,
+                "credits": 9.0,
+                "dollars": 0.31,
+            ] as [String: Any],
+            "budget": [
+                "creditsSpentToday": 36.8,
+                "creditCeiling": 100.0,
+                "creditsRemaining": 63.2,
+                "dollarsSpentToday": 1.84,
+            ] as [String: Any],
+        ] as [String: Any]
+    }
+
     // MARK: - The boundary
 
     /// **The one assertion this whole feature is built around.**
@@ -279,65 +312,56 @@ final class FaceSessionTests: XCTestCase {
     // MARK: - State and the meter
 
     func testShouldReadTheStateAndTheMeterFromTheSessionsOwnPath() async throws {
-        MockURLProtocol.handler = MockURLProtocol.respond(json: [
-            "success": true,
-            "data": [
-                "sessionId": "s1",
-                "standing": "live",
-                "meter": [
-                    "elapsedSeconds": 94.5,
-                    "dollars": 0.31,
-                    "dollarsToday": 1.84,
-                    "dailyCeilingDollars": 5.0,
-                ],
-                "reason": NSNull(),
-            ] as [String: Any],
-        ] as [String: Any])
+        MockURLProtocol.handler = MockURLProtocol.respond(
+            json: ["success": true, "data": reportBody()])
 
         let report = try await makeClient().send(SylAPI.faceSession("s1"))
 
         XCTAssertEqual(MockURLProtocol.recordedRequests.first?.url?.path, "/api/v1/face/sessions/s1")
-        XCTAssertEqual(report.standing, .live)
-        XCTAssertEqual(report.meter.dollarsToday, 1.84, accuracy: 0.0001)
-        XCTAssertEqual(try XCTUnwrap(report.meter.fractionOfDay()), 0.368, accuracy: 0.0001)
+        XCTAssertTrue(report.session.isLive)
+        XCTAssertEqual(report.meter.dollars, 0.31, accuracy: 0.0001)
+        XCTAssertEqual(report.budget.dollarsSpentToday, 1.84, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(report.budget.fractionSpent()), 0.368, accuracy: 0.0001)
     }
 
-    /// No published ceiling renders as *unknown*, never as *unlimited*. Dividing by a
-    /// missing number is how a meter reports "0% of your budget" on a route with no
-    /// budget at all.
-    func testShouldRefuseToInventAFractionWithNoPublishedCeiling() {
-        let meter = FaceMeter(
-            elapsedSeconds: 60, dollars: 0.2, dollarsToday: 0.2, dailyCeilingDollars: nil)
+    /// **A reaped session is a different fact from a closed one** and the client must be
+    /// able to tell them apart: `reaped` means the server found a face nobody was
+    /// watching, which is exactly the leak the phone exists to prevent.
+    func testShouldTellAReapedSessionFromAClosedOne() async throws {
+        MockURLProtocol.handler = MockURLProtocol.respond(
+            json: ["success": true, "data": reportBody(ended: "reaped")])
 
-        XCTAssertNil(meter.fractionOfDay())
+        let report = try await makeClient().send(SylAPI.faceSession("s1"))
+
+        XCTAssertEqual(report.session.ended, .reaped)
+        XCTAssertFalse(report.session.isLive)
+    }
+
+    /// No usable ceiling renders as *unknown*, never as *unlimited* and never as
+    /// *nothing spent*. Dividing by a missing number is how a meter reports "0% of your
+    /// budget" on a day with no budget at all.
+    func testShouldRefuseToInventAFractionWithNoUsableCeiling() {
+        let budget = FaceBudget(
+            creditsSpentToday: 40, creditCeiling: 0, creditsRemaining: 0, dollarsSpentToday: 1)
+
+        XCTAssertNil(budget.fractionSpent())
     }
 
     // MARK: - Closing
 
     func testShouldCloseWithADeleteAndAnIdempotencyKey() async throws {
-        MockURLProtocol.handler = MockURLProtocol.respond(json: [
-            "success": true,
-            "data": [
-                "sessionId": "s1",
-                "standing": "closed",
-                "meter": [
-                    "elapsedSeconds": 120.0,
-                    "dollars": 0.4,
-                    "dollarsToday": 0.4,
-                    "dailyCeilingDollars": 5.0,
-                ],
-                "reason": NSNull(),
-            ] as [String: Any],
-        ] as [String: Any])
+        MockURLProtocol.handler = MockURLProtocol.respond(
+            json: ["success": true, "data": sessionRowBody(ended: "closed")])
 
-        let report = try await makeClient().send(
+        let row = try await makeClient().send(
             SylAPI.closeFaceSession("s1", idempotencyKey: "close-s1"))
 
         let request = try XCTUnwrap(MockURLProtocol.recordedRequests.first)
         XCTAssertEqual(request.httpMethod, "DELETE")
         XCTAssertEqual(request.url?.path, "/api/v1/face/sessions/s1")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), "close-s1")
-        XCTAssertEqual(report.standing, .closed)
+        XCTAssertEqual(row.ended, .closed)
+        XCTAssertFalse(row.isLive)
     }
 
     /// **Closing twice is not an error the client may surface.** Two things both mean
@@ -345,27 +369,15 @@ final class FaceSessionTests: XCTestCase {
     /// race. A second close that reads as a failure would put an error on screen for a
     /// session that shut down exactly as intended.
     func testShouldTreatASecondCloseAsHavingWorked() async throws {
-        MockURLProtocol.handler = MockURLProtocol.respond(json: [
-            "success": true,
-            "data": [
-                "sessionId": "s1",
-                "standing": "closed",
-                "meter": [
-                    "elapsedSeconds": 120.0,
-                    "dollars": 0.4,
-                    "dollarsToday": 0.4,
-                    "dailyCeilingDollars": 5.0,
-                ],
-                "reason": NSNull(),
-            ] as [String: Any],
-        ] as [String: Any])
+        MockURLProtocol.handler = MockURLProtocol.respond(
+            json: ["success": true, "data": sessionRowBody(ended: "closed")])
 
         let client = makeClient()
         let first = try await client.send(SylAPI.closeFaceSession("s1", idempotencyKey: "c"))
         let second = try await client.send(SylAPI.closeFaceSession("s1", idempotencyKey: "c"))
 
         XCTAssertEqual(first, second)
-        XCTAssertEqual(second.standing, .closed)
+        XCTAssertEqual(second.ended, .closed)
     }
 
     // MARK: - The catalogue's own rules

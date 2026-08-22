@@ -145,7 +145,7 @@ struct LiveFaceView: View {
             Image(systemName: "dot.radiowaves.left.and.right")
                 .foregroundStyle(SylTheme.Colour.accent)
                 .accessibilityHidden(true)
-            Text(LiveFaceView.meterLine(model.meter))
+            Text(LiveFaceView.meterLine(model.report))
                 .font(SylTheme.Typeface.numeral)
                 .foregroundStyle(SylTheme.Colour.inkSoft)
                 .contentTransition(.numericText())
@@ -154,21 +154,25 @@ struct LiveFaceView: View {
         .padding(.horizontal, SylTheme.Metric.gutter)
         .padding(.vertical, SylTheme.Metric.snug)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(LiveFaceView.meterLine(model.meter))
+        .accessibilityLabel(LiveFaceView.meterLine(model.report))
     }
 
     /// The meter as one line. Pure and static so it can be asserted without a screen.
-    static func meterLine(_ meter: FaceMeter?) -> String {
-        guard let meter else { return "Live · cost not known yet" }
-        let seconds = Int(meter.elapsedSeconds.rounded())
+    ///
+    /// **Nothing here may render an unknown number as zero.** Before the first report
+    /// lands the honest line says the cost is not known yet; a "$0.00" would be a
+    /// confident false claim about a meter that has been running since the session
+    /// opened.
+    static func meterLine(_ report: FaceSessionReport?) -> String {
+        guard let report else { return "Live · cost not known yet" }
+        let seconds = Int(report.meter.elapsedSeconds.rounded())
         let elapsed = String(format: "%d:%02d", seconds / 60, seconds % 60)
-        let spent = String(format: "$%.2f", meter.dollars)
-        guard let ceiling = meter.dailyCeilingDollars else {
+        let spent = String(format: "$%.2f", report.meter.dollars)
+        guard report.budget.creditCeiling > 0 else {
             return "Live · \(elapsed) · \(spent)"
         }
-        let today = String(format: "$%.2f", meter.dollarsToday)
-        let cap = String(format: "$%.2f", ceiling)
-        return "Live · \(elapsed) · \(spent) · today \(today) of \(cap)"
+        let today = String(format: "$%.2f", report.budget.dollarsSpentToday)
+        return "Live · \(elapsed) · \(spent) · today \(today)"
     }
 
     private var leaveBar: some View {

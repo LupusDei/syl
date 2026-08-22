@@ -44,7 +44,7 @@ final class LiveFaceModel: ObservableObject {
     @Published private(set) var standing: Standing = .dormant
     /// What this is costing, when the broker has told us. Nil is *unknown*, and the
     /// surface must render it as unknown rather than as free.
-    @Published private(set) var meter: FaceMeter?
+    @Published private(set) var report: FaceSessionReport?
 
     private let gateway: FaceGateway
     private let clock: @Sendable () -> Date
@@ -160,8 +160,23 @@ final class LiveFaceModel: ObservableObject {
         if case .here(let session) = standing { live = session.sessionId } else { live = nil }
 
         standing = .dormant
-        meter = nil
+        report = nil
         return live
+    }
+
+    /// How a session that ended by itself is described to him.
+    ///
+    /// Four different sentences because they are four different facts, and one of them
+    /// is an admission: **`reaped` means the server found a face nobody was watching**,
+    /// which is precisely what this client exists to make impossible. Rendering it the
+    /// same as an ordinary close would hide the bug it is evidence of.
+    static func sentence(for ended: FaceSessionEnd) -> String {
+        switch ended {
+        case .closed: return "That session is closed."
+        case .reaped: return "I was left running with nobody watching, so I closed myself."
+        case .expired: return "That session reached its limit."
+        case .failed: return "Something went wrong at my end and I had to stop."
+        }
     }
 
     /// He has left: the screen went away, or he pressed Home.
@@ -195,19 +210,16 @@ final class LiveFaceModel: ObservableObject {
     func tick(at now: Date) async {
         guard case .here(let session) = standing else { return }
 
-        if let report = try? await gateway.report(session.sessionId) {
-            meter = report.meter
+        if let latest = try? await gateway.report(session.sessionId) {
+            report = latest
 
             // The broker says it is over. Believe it, and say so — a face that has
             // stopped while the screen still shows a spinner is the stalled face this
             // whole surface exists to avoid.
-            switch report.standing {
-            case .closed, .failed:
-                standing = .refused(.unexplained(report.reason ?? "She had to go."))
+            if let ended = latest.session.ended {
                 wanted = false
+                standing = .refused(.unexplained(LiveFaceModel.sentence(for: ended)))
                 return
-            case .opening, .live:
-                break
             }
         }
 

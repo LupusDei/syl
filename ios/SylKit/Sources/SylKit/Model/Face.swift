@@ -112,80 +112,134 @@ public struct FaceSession: Codable, Equatable, Sendable, Identifiable {
     public static let renewLead: TimeInterval = 30
 }
 
-/// Where a session has got to.
+/// How a session ended. `nil` on a live row means it has not.
 ///
 /// Closed, like every other enum in this contract except `PresenceState`. An unknown
-/// state here has no safe rendering: guessing `live` bills him and guessing `closed`
-/// tears down a session that is running.
-public enum FaceSessionStanding: String, Codable, Equatable, Sendable, CaseIterable {
-    /// Asked for, not answerable yet.
-    case opening
-    /// She is on, and the meter is running.
-    case live
-    /// Settled. The meter is final.
+/// end here has no safe rendering, and the four cases are genuinely different things to
+/// say: **`reaped` is the one the client is supposed to make impossible** — it means the
+/// server found a face nobody was watching, which is the leak the phone is meant to
+/// close instantly.
+public enum FaceSessionEnd: String, Codable, Equatable, Sendable, CaseIterable {
+    /// Somebody closed it. The ordinary case, and the one this client aims for.
     case closed
-    /// It ended by itself, and ``FaceSessionReport/reason`` says why in a sentence.
+    /// The idle reaper found it. A backstop that fired means the client did not.
+    case reaped
+    /// It ran past its cap.
+    case expired
+    /// It ended badly.
     case failed
 }
 
-/// What this face has cost so far, and what the day has left.
+/// One session as the ledger holds it — the row `GET` and `DELETE` both answer.
 ///
-/// **The meter is on the phone because the cost is his.** A surface that spends about
-/// twenty cents a minute and shows no number is asking him to trust an invisible tap;
-/// the operator's view in the web admin (`syl-chzl.7.3`) shows the same figures and
-/// neither is the authority — the broker is.
-public struct FaceMeter: Codable, Equatable, Sendable {
-    /// How long this session has been open.
-    public let elapsedSeconds: Double
-    /// What this session has cost.
-    public let dollars: Double
-    /// What every face today has cost, this one included.
-    public let dollarsToday: Double
-    /// The ceiling the guard refuses at. Null when the broker declines to publish one —
-    /// which must render as *unknown*, never as *unlimited*.
-    public let dailyCeilingDollars: Double?
-
-    public init(
-        elapsedSeconds: Double,
-        dollars: Double,
-        dollarsToday: Double,
-        dailyCeilingDollars: Double?
-    ) {
-        self.elapsedSeconds = elapsedSeconds
-        self.dollars = dollars
-        self.dollarsToday = dollarsToday
-        self.dailyCeilingDollars = dailyCeilingDollars
-    }
-
-    /// How much of the day's budget is gone, or nil when there is no published ceiling.
-    public func fractionOfDay() -> Double? {
-        guard let ceiling = dailyCeilingDollars, ceiling > 0 else { return nil }
-        return min(dollarsToday / ceiling, 1)
-    }
-}
-
-/// A session's state and its live meter — `GET /face/sessions/{id}`.
-public struct FaceSessionReport: Codable, Equatable, Sendable, Identifiable {
+/// Deliberately mirrors `PublicFaceSession` in
+/// `backend/src/face/face-session-store.ts`, which exists so that a route returning the
+/// private row is a type error rather than a leak. Nothing credential-shaped is on it.
+public struct FaceSessionRow: Codable, Equatable, Sendable, Identifiable {
     public let sessionId: String
-    public let standing: FaceSessionStanding
-    public let meter: FaceMeter
-    /// Why it ended, when it ended badly. A sentence, never a code — the same rule
-    /// `Sending.reason` follows.
-    public let reason: String?
+    public let avatarId: String
+    public let openedAt: Date
+    /// Null while it is still live.
+    public let closedAt: Date?
+    /// Null while it is still live. See ``FaceSessionEnd``.
+    public let ended: FaceSessionEnd?
+    /// Everything charged for this session so far, upfront included.
+    public let credits: Double
+    public let dollars: Double
+    /// What the reaper reads. Moved forward by every question put to her.
+    public let lastActivityAt: Date
 
     public init(
         sessionId: String,
-        standing: FaceSessionStanding,
-        meter: FaceMeter,
-        reason: String? = nil
+        avatarId: String,
+        openedAt: Date,
+        closedAt: Date?,
+        ended: FaceSessionEnd?,
+        credits: Double,
+        dollars: Double,
+        lastActivityAt: Date
     ) {
         self.sessionId = sessionId
-        self.standing = standing
-        self.meter = meter
-        self.reason = reason
+        self.avatarId = avatarId
+        self.openedAt = openedAt
+        self.closedAt = closedAt
+        self.ended = ended
+        self.credits = credits
+        self.dollars = dollars
+        self.lastActivityAt = lastActivityAt
     }
 
     public var id: String { sessionId }
+
+    /// Whether she is still here. Derived from the row rather than from a separate
+    /// status field, because two fields that can disagree eventually will.
+    public var isLive: Bool { ended == nil && closedAt == nil }
+}
+
+/// What *this* session has cost so far.
+public struct FaceMeter: Codable, Equatable, Sendable {
+    /// Wall-clock seconds elapsed, never negative.
+    public let elapsedSeconds: Double
+    /// Streaming blocks billed, rounded up.
+    public let blocks: Int
+    public let credits: Double
+    public let dollars: Double
+
+    public init(elapsedSeconds: Double, blocks: Int, credits: Double, dollars: Double) {
+        self.elapsedSeconds = elapsedSeconds
+        self.blocks = blocks
+        self.credits = credits
+        self.dollars = dollars
+    }
+}
+
+/// What the *day* has cost, and what is left of it.
+public struct FaceBudget: Codable, Equatable, Sendable {
+    public let creditsSpentToday: Double
+    public let creditCeiling: Double
+    public let creditsRemaining: Double
+    public let dollarsSpentToday: Double
+
+    public init(
+        creditsSpentToday: Double,
+        creditCeiling: Double,
+        creditsRemaining: Double,
+        dollarsSpentToday: Double
+    ) {
+        self.creditsSpentToday = creditsSpentToday
+        self.creditCeiling = creditCeiling
+        self.creditsRemaining = creditsRemaining
+        self.dollarsSpentToday = dollarsSpentToday
+    }
+
+    /// How much of the day is gone, or nil when there is no usable ceiling.
+    ///
+    /// Nil must render as *unknown*, never as *nothing spent*. A meter that reports
+    /// zero because it could not divide is a confident false claim about money.
+    public func fractionSpent() -> Double? {
+        guard creditCeiling > 0 else { return nil }
+        return min(creditsSpentToday / creditCeiling, 1)
+    }
+}
+
+/// A session's state, its live meter and the day's spend — `GET /face/sessions/{id}`.
+///
+/// **The meter is on his phone because the cost is his.** A surface that spends about
+/// twenty cents a minute and shows no number is asking him to trust an invisible tap.
+/// The operator's view in the web admin (`syl-chzl.7.3`) shows the same figures, and
+/// neither is the authority — the broker is.
+public struct FaceSessionReport: Codable, Equatable, Sendable, Identifiable {
+    public let session: FaceSessionRow
+    public let meter: FaceMeter
+    public let budget: FaceBudget
+
+    public init(session: FaceSessionRow, meter: FaceMeter, budget: FaceBudget) {
+        self.session = session
+        self.meter = meter
+        self.budget = budget
+    }
+
+    public var id: String { session.sessionId }
 }
 
 /// What the broker was asked for.
