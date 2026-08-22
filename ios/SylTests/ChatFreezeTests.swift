@@ -72,9 +72,12 @@ enum ChatFreezeFixture {
 ///
 /// **The comment at the top of `MarkdownView` says "It never parses".** It did, on every
 /// pass. A file agreeing with its own doc comment while neither agrees with the profiler
-/// is exactly the shape `docs/CONTEXT.md` names *consistency is not correspondence* — so
-/// the check below is a stopwatch, which is outside the system, rather than a counter we
-/// keep ourselves, which would not be.
+/// is exactly the shape `docs/CONTEXT.md` names *consistency is not correspondence*.
+///
+/// That is the hazard the first check below was written against, and it used a stopwatch
+/// to stay outside the system. It now counts parses instead — the reasoning, the evidence
+/// that overtook it, and what keeps the counter from quietly agreeing with a wrong system
+/// are all on the test itself.
 final class ChatInlineRenderCostTests: XCTestCase {
 
     /// A transcript the size of the one that froze: the real window, real prose.
@@ -94,25 +97,92 @@ final class ChatInlineRenderCostTests: XCTestCase {
     /// every time, the cost of a body pass is the cost of parsing the whole transcript,
     /// and that is the main thread gone.
     ///
-    /// Measured against the clock rather than against a hit counter of our own, and the
-    /// ratio is deliberately loose — an order of magnitude of headroom either side of the
-    /// real numbers — because the assertion worth making is "the second pass is not
-    /// another parse", not "the second pass took N microseconds".
+    /// ## This was a stopwatch, and the stopwatch had to go
+    ///
+    /// It asserted `warm < cold / 4` and the comment defended the choice: measured from
+    /// outside the system, because a hit counter we keep ourselves can agree with a system
+    /// that is wrong — which is precisely how `MarkdownView` came to say "it never parses"
+    /// while parsing on every pass. **That risk is real and the answer below takes it
+    /// seriously; the instrument was still wrong**, for two reasons that only showed up
+    /// later.
+    ///
+    /// The first is the machine. On a shared CI runner the ratio breaks with the memo
+    /// working perfectly — the cold pass lands on a warm CPU, or the warm pass catches
+    /// scheduler noise. Three failures in eight runs of the iOS workflow since 13 August,
+    /// and on 22 August it failed the TestFlight build too, which is the deploy gate,
+    /// which is everything. A test that is right about the code and wrong about the
+    /// machine cannot be shipped past.
+    ///
+    /// The second is worse and is visible in the numbers below: **the cold pass was never
+    /// cold.** A two-hundred-row window holds four distinct runs, so the first pass was
+    /// already 98% memo hits — it saved four parses out of two hundred calls — and most of
+    /// the margin it asserted on was Foundation warming up its markdown parser on the very
+    /// first call. A 4x ratio over a 4-parse difference is a number that agreed with the
+    /// truth by coincidence.
+    ///
+    /// ## What replaces it, and why it is still the behaviour
+    ///
+    /// `MarkdownInline` now counts the calls it makes into `AttributedString(markdown:)`,
+    /// from inside `parse(_:)` itself rather than beside the memo lookup, so there is no
+    /// way to reach Foundation's parser without passing the counter. See its doc comment
+    /// for why that is not the counter the original objection was about.
+    ///
+    /// The count is not a proxy for the property — it *is* the property. "The second pass
+    /// is not another parse" is a statement about parses; elapsed time was only ever a way
+    /// of guessing at how many there were, and it guessed badly. And the count is asserted
+    /// at both ends: the cold pass must be seen doing the work (four distinct runs, four
+    /// parses — not two hundred, and not zero, which is what a probe measuring nothing
+    /// reports), and the warm pass must do none of it.
+    ///
+    /// What a count cannot say is that the memo is *faithful*, and neither could the
+    /// clock — a memo returning garbage instantly satisfies both. That half is asserted by
+    /// `testShouldReturnExactlyWhatAFreshParseWouldHaveReturned` and
+    /// `testShouldNeverServeARefusedLinkFromTheMemo` directly below.
+    ///
+    /// The wall clock is still taken and still printed, because the numbers are worth
+    /// having across a change. It decides nothing.
     func testShouldNotReparseTheTranscriptOnEverySubsequentPass() {
+        MarkdownInline.resetMemoForTesting()
         let runs = Self.window()
+        let distinct = Set(runs).count
 
-        let cold = Self.elapsed { for run in runs { _ = MarkdownInline.render(run) } }
-        let warm = Self.elapsed { for run in runs { _ = MarkdownInline.render(run) } }
+        MarkdownInline.resetParseCensusForTesting()
+        let coldSeconds = Self.elapsed { for run in runs { _ = MarkdownInline.render(run) } }
+        let cold = MarkdownInline.parsesForTesting()
 
-        XCTAssertLessThan(
-            warm,
-            cold / 4,
+        MarkdownInline.resetParseCensusForTesting()
+        let warmSeconds = Self.elapsed { for run in runs { _ = MarkdownInline.render(run) } }
+        let warm = MarkdownInline.parsesForTesting()
+
+        // Printed rather than merely asserted, the way the row census and the first-paint
+        // shortfall are. This is the pair the old assertion was built on, and a number
+        // that only appears when a test fails is a number nobody can compare across a
+        // change.
+        print(
+            "SYL_INLINE_PARSES \(runs.count) runs, \(distinct) distinct — "
+                + "cold \(cold) parses in \(coldSeconds)s; warm \(warm) parses in \(warmSeconds)s"
+        )
+
+        // The floor first, exactly as `MarkdownCacheCostTests` does it. A census that
+        // reads zero because nothing happened at all would satisfy the assertion below
+        // while proving nothing, so the first pass has to be caught in the act.
+        XCTAssertEqual(
+            cold,
+            distinct,
             """
-            A repeat pass over the same transcript cost \(warm)s against \(cold)s cold, \
-            which means it parsed again. `ChatView.body` re-runs on every keystroke and \
-            every presence frame, so this cost lands on the main thread each time — and \
-            `.defaultScrollAnchor(.bottom)` makes it the whole window rather than the \
-            visible rows.
+            The first pass over \(runs.count) rows parsed \(cold) times where the window \
+            holds \(distinct) distinct runs. Below that and nothing was measured; above it \
+            and the memo is not even collapsing repeats within a single pass.
+            """
+        )
+        XCTAssertEqual(
+            warm,
+            0,
+            """
+            A repeat pass over the same transcript parsed \(warm) runs again. \
+            `ChatView.body` re-runs on every presence frame, so this cost lands on the \
+            main thread each time — and `.defaultScrollAnchor(.bottom)` builds about forty \
+            rows rather than the six he can see.
             """
         )
     }

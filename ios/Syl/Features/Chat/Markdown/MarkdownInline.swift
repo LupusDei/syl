@@ -71,6 +71,14 @@ enum MarkdownInline {
     }
 
     private static func parse(_ source: String) -> AttributedString {
+        // The one place a run is handed to Foundation's parser, and therefore the one
+        // place the cost this file exists to avoid is actually incurred. Counted here
+        // rather than in `render` above: a count taken beside the memo lookup would
+        // agree with any implementation, including one that parsed anyway.
+        // See `ParseCensus`.
+        #if DEBUG
+            census.recordParse()
+        #endif
         guard let parsed = try? AttributedString(markdown: source, options: options) else {
             return AttributedString(source)
         }
@@ -135,6 +143,79 @@ enum MarkdownInline {
     static func memoCountForTesting() -> Int { memo.count() }
 
     static func resetMemoForTesting() { memo.reset() }
+
+    // MARK: - The parse census
+
+    #if DEBUG
+        /// How many runs have actually been handed to Foundation's markdown parser.
+        ///
+        /// ## Why a counter, when this file's test used to argue for a stopwatch
+        ///
+        /// `ChatInlineRenderCostTests` measured the memo against the clock and said why:
+        /// a counter we keep ourselves can agree with a system that is wrong, and
+        /// `MarkdownView`'s doc comment claiming "it never parses" while it parsed on
+        /// every pass is exactly that failure. The reasoning was right about the risk and
+        /// wrong about the instrument, and the evidence came in from CI: on a shared
+        /// runner the ratio breaks with the memo working perfectly — three failures in
+        /// eight runs, and one that took the TestFlight build with it.
+        ///
+        /// The clock was never measuring what it claimed, either. A window of two hundred
+        /// rows holds four distinct runs, so the *cold* pass was already 98% memo hits and
+        /// the margin it was asserting on came mostly from Foundation warming up its
+        /// parser on the first call. A stopwatch reading 4x on a cache that saved four
+        /// parses out of two hundred calls is a number that agrees with the truth by
+        /// coincidence.
+        ///
+        /// So this is not a proxy swapped for a worse one. **The quantity in the
+        /// requirement is the count**: the freeze is N parses per body pass, N being
+        /// however many rows were built, and elapsed time was only ever a way of guessing
+        /// at N. It is made incapable of quietly agreeing the same way `ChatRowCensus` is:
+        ///
+        /// - incremented at **exactly one** place — inside ``parse(_:)``, the function
+        ///   that calls `AttributedString(markdown:)`, before the failure guard so that a
+        ///   parse which threw still counts as a parse. It is not a bookkeeping line
+        ///   beside the work; it is in the same function as the work, and there is no way
+        ///   to reach Foundation's parser from this type without passing it;
+        /// - it says only that the second pass is *cheap*. That it is also *right* is
+        ///   asserted separately, by the fidelity and `LinkPolicy` tests beside it — so
+        ///   "zero parses" cannot be satisfied by a memo returning something wrong,
+        ///   which is a hole the stopwatch had too;
+        /// - proven by mutation: with the memo lookup removed the count goes to two
+        ///   hundred and the test goes red.
+        ///
+        /// Unavailable outside `DEBUG`, so nothing in a shipped build can read it and no
+        /// behaviour can come to depend on it.
+        static func parsesForTesting() -> Int { census.count() }
+
+        static func resetParseCensusForTesting() { census.reset() }
+
+        private static let census = ParseCensus()
+
+        /// Lock-guarded for the same reason `Memo` is: `render` is called from every
+        /// `body` that draws prose, and a `body` is not promised a single thread.
+        private final class ParseCensus: @unchecked Sendable {
+            private let lock = NSLock()
+            private var parses = 0
+
+            func recordParse() {
+                lock.lock()
+                defer { lock.unlock() }
+                parses += 1
+            }
+
+            func count() -> Int {
+                lock.lock()
+                defer { lock.unlock() }
+                return parses
+            }
+
+            func reset() {
+                lock.lock()
+                defer { lock.unlock() }
+                parses = 0
+            }
+        }
+    #endif
 
     /// Give surviving links Syl's colour.
     ///
