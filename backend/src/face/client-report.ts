@@ -120,6 +120,33 @@ export const CLIENT_STATES = [
   /** Connected, and a media element is actually playing frames. */
   "playing",
   /**
+   * **Her picture changed size after the first frame.** The one repeatable word.
+   *
+   * `playing` reports the FIRST frame, and a first frame is the worst frame a
+   * WebRTC stream ever sends — the encoder starts at a low rung and scales up
+   * over the following seconds. The Commander's 2026-08-23 session reported
+   * `278x180` at 8675ms, and it is genuinely unknown whether that is the stream
+   * or the ramp. `syl-chzl.11` turns on the answer: 278px stretched across a
+   * phone is a softness defect quite separate from the crop, and 1.544 is
+   * neither 16:9 nor 4:3, so even the aspect may still move.
+   *
+   * One sample cannot tell those apart. This is the second, and the third — the
+   * page speaks only when the size actually CHANGES, so **a steady stream says
+   * nothing, and the silence is the finding.** Each detail carries the first
+   * size beside the current one, because the session row keeps only the last
+   * state and the row should still tell the whole curve.
+   *
+   * **The exception to one-report-per-state, and it is capped.** The page spends
+   * a budget of four rather than checking a flag; see `tellResized` in
+   * `routes/face-page.ts` for why the allowance is a function nobody else can
+   * borrow rather than an argument every caller could pass.
+   *
+   * Telemetry, not lifecycle: it arrives long after she is on screen, it is not
+   * on the phone's ladder, and `LiveFaceModel` ignores it by the same route it
+   * ignores any word it does not know.
+   */
+  "resized",
+  /**
    * A media element exists, has data, and is paused — the WKWebView autoplay
    * signature. Everything else looks perfect and nothing ever moves.
    */

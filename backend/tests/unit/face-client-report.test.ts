@@ -93,6 +93,40 @@ describe("the client report ingress", () => {
       expect(sessions.get("rts_one")?.clientState).toBe("audible");
     });
 
+    it("should let the size be reported more than once, because a first frame is not a stream", () => {
+      // `playing` reports the FIRST frame and WebRTC ramps: his 2026-08-23
+      // session said `278x180` at 8675ms and nobody can tell from one sample
+      // whether that is the stream or the lowest rung of the climb.
+      //
+      // So `resized` is the one word allowed to repeat, and the server must
+      // accept the repeat — the page caps it at four, and `recordClientState`
+      // is a plain UPDATE with no monotonicity guard, which is what makes a
+      // later, smaller-sounding word land rather than be refused.
+      open();
+      reports.report({ sessionId: "rts_one", secret: KEY, state: "playing", detail: "278x180" });
+
+      const first = reports.report({
+        sessionId: "rts_one",
+        secret: KEY,
+        state: "resized",
+        detail: "first 278x180, was 278x180, now 640x360 at 31240ms",
+      });
+      const second = reports.report({
+        sessionId: "rts_one",
+        secret: KEY,
+        state: "resized",
+        detail: "first 278x180, was 640x360, now 1280x720 at 46010ms",
+      });
+
+      expect(CLIENT_STATES).toContain("resized");
+      expect(first.ok).toBe(true);
+      expect(second.ok).toBe(true);
+      // The row keeps the LAST one, which is why the page writes the whole
+      // curve into every detail rather than only the newest number.
+      expect(sessions.get("rts_one")?.clientDetail).toContain("now 1280x720");
+      expect(sessions.get("rts_one")?.clientDetail).toContain("first 278x180");
+    });
+
     it("should refuse a word it does not publish, and say which words it takes", () => {
       open();
 

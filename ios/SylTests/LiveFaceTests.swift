@@ -769,6 +769,42 @@ final class LiveFaceTests: XCTestCase {
         XCTAssertTrue(broker.closedIDs.isEmpty, "being heard is not a reason to hang up")
     }
 
+    /// **A telemetry word arriving mid-conversation must not disturb her.**
+    ///
+    /// `resized` is the page re-measuring her picture after the first frame (`syl-chzl.11`):
+    /// `playing` reports the FIRST frame, WebRTC ramps, and one sample cannot tell a ramp
+    /// from a stream. It arrives long after she is on screen, it is not on the ladder, and
+    /// it means nothing to this model.
+    ///
+    /// Pinned because the hazard is real and one-sided. Every word the page can say is
+    /// routed through ``LiveFace/failure(forPageState:detail:wasHere:)``, and a word put on
+    /// the wrong side of that switch **hangs up on a healthy face** — settling a session he
+    /// is in the middle of talking to. A word that means "she is still here, and slightly
+    /// bigger" is exactly the kind that looks like it needs a case.
+    ///
+    /// It also has to be inert on a build that has never heard of it: his phone runs a
+    /// version shipped before this word existed, and the page reaching him is served by the
+    /// backend. **The page can gain vocabulary without a TestFlight build, so every new word
+    /// must be safe on the app that is already out there.**
+    func testShouldLetHerCarryOnWhenThePageMerelyRemeasuresHer() async {
+        let broker = broker { _ in aSession(id: "face-remeasured") }
+        let face = model(broker)
+        await face.awaken()
+        await face.pageSaid("playing", detail: "278x180 at 8675ms")
+        XCTAssertTrue(face.isPresented)
+
+        await face.pageSaid("resized", detail: "first 278x180, was 278x180, now 640x360 at 31240ms")
+
+        XCTAssertTrue(face.isPresented, "she was on screen and she stays there")
+        XCTAssertEqual(face.standing, .here(aSession(id: "face-remeasured")))
+        XCTAssertTrue(broker.closedIDs.isEmpty, "re-measuring her is not a reason to hang up")
+        XCTAssertNil(face.homeNotice, "and nothing appears on the home screen about it")
+        XCTAssertNil(
+            LiveFace.failure(forPageState: "resized", detail: "", wasHere: true),
+            "if this ever returns a sentence, a live session ends because her picture "
+                + "got sharper")
+    }
+
     /// **Progress short of a joined room does not start the grace.** `mic_granted` is the
     /// microphone answered, not a room; presenting on it would put a blank rectangle in
     /// front of him seconds after a press, which is a different failure and not a smaller

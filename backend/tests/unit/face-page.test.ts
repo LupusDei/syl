@@ -256,7 +256,15 @@ describe("the live face page", () => {
     it("should report her real size with the frame that proved it", () => {
       // The measurement is worth nothing on the phone alone. `playing` carries
       // it to the session row, which is the only place an operator can read it.
-      expect(FACE_PAGE_HTML).toMatch(/tell\('playing',\s*frameHer\(/);
+      //
+      // Asserted as "the measured value reaches the report" rather than against
+      // one expression: this was written as `tell('playing', frameHer(…))` and
+      // went red the moment the size was hoisted into `firstSize` so the
+      // resampler could compare against it. The behaviour was unchanged and the
+      // test was pinned to the shape of a line. A test should name the fact it
+      // defends, or refactoring it costs a false alarm every time.
+      expect(FACE_PAGE_HTML).toMatch(/const firstSize = frameHer\(/);
+      expect(FACE_PAGE_HTML).toMatch(/tell\('playing', firstSize \+/);
     });
 
     it("should still hold the app's own dark behind her while she is coming", () => {
@@ -344,6 +352,56 @@ describe("the live face page", () => {
 
       expect(script).toContain("void watchHer();");
       expect(FACE_PAGE_HTML).not.toContain("void watchTheMedia()");
+    });
+
+    it("should keep measuring her, because a first frame is not a stream", () => {
+      // 2026-08-23, from his phone: `playing` at 8675ms with `278x180`. WebRTC
+      // ramps, so that may be the lowest rung rather than the stream — and
+      // `syl-chzl.11` turns on which. The watch therefore does not end at the
+      // first frame; it hands off to a slower loop that re-reads the element.
+      expect(FACE_PAGE_HTML).toContain("keepMeasuringHer");
+      expect(FACE_PAGE_HTML).toMatch(/await keepMeasuringHer\(painted\[0\], firstSize, began\)/);
+      expect(FACE_PAGE_HTML).toMatch(/RESAMPLE_TICK_MS\s*=\s*\d+/);
+    });
+
+    it("should speak only when her size actually changes, so a steady stream is silent", () => {
+      // The silence IS the finding: a stream that never moves off its first
+      // frame reports nothing after `playing`, and that is the evidence that
+      // 278x180 was the stream rather than the ramp. A sampler that reported
+      // every tick would drown that signal in its own noise.
+      expect(FACE_PAGE_HTML).toMatch(/if \(!size \|\| size === lastSize\) continue;/);
+    });
+
+    it("should carry the first size alongside the current one, because the row keeps only the last", () => {
+      // `recordClientState` overwrites `client_state`/`client_detail`, so a
+      // later `resized` erases the `playing` before it. The detail therefore has
+      // to be self-contained or the surviving row shows an endpoint with no
+      // curve behind it.
+      expect(FACE_PAGE_HTML).toMatch(/'first ' \+ firstSize \+ ', was ' \+ lastSize \+ ', now ' \+ size/);
+    });
+
+    it("should cap the one repeatable state, and not by a flag any caller could pass", () => {
+      // `resized` is the single exception to one-report-per-state. An exception
+      // with no ceiling is the rule removed — a stream oscillating between two
+      // rungs would report forever. And the allowance is a function with its own
+      // hard-coded state rather than a `repeatable` argument, so the next person
+      // who wants a chatty state does not find the door already open.
+      const cap = /MAX_RESIZE_REPORTS\s*=\s*(\d+)/.exec(FACE_PAGE_HTML);
+
+      expect(Number(cap?.[1])).toBeGreaterThan(1);
+      expect(Number(cap?.[1])).toBeLessThanOrEqual(6);
+      expect(FACE_PAGE_HTML).toMatch(/if \(resizeReports >= MAX_RESIZE_REPORTS\) return;/);
+      expect(FACE_PAGE_HTML).toMatch(/function tellResized\(detail\)/);
+      // The state name is hard-coded inside it, never taken as a parameter.
+      expect(FACE_PAGE_HTML).toMatch(/post\('resized', detail\)/);
+      expect(FACE_PAGE_HTML).not.toMatch(/function tell\([^)]*repeatable/);
+    });
+
+    it("should still let every other state speak exactly once", () => {
+      // The dedupe that `resized` is an exception to must survive the exception.
+      // Splitting `post` out of `tell` is what made a second caller possible at
+      // all, and it would be easy to leave the guard behind in the split.
+      expect(FACE_PAGE_HTML).toMatch(/if \(reported\[state\]\) return;\s*\n\s*reported\[state\] = true;/);
     });
 
     it("should never call a session dead before it has waited longer than the phone", () => {

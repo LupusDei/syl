@@ -435,15 +435,11 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
     return name + ': ' + message;
   }
 
-  const reported = Object.create(null);
-  function tell(state, detail) {
-    try { host && host.postMessage({ state: state, detail: detail || '' }); } catch (_) {}
-    if (!session) return;
-    // One report per state. A retry loop or a state that fires every frame
-    // would turn telemetry into traffic, and the server refuses to let it
-    // become activity anyway — see \`FaceSessionStore.recordClientState\`.
-    if (reported[state]) return;
-    reported[state] = true;
+  /**
+   * Send one report. **No dedupe of its own** — the callers own that, and there
+   * are exactly two of them.
+   */
+  function post(state, detail) {
     try {
       fetch(API_BASE + '/face/sessions/' + encodeURIComponent(session.sessionId) + '/report', {
         method: 'POST',
@@ -459,6 +455,52 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
         body: JSON.stringify({ state: state, detail: String(detail || '').slice(0, 500) })
       }).catch(() => {});
     } catch (_) {}
+  }
+
+  const reported = Object.create(null);
+  function tell(state, detail) {
+    try { host && host.postMessage({ state: state, detail: detail || '' }); } catch (_) {}
+    if (!session) return;
+    // One report per state. A retry loop or a state that fires every frame
+    // would turn telemetry into traffic, and the server refuses to let it
+    // become activity anyway — see \`FaceSessionStore.recordClientState\`.
+    if (reported[state]) return;
+    reported[state] = true;
+    post(state, detail);
+  }
+
+  /**
+   * How many times the dimension sampler may speak. **The whole of its budget.**
+   *
+   * The one-report-per-state rule above exists so telemetry cannot become
+   * traffic, and \`resized\` is the single exception to it. An exception with no
+   * ceiling is not an exception, it is the rule removed — a stream that
+   * oscillates between two rungs would report forever — so the allowance is a
+   * small integer rather than a flag, and it is spent rather than checked.
+   */
+  const MAX_RESIZE_REPORTS = 4;
+  let resizeReports = 0;
+
+  /**
+   * **The one state allowed to speak more than once.**
+   *
+   * Deliberately not \`tell(state, detail)\` with a \`repeatable\` argument: a
+   * flag is available to every future caller, and the next person who wants a
+   * chatty state would find the door already open. This function hard-codes its
+   * own state name, so the allowance cannot be borrowed.
+   *
+   * Why it exists: \`playing\` reports the FIRST frame, and WebRTC ramps. His
+   * 2026-08-23 session reported \`278x180\` at 8675ms, which may be the ramp
+   * rather than the stream — and every framing decision downstream
+   * (\`syl-chzl.11\`) turns on which. One sample cannot tell them apart; a second
+   * one can.
+   */
+  function tellResized(detail) {
+    try { host && host.postMessage({ state: 'resized', detail: detail || '' }); } catch (_) {}
+    if (!session) return;
+    if (resizeReports >= MAX_RESIZE_REPORTS) return;
+    resizeReports += 1;
+    post('resized', detail);
   }
 
   if (!session) {
@@ -688,6 +730,16 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
     const AUTOPLAY_VERDICT_MS = 5000;
     /** How long nothing at all may happen before the session is settled as dead. */
     const NOTHING_EVER_PLAYED_MS = 30000;
+    /**
+     * How often to re-measure her AFTER the first frame.
+     *
+     * Two seconds, which is coarse on purpose: this is not watching for a
+     * moment, it is separating a ramp from a steady state, and the interesting
+     * change happens over seconds. The cost of being wrong in this direction is
+     * one sample landing slightly late in a curve; the cost of being wrong in
+     * the other is a poll loop on a phone for the length of a call.
+     */
+    const RESAMPLE_TICK_MS = 2000;
 
     /**
      * HER REAL DIMENSIONS, TAKEN FROM THE ELEMENT.
@@ -708,6 +760,54 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
         style.setProperty('--face-src-h', String(h));
       } catch (_) {}
       return w + 'x' + h;
+    }
+
+    /**
+     * KEEP MEASURING HER. **One sample cannot tell a ramp from a stream.**
+     *
+     * \`playing\` fires on the FIRST frame, and a first frame is the worst frame
+     * a WebRTC stream ever sends: the encoder starts at a low rung and scales up
+     * over the following seconds. His 2026-08-23 session reported \`278x180\` at
+     * 8675ms, and every framing decision downstream turns on whether that is the
+     * stream or the ramp — 278px upscaled fourfold across a phone is a softness
+     * defect quite separate from the crop, and 1.544 is neither 16:9 nor 4:3, so
+     * even the ASPECT could still move. \`syl-chzl.11\` is blocked on knowing
+     * which, and closing it on the lowest-quality frame she ever sends would be
+     * closing it on the one number guaranteed to be unrepresentative.
+     *
+     * So the watch does not stop at the first frame. It re-reads the element
+     * every {@link RESAMPLE_TICK_MS} and speaks only when the size actually
+     * CHANGES — a steady stream is silent, which is itself the answer. Each
+     * report carries the first size beside the current one, because the session
+     * row keeps only the last state: even the surviving row then tells the whole
+     * curve rather than its endpoint.
+     *
+     * Bounded by {@link MAX_RESIZE_REPORTS} and by nothing else. It deliberately
+     * runs for the life of the page rather than for a fixed window — a change at
+     * four minutes is as interesting as one at ten seconds, and the report
+     * budget is the real ceiling.
+     */
+    async function keepMeasuringHer(video, firstSize, began) {
+      let lastSize = firstSize;
+      while (root) {
+        await new Promise((r) => setTimeout(r, RESAMPLE_TICK_MS));
+        if (!root) return;
+        // The element can be replaced under us if the SDK re-renders. Nothing
+        // to measure is not a change; it is the end of this element's story.
+        if (!video.isConnected) return;
+
+        const size = frameHer(video);
+        if (!size || size === lastSize) continue;
+
+        const waited = Date.now() - began;
+        const spent = resizeReports + 1 >= MAX_RESIZE_REPORTS;
+        tellResized(
+          'first ' + firstSize + ', was ' + lastSize + ', now ' + size + ' at ' + waited + 'ms' +
+            (spent ? ' (last sample: the ' + MAX_RESIZE_REPORTS + '-report budget is spent)' : ''),
+        );
+        lastSize = size;
+        if (spent) return;
+      }
     }
 
     /** Whether an element is carrying sound he could actually hear. */
@@ -773,7 +873,13 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
         const painted = moving.filter((m) => m.tagName === 'VIDEO' && m.videoWidth > 0);
         if (painted.length > 0) {
           say('');
-          tell('playing', frameHer(painted[0]) + ' at ' + waited + 'ms');
+          const firstSize = frameHer(painted[0]);
+          tell('playing', firstSize + ' at ' + waited + 'ms');
+          // **The watch does not end here.** A first frame is the worst frame a
+          // WebRTC stream sends, and one sample cannot tell a ramp from a
+          // stream — see \`keepMeasuringHer\`. Handed off rather than returned
+          // into, so this fast loop stops and the slow one takes over.
+          await keepMeasuringHer(painted[0], firstSize, began);
           return;
         }
 
