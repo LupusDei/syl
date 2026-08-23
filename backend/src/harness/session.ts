@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 import { resolveClaudeBinFromProcess } from "./claude-bin.js";
@@ -202,6 +202,75 @@ export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60_000;
 /** How long a killed child gets to exit on SIGTERM before SIGKILL. */
 const SIGKILL_GRACE_MS = 2_000;
 
+/* ------------------------------------------------------------------ *
+ * No turn outlives the process that started it.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Every `claude` this process has spawned and not yet seen exit.
+ *
+ * ## Why the timeout below is not enough
+ *
+ * A wedged turn is bounded by `timeoutMs`, SIGTERM, then SIGKILL two seconds
+ * later. That ladder is correct **and it is unreachable in the case that
+ * actually happened**, because the timer lives in this process: when this
+ * process dies, the timer dies with it, the child is reparented to `ppid 1`,
+ * and nothing anywhere is going to kill it.
+ *
+ * **An orphan is not a child that outlived its timeout. It is a child whose
+ * timeout was cremated with its parent.** Measured 2026-08-23: twenty orphaned
+ * `claude` processes, all `ppid 1`, minutes old, unbounded — the visible half
+ * of `syl-2vml`, and the reason the test suite was starving itself.
+ *
+ * It is not only a test problem. Kill the service mid-turn in production and
+ * the same thing happens; it has not bitten yet because the CLI usually exits
+ * on its own and restarts are rare.
+ */
+const liveChildren = new Set<ChildProcess>();
+
+/** Follow a spawned child until it exits. Exported for the reaping tests. */
+export function trackChild(child: ChildProcess): void {
+  liveChildren.add(child);
+  child.once("close", () => liveChildren.delete(child));
+}
+
+/** How many spawned children are still running. For tests and diagnosis. */
+export function liveChildCount(): number {
+  return liveChildren.size;
+}
+
+/**
+ * SIGKILL every child we started. Synchronous, because its caller is
+ * `process.on("exit")` and nothing asynchronous runs there.
+ *
+ * **SIGKILL and not SIGTERM**, measured against the real orphans:
+ *
+ * ```
+ * kill -TERM 86637   exit 0, process still alive, state S
+ * kill -KILL 86637   gone
+ * ```
+ *
+ * The CLI ignores SIGTERM. The ladder above can afford to be polite because it
+ * has two seconds to escalate in; this has no time at all, and a polite signal
+ * that is ignored is not a teardown.
+ */
+export function killEveryLiveChild(): void {
+  for (const child of liveChildren) {
+    // A child that exited between the iteration and the kill throws ESRCH, and
+    // a throw here would take the exit path down with it.
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* Already gone, which is the outcome we wanted. */
+    }
+  }
+  liveChildren.clear();
+}
+
+// Registered once, at module load. `exit` runs synchronous work only, which is
+// exactly what `killEveryLiveChild` is.
+process.once("exit", killEveryLiveChild);
+
 /**
  * The turn was killed for making no progress.
  *
@@ -361,6 +430,9 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
     env,
     stdio: ["pipe", "pipe", "pipe"],
   });
+  // Followed from the instant it exists, so a crash between here and the
+  // timeout below still leaves something that knows to kill it.
+  trackChild(child);
 
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
