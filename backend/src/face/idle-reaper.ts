@@ -14,8 +14,10 @@ import type { FaceSession, FaceSessionStore } from "./face-session-store.js";
  * Two things it cuts, and they are settled differently because they are
  * different facts:
  *
- * - **expired** — the session is past the provider's own cap. It is already
- *   over upstream; we are closing our record of it.
+ * - **expired** — the session is past the provider's own cap. It *should* be
+ *   over upstream, and we close our record of it — but we leave the room as
+ *   well rather than take that on trust, because nothing has ever reached the
+ *   cap to prove it. See `#cutExpired`; the settle happens either way.
  * - **reaped** — the session is live, billable, and nobody has said anything
  *   for the idle timeout. This is the one the file exists for.
  *
@@ -214,9 +216,11 @@ export class IdleReaper {
     }
 
     for (const session of live) {
-      // Past the provider's own cap first: it is already over upstream, so
-      // there is nothing to cut and nothing to escalate about.
+      // Past the provider's own cap first. It SHOULD be over upstream already
+      // — but we leave the room anyway rather than trust that, and we settle
+      // either way. See `#cutExpired`.
       if (this.#isPastCap(session)) {
+        await this.#cutExpired(session);
         this.#settle(session, "expired", expired);
         continue;
       }
@@ -295,6 +299,57 @@ export class IdleReaper {
     if (session.providerCapAt === null) return false;
     const cap = parseInstant(session.providerCapAt);
     return cap !== null && this.#now() >= cap;
+  }
+
+  /**
+   * Leave the room of a session that is past the provider's cap.
+   *
+   * ## Why this exists at all
+   *
+   * This path used to settle the row and stop, on the reasoning that the
+   * session "is already over upstream, so there is nothing to cut". That is a
+   * claim about what Runway does at the `expiresAt` it reported, and **we have
+   * never once reached that boundary** — the longest session in the whole
+   * ledger is 128 seconds against a cap of just over five minutes. The claim
+   * may well be true. It has simply never been tested, and if it is false the
+   * old behaviour marked the row closed while the meter ran and left our
+   * participant in a live room for the life of the process. That is the leak
+   * wearing the guard's uniform, which this file refuses to allow twenty lines
+   * further down.
+   *
+   * The insurance is free: `transport.close` on a session it is not holding
+   * returns without doing anything and never throws.
+   *
+   * ## One attempt, and it does NOT gate the settle
+   *
+   * Both of those are deliberate departures from {@link #cut}, and both follow
+   * from this being insurance rather than the cut we depend on:
+   *
+   * - **One attempt.** The retry ladder sleeps between tries, and spending it
+   *   on a room that has almost certainly gone would stall every other session
+   *   in the sweep behind a session that ended on schedule.
+   * - **It cannot stop the settle.** A reap that fails leaves the row open
+   *   because our own cut succeeding was the only evidence the session was
+   *   over. Here the provider's own declared cap is that evidence, and the
+   *   likeliest reason a disconnect fails is that the room really has gone.
+   *   Holding the row open would leave the reaper escalating over it every
+   *   thirty seconds, forever.
+   *
+   * Failing is therefore not fatal, which is exactly why it has to be LOUD:
+   * this log line is the only way anyone learns the untested assumption was
+   * finally tested and came back negative.
+   */
+  async #cutExpired(session: FaceSession): Promise<void> {
+    try {
+      await this.#disconnect(session.id);
+    } catch (error) {
+      this.#logError("face.session.expiry_cut_failed", {
+        sessionId: session.id,
+        clientState: session.clientState,
+        error: error instanceof Error ? error.message : String(error),
+        note: "settled anyway: the provider's own cap says this session is over",
+      });
+    }
   }
 
   /**

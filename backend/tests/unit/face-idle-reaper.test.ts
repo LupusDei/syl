@@ -394,6 +394,126 @@ describe("IdleReaper", () => {
 
       expect(report.reaped).toEqual([]);
     });
+
+    /**
+     * THE ASSUMPTION THAT WAS NEVER TESTED, because nothing has ever reached
+     * the boundary that would test it.
+     *
+     * This path used to settle the row and stop there, on the reasoning that
+     * the session "is already over upstream, so there is nothing to cut". That
+     * is a claim about what Runway does at `expiresAt` — and the longest
+     * session in the entire ledger is 128 seconds against a cap of just over
+     * five minutes. It has never once been observed.
+     *
+     * If the claim is right, leaving the room costs nothing. If it is wrong,
+     * settling the row marks the leak closed while the meter runs and leaves
+     * our participant in a live room for the life of the process — the leak
+     * wearing the guard's uniform, which this same file refuses to allow on
+     * the reaped path. So we buy the insurance and stop the assumption being
+     * load-bearing.
+     */
+    it("should leave the room rather than assume the provider already did", async () => {
+      const disconnect = vi.fn(() => Promise.resolve());
+      const opened = await broker.startSession();
+      now += 6 * 60 * 1_000;
+
+      await reaper({ disconnect }).sweep();
+
+      expect(disconnect).toHaveBeenCalledWith(opened.credentials.sessionId);
+    });
+
+    it("should settle it even when that disconnect fails, unlike a reap", async () => {
+      const opened = await broker.startSession();
+      now += 6 * 60 * 1_000;
+
+      const report = await reaper({
+        disconnect: () => Promise.reject(new Error("room is already gone")),
+      }).sweep();
+
+      // The DIFFERENCE from a reap, and it is deliberate. A reap that cannot
+      // cut leaves the row open, because the only evidence the session is over
+      // would have been our own cut succeeding. Here the provider's own
+      // declared cap is that evidence, and the likeliest reason the disconnect
+      // failed is that the room really has gone. Holding the row open would
+      // leave the reaper escalating every thirty seconds, forever, over a
+      // session that ended on schedule.
+      expect(report.expired).toEqual([opened.credentials.sessionId]);
+      expect(report.failed).toEqual([]);
+      expect(sessions.get(opened.credentials.sessionId)?.ended).toBe("expired");
+    });
+
+    it("should say so loudly when it could not leave the room", async () => {
+      const errors: { event: string; fields: Record<string, unknown> }[] = [];
+      const opened = await broker.startSession();
+      now += 6 * 60 * 1_000;
+
+      await reaper({
+        disconnect: () => Promise.reject(new Error("room is already gone")),
+        logError: (event, fields) => errors.push({ event, fields }),
+      }).sweep();
+
+      // Settling anyway is a judgement call, so it must not be a silent one:
+      // this line is the only way anyone learns the assumption was tested and
+      // came back negative.
+      const line = errors.find((entry) => entry.event === "face.session.expiry_cut_failed");
+      expect(line?.fields).toMatchObject({ sessionId: opened.credentials.sessionId });
+    });
+
+    it("should not spend the retry ladder on a room that has already gone", async () => {
+      const disconnect = vi.fn(() => Promise.reject(new Error("room is already gone")));
+      await broker.startSession();
+      now += 6 * 60 * 1_000;
+
+      await reaper({ disconnect, retries: 2 }).sweep();
+
+      // One attempt, not three. This is insurance against an assumption, not a
+      // cut we are depending on, and three attempts with sleeps between them
+      // would stall the sweep for every other session behind it.
+      expect(disconnect).toHaveBeenCalledTimes(1);
+    });
+
+    it("should still reap the idle ones in the same sweep as an expiry that failed", async () => {
+      // A fake whose cap is five minutes from WHEN EACH SESSION OPENS, rather
+      // than the shared constant the outer fake reports — otherwise every
+      // session in the test expires at the same instant and there is no idle
+      // one left to prove the sweep carried on.
+      const rolling = new FakeRunway();
+      rolling.getRealtimeSession = (id: string): Promise<RealtimeSessionRow> =>
+        Promise.resolve({
+          id,
+          status: "READY",
+          sessionKey: "stk_x",
+          expiresAt: new Date(now + 300_000).toISOString(),
+        });
+      const rollingBroker = new FaceSessionBroker({
+        client: rolling,
+        guard,
+        sessions,
+        avatarId: "48cbc73d-f47f-41de-bed8-58a532b3b84b",
+        now: clock,
+        sleep: () => Promise.resolve(),
+        pollIntervalMs: 1,
+        timeoutMs: 10,
+        log: () => undefined,
+      });
+
+      const stale = await rollingBroker.startSession();
+      // A second face, opened later, so only the first is past the cap.
+      now += 4 * 60 * 1_000;
+      const younger = await rollingBroker.startSession();
+      sessions.recordClientState(younger.credentials.sessionId, "playing");
+      now += 2 * 60 * 1_000;
+
+      const report = await reaper({
+        disconnect: (id) =>
+          id === stale.credentials.sessionId
+            ? Promise.reject(new Error("room is already gone"))
+            : Promise.resolve(),
+      }).sweep();
+
+      expect(report.expired).toEqual([stale.credentials.sessionId]);
+      expect(report.reaped).toEqual([younger.credentials.sessionId]);
+    });
   });
 
   describe("the accounting", () => {
