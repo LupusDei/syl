@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { AskSylIngress } from "../../src/face/ask-syl.js";
 import { FaceCostGuard } from "../../src/face/face-cost-guard.js";
 import { FaceSessionBroker } from "../../src/face/face-session-broker.js";
 import { FaceSessionStore } from "../../src/face/face-session-store.js";
@@ -235,6 +236,108 @@ describe("IdleReaper", () => {
 
       expect(report.reaped).toEqual([]);
       expect(disconnect).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * THE PAIR THAT HAS TO HOLD TOGETHER, driven through the real `ask_syl`
+   * ingress rather than through `sessions.touch`, because the defect was never
+   * in the reaper — it was that nothing PRODUCED the signal the reaper reads.
+   *
+   * `touch` had exactly one caller, `AskSylIngress.ask`. Then 57bde0e told the
+   * avatar to stop calling `ask_syl` for greetings, acknowledgements and chat,
+   * so she could answer him out of her own knowledge instead of racing an
+   * 8-second ceiling on every remark. Both changes are right. Together they
+   * mean **the better she gets at answering him herself, the sooner the reaper
+   * cuts her off** — a conversation she handles alone records nothing at all
+   * and is indistinguishable from an abandoned tab at two minutes.
+   *
+   * So the two tests below are one test. Fixing the first by loosening the
+   * reaper, or by letting the page hold the session open, breaks the second —
+   * and the second is real money.
+   */
+  describe("a conversation is not an abandoned tab, and an abandoned tab is not a conversation", () => {
+    /** The ingress the avatar actually calls, over the real credential. */
+    function ingressFor(sessionId: string, secret: string): {
+      readonly heard: () => Promise<unknown>;
+    } {
+      const ingress = new AskSylIngress({
+        sessions,
+        answer: () => Promise.reject(new Error("no turn should run for a heartbeat")),
+        now: clock,
+        log: () => undefined,
+      });
+      return { heard: () => ingress.heard({ sessionId, secret }) };
+    }
+
+    it("should NOT cut a conversation she is answering out of her own knowledge", async () => {
+      const opened = await broker.startSession();
+      const avatar = ingressFor(opened.credentials.sessionId, opened.askSecret);
+      sessions.recordClientState(opened.credentials.sessionId, "playing");
+
+      // Four minutes of real conversation, every remark answered from her
+      // knowledge base, so `ask_syl` is never called even once. Under the old
+      // rules she is cut at two minutes, mid-sentence.
+      for (let minute = 0; minute < 4; minute += 1) {
+        now += 60_000;
+        await avatar.heard();
+        expect((await reaper().sweep()).reaped).toEqual([]);
+      }
+
+      expect(sessions.get(opened.credentials.sessionId)?.closedAt).toBeNull();
+    });
+
+    it("should STILL reap an abandoned face — this is real money and it is not negotiable", async () => {
+      const opened = await broker.startSession();
+      // Everything a healthy face does EXCEPT be talked to: it drew her, it
+      // said so, and then he walked away with the tab open.
+      sessions.recordClientState(opened.credentials.sessionId, "playing");
+      now += IDLE_TIMEOUT_MS;
+
+      expect((await reaper().sweep()).reaped).toEqual([opened.credentials.sessionId]);
+    });
+
+    it("should not let a page hold a billing face open by reporting its state", async () => {
+      const opened = await broker.startSession();
+
+      // A page looping its own telemetry once a second for the whole window.
+      // Telemetry is not activity — that reasoning is in `recordClientState`
+      // and this is the test that keeps it true.
+      for (let tick = 0; tick < IDLE_TIMEOUT_MS / 1_000; tick += 1) {
+        now += 1_000;
+        sessions.recordClientState(opened.credentials.sessionId, "playing");
+      }
+
+      expect((await reaper().sweep()).reaped).toEqual([opened.credentials.sessionId]);
+    });
+
+    it("should refuse a heartbeat from anyone who does not hold the session's credential", async () => {
+      const opened = await broker.startSession();
+      sessions.recordClientState(opened.credentials.sessionId, "playing");
+      const impostor = ingressFor(opened.credentials.sessionId, "syl_face_not_the_secret");
+
+      // Somebody who has the session id but not its credential — the page
+      // itself, for one, which holds only the short-lived drawing key.
+      now += IDLE_TIMEOUT_MS - 1_000;
+      await impostor.heard();
+      now += 1_000;
+
+      expect((await reaper().sweep()).reaped).toEqual([opened.credentials.sessionId]);
+    });
+
+    it("should take a heartbeat as proof the face appeared, on the shorter clock too", async () => {
+      const opened = await broker.startSession();
+      const avatar = ingressFor(opened.credentials.sessionId, opened.askSecret);
+
+      // He is talking to her and she is answering, but the page never managed
+      // to report `connected` — which is every session on his phone today,
+      // where the last word is `camera_blocked`. Somebody is plainly there.
+      sessions.recordClientState(opened.credentials.sessionId, "camera_blocked");
+      now += 10_000;
+      await avatar.heard();
+      now += UNCONFIRMED_TIMEOUT_MS;
+
+      expect((await reaper().sweep()).reaped).toEqual([]);
     });
   });
 

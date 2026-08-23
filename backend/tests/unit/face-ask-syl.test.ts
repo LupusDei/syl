@@ -8,6 +8,8 @@ import {
   ASK_SYL_TOOL_NAME,
   ASK_SYL_TIMEOUT_SECONDS,
   COLD_LANE_LINE,
+  HEARD_HIM_TOOL,
+  HEARD_HIM_TOOL_NAME,
   NOTHING_ASKED_LINE,
   STILL_THINKING_LINE,
   TOO_SLOW_LINE,
@@ -86,11 +88,31 @@ describe("AskSylIngress", () => {
     });
 
     it("should stay inside the provider's limits, which it rejects a create for", () => {
-      const tool = AskSylIngress.toolDefinition();
-
-      expect(tool.timeoutSeconds).toBeLessThanOrEqual(RUNWAY_RPC_MAX_TIMEOUT_SECONDS);
-      expect(tool.parameters.length).toBeLessThanOrEqual(RUNWAY_RPC_MAX_PARAMETERS);
+      for (const tool of AskSylIngress.toolDefinitions()) {
+        expect(tool.timeoutSeconds).toBeLessThanOrEqual(RUNWAY_RPC_MAX_TIMEOUT_SECONDS);
+        expect(tool.parameters.length).toBeLessThanOrEqual(RUNWAY_RPC_MAX_PARAMETERS);
+      }
       expect(ASK_SYL_TIMEOUT_SECONDS).toBe(8);
+    });
+
+    it("should declare the heartbeat tool alongside the question tool", () => {
+      expect(AskSylIngress.toolDefinitions().map((tool) => tool.name)).toEqual([
+        ASK_SYL_TOOL_NAME,
+        HEARD_HIM_TOOL_NAME,
+      ]);
+    });
+
+    it("should ask for nothing at all when reporting that he spoke", () => {
+      // No parameters, so there is no payload for the model to compose, get
+      // wrong, or smuggle anything through. The CALL is the whole message.
+      expect(HEARD_HIM_TOOL.parameters).toEqual([]);
+    });
+
+    it("should give the heartbeat a short deadline, since it never runs a turn", () => {
+      // It writes one column and returns. Declaring the ask tool's 8 seconds
+      // would tell the model to stand there for eight seconds if the socket
+      // stalls, mid-conversation, for a call that has nothing to say.
+      expect(HEARD_HIM_TOOL.timeoutSeconds).toBeLessThan(ASK_SYL_TIMEOUT_SECONDS);
     });
 
     it("should keep our own deadline strictly inside the declared one", () => {
@@ -547,11 +569,109 @@ describe("AskSylIngress", () => {
     });
   });
 
+  /**
+   * `note_he_spoke` — the heartbeat, and why the ingress owns it.
+   *
+   * `touch` is the idle reaper's ONLY input and `ask_syl` was its only caller.
+   * Then 57bde0e told the avatar to stop calling `ask_syl` for chat, which is
+   * correct and is what stops every remark racing an 8-second ceiling. The two
+   * are jointly fatal: the better she gets at answering him out of her own
+   * knowledge, the sooner a live conversation looks abandoned and gets cut.
+   *
+   * The signal has to come from something only a REAL EXCHANGE can produce.
+   * This is the avatar saying "he just said something to me", over the same RPC
+   * transport, behind the same per-session credential, and it runs no turn.
+   */
+  describe("the heartbeat, for the exchanges that never reach her brain", () => {
+    it("should mark the session active", async () => {
+      now += 30_000;
+
+      await ingress().heard({ sessionId: "rts_1", secret });
+
+      expect(sessions.get("rts_1")?.lastActivityAt).toBe(new Date(now).toISOString());
+    });
+
+    it("should never run a turn — this is a heartbeat, not a question", async () => {
+      const answer = vi.fn<FaceAnswerer>(() => Promise.resolve("unwanted"));
+
+      await ingress({ answer }).heard({ sessionId: "rts_1", secret });
+
+      expect(answer).not.toHaveBeenCalled();
+    });
+
+    it("should answer even while a turn is in flight, and not disturb it", async () => {
+      const answer = vi.fn<FaceAnswerer>(() => new Promise<string>(() => undefined));
+      const gate = ingress({ answer, deadlineMs: 50 });
+      const asking = gate.ask(ask("What is on my list?"));
+
+      // He carries on talking while she thinks. The single-flight gate guards
+      // TURNS; it must never swallow the signal that he is still there.
+      now += 1_000;
+      await expect(gate.heard({ sessionId: "rts_1", secret })).resolves.toEqual({ ok: true });
+
+      expect(sessions.get("rts_1")?.lastActivityAt).toBe(new Date(now).toISOString());
+      expect(answer).toHaveBeenCalledTimes(1);
+      await asking;
+    });
+
+    it("should refuse a caller without this session's credential", async () => {
+      const before = sessions.get("rts_1")?.lastActivityAt;
+      now += 30_000;
+
+      const outcome = await ingress().heard({ sessionId: "rts_1", secret: "syl_face_wrong" });
+
+      expect(outcome.ok).toBe(false);
+      // AND IT MUST NOT HAVE TOUCHED. A heartbeat anyone can send is a way to
+      // hold a billing face open from outside, which is the leak the reaper
+      // exists to stop.
+      expect(sessions.get("rts_1")?.lastActivityAt).toBe(before);
+    });
+
+    it("should stop working the moment its session is settled", async () => {
+      sessions.settle({ id: "rts_1", ended: "closed", credits: 4, dollars: 0.04 });
+
+      await expect(ingress().heard({ sessionId: "rts_1", secret })).resolves.toMatchObject({
+        ok: false,
+      });
+    });
+
+    it("should say nothing at all to an unauthorised caller", async () => {
+      const outcome = await ingress().heard({ sessionId: "rts_1", secret: "syl_face_wrong" });
+
+      expect(outcome).not.toHaveProperty("say");
+    });
+
+    it("should never reject, even when the store is wedged", async () => {
+      const boom = (): never => {
+        throw new Error("database is locked");
+      };
+      const wedged = new Proxy(sessions, { get: () => boom }) as unknown as FaceSessionStore;
+
+      await expect(ingress({ sessions: wedged }).heard({ sessionId: "rts_1", secret })).resolves
+        .toMatchObject({ ok: false });
+    });
+
+    it("should be reachable by the avatar, under the declared tool name", async () => {
+      const handlers = ingress().handlerFor("rts_1", secret);
+      now += 30_000;
+
+      await expect(handlers[HEARD_HIM_TOOL_NAME]?.({})).resolves.toEqual({ ok: true });
+
+      expect(sessions.get("rts_1")?.lastActivityAt).toBe(new Date(now).toISOString());
+    });
+  });
+
   describe("the RPC handler map", () => {
-    it("should expose exactly one method, under the declared tool name", () => {
+    it("should expose exactly the declared tools, and nothing else", () => {
       const handlers = ingress().handlerFor("rts_1", secret);
 
-      expect(Object.keys(handlers)).toEqual([ASK_SYL_TOOL_NAME]);
+      expect(Object.keys(handlers)).toEqual([ASK_SYL_TOOL_NAME, HEARD_HIM_TOOL_NAME]);
+      // Declared and reachable must be the same set. A tool the model is told
+      // about with no handler is a face that freezes; a handler nobody declared
+      // is a surface nobody reviewed.
+      expect(Object.keys(handlers)).toEqual(
+        AskSylIngress.toolDefinitions().map((tool) => tool.name),
+      );
     });
 
     it("should answer a call from the avatar's model", async () => {

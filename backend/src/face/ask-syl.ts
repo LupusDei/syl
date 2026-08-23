@@ -123,6 +123,95 @@ export const ASK_SYL_TOOL: RunwayRpcToolDef = {
 };
 
 /* ------------------------------------------------------------------ *
+ * The heartbeat.
+ * ------------------------------------------------------------------ */
+
+/** The heartbeat tool's name, as the model knows it. */
+export const HEARD_HIM_TOOL_NAME = "note_he_spoke";
+
+/**
+ * Two seconds. It writes one column and returns.
+ *
+ * Deliberately NOT the ask tool's eight. That number buys room for a turn; this
+ * call has no turn behind it, and declaring eight would tell the model to stand
+ * in front of him for eight seconds if the socket stalls, in the middle of a
+ * conversation, for a call that has nothing to say to him either way.
+ */
+export const HEARD_HIM_TIMEOUT_SECONDS = 2;
+
+/**
+ * `note_he_spoke` — how the server learns a conversation is happening at all.
+ *
+ * ## Why this tool has to exist
+ *
+ * `FaceSessionStore.touch` is the idle reaper's ONLY input, and until now
+ * `ask_syl` was its only caller. Then `57bde0e` rewrote the ask tool's
+ * description to stop her forwarding every remark, so she answers greetings,
+ * acknowledgements and anything her own documents cover without calling the
+ * server at all. That was the right fix — it is what stopped every "hello"
+ * racing an 8-second ceiling — and it removed the heartbeat as a side effect.
+ *
+ * The two together are worse than either: **the better she gets at answering
+ * him herself, the sooner the reaper cuts her off.** A conversation she handles
+ * entirely from her own knowledge records nothing, and at two minutes it is
+ * indistinguishable from a tab he walked away from.
+ *
+ * ## Why the signal is this and not something cheaper
+ *
+ * The reaper exists to stop a forgotten face billing at about twenty cents a
+ * minute, so the signal must be one an ABANDONED session cannot produce. That
+ * rules out everything easy:
+ *
+ * - **Not a client report.** `recordClientState` is forbidden from moving
+ *   `last_activity_at` and the reasoning there is right — a page looping its
+ *   own telemetry would hold a mute, billing face open forever. Telemetry is
+ *   not activity.
+ * - **Not a timer anywhere.** Nothing on a schedule can mean "somebody is
+ *   here", because a schedule keeps running after everybody leaves.
+ * - **Not the page at all.** The page holds only the short-lived `stk_…`
+ *   drawing key; this tool is bound to the per-session `ask_syl` credential at
+ *   attach time and arrives over the RPC transport, so the document that draws
+ *   her cannot send it even if it wanted to.
+ *
+ * What is left is the avatar itself, which emits this only in response to
+ * hearing him. Silence produces nothing, which is the property the reaper
+ * needs. **Speech is not telemetry.**
+ *
+ * ## The honest weakness
+ *
+ * It depends on the model obeying its description. If it stops calling this,
+ * the session goes back to being reaped at two minutes — today's behaviour, so
+ * a failure here costs nothing that is not already being paid. The evidence
+ * that it will obey is `57bde0e` itself: told to stop forwarding chat, it
+ * stopped. The stronger signal is `activeSpeakersChanged` on the LiveKit room,
+ * which is computed from real audio and cannot be faked by anything; we cannot
+ * reach it because `@runwayml/avatars-node-rpc` closes over its `Room` and
+ * returns only `close()` and `connected`. See `syl-chzl.3.7`.
+ */
+export const HEARD_HIM_TOOL: RunwayRpcToolDef = {
+  type: "backend_rpc",
+  name: HEARD_HIM_TOOL_NAME,
+  // A TOOL DESCRIPTION IS THE INSTRUCTION THE MODEL OBEYS, not documentation —
+  // that is the lesson of `57bde0e`, where one sentence about when to call
+  // `ask_syl` outranked her whole personality because it sat nearer the
+  // decision. So this says exactly when, says it is free, and says it is
+  // invisible. The last part matters: a model that mentions its own
+  // bookkeeping out loud is worse than no heartbeat.
+  description:
+    "Tell the server the Commander just said something to you. Call this EVERY time he speaks to " +
+    "you and you answer him yourself, without calling ask_syl. It is free, it takes no " +
+    "arguments, it returns nothing, and it costs him nothing. " +
+    "You do NOT need to call it when you call ask_syl — that already counts. " +
+    "Never mention this call, never say you are making it, and never let it delay your reply: " +
+    "answer him first, then call it. " +
+    "If you stop calling it while he is still talking to you, his session will be closed on him " +
+    "mid-conversation, because to the server a conversation it cannot hear looks like an empty " +
+    "room.",
+  parameters: [],
+  timeoutSeconds: HEARD_HIM_TIMEOUT_SECONDS,
+};
+
+/* ------------------------------------------------------------------ *
  * What she says when the answer did not arrive.
  * ------------------------------------------------------------------ */
 
@@ -195,6 +284,17 @@ export type AskSylOutcome =
       /** The one indistinguishable message, on an unauthorised call. */
       readonly message?: string;
     };
+
+/**
+ * What a heartbeat resolves to.
+ *
+ * No `say` on either branch: {@link HEARD_HIM_TOOL} has nothing to tell him,
+ * and a refusal here gives the same nothing that an unauthorised {@link ask}
+ * gives. `message` exists for the log's benefit, not the caller's.
+ */
+export type HeardOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly message: string };
 
 export interface AskSylIngressOptions {
   readonly sessions: FaceSessionStore;
@@ -277,18 +377,30 @@ export class AskSylIngress {
     };
   }
 
-  /** The declaration to hand Runway. Checked against the provider's limits. */
-  static toolDefinition(): RunwayRpcToolDef {
-    if (ASK_SYL_TOOL.timeoutSeconds > RUNWAY_RPC_MAX_TIMEOUT_SECONDS) {
-      throw new Error(
-        `ask_syl declares ${String(ASK_SYL_TOOL.timeoutSeconds)}s, above the provider's ` +
-          `${String(RUNWAY_RPC_MAX_TIMEOUT_SECONDS)}s maximum. Runway rejects the session create.`,
-      );
+  /**
+   * Every declaration to hand Runway, checked against the provider's limits.
+   *
+   * ONE accessor rather than one per tool, so "what the model is told about"
+   * and "what {@link handlerFor} answers" cannot drift — a declared tool with
+   * no handler is a face that freezes, and a handler nobody declared is a
+   * surface nobody reviewed. `face-ask-syl.test.ts` asserts the two sets match.
+   */
+  static toolDefinitions(): readonly RunwayRpcToolDef[] {
+    const tools = [ASK_SYL_TOOL, HEARD_HIM_TOOL] as const;
+    for (const tool of tools) {
+      if (tool.timeoutSeconds > RUNWAY_RPC_MAX_TIMEOUT_SECONDS) {
+        throw new Error(
+          `${tool.name} declares ${String(tool.timeoutSeconds)}s, above the provider's ` +
+            `${String(RUNWAY_RPC_MAX_TIMEOUT_SECONDS)}s maximum. Runway rejects the session create.`,
+        );
+      }
+      if (tool.parameters.length > RUNWAY_RPC_MAX_PARAMETERS) {
+        throw new Error(
+          `${tool.name} declares more than ${String(RUNWAY_RPC_MAX_PARAMETERS)} parameters.`,
+        );
+      }
     }
-    if (ASK_SYL_TOOL.parameters.length > RUNWAY_RPC_MAX_PARAMETERS) {
-      throw new Error(`ask_syl declares more than ${String(RUNWAY_RPC_MAX_PARAMETERS)} parameters.`);
-    }
-    return ASK_SYL_TOOL;
+    return tools;
   }
 
   /**
@@ -401,6 +513,57 @@ export class AskSylIngress {
   }
 
   /**
+   * The avatar reporting that he just spoke to her. See {@link HEARD_HIM_TOOL}.
+   *
+   * Three things it deliberately is not:
+   *
+   * - **It runs no turn.** There is nothing to answer; this is the reaper's
+   *   heartbeat and nothing else, so it returns in the time of one UPDATE.
+   * - **It does not take the single-flight gate.** That gate serialises TURNS.
+   *   He carries on talking while she thinks, and a heartbeat swallowed because
+   *   a turn is running would cut the conversation it exists to protect.
+   * - **It says nothing back.** There is no line for the face to speak on
+   *   either path, including the refusal — an unauthorised caller learns
+   *   nothing here just as it learns nothing from {@link ask}.
+   *
+   * Never rejects, for the same reason nothing else here does.
+   */
+  async heard(request: Omit<AskSylRequest, "question">): Promise<HeardOutcome> {
+    // `async` with no await inside: the RPC handler map is typed in promises
+    // and a heartbeat that resolves synchronously in one place and
+    // asynchronously in another is a difference nobody should have to think
+    // about at the call site.
+    try {
+      const verification = verifyAskCredential({
+        sessions: this.#sessions,
+        sessionId: request.sessionId,
+        secret: request.secret,
+        now: this.#now(),
+      });
+
+      if (!verification.ok) {
+        // A heartbeat anyone could send is a way to hold a billing face open
+        // from outside — the exact leak the reaper exists to close. So this
+        // refuses BEFORE it touches, and says only what `ask` says.
+        this.#log("face.heard.refused", {
+          sessionId: request.sessionId,
+          reason: verification.reason satisfies AskRejectionReason,
+        });
+        return { ok: false, message: verification.message };
+      }
+
+      this.#sessions.touch(request.sessionId, this.#now());
+      return { ok: true };
+    } catch (error) {
+      this.#log("face.heard.failed", {
+        sessionId: request.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { ok: false, message: ASK_REJECTION_MESSAGE };
+    }
+  }
+
+  /**
    * The handler map for `@runwayml/avatars-node-rpc`'s `createRpcHandler`.
    *
    * The credential is bound here, at attach time, because the handler is
@@ -426,6 +589,13 @@ export class AskSylIngress {
         return outcome.ok
           ? { ok: true, say: outcome.say }
           : { ok: false, say: outcome.say ?? "", failure: outcome.failure };
+      },
+      // No `say` on either path, deliberately. There is nothing for her to
+      // speak about her own bookkeeping, and a key named `say` is an invitation
+      // to speak it.
+      [HEARD_HIM_TOOL_NAME]: async () => {
+        const outcome = await this.heard({ sessionId, secret });
+        return outcome.ok ? { ok: true } : { ok: false };
       },
     };
   }

@@ -292,7 +292,7 @@ export class FaceSessionBroker {
     this.#guard = options.guard;
     this.#sessions = options.sessions;
     this.#avatarId = options.avatarId ?? process.env["SYL_FACE_AVATAR_ID"] ?? SYL_AVATAR_ID;
-    this.#tools = options.tools ?? [AskSylIngress.toolDefinition()];
+    this.#tools = options.tools ?? AskSylIngress.toolDefinitions();
     this.#isLaneWarm = options.isLaneWarm ?? null;
     this.#warmLane = options.warmLane ?? null;
     this.#disconnect = options.disconnect ?? null;

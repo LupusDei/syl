@@ -187,7 +187,13 @@ describe("the live face transport", () => {
     // `RunwayClient`, which is the one place in this service that holds it; the
     // library gets room-scoped credentials that expire with the session.
     expect(options?.apiKey).toBeUndefined();
-    expect(Object.keys(options?.tools ?? {})).toEqual([ASK_SYL_TOOL_NAME]);
+    // Every DECLARED tool is registered, checked against the declaration rather
+    // than against a list written out here — a tool the model is told about
+    // with no handler behind it is a face that freezes when it calls one.
+    expect(Object.keys(options?.tools ?? {})).toEqual(
+      AskSylIngress.toolDefinitions().map((tool) => tool.name),
+    );
+    expect(Object.keys(options?.tools ?? {})).toContain(ASK_SYL_TOOL_NAME);
   });
 
   it("should let an RPC invocation reach her turn and return the answer", async () => {
