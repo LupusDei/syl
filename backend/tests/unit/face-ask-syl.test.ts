@@ -737,6 +737,58 @@ describe("AskSylIngress", () => {
       expect(unknown).not.toHaveProperty("say");
     });
 
+    /**
+     * THE CONSTRAINT `dda8945` PUT ON THIS PATH, and it is the right one:
+     *
+     * > it must expire the credential … and not merely speak its line. A
+     * > session that is over in conversation but still open in the ledger keeps
+     * > a live credential.
+     *
+     * It is satisfied by CAUSALITY rather than by an extra write, and the
+     * distinction is worth stating because it is what makes the extra write
+     * unnecessary. `SESSION_OVER_LINE` is not something the ingress decides to
+     * say and then has to clean up after — it is only ever reached **because**
+     * `verifyAskCredential` already refused. The credential is dead before the
+     * sentence exists, so there is no window in which she has said goodbye and
+     * the credential still works.
+     *
+     * The row genuinely does stay open for a moment — that is the state their
+     * test covers — and these assert that nothing is reachable through it while
+     * it does. Not the bank (their test), not a turn, and NOT THE HEARTBEAT,
+     * which is the half nobody had covered and the one that would have kept the
+     * session alive in the reaper's eyes after she said the time was up.
+     */
+    it("should refuse the heartbeat too, on a row that is expired but still open", async () => {
+      capPassed();
+      expect(sessions.get("rts_1")?.closedAt).toBeNull();
+      const before = sessions.get("rts_1")?.lastActivityAt;
+
+      const outcome = await ingress().heard({ sessionId: "rts_1", secret });
+
+      expect(outcome.ok).toBe(false);
+      // AND IT MUST NOT HAVE TOUCHED. A heartbeat that still landed here would
+      // hold a mute, billing face off the reaper's idle clock for as long as
+      // the avatar kept talking to itself.
+      expect(sessions.get("rts_1")?.lastActivityAt).toBe(before);
+    });
+
+    it("should leave nothing at all the dead credential still authorises", async () => {
+      const answer = vi.fn<FaceAnswerer>(() => Promise.resolve("too late"));
+      capPassed();
+      const before = sessions.get("rts_1")?.lastActivityAt;
+      const gate = ingress({ answer });
+
+      await gate.ask(ask());
+      await gate.heard({ sessionId: "rts_1", secret });
+
+      // The whole surface, in one place: no turn, no activity, and the row is
+      // left for the reaper to settle rather than settled from here — settling
+      // without disconnecting is the leak wearing the guard's uniform, which
+      // `syl-chzl.3.8` exists to prevent.
+      expect(answer).not.toHaveBeenCalled();
+      expect(sessions.get("rts_1")?.lastActivityAt).toBe(before);
+    });
+
     it("should hand the ending to the avatar rather than an empty sentence", async () => {
       capPassed();
       const handlers = ingress().handlerFor("rts_1", secret);
