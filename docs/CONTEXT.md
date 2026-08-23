@@ -2994,3 +2994,71 @@ acceptance tests timed out at 120s, one of them a **security** test, and for a m
 looked like a regression. `us6b` passes alone in 23s. The heavy pass runs alone for a
 reason; creating the fleet load yourself and then measuring it is the same error as reading
 a shared tree.
+
+### Ask what the fix just made reachable, and re-derive the number (2026-08-23)
+
+A companion to the entry above, which names the armed-trap idea in a paragraph and moves
+on. The pattern deserves more than a paragraph, because by the end of the day it had
+happened **four times in a row on one epic**, and because the thing that caught each one
+was the same move every time.
+
+**THE CHAIN, IN ORDER. Each fix was correct. Each one exposed the next.**
+
+1. The page's **media fence** was fixed, which let sessions live long enough to reach the
+   client's 45-second presentation deadline — so the deadline became the thing killing
+   every session at 46s.
+2. `57bde0e` stopped her **forwarding every remark**, which removed the only caller of
+   `touch()` — so the idle reaper stopped being able to see a conversation at all.
+3. `syl-chzl.3.6` gave the reaper a **heartbeat** on the per-session credential — so when
+   the provider's five-minute cap expired that credential, it took the heartbeat with it,
+   and a face that had announced its own ending could still be held alive by one more
+   `note_he_spoke` landing.
+4. `syl-chzl.4.7` gave the cap **an honest ending** — which is what made anyone finally
+   ask what `heard()` does on an expired-but-still-open row. Nobody had tested it. It
+   refuses, so the trap did not spring; but it was found by asking, not by a test that
+   already existed.
+
+Read as a list of fixes that is four wins. Read as a sequence it is one mechanism:
+**every fix removes a failure that was masking the next one, so the fix list is also a
+list of things about to become reachable for the first time.** The masking failure is
+usually the fastest one — the 45-second client teardown hid a 120-second reaper which hid
+a five-minute cap — so the traps surface in slowest-last order, which is exactly the order
+in which nobody is still looking.
+
+The habit this argues for is cheap and it is not "write more tests". It is one question,
+asked after each fix and before shipping it: **what was this failure hiding, and is that
+thing now reachable?** Every instance above was findable in minutes by asking it. None of
+them was findable by running the suite, because in each case both sides were correct.
+
+**THE OTHER HALF IS UNITS, AND IT IS THE ACTIONABLE ONE.** Three defects the same day were
+caught not by reasoning but by someone re-deriving a number instead of repeating it:
+
+- **861,739 tokens on his lane, never compacted in thirteen days.** The epic was costed on
+  a 1,635ms warm turn. Nobody re-measured the lane the face actually uses until first-token
+  latency was measured directly: 9,147-15,819ms at 861,739 tokens against 2,644-2,879ms at
+  8,873. The old number was never wrong; it was answered under conditions that had gone.
+- **`861,739 -> 0 tokens (861,739 saved)`.** A `/compact` turn reports no usage at all, so
+  the ledger read the absence as zero and announced a total success while leaving the lane
+  at its pre-sweep size — it would have re-compacted at 04:07, 05:07 and 06:07 every night.
+  Found by measuring *after* the code was written and believed correct. **An absent
+  measurement read as a zero is the most flattering possible lie**, and it is the same
+  shape as the reaper's `NULL` cap, where "the provider never said" and "expired" had to be
+  kept apart on purpose.
+- **The 68% image share was BYTES.** In tokens the images are 11-18% and the conversation
+  is 31-33% — the two units disagree by about four times. The walk over the transcript was
+  careful; the units were assumed. It was one step from being reported to the Commander as
+  evidence that his own no-second-thread ruling rested on a belief the data contradicts,
+  when in fact a third of that thread is the conversation and his instinct was closer to
+  right than the byte number made it look.
+
+**The check that caught all three was re-deriving the quantity rather than re-reading the
+claim about it.** That generalises past numbers. Two hypotheses about a flaky gate died the
+same way in one evening: "the machine was quiet" was an inference from other agents having
+stopped *committing*, which is not the same as their being idle; and "the live Syl service
+is contending with the test's real turns" was answered by reading the service's own log,
+which recorded **zero events across both failing windows**. Neither needed an experiment.
+Both would have survived another round of argument.
+
+So, concretely, before a number is quoted in a decision: **say what it is a count of, say
+when it was taken, and say what would make it stop being true.** A measurement without
+those three is a claim about the future wearing the clothes of a fact.
