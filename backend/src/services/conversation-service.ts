@@ -363,6 +363,27 @@ export class ConversationService {
     }
 
     this.#publish(result.message);
+    // TEMPORARY INSTRUMENT — `syl-chzl.4.8`. Remove with its pair in `index.ts`.
+    //
+    // Paired with `turn.stage runner-entry`, this cuts the unexplained 4,466ms
+    // into three: everything up to here, the queue and `SylAgent`, and the
+    // runner.
+    //
+    // **THE LABEL NAMES BOTH HALVES ON PURPOSE.** This segment is the append
+    // AND the publish, and `#publish` notifies subscribers — which can block on
+    // something nothing like a SQLite write. Called `appended`, a 4.4s reading
+    // here would be attributed to the insert or its FTS index, which is a
+    // measurement containing two things being read as one. That exact error has
+    // already been made twice today, with bytes-for-tokens and with this very
+    // stall. If it lands here, split it THEN.
+    //
+    // It does not fire for a REPLAYED message — the early return above it means
+    // no turn runs at all. An absent mark is not a slow one.
+    try {
+      this.#log("turn.stage appended+published");
+    } catch {
+      /* An instrument must not be able to silence a reply. */
+    }
     return this.#enqueue(result.message);
   }
 

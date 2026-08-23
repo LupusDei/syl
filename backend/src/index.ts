@@ -1316,6 +1316,22 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   const recordHisWords =
     (runner: TurnRunner): TurnRunner =>
     async (prompt, turnOptions) => {
+      // TEMPORARY INSTRUMENT — `syl-chzl.4.8`. Remove once the stall is named.
+      //
+      // 4,466ms was measured between an `ask_syl` beginning and the CLI's init
+      // frame (which is what `turn.start` logs), on a warm lane, on one ask and
+      // not the next. This marks the handoff from the wrappers to the runner,
+      // which splits that window into "before the runner" and "inside it" —
+      // the one bit that decides whether to look at `ConversationService`/
+      // `SylAgent` or at `PersistentSession`.
+      //
+      // Guarded because this sits on the path that makes her answer, and a
+      // logger that throws would turn a measurement into her going silent.
+      try {
+        log?.info("turn.stage", { stage: "runner-entry", lane: turnOptions.lane });
+      } catch {
+        /* Never let an instrument be the reason she says nothing. */
+      }
       if (home !== undefined && turnOptions.hisWords === true) {
         writeTurnMessage(home, prompt);
       }
