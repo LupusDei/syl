@@ -3920,3 +3920,30 @@ with none failing; a skipped-but-green TestFlight satisfies that perfectly. The 
 instrument that could only say yes was another instrument that could only say yes, built
 forty minutes later, by someone who had just written the rule down. Whatever gets built for
 `syl-chzl.18` has to be checked against that exact case, or it is the third iteration.
+
+#### The standing conclusion: every guard here came from a human reading past a summary
+
+Count how each of the five was actually caught, and it is never by an instrument.
+
+- **The knowledge-base theory** was refuted by reading the *third* transcript. One had already
+  been read, and it supported the theory.
+- **The broken iOS build** was found by reading the *unfiltered* `gh run list`. The filtered
+  view said complete.
+- **The skipped TestFlight** was found by reading the *job log*. The run list said success.
+
+Three for three, and in every case the passing-over was reasonable — the summary was
+**technically true and said what the reader expected.** `TestFlight: success` was not a lie.
+Neither was `ALL COMPLETE`, given what it had been asked. Nobody was careless; each summary
+answered a narrower question than the one being asked of it, which is what summaries are.
+
+And each time, the catch came from **the other person**, looking at the same green from a
+different angle: one had the deploy in front of them and a reason to look, the other had a
+caveat and no reason at all. Neither would have found it alone, and neither monitor found it
+either — including the one built that evening specifically to.
+
+So the standing conclusion of this whole section, and the one thing in it that cannot be
+turned into a test: **every mechanised guard we have came from a human reading past a summary
+that was technically true.** The mechanisms are worth building precisely because that reading
+does not scale and will not happen reliably — but the reading is what produces them, and no
+instrument has yet produced one. When something matters and the summary is green, open the
+thing the summary summarises. That is the whole method.
