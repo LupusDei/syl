@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ASK_SECRET_PREFIX, verifyAskCredential } from "../../src/face/ask-credential.js";
+import { MEMORY_TOOL_NAME } from "../../src/face/ask-syl.js";
 import { FaceCostGuard } from "../../src/face/face-cost-guard.js";
 import {
   FaceColdLaneError,
@@ -240,11 +241,16 @@ describe("FaceSessionBroker", () => {
       expect(runway.createCalls[0]?.avatar).toEqual({ type: "custom", avatarId: AVATAR });
     });
 
-    it("should declare the ask_syl tool at create, or she has no way to be asked anything", async () => {
+    it("should declare her memory tool at create, or she has no way to be asked anything", async () => {
       await broker().startSession();
 
+      // **The constant, not the literal.** This said `"ask_syl"` and was the one
+      // place the wire name was written down twice; `syl-chzl.4.10` renamed the
+      // tool and this is where it failed. What the test means is that the
+      // declaration reaches the create call — not what the tool is called this
+      // week, which `face-tool-identity.test.ts` owns.
       const tools = runway.createCalls[0]?.tools ?? [];
-      expect(tools.map((tool) => tool.name)).toContain("ask_syl");
+      expect(tools.map((tool) => tool.name)).toContain(MEMORY_TOOL_NAME);
     });
 
     it("should record the session in the ledger with the upfront credits", async () => {

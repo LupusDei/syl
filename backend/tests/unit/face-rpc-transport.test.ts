@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  ASK_SYL_TOOL_NAME,
+  MEMORY_TOOL_NAME,
   AskSylIngress,
   COLD_LANE_LINE,
   TOO_SLOW_LINE,
@@ -193,7 +193,7 @@ describe("the live face transport", () => {
     expect(Object.keys(options?.tools ?? {})).toEqual(
       AskSylIngress.toolDefinitions().map((tool) => tool.name),
     );
-    expect(Object.keys(options?.tools ?? {})).toContain(ASK_SYL_TOOL_NAME);
+    expect(Object.keys(options?.tools ?? {})).toContain(MEMORY_TOOL_NAME);
   });
 
   it("should let an RPC invocation reach her turn and return the answer", async () => {
@@ -201,7 +201,7 @@ describe("the live face transport", () => {
     const transport = transportFor(h);
     await transport.attach({ sessionId: h.sessionId, askSecret: h.askSecret });
 
-    const result = await h.factory.tool(ASK_SYL_TOOL_NAME)({ question: "Did the deploy go out?" });
+    const result = await h.factory.tool(MEMORY_TOOL_NAME)({ question: "Did the deploy go out?" });
 
     expect(result).toEqual({ ok: true, say: "I heard: Did the deploy go out?" });
   });
@@ -217,7 +217,7 @@ describe("the live face transport", () => {
     const transport = transportFor(h);
     await transport.attach({ sessionId: h.sessionId, askSecret: h.askSecret });
 
-    const result = await h.factory.tool(ASK_SYL_TOOL_NAME)({ question: "How is the day?" });
+    const result = await h.factory.tool(MEMORY_TOOL_NAME)({ question: "How is the day?" });
 
     expect(result).toEqual({ ok: false, say: TOO_SLOW_LINE, failure: "slow" });
     expect(TOO_SLOW_LINE).not.toBe("");
@@ -228,7 +228,7 @@ describe("the live face transport", () => {
     const transport = transportFor(h);
     await transport.attach({ sessionId: h.sessionId, askSecret: h.askSecret });
 
-    const result = await h.factory.tool(ASK_SYL_TOOL_NAME)({ question: "Anything?" });
+    const result = await h.factory.tool(MEMORY_TOOL_NAME)({ question: "Anything?" });
 
     expect(result).toEqual({ ok: false, say: TURN_FAILED_LINE, failure: "failed" });
   });
@@ -238,7 +238,7 @@ describe("the live face transport", () => {
     const transport = transportFor(h);
     await transport.attach({ sessionId: h.sessionId, askSecret: h.askSecret });
 
-    const result = await h.factory.tool(ASK_SYL_TOOL_NAME)({ question: "Anything?" });
+    const result = await h.factory.tool(MEMORY_TOOL_NAME)({ question: "Anything?" });
 
     expect(result).toEqual({ ok: false, say: COLD_LANE_LINE, failure: "cold" });
   });
@@ -247,7 +247,7 @@ describe("the live face transport", () => {
     const h = harness();
     const transport = transportFor(h);
     await transport.attach({ sessionId: h.sessionId, askSecret: h.askSecret });
-    const tool = h.factory.tool(ASK_SYL_TOOL_NAME);
+    const tool = h.factory.tool(MEMORY_TOOL_NAME);
 
     // A missing argument, a wrong type, and an empty question. A rejection here
     // is the avatar standing there with nothing to say.
@@ -264,7 +264,7 @@ describe("the live face transport", () => {
     // Attached with a credential that is not this session's.
     await transport.attach({ sessionId: h.sessionId, askSecret: "not-the-secret" });
 
-    const result = await h.factory.tool(ASK_SYL_TOOL_NAME)({ question: "Let me in." });
+    const result = await h.factory.tool(MEMORY_TOOL_NAME)({ question: "Let me in." });
 
     // One gate, two doors: the LiveKit path verifies exactly as the HTTP door
     // does, so the two cannot drift and one of them end up weaker.
@@ -386,7 +386,7 @@ describe("the face runtime's transport seam", () => {
 
     // The handler it registered verifies against the ledger the runtime owns —
     // proof it was wired to that ingress and not to one of its own.
-    const answered = await factory.tool(ASK_SYL_TOOL_NAME)({ question: "Anything?" });
+    const answered = await factory.tool(MEMORY_TOOL_NAME)({ question: "Anything?" });
     expect(answered["ok"]).toBe(false);
     expect(answered["failure"]).not.toBe("unauthorised");
   });

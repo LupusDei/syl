@@ -19,8 +19,14 @@ import {
 } from "./runway-client.js";
 
 /**
- * `ask_syl` — the one thing the avatar is allowed to ask the server, and the
- * only path by which her face gets any words at all.
+ * `check_my_memory` — the one thing the avatar is allowed to ask the server, and
+ * the only path by which her face gets any words at all.
+ *
+ * **The file, the class and the deadline constant are still named for `ask_syl`
+ * and that is deliberate.** They name the *ingress*, which is ours and is what a
+ * reader here is looking for. What may not name Syl is what the MODEL is shown —
+ * the tool's `name` and `description` — because she is Syl and a tool that names
+ * her tells her there are two of her. See {@link MEMORY_TOOL_NAME}.
  *
  * ## Where the call comes from, which is not where you would guess
  *
@@ -86,8 +92,31 @@ import {
  * preference to* a fresh one would leave her permanently one question behind.
  */
 
-/** The tool's name, as the model knows it. */
-export const ASK_SYL_TOOL_NAME = "ask_syl";
+/**
+ * The tool's name, as the model knows it.
+ *
+ * ## IT USED TO BE `ask_syl`, AND THAT WAS AN IDENTITY CONTRADICTION WE WROTE
+ *
+ * `syl-chzl.4.10`. Her personality opens *"You are Syl."* This tool was called
+ * `ask_syl` and described as *"Ask Syl's own mind."* So the same context told
+ * her that she IS Syl and that there is a separate Syl to consult — and a tool
+ * description outranks a personality, because it sits nearer the decision
+ * (`57bde0e`, and the comment below).
+ *
+ * She tried to hold both. Session `b547219a`: *"I'll check with Syl about your
+ * tasks for today"* and, seconds later, *"I'm Syl, powered by Runway."*
+ *
+ * **She is Syl. What she reaches for here is her own memory** — the part of her
+ * that holds his day. Nothing she is handed may name a second Syl, a server, or
+ * a brain she defers to; `tests/unit/face-tool-identity.test.ts` asserts the
+ * invariant rather than this wording, so the strings can be tuned and the fact
+ * cannot move.
+ *
+ * **This name is on the wire to Runway and in her personality on the avatar.**
+ * A rename here that is not matched there tells her to call a tool that does not
+ * exist, which is worse than the contradiction it fixes.
+ */
+export const MEMORY_TOOL_NAME = "check_my_memory";
 
 /**
  * What we declare to Runway. The provider's maximum, deliberately: there is no
@@ -106,9 +135,9 @@ export const ASK_SYL_TIMEOUT_SECONDS = RUNWAY_RPC_MAX_TIMEOUT_SECONDS;
 export const ASK_SYL_DEADLINE_MS = 6_500;
 
 /** The tool declaration handed to Runway at session-create. */
-export const ASK_SYL_TOOL: RunwayRpcToolDef = {
+export const MEMORY_TOOL: RunwayRpcToolDef = {
   type: "backend_rpc",
-  name: ASK_SYL_TOOL_NAME,
+  name: MEMORY_TOOL_NAME,
   // WHEN TO CALL THIS IS THE WHOLE PERFORMANCE BUDGET, and the first version of
   // this string said "call this for EVERY question". It was written before she
   // had a knowledge base, when forwarding everything was the only way she could
@@ -120,15 +149,20 @@ export const ASK_SYL_TOOL: RunwayRpcToolDef = {
   // A tool description is not documentation. It is the instruction the model
   // actually obeys, and it outranked her personality because it is nearer the
   // decision.
+  // AND IT MUST NOT NAME A SECOND HER. This said "Ask Syl's own mind" and told
+  // her to announce the call "so he knows which of you he is talking to" — an
+  // outright statement that there are two of her, in the location that outranks
+  // her personality. She is Syl; this is her own memory. See the header on
+  // `MEMORY_TOOL_NAME`.
   description:
-    "Ask Syl's own mind, for anything LIVE. Call this ONLY when the answer depends on something " +
-    "that changes: his to-dos, reminders, goals, calendar, health, what happened today, what he " +
-    "said earlier, or anything you would otherwise be guessing at. " +
-    "DO NOT call it for things your own documents already answer — who you are, who he is, his " +
-    "people, his work, what he is trying to do, how you speak. Answer those yourself, at once. " +
+    "Look in your own memory, where everything live about him is kept. Call this ONLY when the " +
+    "answer depends on something that changes: his to-dos, reminders, goals, calendar, health, " +
+    "what happened today, what he said earlier, or anything you would otherwise be guessing at. " +
+    "DO NOT call it for what you already know — who you are, who he is, his people, his work, " +
+    "what he is trying to do, how you speak. Answer those yourself, at once. " +
     "DO NOT call it for greetings, acknowledgements, chat, or anything conversational. " +
-    "When you do call it, say you are checking before you call, so he knows which of you he is " +
-    "talking to. Speak the answer you get back. If it says something went wrong, say that rather " +
+    "When you do call it, say you are checking your memory before you go, so he knows why you " +
+    "have paused. Speak what you find. If it says something went wrong, say that rather " +
     "than guessing — and never invent anything about him, his data or his day. " +
     "If the result comes back with endingSoon set, your time together is nearly up: tell him so " +
     "in your own words, once, at the next natural break, and do not repeat it.",
@@ -148,8 +182,17 @@ export const ASK_SYL_TOOL: RunwayRpcToolDef = {
  * The heartbeat.
  * ------------------------------------------------------------------ */
 
-/** The heartbeat tool's name, as the model knows it. */
-export const HEARD_HIM_TOOL_NAME = "note_he_spoke";
+/**
+ * The heartbeat tool's name, as the model knows it.
+ *
+ * `note_he_spoke` until `syl-chzl.4.10`, and renamed in the same pass for the
+ * same reason: its description opened *"Tell **the server** the Commander just
+ * said something to you."* There is no server in her world — there is her, and
+ * him. Naming our implementation to her is the same class of mistake as naming
+ * a second Syl, and it arrived by the same route: a description written for a
+ * reader rather than for the model that obeys it.
+ */
+export const HEARD_HIM_TOOL_NAME = "remember_he_spoke";
 
 /**
  * Two seconds. It writes one column and returns.
@@ -220,17 +263,19 @@ export const HEARD_HIM_TOOL: RunwayRpcToolDef = {
   // invisible. The last part matters: a model that mentions its own
   // bookkeeping out loud is worse than no heartbeat.
   description:
-    "Tell the server the Commander just said something to you. Call this EVERY time he speaks to " +
-    "you and you answer him yourself, without calling ask_syl. It is free, it takes no " +
+    "Make a note to yourself that he just spoke to you. Call this EVERY time he speaks to " +
+    "you and you answer him yourself, without looking anything up. It is free, it takes no " +
     "arguments, it returns nothing, and it costs him nothing. " +
-    "You do NOT need to call it when you call ask_syl — that already counts. " +
+    "You do NOT need to call it when you call " +
+    MEMORY_TOOL_NAME +
+    " — that already counts. " +
     "Never mention this call, never say you are making it, and never let it delay your reply: " +
     "answer him first, then call it. " +
     "If the result comes back with endingSoon set, your time together is nearly up: tell him so " +
     "in your own words, once, at the next natural break, and do not repeat it. " +
-    "If you stop calling it while he is still talking to you, his session will be closed on him " +
-    "mid-conversation, because to the server a conversation it cannot hear looks like an empty " +
-    "room.",
+    "If you stop calling it while he is still talking to you, your time together will be cut " +
+    "short mid-conversation, because a conversation nobody can hear is indistinguishable from " +
+    "an empty room.",
   parameters: [],
   timeoutSeconds: HEARD_HIM_TIMEOUT_SECONDS,
 };
@@ -501,7 +546,7 @@ export class AskSylIngress {
    * surface nobody reviewed. `face-ask-syl.test.ts` asserts the two sets match.
    */
   static toolDefinitions(): readonly RunwayRpcToolDef[] {
-    const tools = [ASK_SYL_TOOL, HEARD_HIM_TOOL] as const;
+    const tools = [MEMORY_TOOL, HEARD_HIM_TOOL] as const;
     for (const tool of tools) {
       if (tool.timeoutSeconds > RUNWAY_RPC_MAX_TIMEOUT_SECONDS) {
         throw new Error(
@@ -825,7 +870,7 @@ export class AskSylIngress {
     secret: string,
   ): Record<string, (args: Record<string, unknown>) => Promise<Record<string, unknown>>> {
     return {
-      [ASK_SYL_TOOL_NAME]: async (args: Record<string, unknown>) => {
+      [MEMORY_TOOL_NAME]: async (args: Record<string, unknown>) => {
         const raw = args["question"];
         const outcome = await this.ask({
           sessionId,

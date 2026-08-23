@@ -4,8 +4,8 @@ import { mintAskSecret } from "../../src/face/ask-credential.js";
 import {
   AskSylIngress,
   ASK_SYL_DEADLINE_MS,
-  ASK_SYL_TOOL,
-  ASK_SYL_TOOL_NAME,
+  MEMORY_TOOL,
+  MEMORY_TOOL_NAME,
   ASK_SYL_TIMEOUT_SECONDS,
   COLD_LANE_LINE,
   ENDING_SOON_LEAD_MS,
@@ -85,8 +85,8 @@ describe("AskSylIngress", () => {
 
   describe("the tool declaration", () => {
     it("should declare exactly one tool named ask_syl", () => {
-      expect(ASK_SYL_TOOL.name).toBe(ASK_SYL_TOOL_NAME);
-      expect(ASK_SYL_TOOL.type).toBe("backend_rpc");
+      expect(MEMORY_TOOL.name).toBe(MEMORY_TOOL_NAME);
+      expect(MEMORY_TOOL.type).toBe("backend_rpc");
     });
 
     it("should stay inside the provider's limits, which it rejects a create for", () => {
@@ -99,7 +99,7 @@ describe("AskSylIngress", () => {
 
     it("should declare the heartbeat tool alongside the question tool", () => {
       expect(AskSylIngress.toolDefinitions().map((tool) => tool.name)).toEqual([
-        ASK_SYL_TOOL_NAME,
+        MEMORY_TOOL_NAME,
         HEARD_HIM_TOOL_NAME,
       ]);
     });
@@ -127,7 +127,7 @@ describe("AskSylIngress", () => {
       // The durable half. Whatever else the description says about WHEN to
       // call, a face that makes something up about his life is the failure
       // that is hard to undo — she named it herself as her first hard rule.
-      expect(ASK_SYL_TOOL.description).toMatch(/never invent/i);
+      expect(MEMORY_TOOL.description).toMatch(/never invent/i);
     });
 
     it("should scope the call to LIVE things, not to every remark he makes", () => {
@@ -146,8 +146,8 @@ describe("AskSylIngress", () => {
       //
       // So the property now worth protecting is the opposite one: the
       // description must RESTRICT the call rather than demand it.
-      expect(ASK_SYL_TOOL.description).toMatch(/only when/i);
-      expect(ASK_SYL_TOOL.description).not.toMatch(/for every question/i);
+      expect(MEMORY_TOOL.description).toMatch(/only when/i);
+      expect(MEMORY_TOOL.description).not.toMatch(/for every question/i);
     });
   });
 
@@ -568,8 +568,8 @@ describe("AskSylIngress", () => {
       const gate = ingress({ answer: () => new Promise<string>(() => undefined), deadlineMs: 50 });
       const handlers = gate.handlerFor("rts_1", secret);
 
-      const first = handlers[ASK_SYL_TOOL_NAME]?.({ question: "What is on my list?" });
-      const second = await handlers[ASK_SYL_TOOL_NAME]?.({ question: "Did you get that?" });
+      const first = handlers[MEMORY_TOOL_NAME]?.({ question: "What is on my list?" });
+      const second = await handlers[MEMORY_TOOL_NAME]?.({ question: "Did you get that?" });
 
       expect(second).toEqual({ ok: false, say: STILL_THINKING_LINE, failure: "busy" });
       await first;
@@ -793,7 +793,7 @@ describe("AskSylIngress", () => {
       capPassed();
       const handlers = ingress().handlerFor("rts_1", secret);
 
-      await expect(handlers[ASK_SYL_TOOL_NAME]?.({ question: "Anything?" })).resolves.toEqual({
+      await expect(handlers[MEMORY_TOOL_NAME]?.({ question: "Anything?" })).resolves.toEqual({
         ok: false,
         say: SESSION_OVER_LINE,
         failure: "expired",
@@ -884,7 +884,7 @@ describe("AskSylIngress", () => {
         ok: true,
         endingSoon: true,
       });
-      await expect(handlers[ASK_SYL_TOOL_NAME]?.({ question: "What is on today?" })).resolves.toEqual(
+      await expect(handlers[MEMORY_TOOL_NAME]?.({ question: "What is on today?" })).resolves.toEqual(
         { ok: true, say: "Two things are due before lunch.", endingSoon: true },
       );
     });
@@ -903,7 +903,7 @@ describe("AskSylIngress", () => {
     it("should expose exactly the declared tools, and nothing else", () => {
       const handlers = ingress().handlerFor("rts_1", secret);
 
-      expect(Object.keys(handlers)).toEqual([ASK_SYL_TOOL_NAME, HEARD_HIM_TOOL_NAME]);
+      expect(Object.keys(handlers)).toEqual([MEMORY_TOOL_NAME, HEARD_HIM_TOOL_NAME]);
       // Declared and reachable must be the same set. A tool the model is told
       // about with no handler is a face that freezes; a handler nobody declared
       // is a surface nobody reviewed.
@@ -915,7 +915,7 @@ describe("AskSylIngress", () => {
     it("should answer a call from the avatar's model", async () => {
       const handlers = ingress().handlerFor("rts_1", secret);
 
-      const result = await handlers[ASK_SYL_TOOL_NAME]?.({ question: "What is on today?" });
+      const result = await handlers[MEMORY_TOOL_NAME]?.({ question: "What is on today?" });
 
       expect(result).toEqual({ ok: true, say: "Two things are due before lunch." });
     });
@@ -925,18 +925,18 @@ describe("AskSylIngress", () => {
         answer: () => Promise.reject(new Error("boom")),
       }).handlerFor("rts_1", secret);
 
-      await expect(handlers[ASK_SYL_TOOL_NAME]?.({})).resolves.toEqual(
+      await expect(handlers[MEMORY_TOOL_NAME]?.({})).resolves.toEqual(
         expect.objectContaining({ ok: false, say: NOTHING_ASKED_LINE }),
       );
       await expect(
-        handlers[ASK_SYL_TOOL_NAME]?.({ question: 42 as unknown as string }),
+        handlers[MEMORY_TOOL_NAME]?.({ question: 42 as unknown as string }),
       ).resolves.toEqual(expect.objectContaining({ ok: false }));
     });
 
     it("should refuse when bound to a credential that is not this session's", async () => {
       const handlers = ingress().handlerFor("rts_1", mintAskSecret().secret);
 
-      const result = (await handlers[ASK_SYL_TOOL_NAME]?.({ question: "Hello?" })) ?? {};
+      const result = (await handlers[MEMORY_TOOL_NAME]?.({ question: "Hello?" })) ?? {};
 
       expect(result["ok"]).toBe(false);
       expect(result["say"]).toBe("");
@@ -944,11 +944,11 @@ describe("AskSylIngress", () => {
 
     it("should stop working the moment its session is settled", async () => {
       const handlers = ingress().handlerFor("rts_1", secret);
-      expect((await handlers[ASK_SYL_TOOL_NAME]?.({ question: "Hi" }))?.["ok"]).toBe(true);
+      expect((await handlers[MEMORY_TOOL_NAME]?.({ question: "Hi" }))?.["ok"]).toBe(true);
 
       sessions.settle({ id: "rts_1", ended: "reaped", credits: 4, dollars: 0.04 });
 
-      expect((await handlers[ASK_SYL_TOOL_NAME]?.({ question: "Hi" }))?.["ok"]).toBe(false);
+      expect((await handlers[MEMORY_TOOL_NAME]?.({ question: "Hi" }))?.["ok"]).toBe(false);
     });
   });
 });
