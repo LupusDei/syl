@@ -3544,3 +3544,74 @@ ordering, the reason a decision went one way — those cannot be tests, and they
 are most of what this document and `CLAUDE.md` are for. What it kills is the
 idea that writing it down **discharges** the obligation. Write it down AND make
 something red, wherever the shape permits.
+
+## The page is DEPLOYED; the app's understanding of it is RELEASED
+
+A constraint in its own right, found on 2026-08-23 while shipping `syl-chzl.11`'s second
+measurement, and written here because it is a property of the system rather than a fact
+about that change.
+
+**`/face/live` is served by the backend.** So a backend deploy changes what the Commander's
+phone *receives*, while his phone stays exactly as it is. There is no App Store review, no
+install step, no version negotiation, and no gate of any kind between the two sides — the
+page can say a word the app has never heard, at any moment, to a device in his hand, during
+a session that is billing.
+
+That asymmetry runs one way and only one way:
+
+| | how it reaches him | how long it takes | what can stop a bad one |
+| --- | --- | --- | --- |
+| the page's **vocabulary** | `npm run deploy` | minutes | the CI gate, and nothing after it |
+| the app's **understanding** | TestFlight | hours to days, and he must install it | review, and his own choice not to update |
+
+**So the oldest app in the field is the one that has to survive every new word**, and "the
+oldest app in the field" is not a version anyone controls — he updates when he updates.
+
+Tonight this is benign: `LiveFaceModel.pageSaid` routes an unknown state to no ladder rung,
+no phrase and no failure, so it changes nothing. **But it is benign by accident of an
+earlier decision, not by policy.** Nobody chose that property as a compatibility guarantee;
+it fell out of writing a closed vocabulary defensively, and the next person adding a state
+will not know they are relying on it. Hence the rule:
+
+> **Every word in `CLIENT_STATES` must be inert on every shipped app version.** A new state
+> may be *understood* by a newer app, and it must be *safe* on an older one — meaning it
+> reaches no case in `LiveFace.failure(forPageState:detail:wasHere:)` that settles a
+> session, and no path that presents or hides her.
+
+The direction of the hazard is what makes it sharp. A word that means *"she is still here,
+and slightly bigger"* is exactly the kind that looks like it deserves a case in the fatal
+switch — and a case there hangs up on a session he is in the middle of talking to, on a
+build that shipped weeks earlier, with no way to take it back except another release.
+`resized` is pinned inert by
+`ios/SylTests/LiveFaceTests.swift:testShouldLetHerCarryOnWhenThePageMerelyRemeasuresHer`.
+
+**This is the vendor-prop guard's shape, pointed inward.** There, we hold a contract with
+someone who ships without us; here, we ship without ourselves. Both are *a contract between
+two sides where only one of them ships*, and both fail the same way — silently, with the
+sending side perfectly healthy. `syl-chzl.14` is the guard: a test that fails when a
+`CLIENT_STATES` entry has no defined behaviour on the app side.
+
+### Three smaller things worth keeping from the same change
+
+**An absence made to mean something, on purpose.** The resampler speaks only when her size
+*changes*, so a steady stream is silent — and that silence is the finding: no `resized` at
+all means the first frame *was* the stream. This whole night was one long argument about
+absences that mean nothing being read as absences that mean something (`camera_blocked` as
+an epitaph; a blank server record as either "fine" or "never happened"). Designing an
+absence to carry information is only legitimate when the alternative is bounded, which is
+why the report budget's last sample announces that it is the last: **a channel that can go
+quiet for two different reasons has no meaning left in its quiet.**
+
+**A capability nobody can reach beats one everybody is trusted not to use.** `resized`
+needed an exception to one-report-per-state, and the exception is `tellResized(detail)` — a
+function with its own hard-coded state name — rather than `tell(state, detail, repeatable)`.
+A flag is available to every future caller, and the next person wanting a chatty state would
+find the door already open. Same reasoning that keeps `autoMemoryOff()` off
+`ReaderTurnOptions`.
+
+**A test that describes HOW charges a false alarm for every refactor.** `should report her
+real size with the frame that proved it` was written as
+`toMatch(/tell\('playing',\s*frameHer\(/)` and went red the moment the value was hoisted
+into a variable so the resampler could compare against it. Behaviour identical; the
+assertion was pinned to the shape of a line. Same family as the prose problem — name the
+fact you are defending, not the syntax that currently happens to express it.
