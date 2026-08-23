@@ -1,0 +1,443 @@
+// CAPTURED, NOT WRITTEN. @runwayml/avatars-react@0.17.0
+// Source: https://registry.npmjs.org/@runwayml/avatars-react/-/avatars-react-0.17.0.tgz
+// Refresh: node backend/scripts/capture-avatar-sdk-declaration.mjs
+// Do not edit to make a test pass — see the script's header.
+import * as _livekit_components_react from '@livekit/components-react';
+import { TrackReference, TrackReferenceOrPlaceholder } from '@livekit/components-react';
+export { RoomAudioRenderer as AudioRenderer, VideoTrack, isTrackReference } from '@livekit/components-react';
+import * as react_jsx_runtime from 'react/jsx-runtime';
+import * as livekit_client from 'livekit-client';
+import { ClientEvent, SessionCredentials, ConnectResponse, ClientEventHandler, ClientToolDef, ClientToolArgs, TranscriptionEntry, TranscriptionHandler } from '@runwayml/avatars';
+export { ClientEvent, ClientEventFromTool, ClientEventHandler, ClientEventsFrom, ClientToolArgs, ClientToolDef, ConnectResponse, InferSchemaInput, InferSchemaOutput, SessionCredentials, SessionKeyResponse, SessionState, StandardSchemaIssue, StandardSchemaResult, StandardSchemaV1, TranscriptionEntry, TranscriptionHandler, clientTool, getClientToolSchema, validateClientToolArgs } from '@runwayml/avatars';
+import { ComponentPropsWithoutRef, ReactNode } from 'react';
+
+interface AvatarSessionProps<E extends ClientEvent = ClientEvent> {
+    credentials: SessionCredentials;
+    children: React.ReactNode;
+    audio?: boolean;
+    video?: boolean;
+    onEnd?: () => void;
+    onError?: (error: Error) => void;
+    onClientEvent?: ClientEventHandler<E>;
+    initialScreenStream?: MediaStream;
+    /** @internal */
+    __unstable_roomOptions?: livekit_client.RoomOptions;
+}
+interface AvatarProviderProps<E extends ClientEvent = ClientEvent> {
+    avatarId: string;
+    sessionId?: string;
+    sessionKey?: string;
+    credentials?: SessionCredentials;
+    connectUrl?: string;
+    connect?: (avatarId: string) => Promise<ConnectResponse>;
+    baseUrl?: string;
+    audio?: boolean;
+    video?: boolean;
+    onEnd?: () => void;
+    onError?: (error: Error) => void;
+    onClientEvent?: ClientEventHandler<E>;
+    children?: React.ReactNode;
+    fallback?: React.ReactNode;
+    initialScreenStream?: MediaStream;
+    /** @internal */
+    __unstable_roomOptions?: livekit_client.RoomOptions;
+}
+interface AvatarCallProps<E extends ClientEvent = ClientEvent> extends Omit<React.ComponentPropsWithoutRef<'div'>, 'onError'>, Omit<AvatarProviderProps<E>, 'fallback'> {
+    avatarImageUrl?: string;
+}
+interface UseAvatarReturn {
+    participant: livekit_client.RemoteParticipant | null;
+    videoTrackRef: _livekit_components_react.TrackReferenceOrPlaceholder | null;
+    hasVideo: boolean;
+}
+interface MediaDeviceErrors {
+    micError: Error | null;
+    cameraError: Error | null;
+    retryMic: () => Promise<void>;
+    retryCamera: () => Promise<void>;
+}
+interface UseLocalMediaReturn extends MediaDeviceErrors {
+    hasMic: boolean;
+    hasCamera: boolean;
+    isMicEnabled: boolean;
+    isCameraEnabled: boolean;
+    isScreenShareEnabled: boolean;
+    toggleMic: () => void;
+    toggleCamera: () => void;
+    toggleScreenShare: () => void;
+    localVideoTrackRef: _livekit_components_react.TrackReferenceOrPlaceholder | null;
+}
+
+declare function AvatarCall<E extends ClientEvent = ClientEvent>({ avatarId, sessionId, sessionKey, credentials: directCredentials, connectUrl, connect, baseUrl, audio, video, avatarImageUrl, onEnd, onError, onClientEvent, children, initialScreenStream, __unstable_roomOptions, ...props }: AvatarCallProps<E>): react_jsx_runtime.JSX.Element;
+
+declare function AvatarProvider<E extends ClientEvent = ClientEvent>({ avatarId, sessionId, sessionKey, credentials: directCredentials, connectUrl, connect, baseUrl, audio, video, onEnd, onError, onClientEvent, initialScreenStream, __unstable_roomOptions, fallback, children, }: AvatarProviderProps<E>): react_jsx_runtime.JSX.Element;
+
+/**
+ * AvatarSession component - the main entry point for avatar sessions
+ *
+ * Establishes a WebRTC connection and provides session state to children.
+ * This is a headless component that renders minimal DOM.
+ */
+declare function AvatarSession<E extends ClientEvent = ClientEvent>({ credentials, children, audio: requestAudio, video: requestVideo, onEnd, onError, onClientEvent, initialScreenStream, __unstable_roomOptions, }: AvatarSessionProps<E>): react_jsx_runtime.JSX.Element;
+
+/**
+ * useAvatarStatus Hook
+ *
+ * Returns a single discriminated union representing the full avatar lifecycle
+ * inside an AvatarSession. Combines session connection state and video
+ * track availability into one status value.
+ *
+ * Must be used within <AvatarCall> or <AvatarSession>.
+ *
+ * @example
+ * ```tsx
+ * function MyAvatar() {
+ *   const avatar = useAvatarStatus();
+ *
+ *   switch (avatar.status) {
+ *     case 'connecting':
+ *       return <Spinner />;
+ *     case 'waiting':
+ *       return <p>Waiting for video...</p>;
+ *     case 'ready':
+ *       return <VideoTrack trackRef={avatar.videoTrackRef} />;
+ *     case 'error':
+ *       return <p>{avatar.error.message}</p>;
+ *     case 'ended':
+ *       return <p>Call ended</p>;
+ *   }
+ * }
+ * ```
+ */
+
+type AvatarStatus = {
+    status: 'connecting';
+} | {
+    status: 'waiting';
+} | {
+    status: 'ready';
+    videoTrackRef: TrackReference;
+} | {
+    status: 'ending';
+} | {
+    status: 'ended';
+} | {
+    status: 'error';
+    error: Error;
+};
+declare function useAvatarStatus(): AvatarStatus;
+
+/** Subset of AvatarStatus relevant to the video display */
+type AvatarVideoStatus = Extract<AvatarStatus, {
+    status: 'connecting';
+} | {
+    status: 'waiting';
+} | {
+    status: 'ready';
+}>;
+interface AvatarVideoProps extends Omit<ComponentPropsWithoutRef<'div'>, 'children'> {
+    children?: (status: AvatarVideoStatus) => ReactNode;
+}
+declare function AvatarVideo({ children, ...props }: AvatarVideoProps): react_jsx_runtime.JSX.Element;
+
+interface ControlBarState {
+    isMicEnabled: boolean;
+    isCameraEnabled: boolean;
+    isScreenShareEnabled: boolean;
+    toggleMic: () => void;
+    toggleCamera: () => void;
+    toggleScreenShare: () => void;
+    endCall: () => Promise<void>;
+    isActive: boolean;
+    micError: Error | null;
+    cameraError: Error | null;
+    retryMic: () => Promise<void>;
+    retryCamera: () => Promise<void>;
+}
+interface ControlBarProps extends Omit<ComponentPropsWithoutRef<'div'>, 'children'> {
+    showMicrophone?: boolean;
+    showCamera?: boolean;
+    showScreenShare?: boolean;
+    showEndCall?: boolean;
+    children?: (state: ControlBarState) => ReactNode;
+}
+declare function ControlBar({ children, showMicrophone, showCamera, showScreenShare, showEndCall, ...props }: ControlBarProps): react_jsx_runtime.JSX.Element | null;
+
+interface PageActionsOptions {
+    /**
+     * Custom element resolver. Return `null` to skip the action.
+     * Defaults to `getElementById` then `querySelector([data-avatar-target="..."])`.
+     */
+    resolveElement?: (target: string) => Element | null;
+    /** Default highlight duration in milliseconds (default: 2000) */
+    highlightDuration?: number;
+    /** Scroll behavior passed to `scrollIntoView` (default: 'smooth') */
+    scrollBehavior?: ScrollBehavior;
+    /** Scroll block alignment passed to `scrollIntoView` (default: 'start') */
+    scrollBlock?: ScrollLogicalPosition;
+}
+/**
+ * Subscribe to built-in page-action client events (`click`, `scroll_to`,
+ * `highlight`) and execute them against the DOM.
+ *
+ * Must be rendered inside `<AvatarCall>` or `<AvatarSession>`.
+ *
+ * Prefer `<PageActions />` for the simplest integration — this hook is
+ * the lower-level escape hatch for custom composition.
+ */
+declare function usePageActions(options?: PageActionsOptions): void;
+
+/**
+ * Renders nothing visible — subscribes to built-in page-action client events
+ * (`click`, `scroll_to`, `highlight`) and executes them against the DOM.
+ *
+ * Drop this inside `<AvatarCall>` or `<AvatarSession>` alongside your other
+ * components. Pair with `pageActionTools` on the server to wire both sides.
+ *
+ * @example
+ * ```tsx
+ * import { AvatarCall, AvatarVideo, ControlBar, PageActions } from '@runwayml/avatars-react';
+ *
+ * <AvatarCall avatarId="my-avatar" connectUrl="/api/avatar/connect">
+ *   <AvatarVideo />
+ *   <ControlBar />
+ *   <PageActions />
+ * </AvatarCall>
+ * ```
+ */
+declare function PageActions(props: PageActionsOptions): null;
+
+interface ScreenShareVideoState {
+    isSharing: boolean;
+    trackRef: TrackReferenceOrPlaceholder | null;
+}
+interface ScreenShareVideoProps extends Omit<ComponentPropsWithoutRef<'div'>, 'children'> {
+    children?: (state: ScreenShareVideoState) => ReactNode;
+}
+/**
+ * Component for displaying local screen share video.
+ *
+ * Must be used within an AvatarSession or AvatarCall component.
+ */
+declare function ScreenShareVideo({ children, ...props }: ScreenShareVideoProps): react_jsx_runtime.JSX.Element | null;
+
+interface UserVideoState {
+    hasVideo: boolean;
+    isCameraEnabled: boolean;
+    trackRef: UseLocalMediaReturn['localVideoTrackRef'];
+}
+interface UserVideoProps extends Omit<ComponentPropsWithoutRef<'div'>, 'children'> {
+    mirror?: boolean;
+    children?: (state: UserVideoState) => ReactNode;
+}
+declare function UserVideo({ children, mirror, ...props }: UserVideoProps): react_jsx_runtime.JSX.Element;
+
+/**
+ * Hook to access the remote avatar participant's video track
+ *
+ * @returns Avatar participant info and video track reference
+ */
+declare function useAvatar(): UseAvatarReturn;
+
+/**
+ * Discriminated union types for type-safe session state handling
+ */
+type UseAvatarSessionReturn = {
+    state: 'idle';
+    sessionId: string;
+    error: null;
+    end: () => Promise<void>;
+} | {
+    state: 'connecting';
+    sessionId: string;
+    error: null;
+    end: () => Promise<void>;
+} | {
+    state: 'active';
+    sessionId: string;
+    error: null;
+    end: () => Promise<void>;
+} | {
+    state: 'ending';
+    sessionId: string;
+    error: null;
+    end: () => Promise<void>;
+} | {
+    state: 'ended';
+    sessionId: string;
+    error: null;
+    end: () => Promise<void>;
+} | {
+    state: 'error';
+    sessionId: string;
+    error: Error;
+    end: () => Promise<void>;
+};
+/**
+ * Hook to access the current avatar session state
+ *
+ * @returns Session state as a discriminated union
+ */
+declare function useAvatarSession(): UseAvatarSessionReturn;
+
+type EventArgs<E extends ClientEvent, T extends E['tool']> = Extract<E, {
+    tool: T;
+}>['args'];
+/**
+ * Subscribe to a single client event type.
+ *
+ * Returns the latest args as React state (`null` before the first event),
+ * and optionally fires a callback on each event for side effects.
+ *
+ * Must be used within an AvatarSession or AvatarCall component.
+ *
+ * Accepts either a tool name (legacy, with explicit event type param) or
+ * a `clientTool()` definition — the definition form infers args from the
+ * tool and runtime-validates them via the tool's Standard Schema when
+ * present.
+ *
+ * @example Tool definition (recommended)
+ * ```tsx
+ * import { z } from 'zod';
+ * const showCaption = clientTool('show_caption', {
+ *   description: 'Display a caption',
+ *   schema: z.object({ text: z.string() }),
+ * });
+ *
+ * // args is inferred as { text: string } and validated at runtime
+ * const caption = useClientEvent(showCaption, (args) => {
+ *   console.log(args.text);
+ * });
+ * ```
+ *
+ * @example Tool name (legacy)
+ * ```tsx
+ * const score = useClientEvent<TriviaEvent, 'update_score'>('update_score');
+ * ```
+ */
+declare function useClientEvent<Tool extends ClientToolDef>(tool: Tool, onEvent?: (args: ClientToolArgs<Tool>) => void): ClientToolArgs<Tool> | null;
+declare function useClientEvent<E extends ClientEvent, T extends E['tool']>(toolName: T, onEvent?: (args: EventArgs<E, T>) => void): EventArgs<E, T> | null;
+
+/**
+ * Hook to listen for all client events from the avatar.
+ *
+ * Use this hook in child components to handle client events without prop drilling.
+ * Must be used within an AvatarSession or AvatarCall component.
+ *
+ * @typeParam E - The expected event type (defaults to ClientEvent for untyped usage)
+ *
+ * @example
+ * ```tsx
+ * // Untyped usage
+ * useClientEvents((event) => {
+ *   console.log('Received:', event.tool, event.args);
+ * });
+ *
+ * // Type-safe usage with discriminated union
+ * type MyEvents =
+ *   | ClientEvent<'show_caption', { text: string }>
+ *   | ClientEvent<'play_sound', { url: string }>;
+ *
+ * useClientEvents<MyEvents>((event) => {
+ *   switch (event.tool) {
+ *     case 'show_caption':
+ *       setCaption(event.args.text); // TypeScript knows this is string
+ *       break;
+ *     case 'play_sound':
+ *       new Audio(event.args.url).play();
+ *       break;
+ *   }
+ * });
+ * ```
+ */
+declare function useClientEvents<E extends ClientEvent = ClientEvent>(handler: ClientEventHandler<E>): void;
+
+/**
+ * Hook for local media controls (mic, camera, screen share).
+ *
+ * Must be used within an AvatarSession or AvatarCall component.
+ * For use outside the session context, use AvatarSession directly
+ * and manage your own loading states.
+ */
+declare function useLocalMedia(): UseLocalMediaReturn;
+
+interface UseTranscriptOptions {
+    /** Include interim (non-final) segments. Default: `false` */
+    interim?: boolean;
+    /** Max segments to retain. Default: `100` */
+    bufferSize?: number;
+    /**
+     * Also merge transcript JSON from `RoomEvent.DataReceived` (data channel).
+     * Covers LiveKit-style `{ segments: [{ id, text, … }] }` and Runway worker
+     * `{ type: "transcription", role, turn, text }` streaming deltas
+     * (concatenated per role+turn). When a new turn starts on the same role,
+     * the prior turn is promoted to `final: true`. The active (streaming) turn
+     * is always interim and only surfaced when `interim: true`.
+     * Default: `true`.
+     */
+    mergeDataChannelSegments?: boolean;
+}
+/**
+ * Hook that returns an accumulated, deduplicated transcript from the session.
+ *
+ * Segments are upserted by `id` — when LiveKit re-sends a segment (interim →
+ * final), the existing entry is updated in-place rather than duplicated.
+ * The returned array is capped at `bufferSize` (default 100) most-recent
+ * entries to prevent unbounded growth in long sessions.
+ *
+ * Each entry includes `channel`: `native` for LiveKit `TranscriptionReceived`,
+ * or `custom` for transcript JSON on `DataReceived`.
+ *
+ * Must be used within an AvatarSession or AvatarCall component.
+ *
+ * @example
+ * ```tsx
+ * function TranscriptOverlay() {
+ *   const transcript = useTranscript();
+ *   return (
+ *     <ul>
+ *       {transcript.map((entry) => (
+ *         <li key={entry.id}>{entry.participantIdentity}: {entry.text}</li>
+ *       ))}
+ *     </ul>
+ *   );
+ * }
+ * ```
+ */
+declare function useTranscript(options?: UseTranscriptOptions): Array<TranscriptionEntry>;
+
+/**
+ * Hook to listen for transcription events from the session.
+ *
+ * Fires the handler for each transcription segment received. By default,
+ * only final segments are delivered. Pass `{ interim: true }` to also
+ * receive partial/streaming segments.
+ *
+ * Listens to both native `RoomEvent.TranscriptionReceived` and data-channel
+ * JSON (`RoomEvent.DataReceived`) so transcripts work regardless of which
+ * transport the backend uses. Each callback entry includes `channel`: `native`
+ * or `custom` accordingly.
+ *
+ * For Runway flat-delta transcripts (custom channel), the active turn is
+ * always interim and only delivered when `interim: true`. A prior turn is
+ * delivered once as `final: true` when a new turn on the same role begins.
+ *
+ * Must be used within an AvatarSession, AvatarProvider, or AvatarCall component.
+ *
+ * @example
+ * ```tsx
+ * useTranscription((entry) => {
+ *   console.log(`${entry.participantIdentity}: ${entry.text}`);
+ * });
+ *
+ * // Include interim (non-final) segments
+ * useTranscription((entry) => {
+ *   console.log(entry.final ? 'FINAL' : 'partial', entry.text);
+ * }, { interim: true });
+ * ```
+ */
+declare function useTranscription(handler: TranscriptionHandler, options?: {
+    interim?: boolean;
+}): void;
+
+export { AvatarCall, type AvatarCallProps, AvatarProvider, type AvatarProviderProps, AvatarSession, type AvatarStatus, AvatarVideo, type AvatarVideoStatus, ControlBar, type MediaDeviceErrors, PageActions, type PageActionsOptions, ScreenShareVideo, type UseTranscriptOptions, UserVideo, useAvatar, useAvatarSession, useAvatarStatus, useClientEvent, useClientEvents, useLocalMedia, usePageActions, useTranscript, useTranscription };

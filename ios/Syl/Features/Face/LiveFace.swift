@@ -46,6 +46,24 @@ enum LiveFace {
     /// without a deadline a dead session would warm invisibly, forever, at twenty cents
     /// a minute. Forty-five is comfortably past the slowest good case and well short of
     /// the point where he would give up and press again.
+    ///
+    /// ## DO NOT REMOVE THIS AS REDUNDANT NOW THAT THE SIGNALS WORK
+    ///
+    /// It looks like belt-and-braces beside `audible`, `playing` and the `connected`
+    /// grace. It is not, and the history says so with unusual force: **this backstop is
+    /// the only reason the Commander has ever seen her face at all.**
+    ///
+    /// It was added on the principle that silence must never resolve to nothing, argued
+    /// as a safety net against a *fragile* report chain. The chain was not fragile — it
+    /// was never connected. `connected` and `playing` could not fire, because the page
+    /// passed handlers `AvatarCall` does not accept (`syl-chzl.10`), so for a full day
+    /// every session on his phone was presented by this line and by nothing else.
+    ///
+    /// **A fallback justified by the wrong reason was carrying the whole feature.** That
+    /// is the argument for keeping it, not against it: the fix repaired the signals we
+    /// know about, and this is what stands behind the next vendor prop that silently does
+    /// not exist. A backstop is worth most exactly when the reasoning that motivated it
+    /// turns out to have been wrong.
     static let readyDeadline: TimeInterval = 45
 
     /// How long `playing` gets to arrive once the room is joined, before she is presented

@@ -94,6 +94,39 @@ export const FACE_PAGE_PATH = "/face";
 export const FACE_PAGE_API_BASE = "/api/v1";
 
 /**
+ * The avatar SDK this page is written against, **exactly**.
+ *
+ * ## It was unpinned, and that is what made the prop bug unfindable
+ *
+ * The three specifiers below used to say `@runwayml/avatars-react` with no
+ * version at all, so the page loaded whatever `esm.sh` called *latest* at the
+ * moment his phone asked. That is a live dependency on somebody else's release
+ * process, inside a document that costs about twenty cents a minute when it goes
+ * wrong — and there is no build step, no lockfile and no install between them
+ * and him. A vendor could change the component's prop surface overnight and the
+ * first anyone would know is a face that never appears.
+ *
+ * It also made the defect in `syl-chzl.10` structurally unprovable. `onConnected`
+ * was passed to a component that does not accept it; answering *"does this
+ * component accept this prop"* requires naming a version, and there was none to
+ * name. **A guard that reads a declaration is worth nothing unless the page is
+ * pinned to the declaration it read.**
+ *
+ * ## Changing this number is a three-step move
+ *
+ * 1. change it here,
+ * 2. re-capture the declaration —
+ *    `node backend/scripts/capture-avatar-sdk-declaration.mjs`,
+ * 3. run `face-page-vendor-props.test.ts`, which fails until the fixture's own
+ *    recorded version matches this one and every prop the page passes appears
+ *    in the new declaration.
+ *
+ * Skipping step 2 is caught, not tolerated: the fixture records the version it
+ * came from and the test compares it with this constant.
+ */
+export const RUNWAY_AVATARS_VERSION = "0.17.0";
+
+/**
  * The document. One string constant so a test can assert on what is in it
  * without going through a socket, which is how "the page carries no credential"
  * stays a property of the source rather than of one response.
@@ -119,7 +152,7 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
   moment it lands, which is still long before the SDK it styles has finished
   importing. Same origin, same file, nothing new fetched.
 -->
-<link rel="stylesheet" href="https://esm.sh/@runwayml/avatars-react/styles.css"
+<link rel="stylesheet" href="https://esm.sh/@runwayml/avatars-react@${RUNWAY_AVATARS_VERSION}/styles.css"
       media="print" onload="this.media='all'" />
 <!--
   FETCHED IN PARALLEL, EVALUATED IN ORDER.
@@ -141,7 +174,7 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
 -->
 <link rel="modulepreload" href="https://esm.sh/react@18" crossorigin />
 <link rel="modulepreload" href="https://esm.sh/react-dom@18/client" crossorigin />
-<link rel="modulepreload" href="https://esm.sh/@runwayml/avatars-react?bundle&amp;deps=react@18,react-dom@18" crossorigin />
+<link rel="modulepreload" href="https://esm.sh/@runwayml/avatars-react@${RUNWAY_AVATARS_VERSION}?bundle&amp;deps=react@18,react-dom@18" crossorigin />
 <style>
   :root { color-scheme: dark; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #070610;
@@ -436,6 +469,27 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
      * line down and looks like a diagnosis. The inner call's own failure is the
      * far likelier story and it was invisible: a rejected microphone inside a
      * device enumeration surfaces here and nowhere else.
+     *
+     * ## POSTSCRIPT: \`camera_blocked\` WAS THE LAST WORD FOR A REASON THAT HAD
+     * NOTHING TO DO WITH THIS FENCE
+     *
+     * Kept, because the wrong frame outlives the wrong answer and the next
+     * reader will otherwise re-derive it.
+     *
+     * A whole morning went into "the page goes silent after \`camera_blocked\`",
+     * looking for something that had STOPPED. Nothing had stopped. The states
+     * after that point were unreachable code — \`connected\` and \`playing\` were
+     * reported from \`onConnected\`, which \`AvatarCall\` does not accept, so
+     * \`camera_blocked\` was simply the last word the page was still CAPABLE of
+     * saying (\`syl-chzl.10\`). It was the high-water mark of a working reporter,
+     * read as the epitaph of a broken one.
+     *
+     * Everything above is still correct and still worth having — reporting an
+     * outcome rather than an intention is right on its own terms. But it was
+     * aimed at a phantom, and it is worth writing down that a silence has two
+     * explanations: **something stopped, or nothing downstream was ever wired.**
+     * The second leaves exactly the same evidence and is invisible to every
+     * instrument pointed at the first.
      */
     (function fenceTheCamera() {
       const devices = navigator.mediaDevices;
@@ -703,7 +757,7 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
       const React = (await import('https://esm.sh/react@18')).default;
       const { createRoot } = await import('https://esm.sh/react-dom@18/client');
       const { AvatarCall } = await import(
-        'https://esm.sh/@runwayml/avatars-react?bundle&deps=react@18,react-dom@18');
+        'https://esm.sh/@runwayml/avatars-react@${RUNWAY_AVATARS_VERSION}?bundle&deps=react@18,react-dom@18');
       tell('sdk_loaded');
 
       const h = React.createElement;

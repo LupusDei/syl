@@ -3143,3 +3143,62 @@ cropped, and it was reached without doing the arithmetic. The page is now full-b
 `videoWidth`/`videoHeight` off the element and sends them with `playing`. Every framing
 rule this file has ever carried was written against "Runway streams 16:9", which nobody had
 checked; the next argument about her crop gets a number off his phone instead of a comment.
+
+#### Three things that only became visible once the cause was known
+
+**The wrong frame outlives the wrong answer.** A morning went into *"the page goes silent
+after `camera_blocked`"* — looking for something that had **stopped**. Nothing had stopped.
+The states after that point were unreachable, so `camera_blocked` was the last word the
+page was still *capable* of saying: the high-water mark of a working reporter, read as the
+epitaph of a broken one. A fix shipped to make the camera fence report outcomes rather than
+intentions, which is correct on its own terms and was aimed at a phantom. **A silence has
+two explanations — something stopped, or nothing downstream was ever wired — and the second
+leaves identical evidence while being invisible to every instrument pointed at the first.**
+
+**The 45-second backstop is the only reason he has ever seen her face.** It was added that
+morning on the principle that silence must never resolve to nothing, argued as a safety net
+against a *fragile* report chain. The chain was not fragile; it was never connected. So for
+a full day every session on his phone was presented by `LiveFace.readyDeadline` and by
+nothing else. **A fallback justified by the wrong reason was carrying the entire feature.**
+That is an argument for keeping it, not for retiring it now that the real signals work — it
+is what stands behind the next vendor prop that silently does not exist, and there is now a
+note on the constant saying so, because it reads as redundant belt-and-braces beside
+`audible` and `playing`.
+
+**And the SDK was imported unpinned**, which is what made the defect structurally
+unprovable rather than merely unnoticed. `https://esm.sh/@runwayml/avatars-react?bundle…`
+resolves to whatever the CDN calls latest, so the question *"does this component accept this
+prop"* had no version to be asked about — and a page that bills twenty cents a minute had a
+live dependency on somebody else's release process with no build step, no lockfile and no
+install in between. It is pinned to `RUNWAY_AVATARS_VERSION` in all three specifiers now,
+which is the precondition for the guard below rather than a tidy-up.
+
+#### The guard: assert our props against the vendor's own declaration
+
+`backend/tests/unit/face-page-vendor-props.test.ts` reads the SDK's published `index.d.ts`
+— captured verbatim from the npm tarball by
+`backend/scripts/capture-avatar-sdk-declaration.mjs` — and asserts that every prop the page
+hands `AvatarCall` appears in the parameter list that component actually destructures.
+Membership of the *destructured* list is the bar, not of `AvatarCallProps`: a prop that
+falls into the `...props` rest is spread onto a `div`, which is harmless for `className` and
+catastrophic for a handler.
+
+Two ways it could have been worthless, both closed and both mutation-tested:
+
+- **A fixture for a version nobody runs.** The fixture records the version it came from and
+  the test compares it with the page's pin, so bumping one without re-capturing fails.
+- **A regex that matches nothing.** Every extraction asserts non-empty against a name known
+  to be present. This caught a real bug in the test's own parser on the first run — the
+  prop scan returned `[]` and the guard said so instead of passing with no work to do.
+
+Verified by mutation: reintroducing `onConnected` fails with *"the page passes `onConnected`
+and AvatarCall@0.17.0 does not destructure it — it will be spread onto a div and silently do
+nothing"*; bumping the pin without re-capturing fails; unpinning any one of the three
+specifiers fails.
+
+**This is the class, not the instance.** It is the sixth time in this epic something was
+wired to nothing, and the first time the class is catchable. The general shape it shares
+with the acceptance-helper leak found the same evening — a fake `claude` injected only when
+a test remembers to ask — is **a protection that depends on the caller getting it right**.
+Those are not protections; they are conventions with good intentions. The fix in both cases
+is to make the check structural and let it fail loudly at the boundary.
