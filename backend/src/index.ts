@@ -572,9 +572,14 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
       sessions: face.sessions,
       guard: face.guard,
       ingress: face.ingress,
+      // What the page drawing her says became of it (`0037`).
+      reports: face.reports,
       idempotency,
       authenticate,
       attachRpc: (input) => face.transport.attach(input),
+      // The runtime's own sink, so the attach line lands beside every other
+      // face line rather than on stdout. See `FaceRuntime.log`.
+      log: face.log,
     }),
   );
   // His body, as opposed to the service's. Auth is mounted on the three data
@@ -1790,10 +1795,29 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // exactly the behaviour those callers had before this line existed.
   const warmPath = options.runner === undefined;
   const commanderWarmth = (): WarmStatus | undefined => warmLanes.status(LANES.commander);
+  //
+  // AND ITS LOGGING GOES TO THE STRUCTURED LOG, WHICH IT NEVER DID BEFORE.
+  // Every face component defaults `log` to `console.info`, so until this line
+  // the entire subsystem — opened, ended, reaped, attached, warmed, refused —
+  // wrote to stdout and therefore to `launchd-core.log`, while `syl.log` and
+  // `GET /logs` (the surfaces an operator and an agent actually read) had
+  // nothing about her face in them at all. That is not a missing line, it is a
+  // missing SUBSYSTEM, and it is the mechanical reason ninety cents on
+  // 2026-08-23 could not be accounted for.
   const face = createFaceRuntime({
     db: database.handle,
     conversations: chat,
     clock,
+    ...(log === undefined
+      ? {}
+      : {
+          log: (event, fields): void => {
+            log.info(event, fields);
+          },
+          logError: (event, fields): void => {
+            log.error(event, fields);
+          },
+        }),
     ...(warmPath
       ? {
           isLaneWarm: (): boolean => commanderWarmth()?.warm === true,
@@ -1822,6 +1846,17 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
         // Through the broker, so `RunwayClient` stays the one holder of the org
         // secret and the RPC library only ever sees a room-scoped token.
         connectBackend: (sessionId) => broker.connectBackend(sessionId),
+        // Its own line, because the transport is constructed here rather than
+        // by `createFaceRuntime` and would otherwise keep its console default:
+        // `face.rpc.attached`, `connected`, `disconnected` and `error` are the
+        // four lines that say whether the avatar ever had anything to call.
+        ...(log === undefined
+          ? {}
+          : {
+              log: (event, fields): void => {
+                log.info(event, fields);
+              },
+            }),
       }),
   });
   // His date of birth, his sex and his height. Built from the GRAPH and her own

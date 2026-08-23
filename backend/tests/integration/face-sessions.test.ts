@@ -77,6 +77,8 @@ describe("the face session routes", () => {
   let face: FaceRuntime;
   let warm: boolean;
   let attached: { sessionId: string; askSecret: string }[];
+  let attachFails: boolean;
+  let faceLog: { event: string; fields: Record<string, unknown> }[];
   let messages: MessageStore;
 
   const clock = fixedClock(TEST_NOW);
@@ -84,6 +86,8 @@ describe("the face session routes", () => {
   beforeEach(async () => {
     warm = true;
     attached = [];
+    attachFails = false;
+    faceLog = [];
     runway = new FakeRunway();
     db = testDatabase();
     const deps = testDeps(db);
@@ -121,12 +125,13 @@ describe("the face session routes", () => {
       dailyCreditCeiling: 300,
       transport: {
         attach: (input) => {
+          if (attachFails) return Promise.reject(new Error("the room refused us"));
           attached.push(input);
           return Promise.resolve();
         },
         close: () => Promise.resolve(),
       },
-      log: () => undefined,
+      log: (event, fields) => faceLog.push({ event, fields }),
       logError: () => undefined,
     });
 
@@ -223,6 +228,33 @@ describe("the face session routes", () => {
       expect(attached).toHaveLength(1);
       expect(attached[0]?.sessionId).toBe("rts_1");
       expect(attached[0]?.askSecret.startsWith("syl_face_")).toBe(true);
+    });
+
+    it("should say in the log that the tool loop attached, not only that it failed", async () => {
+      await openFace();
+
+      // **The ambiguity this removes is the point.** The attach path used to
+      // log only on failure, so a healthy attach and an attach that never ran
+      // produced the same record — nothing — and on 2026-08-23 that was why
+      // nobody could say whether the avatar had ever had a tool to call. An
+      // absence that means "fine" must not look like an absence that means
+      // "never happened".
+      const line = faceLog.find((entry) => entry.event === "face.rpc.attached");
+      expect(line?.fields["sessionId"]).toBe("rts_1");
+      expect(typeof line?.fields["elapsedMs"]).toBe("number");
+    });
+
+    it("should still hand over a face whose tool loop could not attach, and say so", async () => {
+      attachFails = true;
+
+      const { status } = await openFace();
+
+      // A face that cannot answer is better than a live, billable session
+      // thrown away — and it must be loud, because from the outside a mute
+      // face and a broken one look identical.
+      expect(status).toBe(201);
+      expect(faceLog.map((entry) => entry.event)).toContain("face.rpc.attach_failed");
+      expect(faceLog.map((entry) => entry.event)).not.toContain("face.rpc.attached");
     });
 
     it("should record the session in the ledger", async () => {
@@ -494,6 +526,138 @@ describe("the face session routes", () => {
       // The clock is fixed in this test, so equality is the honest assertion;
       // the moving-clock case is covered in `face-ask-syl.test.ts`.
       expect(face.broker.shouldDisconnectIdle(face.sessions.get("rts_1")!)).toBe(false);
+    });
+  });
+
+  describe("what the page says became of it", () => {
+    /**
+     * The route that would have named the failure in one session instead of
+     * two — `0037`.
+     *
+     * 2026-08-23: two sessions, ninety cents, both reaped, `lastActivityAt`
+     * equal to `openedAt` to the millisecond on both. The cause was on the
+     * device (iOS terminated the app over an undeclared camera usage, four
+     * seconds in) and NOTHING about it reached this service. A blank record was
+     * compatible with "it worked" and with "the document never ran".
+     */
+    async function report(
+      key: string | undefined,
+      body: unknown = { state: "connected" },
+      sessionId = "rts_1",
+    ): Promise<Response> {
+      return fetch(`${running.baseUrl}${API_BASE_PATH}/face/sessions/${sessionId}/report`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(key === undefined ? {} : { authorization: `Bearer ${key}` }),
+        },
+        body: JSON.stringify(body),
+      });
+    }
+
+    it("should take a report from the key the page was given to draw her with", async () => {
+      await openFace();
+
+      const response = await report("stk_shortlived", {
+        state: "autoplay_blocked",
+        detail: "1 element paused with data ready",
+      });
+
+      // 202: a note taken about a session, not a change to one.
+      expect(response.status).toBe(202);
+      const session = face.sessions.get("rts_1");
+      expect(session?.clientState).toBe("autoplay_blocked");
+      expect(session?.clientDetail).toBe("1 element paused with data ready");
+    });
+
+    it("should never let a report keep a dead face alive", async () => {
+      await openFace();
+      const before = face.sessions.get("rts_1")?.lastActivityAt;
+
+      await report("stk_shortlived", { state: "booting" });
+
+      // **Telemetry is not activity.** A page reporting every second would
+      // otherwise hold a mute, billing face open at twenty cents a minute, and
+      // would erase the one field that diagnosed this failure at all.
+      expect(face.sessions.get("rts_1")?.lastActivityAt).toBe(before);
+    });
+
+    it("should refuse an anonymous caller with the ordinary 401", async () => {
+      await openFace();
+
+      expect((await report(undefined)).status).toBe(401);
+    });
+
+    it("should refuse a paired DEVICE token: his phone is not the page", async () => {
+      await openFace();
+
+      expect((await report(await deviceToken())).status).toBe(401);
+    });
+
+    it("should refuse the ask_syl credential, which is a different power entirely", async () => {
+      await openFace();
+      const askSecret = attached[0]?.askSecret;
+
+      // A caller holding that one can speak AS THE AVATAR and drive her turns.
+      // The two credentials on one row must never be interchangeable.
+      expect((await report(askSecret)).status).toBe(401);
+    });
+
+    it("should stop accepting reports once the session has ended", async () => {
+      await openFace();
+      face.broker.recordSessionEnd("rts_1", "closed");
+
+      // Closed with the session, structurally: the credential is a column of
+      // the row that was just settled.
+      expect((await report("stk_shortlived")).status).toBe(401);
+    });
+
+    it("should not disclose whether a session id exists", async () => {
+      await openFace();
+
+      const unknown = await report("stk_shortlived", { state: "connected" }, "rts_nosuch");
+      const wrongKey = await report("stk_nottherightone");
+
+      expect(unknown.status).toBe(401);
+      expect(wrongKey.status).toBe(401);
+    });
+
+    it("should refuse SYL's own credential, and with a 401 rather than a 400", async () => {
+      await openFace();
+      const hers = face.sessions.get("rts_1")?.askSecretHash ?? "hers";
+
+      const response = await report(hers, { state: "not a real state" });
+
+      // The ordering matters as much as the answer. A 400 here would tell a
+      // caller holding a credential this route does not accept that the route
+      // exists and what shape it wants — which is what the confinement sweep in
+      // `agent-credential.test.ts` refuses to allow on any surface.
+      expect(response.status).toBe(401);
+    });
+
+    it("should refuse a word outside the closed vocabulary", async () => {
+      await openFace();
+
+      const response = await report("stk_shortlived", { state: "everything is on fire" });
+
+      // A closed list is what stops this becoming a free-text pipe from a web
+      // view into his database. 400, not 401: it discloses nothing about the
+      // session, only that the caller used a word this route does not know.
+      expect(response.status).toBe(400);
+      expect(face.sessions.get("rts_1")?.clientState).toBeNull();
+    });
+  });
+
+  describe("one face at a time", () => {
+    it("should cut the first face when a second is opened", async () => {
+      await openFace();
+      await openFace();
+
+      // He pressed twice and got two live billable sessions 82 seconds apart,
+      // because the client-side rule died with the client. It lives on the
+      // server now: `rts_1` is settled before `rts_2` is created.
+      expect(face.sessions.get("rts_1")?.ended).toBe("closed");
+      expect(face.sessions.live().map((row) => row.id)).toEqual(["rts_2"]);
     });
   });
 

@@ -2656,3 +2656,77 @@ making a claim about the system, and it is the one kind of comment worth greppin
 "Use X instead" and "X already exists" are the same sentence, and only one of them is
 checkable. If the alternative is a verb, a route or a file, name it in backticks — a
 named thing can be searched for and found missing.
+
+### Ninety cents of a face nobody could account for (2026-08-23)
+
+Two live face sessions opened on the Commander's phone, 44 and 46 credits, $0.90, and
+both were reaped. `last_activity_at` equalled `opened_at` **to the millisecond on both
+rows**, which is the ledger saying `ask_syl` was never invoked once: she was never asked
+anything. Every server-side signal was green — the service was healthy on the expected
+commit, the sessions were created against her real avatar, the per-session credential was
+minted, the provider cap was set, `GET /face/live` answered 200 on the tailnet, esm.sh
+served the SDK, and no `face.rpc.attach_failed` was logged.
+
+**The cause was a crash, and the crash report named it exactly**: `EXC_CRASH (SIGABRT)`,
+`Termination Reason: TCC`, *"attempted to access privacy-sensitive data without a usage
+description ... must contain an NSCameraUsageDescription key"*, four seconds after the
+second session opened. The app was killed both times. Nothing was on his screen for any
+of the two minutes each session then billed.
+
+Four things are worth keeping, and only the first one is about the camera.
+
+**1. `AvatarCall` is passed `video: false` and it makes no difference, because it is not
+the avatar component asking.** Read out of the shipped bundle
+(`@runwayml/avatars-react@0.17.0`, which carries livekit-client):
+`DeviceManager.getDevices(kind)` calls `enumerateDevices()`, sees the empty labels every
+browser returns before permission is granted, and unlocks them with
+
+```js
+getUserMedia({ video: kind !== 'audioinput' && kind !== 'audiooutput',
+               audio: kind !== 'videoinput' && { deviceId: … } })
+```
+
+With no `kind`, that is `video: true`. **The camera is requested as a side effect of
+asking what the microphones are called**, and no prop on the component reaches it. So the
+fix is not a flag: `routes/face-page.ts` wraps `navigator.mediaDevices.getUserMedia`
+*before* the SDK is imported, which puts it innermost — the adapter shims the bundle
+installs wrap ours and delegate inward. Video is stripped and the strip is **reported**,
+so "does the SDK ask for the camera" is a fact in the log after one press.
+
+**2. iOS does not refuse an undeclared capture. It terminates the process.** That is why
+there was no error to catch and no state left to report, and it is why the page now
+reports `mic_requested` *before* the call rather than the outcome after it. A state
+reported after the call can never describe the failure that kills the caller. The last
+word on the row is where it died.
+
+**3. The blindness was not a missing line, it was a missing subsystem.** Every face
+component takes a `log` and defaults it to `console.info`, and `index.ts` passed **none of
+them one**. So every face event — opened, ended, reaped, warmed, refused, attached — went
+to stdout and therefore to `launchd-core.log`, while `syl.log` and `GET /logs`, the
+surfaces an operator and an agent actually read, had nothing about her face in them at
+all. This is the fourth instance of this epic's recurring defect: a complete, unit-tested
+component whose only fault is that its call site does not pass what it declares.
+`tests/integration/face-observability.test.ts` boots the real `bootstrap` and asks the
+runtime where its lines go, because no unit suite can see this and no unit suite ever
+could.
+
+**4. And the attach path only logged on FAILURE**, so a healthy attach and an attach that
+never ran produced the same record: nothing. **An absence that means "fine" and an absence
+that means "never happened" must not look the same.** That single ambiguity is why the
+diagnosis needed a crash report from the device rather than a query against our own log.
+
+The double session is the same lesson wearing the client's clothes. `LiveFaceModel` guards
+"one press is one session" correctly and **the guard is worth nothing across a crash**,
+because the object holding it does not survive one. He pressed twice, got two live
+billable sessions, and a crash loop would have opened one per attempt. `startSession` now
+cuts and settles every live session *before* it creates the next — before, not after,
+because after leaves the create-and-poll window with two meters running. A rule that lives
+only in the client stops existing exactly when the client is the thing going wrong.
+
+Finally, two clocks where there was one. The idle reaper's two minutes is right for a
+conversation that has gone quiet and wrong for a face that was never on screen, and those
+are different questions: `DEFAULT_UNCONFIRMED_TIMEOUT_MS` cuts a session whose client has
+never reported `connected` and which has never been asked anything, at 45 seconds. The
+accepted risk is stated in the code rather than hidden — a working face whose reports
+cannot reach us is cut early — and it is narrow, because the report shares an origin and a
+connection with the document it came from.

@@ -6,6 +6,7 @@ import { AskSylIngress } from "./ask-syl.js";
 import { FaceConversation } from "./face-conversation.js";
 import { FaceCostGuard, type CostModel } from "./face-cost-guard.js";
 import { FaceSessionBroker } from "./face-session-broker.js";
+import { ClientReportIngress } from "./client-report.js";
 import { FaceSessionStore } from "./face-session-store.js";
 import { IdleReaper } from "./idle-reaper.js";
 import type { RunwaySessionApi } from "./runway-client.js";
@@ -118,8 +119,22 @@ export interface FaceRuntime {
   readonly guard: FaceCostGuard;
   readonly broker: FaceSessionBroker;
   readonly ingress: AskSylIngress;
+  /** What the page drawing her says became of it. See `client-report.ts`. */
+  readonly reports: ClientReportIngress;
   readonly reaper: IdleReaper;
   readonly transport: FaceTransport;
+  /**
+   * The sink every part of the face writes to.
+   *
+   * Exposed so `routes/face.ts` writes to the SAME place as the broker, the
+   * reaper and the transport. It used to default to `console.info` in each of
+   * five constructors independently, which meant the whole subsystem wrote to
+   * stdout while `syl.log` and `GET /logs` had nothing about her face in them.
+   * One runtime, one sink, and a caller that forgets is a type error.
+   */
+  readonly log: (event: string, fields: Record<string, unknown>) => void;
+  /** The same, for the lines an operator is meant to be woken by. */
+  readonly logError: (event: string, fields: Record<string, unknown>) => void;
   /** Start the reaper and put today's spend back into the guard. */
   start(): void;
   /**
@@ -146,10 +161,23 @@ export function createFaceRuntime(options: FaceRuntimeOptions): FaceRuntime {
     ...(options.costModel === undefined ? {} : { costModel: options.costModel }),
   });
 
+  // The transport is built FROM the broker (it needs `connectBackend`) and the
+  // broker supersedes THROUGH the transport (it needs `close`). One of the two
+  // references has to be late-bound; this is it, and it is a `let` rather than
+  // a second factory because the alternative is duplicating the assembly this
+  // module exists to hold in one place.
+  let wired: FaceTransport | null = null;
+
   const broker = new FaceSessionBroker({
     guard,
     sessions,
     now: clock,
+    // One face at a time. See `FaceSessionBroker.#supersedeLive`: a second long
+    // press must end the first face rather than bill alongside it, and it must
+    // actually cut the stream before it settles the row.
+    disconnect: async (sessionId: string): Promise<void> => {
+      await wired?.close(sessionId);
+    },
     ...(options.client === undefined ? {} : { client: options.client }),
     ...(options.avatarId === undefined ? {} : { avatarId: options.avatarId }),
     ...(options.isLaneWarm === undefined ? {} : { isLaneWarm: options.isLaneWarm }),
@@ -177,6 +205,16 @@ export function createFaceRuntime(options: FaceRuntimeOptions): FaceRuntime {
     typeof options.transport === "function"
       ? options.transport({ ingress, broker })
       : (options.transport ?? NO_TRANSPORT);
+  wired = transport;
+
+  // What the page drawing her says became of it (`0037`). Built here beside the
+  // ingress it deliberately does NOT share a credential with — see
+  // `client-report.ts`.
+  const reports = new ClientReportIngress({
+    sessions,
+    now: clock,
+    ...(options.log === undefined ? {} : { log: options.log }),
+  });
 
   const reaper = new IdleReaper({
     broker,
@@ -192,8 +230,19 @@ export function createFaceRuntime(options: FaceRuntimeOptions): FaceRuntime {
     guard,
     broker,
     ingress,
+    reports,
     reaper,
     transport,
+    log:
+      options.log ??
+      ((event: string, fields: Record<string, unknown>): void => {
+        console.info(`[syl] ${event}`, fields);
+      }),
+    logError:
+      options.logError ??
+      ((event: string, fields: Record<string, unknown>): void => {
+        console.error(`[syl] ${event}`, fields);
+      }),
     start(): void {
       // Order matters: the ceiling must know what today already cost before the
       // first request can be gated against it.

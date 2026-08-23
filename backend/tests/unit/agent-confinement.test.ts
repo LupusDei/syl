@@ -441,17 +441,27 @@ describe("everything the agent scope cannot reach, swept from the router", () =>
    * it — so they are excluded from the sweep and accounted for by name here
    * instead. All three are checked below.
    *
-   * The first two are `security: []` in the contract. The third, `syl-chzl.3.5`,
-   * is not in the contract at all: it is authenticated by a credential minted
-   * per face session, which is a different system with a different lifetime and
-   * no `Principal` behind it. It gives her nothing for the strongest possible
-   * reason — its gate does not consult `api_keys`, so her key is not a wrong
-   * key there, it is not a key at all.
+   * The first two are `security: []` in the contract. The last two,
+   * `syl-chzl.3.5` and `0037`, are not in the contract at all: each is
+   * authenticated by a credential that lives on a face session row, which is a
+   * different system with a different lifetime and no `Principal` behind it.
+   * They give her nothing for the strongest possible reason — their gate does
+   * not consult `api_keys`, so her key is not a wrong key there, it is not a
+   * key at all.
+   *
+   * **Both answer 401 rather than 400 to her, and the ordering that makes that
+   * true is deliberate.** The report route validates its vocabulary only after
+   * the credential has been checked; reversed, this sweep would see a 400 and
+   * she would have learned that the route exists and what shape it wants. That
+   * is the `/logs` ordering — authenticate first, authorise second — one layer
+   * in, and it is asserted here as well as in `face-client-report.test.ts`
+   * because this sweep is where a reversal would actually be caught.
    */
   const UNAUTHENTICATED: readonly string[] = [
     "GET /health",
     "POST /auth/pair",
     "POST /face/sessions/{faceSessionId}/ask",
+    "POST /face/sessions/{faceSessionId}/report",
   ];
 
   /** Every route the app dispatches that is not hers and not unauthenticated. */

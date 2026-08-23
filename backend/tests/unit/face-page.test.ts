@@ -2,7 +2,11 @@ import type { ApiError } from "@syl/shared";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { API_BASE_PATH, createApp } from "../../src/index.js";
-import { FACE_PAGE_HTML, FACE_PAGE_PATH } from "../../src/routes/face-page.js";
+import {
+  FACE_PAGE_API_BASE,
+  FACE_PAGE_HTML,
+  FACE_PAGE_PATH,
+} from "../../src/routes/face-page.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import { startTestApp, type RunningApp } from "../helpers/http.js";
 import { testConfig, testDatabase, testDeps } from "../helpers/service.js";
@@ -119,6 +123,55 @@ describe("the live face page", () => {
     expect(response.headers.get("content-type")).toContain("application/json");
     const body = (await response.json()) as Envelope;
     expect(body.success).toBe(false);
+  });
+
+  describe("saying what became of it", () => {
+    /**
+     * The page's half of `0037`.
+     *
+     * On 2026-08-23 two face sessions billed ninety cents and produced no
+     * server-side evidence of any kind, because everything that went wrong
+     * went wrong inside a `WKWebView`. These assert the page can now say so —
+     * against the SOURCE, so a page that loses its voice is red at the module
+     * rather than on a device nobody can reproduce.
+     */
+    it("should know where to send a report", () => {
+      // A duplicated constant with a test between the copies is a
+      // correspondence check; with a comment it is how they drift. The page
+      // cannot import `API_BASE_PATH` — `index.ts` imports this module.
+      expect(FACE_PAGE_API_BASE).toBe(API_BASE_PATH);
+      expect(FACE_PAGE_HTML).toContain("/report");
+    });
+
+    it("should prove it ran before it does anything that can kill it", () => {
+      // `booting` is reported before any import, and `mic_requested` before the
+      // call that terminated the app: iOS does not refuse an undeclared capture,
+      // it kills the process, so a state reported afterwards can never describe
+      // the failure. The last word on the row is where it died.
+      const booting = FACE_PAGE_HTML.indexOf("'booting'");
+      const requested = FACE_PAGE_HTML.indexOf("'mic_requested'");
+      const firstImport = FACE_PAGE_HTML.indexOf("await import(");
+      const getUserMedia = FACE_PAGE_HTML.indexOf("getUserMedia({ audio: true");
+
+      expect(booting).toBeGreaterThan(-1);
+      expect(booting).toBeLessThan(firstImport);
+      expect(requested).toBeGreaterThan(-1);
+      expect(requested).toBeLessThan(getUserMedia);
+    });
+
+    it("should fence the camera before it loads anything that could ask for one", () => {
+      // The 2026-08-23 crash. `AvatarCall` is passed `video: false` and it
+      // makes no difference, because it is livekit-client's device manager
+      // asking — it unlocks device LABELS with `getUserMedia({video: true, …})`.
+      // No prop reaches that, so the fence is at the chokepoint instead, and it
+      // has to be installed before the SDK is imported to sit innermost.
+      const fence = FACE_PAGE_HTML.indexOf("fenceTheCamera");
+      const firstImport = FACE_PAGE_HTML.indexOf("await import(");
+
+      expect(fence).toBeGreaterThan(-1);
+      expect(fence).toBeLessThan(firstImport);
+      expect(FACE_PAGE_HTML).toContain("'camera_blocked'");
+    });
   });
 
   it("should be reachable without a bearer token", async () => {

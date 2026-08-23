@@ -198,6 +198,21 @@ const UNDECLARED: readonly string[] = [
   // This is a second door onto one gate, and the gate is what is tested —
   // `face-ask-credential.test.ts` and `face-sessions.test.ts`.
   "POST /face/sessions/{faceSessionId}/ask",
+  // `0037` — the PAGE saying what became of it, and here for exactly the same
+  // reason as the route above rather than as debt.
+  //
+  // Its caller is a `WKWebView` holding the short-lived session key it was
+  // given to draw her with. That credential lives on the session row, expires
+  // with it, and has no `Principal` — so there is nothing for a `security`
+  // block to describe, and publishing it would advertise a door no generated
+  // client can or should open. A phone holding a device token gets 401 here,
+  // and always will.
+  //
+  // The difference from `/ask` is which way it points: `/ask` is the avatar
+  // asking her something, this is the page telling us what happened to it. It
+  // exists because on 2026-08-23 ninety cents of face sessions produced no
+  // server-side evidence of any kind — see `face/client-report.ts`.
+  "POST /face/sessions/{faceSessionId}/report",
 ];
 
 /** Path parameters that are syntactically valid but name nothing. */

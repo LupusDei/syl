@@ -8,6 +8,7 @@ import {
   FaceSessionBroker,
   FaceSessionFailedError,
 } from "../../src/face/face-session-broker.js";
+import { hashSessionKey } from "../../src/face/client-report.js";
 import { FaceSessionStore } from "../../src/face/face-session-store.js";
 import type {
   CreateRealtimeSessionInput,
@@ -103,6 +104,125 @@ describe("FaceSessionBroker", () => {
       ...overrides,
     });
   }
+
+  describe("one face at a time", () => {
+    /**
+     * The second long press, and the ninety cents it cost.
+     *
+     * 2026-08-23: he pressed, saw nothing (iOS had killed the app four seconds
+     * in over an undeclared camera usage), and pressed again 82 seconds later.
+     * Two realtime sessions were live at once and **both were billing** — 44
+     * and 46 credits — and neither was ever closed by the client, because
+     * there was no client left to close them.
+     *
+     * `LiveFaceModel` guards rule 1 correctly on the phone and the guard is
+     * worth nothing across a crash: the object that holds it does not survive
+     * one. A rule that lives only in the client stops existing exactly when the
+     * client is the thing going wrong, so it lives here too.
+     */
+    it("should cut and settle a live face before opening another", async () => {
+      const cut: string[] = [];
+      const subject = broker({ disconnect: (id) => { cut.push(id); return Promise.resolve(); } });
+
+      const first = await subject.startSession();
+      runway.createResult = { id: "rts_2", status: "PENDING" };
+      runway.statuses = [{ ...READY, id: "rts_2" }];
+      const second = await subject.startSession();
+
+      expect(cut).toEqual([first.credentials.sessionId]);
+      expect(sessions.get(first.credentials.sessionId)?.ended).toBe("closed");
+      expect(sessions.live().map((row) => row.id)).toEqual([second.credentials.sessionId]);
+    });
+
+    it("should cut it BEFORE the create, so two meters never run at once", async () => {
+      const order: string[] = [];
+      const subject = broker({
+        disconnect: (id) => { order.push(`cut ${id}`); return Promise.resolve(); },
+      });
+
+      await subject.startSession();
+      runway.createResult = { id: "rts_2", status: "PENDING" };
+      runway.statuses = [{ ...READY, id: "rts_2" }];
+      const before = runway.createCalls.length;
+      await subject.startSession();
+
+      // Ordering is the property. Superseding AFTER the create leaves the
+      // window the whole fix exists to close: a create plus a poll to READY is
+      // up to thirty seconds of two sessions billing in parallel.
+      expect(order).toEqual(["cut rts_1"]);
+      expect(sessions.get("rts_1")?.closedAt).not.toBeNull();
+      expect(runway.createCalls.length).toBe(before + 1);
+    });
+
+    it("should leave a session open when its stream could not be cut", async () => {
+      const subject = broker({ disconnect: () => Promise.reject(new Error("room is gone")) });
+
+      await subject.startSession();
+      runway.createResult = { id: "rts_2", status: "PENDING" };
+      runway.statuses = [{ ...READY, id: "rts_2" }];
+      await subject.startSession();
+
+      // Same rule as the reaper's: a row marked closed while the stream runs on
+      // makes the ledger say the leak has stopped. It stays visible and the
+      // reaper takes it on its own terms.
+      expect(sessions.get("rts_1")?.closedAt).toBeNull();
+      expect(sessions.live()).toHaveLength(2);
+    });
+
+    it("should supersede nothing when it has no way to cut a stream", async () => {
+      // No `disconnect`. Settling the rows anyway would hide the second meter,
+      // which is worse than the bug — so nothing is superseded at all.
+      const subject = broker();
+
+      await subject.startSession();
+      runway.createResult = { id: "rts_2", status: "PENDING" };
+      runway.statuses = [{ ...READY, id: "rts_2" }];
+      await subject.startSession();
+
+      expect(sessions.live()).toHaveLength(2);
+    });
+
+    it("should say so in the log, with the page's last word on the row it cut", async () => {
+      const lines: { event: string; fields: Record<string, unknown> }[] = [];
+      const subject = broker({
+        disconnect: () => Promise.resolve(),
+        log: (event, fields) => lines.push({ event, fields }),
+      });
+
+      await subject.startSession();
+      sessions.recordClientState("rts_1", "mic_requested");
+      runway.createResult = { id: "rts_2", status: "PENDING" };
+      runway.statuses = [{ ...READY, id: "rts_2" }];
+      await subject.startSession();
+
+      // `closed` rather than a fifth `ended` value — SQLite cannot widen a
+      // CHECK without rebuilding the table — so the log line is what names it.
+      const line = lines.find((entry) => entry.event === "face.session.superseded");
+      expect(line?.fields).toMatchObject({ sessionId: "rts_1", clientState: "mic_requested" });
+    });
+  });
+
+  describe("the credential the page reports with", () => {
+    it("should bind the session key's hash at READY", async () => {
+      const opened = await broker().startSession();
+
+      // Only the hash touches disk, the same rule `ask_secret_hash` follows.
+      expect(sessions.get(opened.credentials.sessionId)?.sessionKeyHash).toBe(
+        hashSessionKey("stk_shortlived"),
+      );
+      expect(sessions.get(opened.credentials.sessionId)?.sessionKeyHash).not.toContain("stk_");
+    });
+
+    it("should leave a session that never readied with none", async () => {
+      runway.statuses = [{ id: "rts_1", status: "PENDING" }];
+
+      await expect(broker().startSession()).rejects.toThrow(FaceSessionFailedError);
+
+      // The provider issues no session key before READY, so there is nothing to
+      // bind — and NULL refuses every report rather than accepting a blank.
+      expect(sessions.get("rts_1")?.sessionKeyHash).toBeNull();
+    });
+  });
 
   describe("the happy path", () => {
     it("should create, charge, poll to READY and hand back browser credentials", async () => {

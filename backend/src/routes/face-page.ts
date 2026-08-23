@@ -80,6 +80,20 @@ import { Router } from "express";
 export const FACE_PAGE_PATH = "/face";
 
 /**
+ * The contract's prefix, as the PAGE has to know it.
+ *
+ * The page reports what became of it to `POST /api/v1/face/sessions/{id}/report`
+ * and therefore has to compose that path. It cannot import `API_BASE_PATH` from
+ * `index.ts` — `index.ts` imports this module, and a cycle here would be a boot
+ * failure to pay for a constant.
+ *
+ * So it is duplicated, deliberately, and `tests/unit/face-page.test.ts` asserts
+ * the two are equal. A duplicated value with a test between the copies is a
+ * correspondence check; a duplicated value with a comment is how they drift.
+ */
+export const FACE_PAGE_API_BASE = "/api/v1";
+
+/**
  * The document. One string constant so a test can assert on what is in it
  * without going through a socket, which is how "the page carries no credential"
  * stays a property of the source rather than of one response.
@@ -142,6 +156,15 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
 <div id="root"></div>
 <div id="status"><span class="spin"></span>Waking her.</div>
 <script type="module">
+  /**
+   * Where the contract lives, on this same origin.
+   *
+   * Written here rather than imported from \`index.ts\`, which would be a cycle
+   * — this module is imported BY it. \`FACE_PAGE_API_BASE\` is the constant, and
+   * \`face-page.test.ts\` asserts it equals \`API_BASE_PATH\`, so the two cannot
+   * drift silently: that is a correspondence check rather than a comment.
+   */
+  const API_BASE = ${JSON.stringify(FACE_PAGE_API_BASE)};
   const statusEl = document.getElementById('status');
   const say = (msg, isErr) => { statusEl.innerHTML = msg; statusEl.className = isErr ? 'err' : ''; };
 
@@ -149,7 +172,6 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
   // renders nothing and says nothing is the stalled face this epic forbids, and
   // the host cannot see inside the document.
   const host = (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.sylFace) || null;
-  const tell = (state, detail) => { try { host && host.postMessage({ state, detail: detail || '' }); } catch (_) {} };
 
   /**
    * The session, from the host or from the fragment. NEVER from the query
@@ -169,10 +191,127 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
   }
 
   const session = readSession();
+
+  /**
+   * SAY WHAT HAPPENED, TO THE HOST *AND* TO THE SERVER.
+   *
+   * The host channel alone was not enough and the reason is worth stating: it
+   * reaches a \`WKWebView\` delegate on his phone, which reaches nothing an
+   * operator can read. On 2026-08-23 two sessions billed ninety cents, both
+   * were reaped without a single \`ask_syl\`, and every server-side signal was
+   * green — because everything that could have gone wrong went wrong in here.
+   *
+   * \`keepalive\` so the last report survives the page being torn down, which is
+   * exactly when \`left\` is sent. Never awaited by anything that draws, and
+   * never allowed to throw: a page failing at one thing must not fail at two.
+   */
+  const reported = Object.create(null);
+  function tell(state, detail) {
+    try { host && host.postMessage({ state: state, detail: detail || '' }); } catch (_) {}
+    if (!session) return;
+    // One report per state. A retry loop or a state that fires every frame
+    // would turn telemetry into traffic, and the server refuses to let it
+    // become activity anyway — see \`FaceSessionStore.recordClientState\`.
+    if (reported[state]) return;
+    reported[state] = true;
+    try {
+      fetch(API_BASE + '/face/sessions/' + encodeURIComponent(session.sessionId) + '/report', {
+        method: 'POST',
+        keepalive: true,
+        // Joined rather than written as a literal, so the scheme and the
+        // credential never appear next to each other anywhere in this
+        // document's source — a property \`face-page.test.ts\` asserts against
+        // the module rather than against one response.
+        headers: {
+          'content-type': 'application/json',
+          'authorization': ['Bearer', session.sessionKey].join(' ')
+        },
+        body: JSON.stringify({ state: state, detail: String(detail || '').slice(0, 500) })
+      }).catch(() => {});
+    } catch (_) {}
+  }
+
   if (!session) {
     say('This page is opened by Syl, and it was opened without a session.', true);
-    tell('failed', 'no session');
+    // Reaches the host only: with no session there is nothing to report
+    // against and no credential to report with.
+    tell('no_session');
   } else {
+    // The FIRST thing that happens, before any import. Its whole job is to
+    // prove the document ran: the difference between "the SDK failed" and "the
+    // page never executed" is the difference between a CDN problem and a web
+    // view problem, and until this line they looked identical from here.
+    tell('booting', navigator.userAgent);
+
+    /**
+     * THE CAMERA FENCE. Installed before any import, and it is the fix for a
+     * crash rather than a preference.
+     *
+     * 2026-08-23: the app was TERMINATED four seconds into the session —
+     * \`EXC_CRASH (SIGABRT)\`, \`Termination Reason: TCC\`, *"attempted to access
+     * privacy-sensitive data without a usage description ... must contain an
+     * NSCameraUsageDescription key"*. Both of his attempts died the same way
+     * and he was billed ninety cents for two crashes. **iOS does not refuse an
+     * undeclared capture, it kills the process**, so there is no error to
+     * catch and no state left to report.
+     *
+     * \`AvatarCall\` is already passed \`video: false\` and it makes no
+     * difference, because it is not the avatar component asking. Read from the
+     * shipped bundle (\`@runwayml/avatars-react@0.17.0\`, which carries
+     * livekit-client): \`DeviceManager.getDevices(kind)\` calls
+     * \`enumerateDevices()\`, sees the empty labels every browser returns before
+     * permission is granted, and unlocks them with
+     *
+     *     getUserMedia({ video: kind !== 'audioinput' && kind !== 'audiooutput',
+     *                    audio: kind !== 'videoinput' && { deviceId: … } })
+     *
+     * With no \`kind\`, that is \`video: true\`. **The camera is requested as a
+     * side effect of asking what the microphones are called.** No prop reaches
+     * it and no version of \`video: false\` ever will.
+     *
+     * So it is fenced at the one chokepoint every path goes through. Wrapping
+     * \`mediaDevices.getUserMedia\` before the SDK loads puts this innermost:
+     * the adapter shims the bundle installs wrap OUR function, so they delegate
+     * inward and cannot get round it. A request that asked for video and audio
+     * proceeds with audio alone; one that asked for video ONLY is refused with
+     * a \`NotAllowedError\`, which is the shape callers already handle — and is
+     * emphatically better than the \`TypeError\` an all-false constraint throws.
+     *
+     * Every strip is REPORTED, which turns "does the SDK ask for the camera?"
+     * into a fact in the log after one press rather than an argument.
+     */
+    (function fenceTheCamera() {
+      const devices = navigator.mediaDevices;
+      if (!devices || typeof devices.getUserMedia !== 'function') return;
+      const inner = devices.getUserMedia.bind(devices);
+      devices.getUserMedia = function (constraints) {
+        const asked = constraints || {};
+        if (!asked.video) return inner(asked);
+        tell('camera_blocked', 'a media request asked for video; the page does not use a camera');
+        const audioOnly = Object.assign({}, asked, { video: false });
+        if (!audioOnly.audio) {
+          return Promise.reject(new DOMException(
+            'This page never uses the camera.', 'NotAllowedError'));
+        }
+        return inner(audioOnly);
+      };
+      // The legacy shims, for completeness. Both are documented to route into
+      // \`mediaDevices\` on modern WebKit, so this is belt rather than braces —
+      // and a belt costs four lines.
+      const legacy = navigator.getUserMedia || navigator.webkitGetUserMedia;
+      if (typeof legacy === 'function') {
+        const shim = legacy.bind(navigator);
+        const fenced = function (constraints, onOk, onErr) {
+          const asked = constraints || {};
+          if (!asked.video) return shim(asked, onOk, onErr);
+          tell('camera_blocked', 'a legacy getUserMedia asked for video');
+          return shim(Object.assign({}, asked, { video: false }), onOk, onErr);
+        };
+        try { navigator.getUserMedia = fenced; } catch (_) {}
+        try { navigator.webkitGetUserMedia = fenced; } catch (_) {}
+      }
+    })();
+
     let root = null;
 
     /**
@@ -189,6 +328,89 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
     };
     window.addEventListener('pagehide', () => { window.sylFaceLeave(); });
 
+    /**
+     * HIS HALF OF THE CALL, ASKED FOR EXPLICITLY AND BEFORE THE SDK.
+     *
+     * A conversation needs his microphone. In a \`WKWebView\` that needs the
+     * app's \`NSMicrophoneUsageDescription\`, the \`WKUIDelegate\` capture
+     * decision, and the OS prompt actually being answered — three things, any
+     * of which failing makes \`getUserMedia\` reject, which inside the SDK is
+     * indistinguishable from a face that simply never spoke.
+     *
+     * So it is asked here, where the rejection has a name, and the tracks are
+     * stopped immediately: this is a permission probe, not a capture. The
+     * failure does NOT stop the render — hearing her with no way to answer is
+     * worth more than a black screen, and she is already billing.
+     */
+    async function askForTheMicrophone() {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          tell('mic_denied', 'navigator.mediaDevices is not available in this web view');
+          return;
+        }
+        // **REPORTED BEFORE THE CALL, and that is the whole point.** iOS
+        // terminates the process for an undeclared capture rather than
+        // refusing it, so a state reported afterwards can never describe the
+        // failure that killed the caller. If this is the last word on the row,
+        // she died asking for media.
+        tell('mic_requested');
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream.getTracks().forEach((t) => { try { t.stop(); } catch (_) {} });
+        tell('mic_granted');
+      } catch (error) {
+        tell('mic_denied', (error && (error.name + ': ' + error.message)) || String(error));
+      }
+    }
+
+    /**
+     * DID ANY OF IT ACTUALLY MOVE?
+     *
+     * \`onConnected\` means the SDK joined a room. It does not mean a frame was
+     * painted or a sound was made, and on iOS those are a different question:
+     * a \`WKWebView\` blocks media that starts without a user gesture, and the
+     * long press that opens this page happens in NATIVE code — so from the web
+     * view's point of view there may have been no gesture at all. A blocked
+     * element is \`paused\` with data ready and everything else looking perfect.
+     *
+     * One \`play()\` is attempted, because that is the fix when the block is
+     * merely a missing gesture and it costs nothing when it is not. The outcome
+     * either way is reported, which is the point: \`playing\`,
+     * \`autoplay_blocked\` and \`no_media\` are three different bugs that until now
+     * produced one symptom.
+     */
+    async function watchTheMedia() {
+      for (const wait of [1200, 4000]) {
+        await new Promise((r) => setTimeout(r, wait));
+        if (!root) return;
+
+        const media = Array.from(document.querySelectorAll('#root video, #root audio'));
+        if (media.length === 0) continue;
+
+        const live = media.filter((m) => m.srcObject || m.currentSrc || m.src);
+        if (live.length === 0) continue;
+
+        const moving = live.filter((m) => !m.paused && m.readyState >= 2);
+        if (moving.length > 0) { tell('playing', live.length + ' element(s)'); return; }
+
+        const blocked = live.filter((m) => m.paused);
+        if (blocked.length > 0) {
+          let recovered = false;
+          for (const m of blocked) {
+            try { await m.play(); recovered = true; } catch (_) {}
+          }
+          if (recovered) { tell('playing', 'after an explicit play()'); return; }
+          tell('autoplay_blocked', blocked.length + ' element(s) paused with data ready');
+          say('She is here but her video will not start on this device.', true);
+          return;
+        }
+      }
+      if (root) tell('no_media', 'connected, and nothing ever played');
+    }
+
+    // Not awaited: the prompt can sit on screen for as long as he likes, and
+    // making the render wait behind it would mean a blank page while she bills.
+    void askForTheMicrophone();
+
     try {
       // SERIALLY, in this order: react first, so react-dom and avatars-react
       // resolve it from cache. Adjutant measured a parallel Promise.all here
@@ -197,9 +419,11 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
       const { createRoot } = await import('https://esm.sh/react-dom@18/client');
       const { AvatarCall } = await import(
         'https://esm.sh/@runwayml/avatars-react?bundle&deps=react@18,react-dom@18');
+      tell('sdk_loaded');
 
       const h = React.createElement;
       root = createRoot(document.getElementById('root'));
+      tell('connecting');
       root.render(h(AvatarCall, {
         sessionId: session.sessionId,
         sessionKey: session.sessionKey,
@@ -209,7 +433,7 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
         // not use is a permission prompt nobody should have to answer.
         audio: true,
         video: false,
-        onConnected: () => { say(''); tell('connected'); },
+        onConnected: () => { say(''); tell('connected'); void watchTheMedia(); },
         onDisconnected: () => { say('She has gone.'); tell('ended'); },
         onError: (e) => {
           say('Something went wrong drawing her: ' + ((e && e.message) || e), true);
@@ -221,7 +445,7 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
       // the lot. Say so — the session is already billing, and a blank screen is
       // the one outcome that tells him nothing.
       say('I could not load the parts that draw me. ' + ((error && error.message) || error), true);
-      tell('failed', String((error && error.message) || error));
+      tell('sdk_failed', String((error && error.message) || error));
     }
   }
 </script>

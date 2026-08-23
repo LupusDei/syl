@@ -60,6 +60,27 @@ export interface FaceSession {
    * opens, and anything renewing on the signal loops at twenty cents a lap.
    */
   readonly providerCapAt: string | null;
+  /**
+   * The last thing the page drawing her said about itself, or `null` when it
+   * has said nothing at all (`0037`).
+   *
+   * **`null` on a reaped session is itself the finding**: the document either
+   * never ran or could not reach us. That is a different fact from `failed`,
+   * and before this column the two were indistinguishable.
+   */
+  readonly clientState: string | null;
+  /** Whatever the page attached to {@link clientState}. Bounded, never trusted. */
+  readonly clientDetail: string | null;
+  /** When that state was reported. Deliberately NOT `lastActivityAt`. */
+  readonly clientStateAt: string | null;
+  /**
+   * SHA-256 of the short-lived `stk_…` session key, hex, or `null`.
+   *
+   * The credential a client report is checked against — see the migration for
+   * why the page's own drawing credential is reused rather than a third secret
+   * minted. `null` means no report can ever authenticate here.
+   */
+  readonly sessionKeyHash: string | null;
 }
 
 /**
@@ -69,7 +90,10 @@ export interface FaceSession {
  * route returning a `FaceSession` is a type error waiting to be caught, and a
  * column added to the row tomorrow does not silently join the response.
  */
-export type PublicFaceSession = Omit<FaceSession, "askSecretHash" | "askExpiresAt">;
+export type PublicFaceSession = Omit<
+  FaceSession,
+  "askSecretHash" | "askExpiresAt" | "sessionKeyHash"
+>;
 
 /** Opening a session in the ledger. Called after the provider create succeeded. */
 export interface OpenFaceSession {
@@ -130,11 +154,16 @@ interface FaceSessionRow {
   readonly ask_secret_hash: string;
   readonly ask_expires_at: string;
   readonly provider_cap_at: string | null;
+  readonly client_state: string | null;
+  readonly client_detail: string | null;
+  readonly client_state_at: string | null;
+  readonly session_key_hash: string | null;
 }
 
 const COLUMNS =
   "id, avatar_id, opened_at, closed_at, credits, dollars, ended, last_activity_at, " +
-  "ask_secret_hash, ask_expires_at, provider_cap_at";
+  "ask_secret_hash, ask_expires_at, provider_cap_at, client_state, client_detail, " +
+  "client_state_at, session_key_hash";
 
 function toSession(row: FaceSessionRow): FaceSession {
   return {
@@ -151,6 +180,10 @@ function toSession(row: FaceSessionRow): FaceSession {
     askSecretHash: row.ask_secret_hash,
     askExpiresAt: row.ask_expires_at,
     providerCapAt: row.provider_cap_at,
+    clientState: row.client_state,
+    clientDetail: row.client_detail,
+    clientStateAt: row.client_state_at,
+    sessionKeyHash: row.session_key_hash,
   };
 }
 
@@ -217,7 +250,8 @@ export class FaceSessionStore {
     try {
       this.#db
         .prepare(
-          `INSERT INTO face_sessions (${COLUMNS}) VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, ?, ?, NULL)`,
+          `INSERT INTO face_sessions (${COLUMNS}) ` +
+            `VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, NULL)`,
         )
         .run(
           id,
@@ -306,6 +340,56 @@ export class FaceSessionStore {
   }
 
   /**
+   * Bind the credential a client report will be checked against (`0037`).
+   *
+   * The hash of the short-lived `stk_…` key the broker is about to hand the
+   * page. Written once, at READY, because the key does not exist before then —
+   * a session that was charged for and never readied therefore keeps
+   * `session_key_hash IS NULL`, and **NULL refuses every report**, which is the
+   * safe direction for an absent credential.
+   *
+   * **Only while the session is open**, for the same reason
+   * {@link adoptProviderExpiry} is: a settled session must not have a
+   * credential brought back to life.
+   */
+  bindClientCredential(id: string, sessionKeyHash: string): void {
+    const hash = sessionKeyHash.trim();
+    if (hash === "") return;
+    this.#db
+      .prepare("UPDATE face_sessions SET session_key_hash = ? WHERE id = ? AND closed_at IS NULL")
+      .run(hash, id);
+  }
+
+  /**
+   * Record what the page drawing her last said about itself (`0037`).
+   *
+   * **This must never move `last_activity_at`, and that is the whole point of
+   * the method existing rather than the caller reusing {@link touch}.**
+   * `last_activity_at` is the idle reaper's only input and it is also the field
+   * that diagnosed the failure this column was added for — equal to `opened_at`
+   * to the millisecond on both of the Commander's ninety cents, which is how we
+   * know `ask_syl` was never invoked. A page reporting its state every second
+   * would hold a mute, billing face open forever AND erase that signal.
+   * **Telemetry is not activity.**
+   *
+   * Silent about an unknown session, like {@link touch}: the credential check
+   * is the gate, and a write that lands nowhere costs nothing.
+   */
+  recordClientState(
+    id: string,
+    state: string,
+    detail: string | null = null,
+    at: number = this.#clock(),
+  ): void {
+    this.#db
+      .prepare(
+        "UPDATE face_sessions SET client_state = ?, client_detail = ?, client_state_at = ? " +
+          "WHERE id = ?",
+      )
+      .run(state, detail, instant(at), id);
+  }
+
+  /**
    * Adopt the provider's own reported session cap as the credential's expiry.
    *
    * A session row is written the instant the create succeeds, which is before
@@ -388,7 +472,12 @@ export class FaceSessionStore {
    * has one definition sitting beside the row it strips.
    */
   publicView(session: FaceSession): PublicFaceSession {
-    const { askSecretHash: _hash, askExpiresAt: _expiry, ...rest } = session;
+    const {
+      askSecretHash: _hash,
+      askExpiresAt: _expiry,
+      sessionKeyHash: _keyHash,
+      ...rest
+    } = session;
     return rest;
   }
 }

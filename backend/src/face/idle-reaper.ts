@@ -68,6 +68,13 @@ export interface IdleReaperOptions {
    * LiveKit RPC participant and the room, which is what ends the stream.
    */
   readonly disconnect: (sessionId: string) => Promise<void>;
+  /**
+   * How long a session may go without its client ever confirming it is up.
+   *
+   * See {@link DEFAULT_UNCONFIRMED_TIMEOUT_MS}. Shorter than the ordinary idle
+   * timeout because it answers a different question.
+   */
+  readonly unconfirmedTimeoutMs?: number;
   /** How often to sweep once {@link IdleReaper.start} is called. */
   readonly intervalMs?: number;
   /** Retries after the first attempt. Default 2, so three attempts in all. */
@@ -82,6 +89,38 @@ export interface IdleReaperOptions {
 /** Default sweep interval. Well under the two-minute idle timeout. */
 export const DEFAULT_REAP_INTERVAL_MS = 30_000;
 
+/**
+ * How long a face may bill before its client has ever said it is up.
+ *
+ * **A different question from the idle timeout, which is why it has its own
+ * number.** Idle asks "has this conversation gone quiet"; two minutes is right
+ * for that, because a pause in a conversation is an ordinary thing. This asks
+ * "did a face ever appear at all", and there is no innocent version of the
+ * answer being no.
+ *
+ * The number comes from a real bill. On 2026-08-23 the app was terminated by
+ * iOS four seconds into each of two sessions — a TCC crash over an undeclared
+ * camera usage — and each one then billed for the full two-minute idle window:
+ * 44 and 46 credits, ninety cents, for two crashes. Nothing was on his screen
+ * for any of it. A crash loop would have opened one of these per attempt.
+ *
+ * 45 seconds is chosen against the create-and-connect path, not against
+ * comfort: the create plus the poll to READY is bounded at 30 seconds, and the
+ * page reports `connected` within a second or two of the stream starting. So a
+ * healthy face confirms itself with room to spare, and a face that never
+ * appears costs a third of what it used to.
+ */
+export const DEFAULT_UNCONFIRMED_TIMEOUT_MS = 45_000;
+
+/**
+ * The client states that mean a face is actually up on his screen.
+ *
+ * Anything else — including having said nothing at all — is unconfirmed. The
+ * set is deliberately the two that require frames or a live room, not the ones
+ * that merely mean the page is trying.
+ */
+const CONFIRMED_LIVE: ReadonlySet<string> = new Set(["connected", "playing"]);
+
 const DEFAULT_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 500;
 
@@ -95,6 +134,7 @@ export class IdleReaper {
   readonly #broker: ReaperBroker;
   readonly #sessions: ReaperSessions;
   readonly #disconnect: (sessionId: string) => Promise<void>;
+  readonly #unconfirmedTimeoutMs: number;
   readonly #intervalMs: number;
   readonly #retries: number;
   readonly #retryDelayMs: number;
@@ -111,6 +151,7 @@ export class IdleReaper {
     this.#broker = options.broker;
     this.#sessions = options.sessions;
     this.#disconnect = options.disconnect;
+    this.#unconfirmedTimeoutMs = options.unconfirmedTimeoutMs ?? DEFAULT_UNCONFIRMED_TIMEOUT_MS;
     this.#intervalMs = options.intervalMs ?? DEFAULT_REAP_INTERVAL_MS;
     this.#retries = options.retries ?? DEFAULT_RETRIES;
     this.#retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
@@ -180,8 +221,11 @@ export class IdleReaper {
         continue;
       }
 
-      if (!this.#broker.shouldDisconnectIdle(session)) {
-        // It spoke. Whatever went wrong before is no longer going wrong.
+      // A face nobody ever saw is cut on a shorter clock than a conversation
+      // that has gone quiet. See `#neverAppeared`.
+      if (!this.#broker.shouldDisconnectIdle(session) && !this.#neverAppeared(session)) {
+        // It spoke, or it is up and simply quiet. Whatever went wrong before is
+        // no longer going wrong.
         this.#failures.delete(session.id);
         continue;
       }
@@ -213,6 +257,40 @@ export class IdleReaper {
    * reading it here would make the NULL case unreachable and the bug above
    * unavoidable. This module had exactly that defect.
    */
+  /**
+   * Has this face been billing for {@link DEFAULT_UNCONFIRMED_TIMEOUT_MS}
+   * without its client ever saying it is up?
+   *
+   * Three conditions, all of which must hold, and each one is there to stop
+   * this from cutting something that works:
+   *
+   * - **No `ask_syl` has ever landed.** `lastActivityAt` still equals
+   *   `openedAt`, which is the exact signature of the two sessions this exists
+   *   for. One question asked is proof of life and takes the session straight
+   *   back onto the ordinary two-minute clock.
+   * - **The client has never reported `connected` or `playing`.** The page says
+   *   so within a second or two of the stream starting, over the same origin it
+   *   was just fetched from.
+   * - **It has been open longer than the grace window.**
+   *
+   * The accepted risk is stated rather than hidden: a face that genuinely works
+   * while its reports cannot reach us is cut at 45 seconds. That path is
+   * narrow — the report shares an origin and a connection with the document —
+   * and the failure it replaces is a crashed app billing twenty cents a minute
+   * at nobody.
+   */
+  #neverAppeared(session: FaceSession): boolean {
+    if (session.clientState !== null && CONFIRMED_LIVE.has(session.clientState)) return false;
+
+    const opened = parseInstant(session.openedAt);
+    const last = parseInstant(session.lastActivityAt);
+    if (opened === null) return false;
+    // Any activity at all is proof of life, whatever the client said.
+    if (last !== null && last > opened) return false;
+
+    return this.#now() - opened >= this.#unconfirmedTimeoutMs;
+  }
+
   #isPastCap(session: FaceSession): boolean {
     if (session.providerCapAt === null) return false;
     const cap = parseInstant(session.providerCapAt);
@@ -247,6 +325,7 @@ export class IdleReaper {
     // while the stream runs on is the leak wearing the guard's uniform.
     this.#logError("face.session.reap_failed", {
       sessionId: session.id,
+      clientState: session.clientState,
       attempts,
       consecutiveFailures,
       idleMs: this.#idleMsOf(session),
@@ -277,6 +356,15 @@ export class IdleReaper {
 
     this.#log(ended === "reaped" ? "face.session.reaped" : "face.session.expired", {
       sessionId: session.id,
+      // WHY it had no activity, from the row (`0037`). A reap used to report
+      // only that nothing had been said, which is a symptom with a dozen
+      // causes; this is the page's own last word about itself, and `null` here
+      // is itself a finding — the document never ran or could not reach us.
+      clientState: session.clientState,
+      clientDetail: session.clientDetail,
+      // Which clock cut it. A face nobody ever saw and a conversation that went
+      // quiet are two different findings settled into the same `reaped` row.
+      neverAppeared: this.#neverAppeared(session),
       idleMs: this.#idleMsOf(session),
       elapsedSeconds: Math.round(meter.elapsedSeconds),
       credits: meter.credits,

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FaceCostGuard } from "../../src/face/face-cost-guard.js";
 import { FaceSessionBroker } from "../../src/face/face-session-broker.js";
 import { FaceSessionStore } from "../../src/face/face-session-store.js";
-import { IdleReaper } from "../../src/face/idle-reaper.js";
+import { DEFAULT_UNCONFIRMED_TIMEOUT_MS, IdleReaper } from "../../src/face/idle-reaper.js";
 import type {
   CreateRealtimeSessionInput,
   LiveKitConnectCreds,
@@ -52,6 +52,7 @@ describe("IdleReaper", () => {
   const clock: Clock = () => now;
 
   const IDLE_TIMEOUT_MS = 120_000;
+  const UNCONFIRMED_TIMEOUT_MS = DEFAULT_UNCONFIRMED_TIMEOUT_MS;
 
   beforeEach(() => {
     now = Date.parse("2026-08-21T12:00:00.000Z");
@@ -103,12 +104,101 @@ describe("IdleReaper", () => {
 
     it("should leave an active session alone", async () => {
       const opened = await broker.startSession();
+      // A face that is genuinely up SAYS SO (`0037`). Without this the session
+      // has never been confirmed by anything and is cut on the shorter clock
+      // below — which is the whole point of that clock, and is why this test
+      // now has to describe an active session rather than merely a young one.
+      sessions.recordClientState(opened.credentials.sessionId, "connected");
       now += IDLE_TIMEOUT_MS - 1;
 
       const report = await reaper().sweep();
 
       expect(report.reaped).toEqual([]);
       expect(sessions.get(opened.credentials.sessionId)?.closedAt).toBeNull();
+    });
+
+    describe("a face that never appeared", () => {
+      /**
+       * The ninety cents, in a test.
+       *
+       * 2026-08-23: iOS terminated the app four seconds into each of two
+       * sessions — a TCC crash over an undeclared camera usage — and each one
+       * then billed for the FULL two-minute idle window at nobody. 44 and 46
+       * credits. The idle clock is right for a conversation that has gone
+       * quiet and wrong for a face that was never on screen, so those are now
+       * two clocks.
+       */
+      it("should cut it well before the idle timeout", async () => {
+        const opened = await broker.startSession();
+        // Exactly the shape of both rows: the page never confirmed anything,
+        // and `ask_syl` never landed, so `lastActivityAt` still equals
+        // `openedAt` to the millisecond.
+        now += UNCONFIRMED_TIMEOUT_MS;
+
+        const report = await reaper().sweep();
+
+        expect(report.reaped).toEqual([opened.credentials.sessionId]);
+        expect(now - Date.parse(sessions.get(opened.credentials.sessionId)?.openedAt ?? "")).toBeLessThan(
+          IDLE_TIMEOUT_MS,
+        );
+      });
+
+      it("should give it the grace window first, rather than cutting on sight", async () => {
+        await broker.startSession();
+        now += UNCONFIRMED_TIMEOUT_MS - 1;
+
+        // The create plus the poll to READY is bounded at thirty seconds, so a
+        // window shorter than the connect path would cut faces that were
+        // simply still arriving.
+        expect((await reaper().sweep()).reaped).toEqual([]);
+      });
+
+      it("should stop applying the moment the page says she is up", async () => {
+        const opened = await broker.startSession();
+        sessions.recordClientState(opened.credentials.sessionId, "connected");
+        now += UNCONFIRMED_TIMEOUT_MS;
+
+        expect((await reaper().sweep()).reaped).toEqual([]);
+      });
+
+      it("should stop applying the moment she is asked anything", async () => {
+        const opened = await broker.startSession();
+        // One question is proof of life whatever the client said — a page whose
+        // reports cannot reach us, over a face that plainly works.
+        now += 1_000;
+        sessions.touch(opened.credentials.sessionId, now);
+        now += UNCONFIRMED_TIMEOUT_MS - 1_000;
+
+        expect((await reaper().sweep()).reaped).toEqual([]);
+      });
+
+      it("should still be cut when the page reported only that it was trying", async () => {
+        const opened = await broker.startSession();
+        // The crash signature exactly: the document ran, asked for media, and
+        // the process was killed. `booting` is not `connected`.
+        sessions.recordClientState(opened.credentials.sessionId, "mic_requested");
+        now += UNCONFIRMED_TIMEOUT_MS;
+
+        expect((await reaper().sweep()).reaped).toEqual([opened.credentials.sessionId]);
+      });
+
+      it("should say on the reap line which clock cut it, and what the page last said", async () => {
+        const lines: { event: string; fields: Record<string, unknown> }[] = [];
+        const opened = await broker.startSession();
+        sessions.recordClientState(opened.credentials.sessionId, "mic_requested", "about to ask");
+        now += UNCONFIRMED_TIMEOUT_MS;
+
+        await reaper({ log: (event, fields) => lines.push({ event, fields }) }).sweep();
+
+        // A reap used to report only that nothing had been said, which is a
+        // symptom with a dozen causes. This is the page's own last word.
+        const reaped = lines.find((line) => line.event === "face.session.reaped");
+        expect(reaped?.fields).toMatchObject({
+          clientState: "mic_requested",
+          clientDetail: "about to ask",
+          neverAppeared: true,
+        });
+      });
     });
 
     it("should not reap a session that went quiet and then spoke again", async () => {

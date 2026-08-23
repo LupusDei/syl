@@ -304,4 +304,81 @@ describe("FaceSessionStore", () => {
       expect(JSON.stringify(sessions.publicView(opened))).not.toContain("hash-of-rts_one");
     });
   });
+
+  describe("what the page drawing her said about itself", () => {
+    it("should record the state, the detail and when it was said", () => {
+      open();
+      now += 3_000;
+
+      sessions.recordClientState("rts_one", "autoplay_blocked", "1 element paused");
+
+      const session = sessions.get("rts_one");
+      expect(session?.clientState).toBe("autoplay_blocked");
+      expect(session?.clientDetail).toBe("1 element paused");
+      expect(session?.clientStateAt).toBe("2026-08-21T12:00:03.000Z");
+    });
+
+    it("should start NULL, because saying nothing is itself a finding", () => {
+      const opened = open();
+
+      // `null` on a reaped session means the document either never ran or could
+      // not reach us — a different fact from `failed`, and before `0037` the
+      // two were indistinguishable.
+      expect(opened.clientState).toBeNull();
+      expect(opened.clientStateAt).toBeNull();
+    });
+
+    it("should NEVER move lastActivityAt", () => {
+      const opened = open();
+      now += 90_000;
+
+      sessions.recordClientState("rts_one", "connected");
+
+      // **The load-bearing separation.** `last_activity_at` is the idle
+      // reaper's only input, so a page reporting its state would otherwise hold
+      // a mute, billing face open at twenty cents a minute forever. It is also
+      // the field that diagnosed the 2026-08-23 failure — equal to `opened_at`
+      // to the millisecond on both rows, which is how we know `ask_syl` was
+      // never invoked. Telemetry is not activity.
+      expect(sessions.get("rts_one")?.lastActivityAt).toBe(opened.lastActivityAt);
+    });
+
+    it("should ignore a report for a session it has never heard of", () => {
+      expect(() => sessions.recordClientState("rts_nobody", "booting")).not.toThrow();
+    });
+  });
+
+  describe("the credential the page reports with", () => {
+    it("should keep only the hash, on the session row, so it dies with the session", () => {
+      open();
+
+      sessions.bindClientCredential("rts_one", "hash-of-the-session-key");
+
+      expect(sessions.get("rts_one")?.sessionKeyHash).toBe("hash-of-the-session-key");
+    });
+
+    it("should start NULL, so a session that never readied refuses every report", () => {
+      expect(open().sessionKeyHash).toBeNull();
+    });
+
+    it("should refuse to bind one onto a session that has already ended", () => {
+      open();
+      sessions.settle({ id: "rts_one", ended: "closed", credits: 4, dollars: 0.04 });
+
+      sessions.bindClientCredential("rts_one", "hash-of-the-session-key");
+
+      // Same rule as the expiry: a settled session must not have a credential
+      // brought back to life.
+      expect(sessions.get("rts_one")?.sessionKeyHash).toBeNull();
+    });
+
+    it("should never expose it through the shape handed to a client", () => {
+      open();
+      sessions.bindClientCredential("rts_one", "hash-of-the-session-key");
+      const bound = sessions.get("rts_one");
+      if (bound === null) throw new Error("the session vanished");
+
+      expect(JSON.stringify(sessions.publicView(bound))).not.toContain("hash-of-the-session-key");
+    });
+  });
 });

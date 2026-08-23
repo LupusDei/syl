@@ -2,6 +2,7 @@ import { parseInstant, systemClock, type Clock } from "../services/clock.js";
 import { systemEntropy, type Entropy } from "../services/id.js";
 import { mintAskSecret } from "./ask-credential.js";
 import { AskSylIngress } from "./ask-syl.js";
+import { hashSessionKey } from "./client-report.js";
 import type { FaceCostGuard, SessionMeter } from "./face-cost-guard.js";
 import type {
   FaceSession,
@@ -218,6 +219,15 @@ export interface FaceSessionBrokerOptions {
    * wants: there is no warm process for anything to be warm about.
    */
   readonly warmLane?: () => Promise<unknown>;
+  /**
+   * Actually cut a session's stream — `transport.close`.
+   *
+   * Used by {@link FaceSessionBroker.startSession} to supersede a face that is
+   * already open. Optional, and its absence is not a no-op that pretends to
+   * work: without it nothing is superseded at all, because settling a row while
+   * the stream runs on is the leak wearing the guard's uniform.
+   */
+  readonly disconnect?: (sessionId: string) => Promise<void>;
   readonly pollIntervalMs?: number;
   readonly timeoutMs?: number;
   readonly renewLeadMs?: number;
@@ -236,6 +246,7 @@ export class FaceSessionBroker {
   readonly #tools: readonly RunwayRpcToolDef[];
   readonly #isLaneWarm: (() => boolean) | null;
   readonly #warmLane: (() => Promise<unknown>) | null;
+  readonly #disconnect: ((sessionId: string) => Promise<void>) | null;
   readonly #pollIntervalMs: number;
   readonly #timeoutMs: number;
   readonly #renewLeadMs: number;
@@ -253,6 +264,7 @@ export class FaceSessionBroker {
     this.#tools = options.tools ?? [AskSylIngress.toolDefinition()];
     this.#isLaneWarm = options.isLaneWarm ?? null;
     this.#warmLane = options.warmLane ?? null;
+    this.#disconnect = options.disconnect ?? null;
     this.#pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_CREATE_TIMEOUT_MS;
     this.#renewLeadMs = options.renewLeadMs ?? DEFAULT_RENEW_LEAD_MS;
@@ -347,6 +359,11 @@ export class FaceSessionBroker {
       );
     }
 
+    // 1b. ONE FACE AT A TIME. Everything still open is cut and settled BEFORE
+    //     anything new is created, so at no instant are two meters running.
+    //     See `#supersedeLive` for why it is before the create and not after.
+    await this.#supersedeLive();
+
     // 2. Mint the credential BEFORE the create, so the row can be written with
     //    it in one insert. A session that exists with no credential is a
     //    session whose ingress cannot authenticate anybody.
@@ -385,6 +402,11 @@ export class FaceSessionBroker {
     // credential's floor written above is replaced by the real thing now.
     const cap = ready.expiresAt === undefined ? Number.NaN : Date.parse(ready.expiresAt);
     if (!Number.isNaN(cap)) this.#sessions.adoptProviderExpiry(sessionId, cap);
+
+    // The page's own credential, hashed (`0037`). It exists only from here —
+    // the provider does not issue a session key before READY — which is why a
+    // session that never readied can never accept a client report.
+    this.#sessions.bindClientCredential(sessionId, hashSessionKey(ready.sessionKey));
 
     const session = this.#sessions.get(sessionId);
     if (session === null) throw new Error(`face session ${sessionId} vanished after open`);
@@ -512,6 +534,73 @@ export class FaceSessionBroker {
   }
 
   // ------------------------------------------------------------- internals ---
+
+  /**
+   * One face at a time — the fix for the second long press.
+   *
+   * ## What happened
+   *
+   * 2026-08-23: he pressed, saw nothing, and pressed again 82 seconds later.
+   * Two realtime sessions were live at once and **both were billing**, 44 and
+   * 46 credits, and neither was ever closed by the client — the idle reaper
+   * found them both two minutes in. `LiveFaceModel` guards rule 1 correctly on
+   * the phone, and the guard is worth nothing across a crash, a force-quit or a
+   * relaunch, because the model that holds it does not survive any of them. A
+   * rule that only exists in the client is a rule that stops existing exactly
+   * when the client is the thing going wrong.
+   *
+   * ## Why "replace" and not "join"
+   *
+   * There is nothing to join. A realtime session's `sessionKey` is short-lived
+   * and handed out once at READY; it is not stored, and the provider offers no
+   * second issue of it. So the honest maximum is that opening a face *ends*
+   * whatever face was open, which is also what a second long press means.
+   *
+   * ## Why BEFORE the create and not after
+   *
+   * Because after leaves a window — the create plus the poll to READY, up to
+   * thirty seconds — during which two meters run, and the whole point is that
+   * they never do. The cost is real and it is accepted: if the create then
+   * fails he has lost a face he already had. That face was one he had just
+   * asked to replace, and he gets a refusal sentence rather than silence.
+   *
+   * ## A cut that fails does NOT settle the row
+   *
+   * Same rule as the reaper's, for the same reason: a row marked closed while
+   * the stream runs on makes the ledger say the leak has stopped. It is logged
+   * loudly, left open, and the reaper picks it up on its own terms.
+   */
+  async #supersedeLive(): Promise<void> {
+    // With no way to cut a stream there is nothing honest to do here. Settling
+    // the rows would only hide the second meter, which is worse than the bug.
+    if (this.#disconnect === null) return;
+
+    for (const other of this.#sessions.live()) {
+      try {
+        await this.#disconnect(other.id);
+      } catch (error) {
+        this.#log("face.session.supersede_failed", {
+          sessionId: other.id,
+          error: error instanceof Error ? error.message : String(error),
+          note: "still open and still billing; left for the reaper",
+        });
+        continue;
+      }
+
+      // `closed` rather than a fifth `ended` value: SQLite cannot widen a
+      // CHECK without rebuilding the table, and the distinction that matters —
+      // reaped from closed — is untouched. The log line below is what names
+      // this one, with both ids on it.
+      const settled = this.recordSessionEnd(other.id, "closed").settled;
+      if (settled) {
+        this.#log("face.session.superseded", {
+          sessionId: other.id,
+          clientState: other.clientState,
+          note: "a second face was opened, so this one was cut before it could bill alongside it",
+        });
+      }
+    }
+  }
 
   #elapsedMs(session: Pick<FaceSession, "openedAt">): number {
     const openedAt = parseInstant(session.openedAt);

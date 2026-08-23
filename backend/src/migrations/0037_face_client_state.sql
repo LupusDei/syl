@@ -1,0 +1,57 @@
+-- 0037_face_client_state.sql — what happened to her face on the CLIENT.
+--
+-- ## The failure this exists for
+--
+-- On 2026-08-23 two face sessions opened on the Commander's phone, ninety
+-- cents' worth, and both were reaped. `last_activity_at` equalled `opened_at`
+-- to the millisecond on both rows: `ask_syl` was never invoked once, so she was
+-- never asked anything. The service was healthy, the sessions were real, the
+-- credentials were minted, the page returned 200 over the tailnet — and nobody
+-- could say what happened after that, because everything downstream of
+-- `POST /face/sessions` happens inside a `WKWebView` and the server cannot see
+-- in.
+--
+-- Three columns, so a reaped session can say WHY it had no activity instead of
+-- leaving `last_activity_at` as the only clue. Observability is a first
+-- principle here, not a later phase, and a face that cannot be inspected cannot
+-- be fixed — every guess costs another ninety cents.
+--
+-- ## Why the state is a column and not only a log line
+--
+-- Both. The log is the narrative; this is the answer to "what was the last
+-- thing that session knew about itself", asked of the row that the reaper is
+-- about to settle. The reaper reads the row and nothing else, so the reason has
+-- to be on the row for the reap line to carry it — and the ledger is what
+-- survives a log rotation.
+--
+-- ## `session_key_hash`, and why there is no NEW credential
+--
+-- The page must be able to report, and it must be the only thing that can.
+-- Minting a third per-session secret was rejected: the page already holds one.
+-- `session_key` is the short-lived `stk_…` the broker hands it to draw her
+-- with, so **whoever can draw her face may say what happened to it**, and
+-- nobody else can. No new field goes outward, no second secret exists to leak,
+-- and it dies with the session exactly as the ask credential does.
+--
+-- Only the SHA-256 is stored, the same rule `api_keys` and `ask_secret_hash`
+-- follow: a copy of `syl.db` must contain nothing presentable to the service.
+--
+-- NULLABLE, and that is not laziness. The key is only known once the provider
+-- reports READY, so a session that was charged for and never readied has none —
+-- and rows that predate this migration have none either. **NULL means no client
+-- report can ever authenticate against this session**, which is the safe
+-- direction: the verifier refuses rather than accepting a blank.
+--
+-- ## What must NOT happen here
+--
+-- A client report **must never move `last_activity_at`**. That column is the
+-- idle reaper's whole input, and it is also the field that diagnosed this
+-- failure. A page that reported its state every second would hold a mute,
+-- billing face open at twenty cents a minute forever, and would erase the one
+-- signal that says she was never asked anything. Telemetry is not activity.
+-- `FaceSessionStore.recordClientState` has a test named for it.
+
+ALTER TABLE face_sessions ADD COLUMN client_state TEXT;
+ALTER TABLE face_sessions ADD COLUMN client_detail TEXT;
+ALTER TABLE face_sessions ADD COLUMN client_state_at TEXT;
+ALTER TABLE face_sessions ADD COLUMN session_key_hash TEXT;

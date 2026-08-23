@@ -1,6 +1,7 @@
 import { Router, type Request, type RequestHandler } from "express";
 
 import { AskSylIngress } from "../face/ask-syl.js";
+import { CLIENT_STATES, type ClientReportIngress } from "../face/client-report.js";
 import type { FaceCostGuard } from "../face/face-cost-guard.js";
 import {
   FaceColdLaneError,
@@ -27,6 +28,7 @@ import { runIdempotent, runIdempotentAsync, sendIdempotent } from "./idempotency
  * GET    /face/sessions/{id}         bearer  its state, its meter, the day's spend
  * DELETE /face/sessions/{id}         bearer  close it and settle the accounting
  * POST   /face/sessions/{id}/ask     PER-SESSION CREDENTIAL — the ask_syl ingress
+ * POST   /face/sessions/{id}/report  THE PAGE'S OWN KEY — what became of it
  * ```
  *
  * ## The three client routes
@@ -71,6 +73,25 @@ import { runIdempotent, runIdempotentAsync, sendIdempotent } from "./idempotency
  * door exists as a second transport sharing one gate, and it needs no inbound
  * exposure of its own: it lives on the tailnet like everything else, and no
  * Tailscale Funnel has been opened for it.
+ *
+ * ## The fifth route, and why it had to exist
+ *
+ * `POST /face/sessions/{id}/report` is the PAGE saying what became of it, and
+ * it is the answer to ninety cents nobody could account for — see
+ * `face/client-report.ts` for the failure and `0037` for the columns. It is
+ * registered beside `/ask` and in front of the bearer middleware for the same
+ * reason: its caller is a `WKWebView` that must never hold a device token.
+ *
+ * Its credential is **not** the ask credential. It is the short-lived session
+ * key the page was already given to draw her with, so whoever can draw her face
+ * may say what happened to it, and a page that somehow leaked it has leaked the
+ * ability to write one word from a closed list onto a row it is already
+ * paying for.
+ *
+ * It is deliberately not a telemetry surface: one route, one session, a closed
+ * vocabulary, a bounded detail string, and no way to move a meter. It closes
+ * when the session settles, structurally, because the credential is a column of
+ * the session.
  */
 
 /** Longest question the ingress will accept, in characters. */
@@ -89,6 +110,12 @@ export interface FaceRouterOptions {
   readonly sessions: FaceSessionStore;
   readonly guard: FaceCostGuard;
   readonly ingress: AskSylIngress;
+  /**
+   * What the page drawing her says became of it. Optional, because every
+   * caller that predates `0037` built this router without one — and its
+   * absence is a 404 on the report route rather than a silent accept.
+   */
+  readonly reports?: ClientReportIngress;
   readonly idempotency: IdempotencyStore;
   readonly authenticate: RequestHandler;
   /**
@@ -185,9 +212,53 @@ export function createFaceRouter(options: FaceRouterOptions): Router {
       .catch(next);
   });
 
+  // ---------------------------------------------------------------------
+  // THE PAGE'S DOOR. Registered here for exactly the reason the one above is:
+  // its caller is the `WKWebView` drawing her, which holds the session key and
+  // must never hold a device token. See the header, and `client-report.ts`.
+  // ---------------------------------------------------------------------
+  if (options.reports !== undefined) {
+    const reports = options.reports;
+    router.post("/face/sessions/:faceSessionId/report", (request, response, next) => {
+      const rawId = request.params["faceSessionId"];
+      const sessionId = typeof rawId === "string" ? rawId : "";
+      const secret = bearerToken(request.headers.authorization);
+      if (secret === null) {
+        next(unauthorized());
+        return;
+      }
+
+      const body: unknown = request.body;
+      const fields = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+
+      const outcome = reports.report({
+        sessionId,
+        secret,
+        state: fields["state"],
+        detail: fields["detail"],
+      });
+
+      if (!outcome.ok && outcome.reason === "unknown_state") {
+        throw new ApiFailure("VALIDATION_FAILED", outcome.message, {
+          details: { field: "state", reason: `one of: ${CLIENT_STATES.join(", ")}` },
+        });
+      }
+      if (!outcome.ok) {
+        // The same indistinguishable 401 as everywhere else. A page that has
+        // lost its credential learns nothing about why.
+        next(unauthorized());
+        return;
+      }
+
+      // 202, not 200: this is a note taken about a session, not a change to
+      // one. Nothing the caller can read back and nothing it should retry.
+      sendOk(response, { recorded: outcome.state }, 202);
+    });
+  }
+
   // Order is the security property, exactly as in `routes/logs.ts`: everything
-  // registered BELOW this line requires a token, and the one route above it is
-  // the documented exception.
+  // registered BELOW this line requires a token, and the two routes above it
+  // are the documented exceptions.
   router.use("/face", authenticate);
 
   // ---------------------------------------------------------------------
@@ -202,17 +273,36 @@ export function createFaceRouter(options: FaceRouterOptions): Router {
       // and the session is still handed over — a face that cannot answer is
       // better than a face that was paid for and thrown away.
       if (options.attachRpc) {
+        // **LOGGED ON SUCCESS TOO, and that is the point of this block.** It
+        // used to log only the failure, which made a healthy attach and an
+        // attach that never ran indistinguishable in the record — and on
+        // 2026-08-23 that ambiguity was the reason nobody could say whether
+        // the avatar had ever had a tool to call. An absence that means "fine"
+        // must not look like an absence that means "never happened".
+        const startedAt = Date.now();
         try {
           await options.attachRpc({
             sessionId: opened.credentials.sessionId,
             askSecret: opened.askSecret,
           });
+          log("face.rpc.attached", {
+            sessionId: opened.credentials.sessionId,
+            elapsedMs: Date.now() - startedAt,
+          });
         } catch (error) {
           log("face.rpc.attach_failed", {
             sessionId: opened.credentials.sessionId,
+            elapsedMs: Date.now() - startedAt,
             error: error instanceof Error ? error.message : String(error),
           });
         }
+      } else {
+        // No transport at all. The face will open and be mute, and a line
+        // saying so is worth more than the silence that used to stand for it.
+        log("face.rpc.not_attached", {
+          sessionId: opened.credentials.sessionId,
+          note: "no transport is wired, so the avatar has no ask_syl to call",
+        });
       }
 
       // `credentials` and nothing else. The per-session credential is for the
