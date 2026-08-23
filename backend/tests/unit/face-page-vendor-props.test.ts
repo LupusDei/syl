@@ -116,20 +116,11 @@ describe("the props the page hands the avatar SDK", () => {
     expect(declaration).toContain(`CAPTURED, NOT WRITTEN. @runwayml/avatars-react@${RUNWAY_AVATARS_VERSION}`);
   });
 
-  it("should be loaded from a pinned version, in every place the page names it", () => {
-    // Unpinned, the page is a live dependency on somebody else's release
-    // process, in a document that bills about twenty cents a minute when it
-    // fails. Three specifiers name the package: the stylesheet, the preload
-    // and the import.
-    const named = [...FACE_PAGE_HTML.matchAll(/@runwayml\/avatars-react(@[\d.]+)?/g)].map(
-      (match) => match[1],
-    );
-
-    expect(named.length).toBeGreaterThanOrEqual(3);
-    for (const version of named) {
-      expect(version).toBe(`@${RUNWAY_AVATARS_VERSION}`);
-    }
-  });
+  // **That the page is PINNED is asserted next door**, in `face-page.test.ts`'s
+  // preload/import correspondence test — one fact, one place, and that is the
+  // test that owns what these three URLs say. It is the precondition for
+  // everything below: a declaration can only answer "does it accept this prop"
+  // for a version the page can be shown to load.
 
   it("should every one of them be a prop that component actually destructures", () => {
     // THE ASSERTION. `onConnected` would have failed here on the day it was

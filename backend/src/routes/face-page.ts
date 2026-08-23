@@ -96,21 +96,62 @@ export const FACE_PAGE_API_BASE = "/api/v1";
 /**
  * The avatar SDK this page is written against, **exactly**.
  *
- * ## It was unpinned, and that is what made the prop bug unfindable
+ * # THIS PIN IS A SECURITY CONTROL, AND IT IS THE ONLY ONE WE HAVE
  *
- * The three specifiers below used to say `@runwayml/avatars-react` with no
- * version at all, so the page loaded whatever `esm.sh` called *latest* at the
- * moment his phone asked. That is a live dependency on somebody else's release
- * process, inside a document that costs about twenty cents a minute when it goes
- * wrong — and there is no build step, no lockfile and no install between them
- * and him. A vendor could change the component's prop surface overnight and the
- * first anyone would know is a face that never appears.
+ * Read the correctness argument second. The first argument is this:
  *
- * It also made the defect in `syl-chzl.10` structurally unprovable. `onConnected`
- * was passed to a component that does not accept it; answering *"does this
- * component accept this prop"* requires naming a version, and there was none to
- * name. **A guard that reads a declaration is worth nothing unless the page is
- * pinned to the declaration it read.**
+ * **This document holds `window.__sylFaceSession` — the session id AND the
+ * session key — in the same JavaScript context as a script fetched at runtime
+ * from a third party.** There is no lockfile, no build step, no integrity hash
+ * and no review between somebody else's release and a live credential on the
+ * Commander's phone. It is the one place in this subsystem where an outside
+ * party's code runs beside one of his secrets.
+ *
+ * Everything else here is built to keep secrets out of the browser. The broker
+ * exists so the page never holds the org secret. The credential arrives by user
+ * script rather than by query string. `face-page.test.ts` asserts this document
+ * reflects nothing a caller puts in the URL, and that it carries no credential
+ * in its source. **All of that is defended against us, and none of it was
+ * defended against `esm.sh`.** Until this constant existed, the three specifiers
+ * below said `@runwayml/avatars-react` with no version at all — so the code that
+ * runs next to his session key was whatever the CDN felt like serving at the
+ * moment his phone asked.
+ *
+ * ## What is and is not available as a control
+ *
+ * Measured against esm.sh on 2026-08-23, rather than assumed:
+ *
+ * - **A pinned URL is served `cache-control: public, max-age=31536000,
+ *   immutable`.** That is a promise about *caching*, made by the same party that
+ *   serves the bytes. It is not integrity: a cold fetch on a phone that has
+ *   never seen the URL gets whatever is served then.
+ * - **Subresource Integrity does not reach a dynamic `import()`.** SRI is
+ *   available on `<link rel="modulepreload">` and on the stylesheet, but a
+ *   preload whose hash fails is merely discarded — the `import()` behind it then
+ *   re-fetches with no check at all, so a hash there is a hint and not a gate.
+ *   The only mechanism that would cover the import itself is an import map with
+ *   `integrity`, whose support in the iOS `WKWebView` is unverified here and
+ *   must be measured before it is relied on.
+ * - **The pin does not even cover the whole graph.** The `deps=react@18` query
+ *   resolves at esm.sh's discretion: today's response reports
+ *   `react-dom@18.3.1,react@18.3.1` in its `x-esm-path`, chosen by them and not
+ *   by us. See `syl-chzl.12`.
+ *
+ * So the pin is the only control that exists today, and it is a weak one: it
+ * removes the *silent* change and leaves the deliberate one. **The real answer
+ * is a same-origin self-hosted bundle** — `syl-chzl.13`. The header above
+ * already contemplates that fallback for reliability, because the esm.sh module
+ * graph can fail on a mobile `WKWebView`; it now has a second and better reason,
+ * and Adjutant has already built exactly this (`backend/avatar-sdk-build/` →
+ * `backend/public/avatar-sdk.js`, served same-origin).
+ *
+ * ## And it is what made the prop bug findable
+ *
+ * `syl-chzl.10`: `onConnected` was passed to a component that does not accept
+ * it. Answering *"does this component accept this prop"* requires naming a
+ * version, and there was none to name — so the defect was not merely unnoticed,
+ * it was unprovable. **A guard that reads a declaration is worth nothing unless
+ * the page is pinned to the declaration it read.**
  *
  * ## Changing this number is a three-step move
  *
@@ -122,7 +163,9 @@ export const FACE_PAGE_API_BASE = "/api/v1";
  *    in the new declaration.
  *
  * Skipping step 2 is caught, not tolerated: the fixture records the version it
- * came from and the test compares it with this constant.
+ * came from and the test compares it with this constant. And a specifier that
+ * loses its exact version — a range, a `latest`, or nothing at all — fails
+ * `face-page.test.ts`, which checks all three against this constant.
  */
 export const RUNWAY_AVATARS_VERSION = "0.17.0";
 

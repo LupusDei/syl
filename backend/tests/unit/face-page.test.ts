@@ -6,6 +6,7 @@ import {
   FACE_PAGE_API_BASE,
   FACE_PAGE_HTML,
   FACE_PAGE_PATH,
+  RUNWAY_AVATARS_VERSION,
 } from "../../src/routes/face-page.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import { startTestApp, type RunningApp } from "../helpers/http.js";
@@ -419,6 +420,45 @@ describe("the live face page", () => {
       for (const specifier of imported) {
         expect(preloaded).toContain(specifier);
       }
+
+      // **AND EVERY ONE OF THEM CARRIES AN EXACT VERSION.** Extended here rather
+      // than asserted separately, because it is the same fact about the same
+      // three URLs: what the page fetches, and from where.
+      //
+      // This half is a SECURITY assertion, not a latency one. The document holds
+      // the session id and key in `window.__sylFaceSession`, so whatever these
+      // URLs return runs in the same JavaScript context as a live credential on
+      // his phone — with no lockfile, no build step and no integrity hash in
+      // between. Unpinned, that code was whatever the CDN chose to serve at the
+      // moment his phone asked. The pin does not make the fetch trustworthy; it
+      // removes the SILENT change and leaves only the deliberate one, which is
+      // the whole of what is available until `syl-chzl.13` self-hosts the bundle.
+      //
+      // A range, a `latest`, a major-only tag or a bare package name all fail
+      // here. So does a version that is exact but disagrees with the constant,
+      // which is what keeps the captured declaration in
+      // `face-page-vendor-props.test.ts` describing the code that actually runs.
+      // Anchored on `https://esm.sh/`, so it matches URLs and not the prose.
+      // This document names the package in its comments too — the camera fence
+      // cites the shipped bundle by version — and an unanchored scan is answered
+      // by a sentence about the code instead of by the code. That has now caught
+      // itself twice in this file; the rule is that an assertion about a fetch
+      // must match the thing that does the fetching.
+      const named = [
+        ...FACE_PAGE_HTML.matchAll(/https:\/\/esm\.sh\/@runwayml\/avatars-react([^/?"'\s]*)/g),
+      ].map((match) => match[1] ?? "");
+
+      // The stylesheet, the preload and the import. Fewer means one of them
+      // stopped naming the package and this check quietly covers less.
+      expect(named.length).toBeGreaterThanOrEqual(3);
+      for (const version of named) {
+        expect(version, `every avatars-react URL must name ${RUNWAY_AVATARS_VERSION} exactly`).toBe(
+          `@${RUNWAY_AVATARS_VERSION}`,
+        );
+      }
+      expect(RUNWAY_AVATARS_VERSION, "an exact version — no range, no tag").toMatch(
+        /^\d+\.\d+\.\d+$/,
+      );
     });
 
     it("should still import them one at a time", () => {

@@ -3202,3 +3202,64 @@ with the acceptance-helper leak found the same evening — a fake `claude` injec
 a test remembers to ask — is **a protection that depends on the caller getting it right**.
 Those are not protections; they are conventions with good intentions. The fix in both cases
 is to make the check structural and let it fail loudly at the boundary.
+
+#### The pin is a supply-chain control, and it is the only one we have
+
+The pin above was landed as a correctness precondition — a declaration-based guard is
+worthless unless the page is pinned to the declaration it read. That priced it wrong, and
+the bigger half is this:
+
+**`face-page.ts` holds `window.__sylFaceSession` — the session id AND the session key — in
+the same JavaScript context as three scripts fetched at runtime from a third party.** No
+lockfile, no build step, no integrity hash, no review between somebody else's release and a
+live credential on the Commander's phone. It is the one place in this subsystem where an
+outside party's code runs beside one of his secrets.
+
+Everything else here is aimed at *us*. The broker exists so the page never holds the org
+secret. The credential arrives by user script rather than by query string. `face-page.test.ts`
+asserts the document reflects nothing from its URL and carries no credential in its source.
+**All of that is defended against us and none of it was defended against `esm.sh`** — and
+until this week the specifier had no version in it at all, so the code running next to his
+session key was whatever the CDN chose to serve at the moment his phone asked.
+
+What is actually available, measured against esm.sh on 2026-08-23 rather than assumed:
+
+- **A pinned URL is served `cache-control: public, max-age=31536000, immutable`.** That is a
+  promise about *caching*, made by the party that serves the bytes. A cold fetch on a phone
+  that has never seen the URL gets whatever is served then. **An immutability header is not
+  an integrity control**, and it is easy to read as one.
+- **SRI does not reach a dynamic `import()`.** It works on `<link rel="modulepreload">` and
+  on the stylesheet, but a preload whose hash fails is merely *discarded* — the import
+  behind it then re-fetches with no check at all. A hash there is a hint, not a gate. The
+  only mechanism covering the import itself is an import map with `integrity`, whose
+  `WKWebView` support is unverified and must be measured before it is relied on.
+- **The pin does not cover the graph.** `deps=react@18` resolves at esm.sh's discretion:
+  today's response reports `react-dom@18.3.1,react@18.3.1` in its `x-esm-path`, chosen by
+  them. `syl-chzl.12`.
+
+So the pin removes the *silent* change and leaves the deliberate one. The real answer is a
+same-origin bundle (`syl-chzl.13`), which Adjutant has already built for the reliability
+reason (`backend/avatar-sdk-build/` → `backend/public/avatar-sdk.js`); we now have a better
+one. When it lands, the prop guard gets stronger for free — the declaration can be read from
+the installed package instead of a captured fixture.
+
+#### The class: a contract with an outside party that nothing checks
+
+Three defects in one evening, and they are one defect:
+
+- **`onConnected`** — a prop the vendor does not accept. It type-checked, rendered, and did
+  nothing.
+- **`startLiveService`** — injects the fake `claude` only if a test remembers to pass
+  `options.claude`. A test that supplies a `runner` instead spawns the real binary.
+- **the SDK itself** — whatever the CDN felt like serving that day.
+
+Each is *a protection that depends on the caller getting it right*, which is not a
+protection but a convention with good intentions. They fail silently, they leave evidence
+identical to "nothing happened", and every instrument we own is pointed at the wrong thing.
+The prop-existence guard is the first mechanism against the class rather than an instance —
+which is why the pin matters more than the bug that revealed it.
+
+The generalisation worth keeping: **at every boundary with something we do not build, write
+down what we believe the other side accepts, and let a test compare that belief with the
+other side's own description of itself.** A comment is not a mechanism; a captured
+declaration is.
