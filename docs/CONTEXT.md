@@ -3776,3 +3776,102 @@ already learned that a prop the vendor does not accept is a feature wired to not
 the same shape: a name the vendor's *stored configuration* does not match is an instruction
 wired to nothing. Any time a value must agree with something held in a third party's
 database, either fetch and assert it, or write down that you chose not to.
+
+### The evidence that refutes you is usually already in the thing you stopped reading
+
+The one-line form of the entry above, and the more useful one.
+
+The transcript endpoint was found, one session was read, and a confident conclusion was
+formed and reported. Three sessions were available at that same moment, from the same
+endpoint, at the same zero cost. The third one contained the discriminator that refuted the
+conclusion. **The difference was not evidence arriving later — it was stopping once
+something fit.**
+
+That is worse than not having looked, because a theory built on one real observation is far
+harder to dislodge than a guess: it comes with a citation. Both of the night's wrong
+conclusions had exactly this shape — one transcript read as though it were the population,
+and one artifact (a script) read as though it were somebody's whole process.
+
+The cheap discipline: when a source can return N items and you have read one, **read the
+others before you conclude, or say out loud that you did not.** Reading three transcripts
+took ninety seconds and overturned two hypotheses.
+
+### Backups: WHERE, and WHEN. Two rules, and the second is the invisible one
+
+From the avatar `PATCH` — a one-way door, since Runway keeps no version history and the
+endpoint has no `If-Match`.
+
+**WHERE: not in the same lifetime as the thing that might destroy it.** The agent's
+scratchpad is `/private/tmp/claude-501/…`, scoped to one session and one cleanup away from
+gone. It did not matter for a script. It would have mattered enormously for the only copy of
+her identity. A shared git worktree is the same hazard with a different clock — someone
+else's `git add -A` is the cleanup.
+
+**WHEN: before the write — because a backup taken afterwards is worse than no backup.** It
+looks like a restore point and it holds the damage. Nothing you would think to check catches
+it: the file exists, it is the right size, it parses, its hash is stable. No backup at all is
+a known gap; a post-write backup is a gap that reports itself as covered.
+
+Both were satisfied here, and **only one of them by design.** Two people independently saved
+the original fourteen seconds apart without coordinating, and the hashes matched — which
+proved the restore point and, incidentally, that neither had read the other's message. The
+script itself took its "before" in memory and would have destroyed the only copy if run
+alone. **The fix is not to remember step one: it is that
+`~/.syl/tools/patch-avatar-personality.py` now writes the backup, reads it back, compares it
+to live, and refuses to PATCH unless all of that succeeded.** A two-step procedure where step
+one is remembered is not a procedure.
+
+Also: **back up the whole record, not the field you meant to change.** A backup holding only
+the changed key cannot prove the others survived — the same reasoning as a verification that
+asserts both directions.
+
+### FOUR instruments that could only say yes, in one evening, by three people
+
+`docs/CONTEXT.md` already has a section titled *You cannot check a claim with an instrument
+that can only say yes.* Here is what it looks like when the people who just wrote that down
+build four more inside two hours.
+
+- **`swiftc -parse` standing in for the test suite.** Parses syntax; performs no availability
+  analysis. `ios/scripts/test.sh` was one command away and is exactly what CI runs. This one
+  broke `main`.
+- **`gh run list --commit <sha>` counted for pending rows.** The filter returns an *empty
+  list*; zero rows became zero pending became "ALL COMPLETE". A check that cannot tell
+  *nothing failed* from *nothing found*. This one hid the break.
+- **`bash test.sh | tail`, exit code read as the script's.** It is `tail`'s. This one would
+  have hidden the fix failing too.
+- **A CI monitor filtering `select(.workflowName=="CI")` and calling it "the gate."** Six of
+  these were armed that evening. The repository runs four workflows; one of them is named
+  `CI`, and the variable was named after the whole thing it was a part of. It would have said
+  *deploy* with the iOS job red.
+
+Three distinct mechanisms — a cheap proxy, an empty result set, a masked exit code — and one
+naming error, all producing the same output: *yes*, on no evidence.
+
+**The general form: a check must be able to distinguish "it passed" from "I did not look."**
+Before trusting one, ask what it prints when it learns nothing. If that is indistinguishable
+from success, it is not a check.
+
+Two things caught these, and neither was an instrument. **A human reading the unfiltered
+list** — the same act as reading the third transcript. And **`decideDeploy`, which refuses
+any commit whose checks have not all passed** and treats every ambiguous answer as no. The
+gate held behind two bad monitors belonging to the two people most confident they did not
+need it. That is the argument for it having no bypass, and it was made by the people who
+would have used one.
+
+#### The corollary that did work: validate a diagnostic against known outcomes first
+
+The face-attribution script (`~/.syl/tools/face-attribution.py`) was built to read which of
+two fixes worked, from Runway's transcripts, after both shipped. It had five metrics. One —
+n-gram phrase overlap between the user and assistant channels, the *obvious* echo test — was
+**backwards on the labelled data**: the healthy session scored highest (9 shared bigrams) and
+the broken one scored 1, because speech recognition mangled her echoed words past matching
+while ordinary conversational quoting matches perfectly.
+
+It was cut before use, and the note stays in the file with its scores so nobody re-adds it
+thinking it was an oversight. The three that remain separate 3/0/0, 1/0/0 and 4/0/0 across
+the one broken and two healthy sessions.
+
+**Run the new instrument against cases whose answer you already know, and delete the ones
+that disagree.** Every failure above is the same discipline not applied — to a compiler
+invocation, a `gh` filter, a shell pipeline and a `jq` selector, none of which anyone thought
+of as a diagnostic worth validating.
