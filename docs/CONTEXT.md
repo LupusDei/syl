@@ -3488,13 +3488,31 @@ helps a human already reading the log and nobody else. A trace with no assertion
 behind it is prose with a timestamp. Pair it with something that goes red, or be
 honest that it is documentation.
 
-**Footnote to the entry above, earned the same evening.** That entry says a
-measurement must carry what it counts, when it was taken, and what would make it
-stop being true. That is necessary and not sufficient: the deployed commit was
-read honestly from `/api/v1/health` at 17:13, quoted at 18:0x as though current,
-and was two deploys stale by then. **A timestamped measurement is not safe
-either, if the person quoting it drops the timestamp.** The rule needs both
-halves or it only protects whoever took the reading.
+## A fifth, promoted out of a footnote by its third instance
+
+The entry above says a measurement must carry what it counts, when it was taken,
+and what would make it stop being true. **That is necessary and not sufficient**,
+and one evening produced three violations of the missing half:
+
+- the deployed commit, read honestly from `/api/v1/health` at 17:13 and quoted
+  at 18:0x as though current — two deploys stale by then;
+- "the deploy is unblocked", written at 20:0x about a deploy that had gone out
+  at 18:50, which is why the press being discussed had a face in it at all;
+- the reaped-session evidence, cited as proof of a coupling by a commit that
+  post-dated every row of it.
+
+Two of the three were committed by the person who had just written the rule
+down, which is the conclusion of this entry arriving early.
+
+**A timestamped measurement is not safe either, if whoever quotes it drops the
+timestamp.** The rule needs both halves or it only protects the person who took
+the reading — and the reader is usually a third party who has neither.
+
+It has no scan and no obvious test, so by the taxonomy above it is prose, and
+prose is the weakest tier. **The nearest thing to a mechanism is asking the
+system rather than the transcript**: `/api/v1/health` is authoritative about
+what is running and `deploy-state.json` is not, because the stamp travels inside
+`dist/`. Where such a source exists, quote it fresh instead of quoting yourself.
 
 ## Why mechanise it: two authors, one evening, both of them the expert
 
