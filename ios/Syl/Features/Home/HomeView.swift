@@ -67,6 +67,23 @@ struct HomeView: View {
     /// for the assertion that says so.
     var onAwaken: (() -> Void)?
 
+    /// What she is doing about that press, when there is anything to say.
+    ///
+    /// **Nil is the ordinary case and this screen is unchanged in it.** She is warming
+    /// behind this view for anywhere from five to thirty seconds, and for that whole time
+    /// he keeps his home screen: he can read the day, scroll it, open a door, walk away.
+    /// The only thing this adds is one line over her own figure saying she is coming —
+    /// and, in the case that matters most, one line saying she is not.
+    ///
+    /// Defaulted, like every closure above, so a preview, an offscreen render and every
+    /// existing call site draw exactly the screen they drew before.
+    var awakening: FaceNotice?
+
+    /// Cancel the wait, or dismiss the failure. See ``LiveFaceModel/dismissNotice()`` —
+    /// they are one gesture to him and two acts underneath, and this screen is not the
+    /// place that knows which.
+    var onCancelAwakening: () -> Void = {}
+
     /// Where an orb goes.
     ///
     /// `Hashable` since `syl-011.5.3`, because it is now a navigation path value:
@@ -214,6 +231,26 @@ struct HomeView: View {
 
             nameplate(width: viewport.width)
         }
+        // **Over her, and over nothing else.** An overlay rather than a row in the
+        // nameplate stack, so that a face on its way moves not one point of the layout
+        // he is reading — and it sits at the top of the hero, clear of her own light and
+        // clear of the doors, where the eye that just pressed her is already looking.
+        .overlay(alignment: .top) {
+            if let awakening {
+                AwakeningNotice(
+                    notice: awakening,
+                    onCancel: onCancelAwakening,
+                    // Pressing again *is* the gesture. Routing retry through the same
+                    // handler the long press uses means there is one way in, so the
+                    // guard against opening two sessions covers this button for free.
+                    onRetry: onAwaken
+                )
+                .padding(.top, SylTheme.Metric.chapter)
+                .padding(.horizontal, SylTheme.Metric.gutter)
+                .transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : SylTheme.Motion.settle, value: awakening)
         // One *visible* screen, not one raw geometry height.
         //
         // `GeometryReader` inside this scroll view reports a height that runs underneath
@@ -364,6 +401,19 @@ struct HomeView: View {
                 detail: snapshot.isClear ? nil : "\(snapshot.remaining) left"
             ) { scrollToDay &+= 1 },
         ]
+    }
+
+    /// The waking notice, as a value — nil when there is nothing to say.
+    ///
+    /// A function for exactly the reason ``doors()`` is one, and against the same scar:
+    /// **a button whose handler went missing renders pixel-identical to one that works.**
+    /// The two handlers here are the only way to cancel a session that is billing and the
+    /// only way to retry one that failed, so a snapshot proving the pill is drawn proves
+    /// nothing worth knowing. This lets a test press them and check where they go.
+    func awakeningNotice() -> AwakeningNotice? {
+        awakening.map {
+            AwakeningNotice(notice: $0, onCancel: onCancelAwakening, onRetry: onAwaken)
+        }
     }
 
     // MARK: - The day

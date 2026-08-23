@@ -90,8 +90,11 @@ enum LiveFacePage {
 struct FaceWebPage: UIViewRepresentable {
     let session: FaceSession
     let pageURL: URL
-    /// What the page says about itself: `connected`, `ended`, `failed`, `left`.
-    var onState: @MainActor (String, String) -> Void = { _, _ in }
+    /// What the page says about itself: `booting`, `connected`, `playing`, `failed`, …
+    ///
+    /// **Not defaulted.** A defaulted sink is a sink a call site forgets, and this one is
+    /// what decides whether she is ever presented at all.
+    var onState: @MainActor (String, String) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onState: onState)
@@ -237,15 +240,21 @@ extension FaceRenderer {
     /// ``FaceRenderer/canDraw`` is false when there is no usable origin — a renderer that
     /// cannot resolve where the page lives says so, rather than presenting a web view
     /// that will fail to load over a session that is already billing.
-    static func web(
-        origin: @escaping @Sendable () -> URL?,
-        onState: @escaping @MainActor (String, String) -> Void = { _, _ in }
-    ) -> FaceRenderer {
+    ///
+    /// **There is no `onState` parameter and there must not be one.** It used to be a
+    /// defaulted argument, `AppDelegate` built this renderer without it, and so every
+    /// word the page said about itself — `connected`, `playing`, `sdk_failed`, the entire
+    /// closed vocabulary in `face/client-report.ts` — arrived at an empty closure. The
+    /// page was reporting perfectly and the phone was deaf, which is why the surface had
+    /// nothing better than a spinner to show. The sink is now an argument of
+    /// ``FaceRenderer/view``, supplied by whoever is drawing, so it cannot be defaulted
+    /// away at a call site that has nothing to report to.
+    static func web(origin: @escaping @Sendable () -> URL?) -> FaceRenderer {
         FaceRenderer(
             canDraw: { session in
                 !session.sessionKey.isEmpty && origin() != nil
             },
-            view: { session in
+            view: { session, onState in
                 guard let pageURL = origin().flatMap({ LiveFacePage.url(apiBaseURL: $0) }) else {
                     // Unreachable while `canDraw` gates it, and still not a spinner: a
                     // renderer that cannot say where she is must say so.

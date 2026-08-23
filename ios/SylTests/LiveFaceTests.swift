@@ -129,6 +129,19 @@ final class LiveFaceTests: XCTestCase {
         LiveFaceModel(gateway: broker.gateway(), clock: { [now] in now })
     }
 
+    /// A model that has got all the way to a face he can actually talk to.
+    ///
+    /// Two steps, because they are now two facts: the broker opens a session, and then
+    /// **the page reports that her video is playing**. Nothing in this app may treat the
+    /// first as the second — that conflation is the thirty-second spinner this bead
+    /// exists to delete — so every test that needs her live has to say so out loud.
+    private func liveModel(_ broker: Broker) async -> LiveFaceModel {
+        let face = model(broker)
+        await face.awaken()
+        await face.pageSaid("playing")
+        return face
+    }
+
     // MARK: - 1. The gesture is on her face
 
     /// **The home screen hands its hero a way to wake her.**
@@ -275,7 +288,9 @@ final class LiveFaceTests: XCTestCase {
         await face.awaken()
 
         XCTAssertEqual(broker.openCount, 1)
-        XCTAssertEqual(face.standing, .here(aSession()))
+        XCTAssertEqual(
+            face.standing, .warming(aSession()),
+            "the session is open and billing; she is not on screen and must not be")
     }
 
     /// **Two presses are still one session.** The gesture can fire again while the first
@@ -292,12 +307,32 @@ final class LiveFaceTests: XCTestCase {
         XCTAssertEqual(broker.openCount, 1, "one face, whatever his thumb did")
     }
 
+    /// **And a press that arrives while she is WARMING is the one that now matters most.**
+    ///
+    /// Nothing covers the home screen during the wait, so pressing again is the natural
+    /// thing to do — there is no modal telling him something is already happening. The
+    /// broker cuts a previous live session before creating the next one, so a second ask
+    /// would not merely double-bill; it would *destroy the session that was thirty
+    /// seconds from arriving* and start the wait over. The phone must not ask.
+    func testShouldNotStartASecondSessionWhileTheFirstIsStillWarming() async {
+        let broker = broker { ordinal in aSession(id: "face-\(ordinal)") }
+        let face = model(broker)
+        await face.awaken()
+        XCTAssertEqual(face.standing, .warming(aSession(id: "face-1")))
+
+        await face.awaken()
+        await face.awaken()
+
+        XCTAssertEqual(broker.openCount, 1, "the wait is invisible; the guard is not")
+        XCTAssertEqual(face.standing, .warming(aSession(id: "face-1")))
+        XCTAssertTrue(broker.closedIDs.isEmpty, "and nothing was cut short to find that out")
+    }
+
     // MARK: - 3b. Leaving closes it
 
     func testShouldCloseTheSessionWhenHeLeavesTheScreen() async {
         let broker = broker { _ in aSession(id: "face-9") }
-        let face = model(broker)
-        await face.awaken()
+        let face = await liveModel(broker)
 
         await face.withdraw()
 
@@ -311,8 +346,7 @@ final class LiveFaceTests: XCTestCase {
     /// charged for the length of its interval.
     func testShouldCloseTheSessionWhenTheAppIsPutAway() async {
         let broker = broker { _ in aSession(id: "face-bg") }
-        let face = model(broker)
-        await face.awaken()
+        let face = await liveModel(broker)
 
         await face.scenePhaseChanged(to: .background)
 
@@ -320,12 +354,31 @@ final class LiveFaceTests: XCTestCase {
         XCTAssertEqual(face.standing, .dormant)
     }
 
+    /// **The new shape of the same leak.** He presses, nothing covers his home screen,
+    /// and he puts the phone in his pocket while she is still coming through. That
+    /// session is open and billing at twenty cents a minute and he cannot see it, which
+    /// makes it the *likeliest* one to be abandoned and the one nothing on screen would
+    /// ever remind him about.
+    func testShouldCloseASessionThatIsStillWarmingWhenTheAppIsPutAway() async {
+        let broker = broker { _ in aSession(id: "face-warm-bg") }
+        let face = model(broker)
+        await face.awaken()
+        XCTAssertFalse(face.isPresented, "she never reached the screen")
+
+        await face.scenePhaseChanged(to: .background)
+
+        XCTAssertEqual(
+            broker.closedIDs, ["face-warm-bg"],
+            "a session nobody has seen yet bills exactly as hard as one he is watching")
+        XCTAssertEqual(face.standing, .dormant)
+        XCTAssertNil(face.homeNotice, "and the home screen goes back to saying nothing")
+    }
+
     /// Glancing at a notification banner is not leaving. Tearing down a live conversation
     /// because the app went inactive for a second would be its own defect.
     func testShouldNotCloseMerelyBecauseTheAppWentInactive() async {
         let broker = broker { _ in aSession() }
-        let face = model(broker)
-        await face.awaken()
+        let face = await liveModel(broker)
 
         await face.scenePhaseChanged(to: .inactive)
 
@@ -337,8 +390,7 @@ final class LiveFaceTests: XCTestCase {
     /// skipped, and the second must not error.
     func testShouldSurviveLeavingTwice() async {
         let broker = broker { _ in aSession(id: "face-2x") }
-        let face = model(broker)
-        await face.awaken()
+        let face = await liveModel(broker)
 
         await face.withdraw()
         await face.withdraw()
@@ -384,8 +436,7 @@ final class LiveFaceTests: XCTestCase {
     /// ask for, that costs money, is the worst possible surprise on this surface.
     func testShouldNotReopenAnythingWhenHeComesBack() async {
         let broker = broker { _ in aSession() }
-        let face = model(broker)
-        await face.awaken()
+        let face = await liveModel(broker)
         await face.scenePhaseChanged(to: .background)
 
         await face.scenePhaseChanged(to: .active)
@@ -408,11 +459,18 @@ final class LiveFaceTests: XCTestCase {
 
         await face.awaken()
 
-        XCTAssertTrue(face.isPresented, "a refusal is the thing that must be visible")
         XCTAssertFalse(
             (face.visibleMessage ?? "").isEmpty,
             "there is always something to read; silence is the one forbidden outcome")
         XCTAssertTrue(face.offersAnotherTry, "an unreachable Mac is worth another press")
+
+        // **And it is said where he is standing.** She never reached the screen, so
+        // covering it to apologise would be a modal he did not ask for on top of a
+        // gesture that already failed.
+        XCTAssertFalse(face.isPresented, "nothing covers the home screen for this")
+        XCTAssertEqual(face.homeNotice?.kind, .failed)
+        XCTAssertEqual(face.homeNotice?.sentence, face.visibleMessage)
+        XCTAssertEqual(face.homeNotice?.offersRetry, true)
     }
 
     /// The ceiling is a refusal with its own words and its own answer to "press again".
@@ -464,8 +522,7 @@ final class LiveFaceTests: XCTestCase {
             ordinal == 1 ? aSession(id: "first", expiresIn: 10) : aSession(id: "second")
         }
         broker.report = { id in aReport(id: id) }
-        let face = model(broker)
-        await face.awaken()
+        let face = await liveModel(broker)
 
         await face.tick(at: now)
 
@@ -478,8 +535,7 @@ final class LiveFaceTests: XCTestCase {
     func testShouldNotRenewASessionThatHasTimeLeft() async {
         let broker = broker { _ in aSession(expiresIn: 300) }
         broker.report = { id in aReport(id: id) }
-        let face = model(broker)
-        await face.awaken()
+        let face = await liveModel(broker)
 
         await face.tick(at: now)
 
@@ -490,8 +546,7 @@ final class LiveFaceTests: XCTestCase {
     func testShouldPublishTheMeterWhileSheIsHere() async {
         let broker = broker { _ in aSession() }
         broker.report = { id in aReport(id: id, elapsed: 94) }
-        let face = model(broker)
-        await face.awaken()
+        let face = await liveModel(broker)
 
         await face.tick(at: now)
 
@@ -504,8 +559,7 @@ final class LiveFaceTests: XCTestCase {
     func testShouldSayThatSheHasGoneRatherThanShowingAStalledFace() async {
         let broker = broker { _ in aSession() }
         broker.report = { id in aReport(id: id, ended: .reaped) }
-        let face = model(broker)
-        await face.awaken()
+        let face = await liveModel(broker)
 
         await face.tick(at: now)
 
@@ -515,6 +569,319 @@ final class LiveFaceTests: XCTestCase {
         XCTAssertNotEqual(
             LiveFaceModel.sentence(for: .reaped), LiveFaceModel.sentence(for: .closed),
             "the four ends are four different facts and must not read alike")
+
+        // **Said where he is looking.** She was on screen when it ended, so the sentence
+        // stays on screen — dropping him back to the home screen with a pill would make
+        // her vanish mid-conversation and explain it somewhere he is no longer looking.
+        XCTAssertTrue(face.isPresented, "the end of a face he was watching is shown to him")
+        XCTAssertNil(face.homeNotice, "and is not also said a second time behind it")
+    }
+
+    // MARK: - 4. She is not shown until she is live (`syl-chzl.7.2`, 2026-08-23)
+
+    /// **The whole bead, as one assertion.** He held her face down; the broker answered;
+    /// nothing may appear.
+    ///
+    /// The old surface presented here and spent the next five to thirty seconds saying
+    /// *Waking her* over a screen he could no longer use. The session existing is not
+    /// her being here — it is a room being booked.
+    func testShouldNotShowHerJustBecauseASessionExists() async {
+        let broker = broker { _ in aSession() }
+        let face = model(broker)
+
+        await face.awaken()
+
+        XCTAssertFalse(face.isPresented, "a session row is not a face")
+        XCTAssertNotNil(
+            face.drawnSession,
+            "and yet the surface must exist, hidden — the page has to be running for "
+                + "there to be a video track to wait for")
+        XCTAssertTrue(face.needsSurface)
+    }
+
+    /// **The signal, and the only signal.** A media element with data, moving. Everything
+    /// short of it is a room joined with nothing coming out of it, which is precisely
+    /// what he has been staring at.
+    func testShouldShowHerTheMomentHerVideoActuallyPlays() async {
+        let broker = broker { _ in aSession() }
+        let face = model(broker)
+        await face.awaken()
+
+        await face.pageSaid("playing", detail: "1 element(s)")
+
+        XCTAssertTrue(face.isPresented)
+        XCTAssertEqual(face.standing, .here(aSession()))
+        XCTAssertNil(face.homeNotice, "she is in front of him; the home screen is silent")
+    }
+
+    /// And on nothing else. Every one of these is the page making progress, and this app
+    /// has already shown him thirty seconds of `connected` with a blank rectangle in it.
+    func testShouldShowHerOnNothingShortOfPlaying() async {
+        let broker = broker { _ in aSession() }
+        let face = model(broker)
+        await face.awaken()
+
+        for state in [
+            "booting", "sdk_loaded", "mic_requested", "camera_blocked", "mic_granted",
+            "connecting", "connected",
+        ] {
+            await face.pageSaid(state)
+            XCTAssertFalse(face.isPresented, "\(state) is not a face he can speak to")
+            XCTAssertEqual(face.standing, .warming(aSession()), "and it is still warming")
+        }
+
+        await face.pageSaid("playing")
+        XCTAssertTrue(face.isPresented, "and then, exactly once, it is")
+    }
+
+    /// A word the page has never been able to say leaves the wait exactly where it was.
+    /// The safe direction is both ways at once: an unknown state must not present her,
+    /// and must not hang up on her either.
+    func testShouldIgnoreAWordThePageCannotSay() async {
+        let broker = broker { _ in aSession() }
+        let face = model(broker)
+        await face.awaken()
+
+        await face.pageSaid("hello", detail: "not in the vocabulary")
+
+        XCTAssertEqual(face.standing, .warming(aSession()))
+        XCTAssertTrue(broker.closedIDs.isEmpty)
+    }
+
+    /// **A long press must never change nothing.** The haptic answers *did I hold it long
+    /// enough*; it does not answer *is anything happening*, and it is silent on a phone
+    /// with haptics off or on a table. So the home screen says so, quietly, over her own
+    /// figure — and keeps saying something different as the page gets further along,
+    /// because a hint that never moves for thirty seconds is a hint he stops believing.
+    func testShouldTellHimSomethingIsHappeningWithoutTakingHisScreen() async {
+        let broker = broker { _ in aSession() }
+        let face = model(broker)
+
+        await face.awaken()
+
+        XCTAssertEqual(face.homeNotice?.kind, .waking)
+        XCTAssertEqual(face.homeNotice?.sentence, LiveFace.wakingPhrase)
+        XCTAssertEqual(face.homeNotice?.offersRetry, false, "there is nothing to retry yet")
+        XCTAssertFalse(face.isPresented, "and it costs him no part of his screen")
+
+        await face.pageSaid("connected")
+        XCTAssertEqual(
+            face.homeNotice?.sentence, LiveFace.phrase(forPageState: "connected"),
+            "the wait is legible only if it visibly moves")
+        XCTAssertFalse(face.isPresented)
+    }
+
+    // MARK: - 5. Cancelling, and settling what it cost
+
+    /// **Thirty seconds is long enough to change your mind**, and the meter has been
+    /// running the whole time. Cancelling must reach the broker, not merely stop looking.
+    func testShouldSettleTheSessionWhenHeCancelsTheWait() async {
+        let broker = broker { _ in aSession(id: "face-cancel") }
+        let face = model(broker)
+        await face.awaken()
+        XCTAssertEqual(face.homeNotice?.kind, .waking)
+
+        await face.dismissNotice()
+
+        XCTAssertEqual(
+            broker.closedIDs, ["face-cancel"],
+            "cancelling a wait closes the session it was waiting on")
+        XCTAssertEqual(face.standing, .dormant)
+        XCTAssertNil(face.homeNotice)
+    }
+
+    /// The same button on a failure has nothing to settle — it dismisses the sentence and
+    /// must not invent a close for a session that never opened or is already gone.
+    func testShouldDismissAFailureWithoutClosingAnythingTwice() async {
+        let broker = Broker()
+        broker.answer = { _ in throw APIError.transport(code: .timedOut, description: "slow") }
+        let face = model(broker)
+        await face.awaken()
+        XCTAssertEqual(face.homeNotice?.kind, .failed)
+
+        await face.dismissNotice()
+
+        XCTAssertEqual(face.standing, .dormant)
+        XCTAssertNil(face.homeNotice)
+        XCTAssertTrue(broker.closedIDs.isEmpty, "there was never a session to close")
+    }
+
+    /// He can press again after cancelling. A cancelled wait is not a state he is stuck in.
+    func testShouldLetHimPressAgainAfterCancelling() async {
+        let broker = broker { ordinal in aSession(id: "face-\(ordinal)") }
+        let face = model(broker)
+        await face.awaken()
+        await face.dismissNotice()
+
+        await face.awaken()
+
+        XCTAssertEqual(broker.openCount, 2)
+        XCTAssertEqual(face.standing, .warming(aSession(id: "face-2")))
+    }
+
+    // MARK: - 6. A failure is visible, in words, where he is
+
+    /// **The case that matters most.** She never becomes ready — and right now that
+    /// happens, repeatedly, with *could not establish signal connection*. Silence after a
+    /// long press is the worst outcome available: he cannot tell a slow success from a
+    /// dead failure, so he presses again, and pays again.
+    func testShouldSayOnTheHomeScreenWhenThePageCannotDrawHer() async {
+        let broker = broker { _ in aSession(id: "face-dead") }
+        let face = model(broker)
+        await face.awaken()
+
+        await face.pageSaid("failed", detail: "could not establish signal connection")
+
+        XCTAssertEqual(face.homeNotice?.kind, .failed)
+        XCTAssertTrue(
+            face.homeNotice?.sentence.contains("could not establish signal connection") == true,
+            "the page's own words are the difference between 'it broke' and something he "
+                + "can act on")
+        XCTAssertEqual(face.homeNotice?.offersRetry, true)
+        XCTAssertFalse(face.isPresented, "she never arrived; nothing covers his screen")
+        XCTAssertEqual(
+            broker.closedIDs, ["face-dead"],
+            "and the session that will never draw her is settled, not left to the reaper")
+    }
+
+    /// Every fatal word the page can say produces a sentence and settles the session.
+    /// None of them may leave the wait running, and none may leave him with nothing.
+    func testShouldSaySomethingForEveryWayThePageCanFail() async {
+        for state in ["sdk_failed", "failed", "no_media", "autoplay_blocked", "no_session", "ended"] {
+            let broker = broker { _ in aSession(id: "face-\(state)") }
+            let face = model(broker)
+            await face.awaken()
+
+            await face.pageSaid(state, detail: "why")
+
+            XCTAssertEqual(face.homeNotice?.kind, .failed, "\(state) must be said out loud")
+            XCTAssertFalse((face.homeNotice?.sentence ?? "").isEmpty, "\(state)")
+            XCTAssertEqual(
+                broker.closedIDs, ["face-\(state)"],
+                "\(state) leaves a billing session behind unless it is settled")
+        }
+    }
+
+    /// **Nothing at all is the failure with no signal to hang off.** The connection
+    /// failures he has actually hit report no state from inside the page whatsoever, so
+    /// the only thing that can end that wait is a deadline — and it ends it by *saying
+    /// so*, which is the opposite of presenting on a timer.
+    func testShouldGiveUpAndSaySoWhenNothingEverPlays() async {
+        let broker = broker { _ in aSession(id: "face-silent") }
+        broker.report = { id in aReport(id: id) }
+        let face = model(broker)
+        await face.awaken()
+
+        // One beat just short of the deadline changes nothing.
+        await face.tick(at: now.addingTimeInterval(LiveFace.readyDeadline - 1))
+        XCTAssertEqual(face.standing, .warming(aSession(id: "face-silent")), "still waiting")
+        XCTAssertTrue(broker.closedIDs.isEmpty)
+
+        await face.tick(at: now.addingTimeInterval(LiveFace.readyDeadline))
+
+        XCTAssertEqual(face.homeNotice?.kind, .failed)
+        XCTAssertFalse((face.homeNotice?.sentence ?? "").isEmpty)
+        XCTAssertEqual(face.homeNotice?.offersRetry, true, "the next press plausibly works")
+        XCTAssertEqual(broker.closedIDs, ["face-silent"], "and it stops costing money")
+        XCTAssertFalse(face.isPresented)
+    }
+
+    /// The deadline is generous against the slowest good case, because the cost of being
+    /// early is hanging up on a face that was about to arrive.
+    func testShouldWaitLongerThanTheSlowestGoodCaseBeforeGivingUp() {
+        XCTAssertGreaterThan(
+            LiveFace.readyDeadline, 30,
+            "the observed wait runs to thirty seconds; giving up inside it kills good sessions")
+    }
+
+    // MARK: - 7. The signal reaches the model at all
+
+    /// **The handler that was not there.** `FaceRenderer.web` was built with no `onState`
+    /// at all, so every word the page said — the whole closed vocabulary in
+    /// `face/client-report.ts` — arrived at an empty closure and nothing on the phone
+    /// ever heard it. A snapshot cannot catch that: a surface wired to nothing renders
+    /// pixel-identical to one wired to everything.
+    ///
+    /// So this evaluates the real surface, takes the sink it hands its renderer, and
+    /// drives the model through it.
+    func testShouldWireThePagesOwnReportsAllTheWayToTheModel() async {
+        let broker = broker { _ in aSession() }
+        let face = model(broker)
+        await face.awaken()
+
+        // A renderer that draws nothing and keeps whatever sink it is given.
+        final class Box: @unchecked Sendable { var sink: (@MainActor (String, String) -> Void)? }
+        let box = Box()
+        let renderer = FaceRenderer(
+            canDraw: { _ in true },
+            view: { _, onState in
+                box.sink = onState
+                return AnyView(Color.clear)
+            }
+        )
+
+        _ = LiveFaceView(model: face, renderer: renderer, clock: { [now] in now }).body
+        let sink = try? XCTUnwrap(box.sink)
+        XCTAssertNotNil(sink, "the surface must hand the renderer somewhere to report to")
+
+        sink?("playing", "1 element(s)")
+        // The relay hops through a Task; give it the one turn it needs.
+        await Task.yield()
+        for _ in 0..<20 where !face.isPresented { await Task.yield() }
+
+        XCTAssertTrue(
+            face.isPresented,
+            "the page said it was playing and the phone must have heard it")
+    }
+
+    /// And the page hands what it hears to whoever is drawing it. The two halves of the
+    /// same wire, asserted separately because they break separately.
+    func testShouldCarryThePagesStateOutOfTheWebViewToItsCaller() throws {
+        var heard: [String] = []
+        let page = FaceWebPage(
+            session: aSession(),
+            pageURL: try XCTUnwrap(URL(string: "https://syl.example/face/live")),
+            onState: { state, _ in heard.append(state) }
+        )
+
+        page.makeCoordinator().receive(state: "playing", detail: "1 element(s)")
+
+        XCTAssertEqual(heard, ["playing"])
+    }
+
+    // MARK: - 8. The notice on the home screen is a thing he can press
+
+    /// The pill carries the only way to cancel a billing session and the only way to
+    /// retry a failed one. Pressed here rather than looked at — this project has the scar.
+    func testShouldPutWorkingButtonsOnTheAwakeningNotice() throws {
+        var cancelled = 0
+        var pressedAgain = 0
+        let view = HomeView(
+            snapshot: .preview(remaining: 2),
+            presence: .idle,
+            presenceIntensity: 0.4,
+            now: now,
+            onAwaken: { pressedAgain += 1 },
+            awakening: FaceNotice(kind: .failed, sentence: "I could not reach you.", offersRetry: true),
+            onCancelAwakening: { cancelled += 1 }
+        )
+
+        let notice = try XCTUnwrap(view.awakeningNotice())
+        notice.onCancel()
+        notice.onRetry?()
+
+        XCTAssertEqual(cancelled, 1, "dismissing must reach the model that settles the session")
+        XCTAssertEqual(pressedAgain, 1, "and retry is the same one way in as the long press")
+    }
+
+    /// And there is nothing on the home screen at all in the ordinary case. She is not
+    /// coming, nothing is billing, and this screen is exactly the screen it always was.
+    func testShouldPutNothingOnTheHomeScreenWhenNothingIsHappening() {
+        let view = HomeView(
+            snapshot: .preview(remaining: 2), presence: .idle, presenceIntensity: 0.4, now: now,
+            onAwaken: {})
+
+        XCTAssertNil(view.awakeningNotice())
     }
 
     // MARK: - The surface's own honesty
@@ -555,6 +922,24 @@ final class LiveFaceTests: XCTestCase {
     /// session that is already billing is the spinner this surface is forbidden to show.
     func testShouldRefuseToDrawWhenThereIsNoOriginToDrawFrom() {
         XCTAssertFalse(FaceRenderer.web(origin: { nil }).canDraw(aSession()))
+    }
+
+    /// **The web renderer takes its state sink at draw time and cannot be built without
+    /// one.** It used to be a defaulted argument on `web(origin:onState:)`, `AppDelegate`
+    /// built the renderer without it, and the phone went deaf. Asserting the signature
+    /// this way means the compiler asks every future call site the question that was
+    /// silently answered wrong.
+    func testShouldRequireSomewhereToReportToBeforeItWillDrawAnything() throws {
+        var heard: [String] = []
+        let renderer = FaceRenderer.web(origin: { URL(string: "https://syl.example/api/v1") })
+
+        _ = renderer.view(aSession()) { state, _ in heard.append(state) }
+
+        // Building the page cannot make it speak — a real one needs a real web view. What
+        // is asserted is that there is a parameter to fill at all, which is what was
+        // missing; `testShouldCarryThePagesStateOutOfTheWebViewToItsCaller` covers the
+        // other end.
+        XCTAssertTrue(heard.isEmpty)
     }
 
     /// The page lives beside the contract, not inside it — same origin, so there is no

@@ -32,6 +32,201 @@ enum LiveFace {
     /// tightened — a scroll that opens a session is the accidental spend in its most
     /// annoying form.
     static let allowableMovement: CGFloat = 8
+
+    /// How long she may take to come through before the wait is declared a failure.
+    ///
+    /// **This is not the thing that decides when to show her.** She is shown when her
+    /// video track actually plays and at no other moment; this number is the opposite
+    /// signal — the point past which *nothing has played and nothing is going to*, so
+    /// the session is settled and he is told in words.
+    ///
+    /// It exists because the worst failure on this surface is silence. The observed wait
+    /// is five to thirty seconds, and the failures he has actually hit ("could not
+    /// establish signal connection") produce no state at all from inside the page — so
+    /// without a deadline a dead session would warm invisibly, forever, at twenty cents
+    /// a minute. Forty-five is comfortably past the slowest good case and well short of
+    /// the point where he would give up and press again.
+    static let readyDeadline: TimeInterval = 45
+
+    /// What the home screen says while nothing has happened yet.
+    static let wakingPhrase = "Waking her"
+
+    /// What the page's own progress reports are called on his screen.
+    ///
+    /// Nil for the states that are measurement rather than progress — `camera_blocked`
+    /// is how we know the SDK asks for a camera it was told not to want, and it is not
+    /// news he can act on. See `backend/src/face/client-report.ts` for the closed
+    /// vocabulary these names come from; anything not listed there cannot arrive.
+    static func phrase(forPageState state: String) -> String? {
+        switch state {
+        case "booting", "sdk_loaded": return wakingPhrase
+        case "mic_requested", "mic_granted": return "Reaching for the microphone"
+        // Not fatal: she can still be seen. It is the half of the conversation that is
+        // about to be missing, so it is said rather than swallowed.
+        case "mic_denied": return "She will not be able to hear you"
+        case "connecting": return "Connecting"
+        case "connected": return "Almost here"
+        default: return nil
+        }
+    }
+
+    /// The states that mean she is never going to play, and what to say about each.
+    ///
+    /// Nil means *keep waiting* — the vocabulary is closed and a word this function does
+    /// not know is a word the page did not send. Returning a sentence here settles the
+    /// session, so a state added to the wrong side of this switch either bills forever
+    /// or hangs up on a healthy face.
+    static func failure(forPageState state: String, detail: String, wasHere: Bool) -> String? {
+        switch state {
+        case "sdk_failed":
+            return "I could not load the parts that draw me" + note(detail)
+        case "failed":
+            return "Something went wrong bringing me through" + note(detail)
+        case "no_media":
+            return "I connected, and then nothing of me ever played."
+        case "autoplay_blocked":
+            return "I am here, but this phone will not start my video."
+        case "no_session":
+            return "That page opened with no session in it."
+        case "ended":
+            return wasHere ? "I have gone." : "I dropped before I could reach you."
+        default:
+            return nil
+        }
+    }
+
+    /// The page's own words for what broke, bounded.
+    ///
+    /// Shown because it is the difference between "it did not work" and "could not
+    /// establish signal connection", and the second is the one he can act on. Bounded
+    /// because it is a string a failing import graph chose, not one we wrote.
+    /// Joined with a dash rather than a full stop, because the page's own words are a
+    /// fragment written by a failing SDK — `could not establish signal connection`, with
+    /// no capital and no punctuation. Ending our sentence first and starting theirs after
+    /// it reads as a typo; hanging it off a dash reads as a quotation, which it is.
+    private static func note(_ detail: String) -> String {
+        let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "." }
+        return " — " + String(trimmed.prefix(140))
+    }
+}
+
+/// What the **home screen** says about a face that is on its way, or one that never came.
+///
+/// A value rather than a view so the decision and the drawing are separable: the model
+/// decides what he is owed and the home screen draws it, which is the same split every
+/// other surface in this app makes and the reason any of this is assertable.
+struct FaceNotice: Equatable {
+    enum Kind: Equatable {
+        /// She is coming. Small, quiet, and cancellable.
+        case waking
+        /// She is not coming, and this says why. **The case that matters most** — a long
+        /// press followed by silence is indistinguishable from a dead gesture.
+        case failed
+    }
+
+    var kind: Kind
+    var sentence: String
+    /// Whether pressing again could plausibly work. False against a spent ceiling.
+    var offersRetry: Bool = false
+}
+
+/// The hint over her figure while she is on her way, and the sentence when she is not.
+///
+/// ## Why there is anything here at all
+///
+/// The haptic on `.began` is kept and is not enough on its own. It answers *"did I hold
+/// it long enough"* and nothing else: it says the gesture landed, not that something is
+/// now happening that will take a moment, and it is silent on a phone with haptics off,
+/// in a thick case, or on a table. Thirty seconds of a home screen that looks exactly as
+/// it did before is a dead gesture, and a dead gesture gets pressed again.
+///
+/// ## Why it is this small
+///
+/// Because the alternative is what we are removing. A modal or a spinner over the whole
+/// screen is the thirty-second block this change exists to delete — he must be able to
+/// read his day, scroll it, tap a door and walk away while she warms. So this is one
+/// line over her own figure, it hit-tests only itself, and the only thing it takes from
+/// him is the space it occupies.
+struct AwakeningNotice: View {
+    let notice: FaceNotice
+    /// Cancel the wait, or dismiss the failure. Settles the session either way.
+    var onCancel: () -> Void
+    /// Press again. Absent when there is nothing to press again for.
+    var onRetry: (() -> Void)?
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        // **One line while she is coming, a paragraph only when something is wrong.**
+        // The waiting case is the one he will see forty times and it earns the least
+        // room on the screen; the failing case is the one he has to read, and it is the
+        // only one allowed to grow.
+        HStack(alignment: .top, spacing: SylTheme.Metric.snug) {
+            mark
+                // Optically against the first line's cap height rather than the text
+                // block's centre — a dot beside three lines of prose must not float in
+                // the middle of them.
+                .padding(.top, 6)
+
+            VStack(alignment: .leading, spacing: SylTheme.Metric.snug) {
+                Text(notice.sentence)
+                    .font(SylTheme.Typeface.detail)
+                    .foregroundStyle(SylTheme.Colour.ink)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if notice.kind == .failed {
+                    HStack(spacing: SylTheme.Metric.gutter) {
+                        if notice.offersRetry, let onRetry {
+                            Button("Try again", action: onRetry)
+                                .foregroundStyle(SylTheme.Colour.accent)
+                        }
+                        Button("Dismiss", action: onCancel)
+                            .foregroundStyle(SylTheme.Colour.inkSoft)
+                    }
+                    .font(SylTheme.Typeface.detail)
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if notice.kind == .waking {
+                Button("Cancel", action: onCancel)
+                    .font(SylTheme.Typeface.detail)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(SylTheme.Colour.inkSoft)
+                    .padding(.leading, SylTheme.Metric.tight)
+            }
+        }
+        .padding(.horizontal, SylTheme.Metric.step)
+        .padding(.vertical, SylTheme.Metric.snug)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: SylTheme.Metric.cardRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: SylTheme.Metric.cardRadius, style: .continuous)
+                .strokeBorder(SylTheme.Colour.luminance.opacity(0.18), lineWidth: SylTheme.Metric.hair)
+        }
+        .frame(maxWidth: 320)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(notice.sentence)
+    }
+
+    /// A breathing point of her light, **not a spinner**. A progress indicator is the
+    /// vocabulary of a blocked screen, and this screen is not blocked.
+    @ViewBuilder
+    private var mark: some View {
+        let dot = Circle()
+            .fill(notice.kind == .waking ? SylTheme.Colour.luminance : SylTheme.Colour.inkFaint)
+            .frame(width: SylTheme.Metric.snug, height: SylTheme.Metric.snug)
+
+        if notice.kind == .waking && !reduceMotion {
+            TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { timeline in
+                let t = timeline.date.timeIntervalSinceReferenceDate
+                dot.opacity(0.35 + 0.45 * (0.5 + 0.5 * sin(t / 1.4 * .pi * 2)))
+            }
+        } else {
+            dot
+        }
+    }
 }
 
 /// A transparent layer over her face that recognises exactly one thing.

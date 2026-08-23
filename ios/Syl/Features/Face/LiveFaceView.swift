@@ -23,6 +23,19 @@ import SylKit
 ///
 /// The alternative — a spinner where the video will go — is the exact failure the epic
 /// names: a face that is not coming must not look like a face that is loading.
+///
+/// ## It is built before it is shown, and that is the mechanism
+///
+/// This view goes into the tree the instant a session opens and stays **invisible** until
+/// her video track is playing (``LiveFaceModel/isPresented``, applied by `HomeScreen`).
+/// The page inside it is loading, importing and joining a room the whole time — which is
+/// the only way there can be a playing track to present on.
+///
+/// So nothing in here may be built conditionally on *presented*. The renderer sits at one
+/// position in one branch across the whole of `warming` and `here`; if presenting her
+/// moved it, SwiftUI would tear down the web view that had just spent thirty seconds
+/// connecting and build a second one over the same billing session. Every `if` below
+/// varies content around that fixed position, never the position itself.
 struct LiveFaceView: View {
     @ObservedObject var model: LiveFaceModel
     /// What actually draws the avatar's video track. See the note above.
@@ -37,32 +50,51 @@ struct LiveFaceView: View {
             SylTheme.Colour.veilDeep.ignoresSafeArea()
 
             switch model.standing {
-            case .dormant:
-                // Reachable for one frame while the cover dismisses. Nothing, rather
-                // than a flash of something.
+            case .dormant, .waking:
+                // Not reachable in the ordinary way — the surface is not in the tree at
+                // all until a session exists. Nothing, rather than a flash of something.
                 Color.clear
-            case .waking:
-                waking
-            case .here(let session):
-                here(session)
+            case .warming(let session), .here(let session):
+                // **One branch for both**, which is what keeps the web view alive across
+                // the moment she becomes visible. Splitting these into two cases would be
+                // two `_ConditionalContent` indices and therefore two web views.
+                drawn(session)
             case .refused(let refusal):
                 refused(refusal)
             }
         }
-        .preferredColorScheme(.dark)
+        // **`environment`, not `preferredColorScheme`, and the difference is a whole-app
+        // bug.** `preferredColorScheme` propagates up to the enclosing *presentation* —
+        // which was this view's own `fullScreenCover` and is now the app's window. Left
+        // as it was, opening a session would have flipped Chat and Settings to night
+        // along with her, in the one app that has already been fixed once for being
+        // bright on one screen and black on another. This colours her subtree and stops.
+        .environment(\.colorScheme, .dark)
         // **The leak this project is named for.** A face nobody is looking at still
-        // bills. `onDisappear` covers leaving the screen; `scenePhase` covers the app
-        // being put away without the screen ever disappearing. They race and they are
-        // both idempotent, which is the point — neither may be the one that is skipped.
+        // bills. `onDisappear` covers the surface going away — which now includes the
+        // Home tab being switched away from while she is still warming; `scenePhase`
+        // covers the app being put away without that ever happening. They race and they
+        // are both idempotent, which is the point.
         .onDisappear { Task { await model.withdraw() } }
         .task(id: tickIdentity) { await beat() }
     }
 
-    /// Restarts the beat when the session changes, and stops it when she is not here.
-    private var tickIdentity: String? {
-        guard case .here(let session) = model.standing else { return nil }
-        return session.sessionId
+    /// What the page says about itself, on its way to the model.
+    ///
+    /// A named method rather than an inline closure so the wiring is a thing a test can
+    /// hold. It is the signal the entire presentation hangs on, and a handler that went
+    /// missing renders pixel-identical to one that works — which is exactly how the
+    /// renderer shipped with no `onState` at all and nothing on the phone ever heard a
+    /// word from inside the page.
+    func pageSaid(_ state: String, _ detail: String) {
+        Task { await model.pageSaid(state, detail: detail) }
     }
+
+    /// Restarts the beat when the session changes, and stops it when there is none.
+    ///
+    /// **Runs through `warming` as well as `here`**, because the give-up deadline is
+    /// checked on this beat and a wait with no beat behind it is a wait with no end.
+    private var tickIdentity: String? { model.drawnSession?.sessionId }
 
     /// One beat a second while she is here: the meter, and the renewal that gets ahead
     /// of the cap.
@@ -78,48 +110,40 @@ struct LiveFaceView: View {
         }
     }
 
-    // MARK: - Waking
-
-    private var waking: some View {
-        VStack(spacing: SylTheme.Metric.gutter) {
-            SylHalo(
-                phrase: "Coming",
-                state: .thinking,
-                intensity: 0.8,
-                availableWidth: 320
-            )
-            Text("Opening a live session.")
-                .font(SylTheme.Typeface.detail)
-                .foregroundStyle(SylTheme.Colour.inkSoft)
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    // MARK: - Here
+    // MARK: - Warming, and then here
 
     @ViewBuilder @MainActor
-    private func here(_ session: FaceSession) -> some View {
+    private func drawn(_ session: FaceSession) -> some View {
         VStack(spacing: 0) {
-            // **The renderer decides, not the session.** `canJoin` asks whether the broker
-            // minted NATIVE join credentials, which is the right question for a client that
-            // joins a room itself and the wrong one for the client this app actually has: a
-            // web view over the page Syl serves needs the session key and nothing else.
-            // Asking the session would leave `FaceRenderer.web` permanently refusing to draw
-            // a session it can draw perfectly well.
-            if renderer.canDraw(session) {
-                renderer.view(session)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                // A session that exists and cannot be drawn. Not a spinner: the broker
-                // minted browser credentials, this is a phone, and saying so is the only
-                // honest thing on offer — with the session closed by the ordinary path
-                // the moment he leaves, so the mistake costs one press and not an hour.
-                cannotDraw
+            Group {
+                // **The renderer decides, not the session.** `canJoin` asks whether the
+                // broker minted NATIVE join credentials, which is the right question for a
+                // client that joins a room itself and the wrong one for the client this app
+                // actually has: a web view over the page Syl serves needs the session key
+                // and nothing else. Asking the session would leave `FaceRenderer.web`
+                // permanently refusing to draw a session it can draw perfectly well.
+                //
+                // `canDraw` is a property of the renderer and the session, neither of which
+                // changes mid-session, so this branch is fixed for the life of the page.
+                if renderer.canDraw(session) {
+                    renderer.view(session, pageSaid)
+                } else {
+                    // A session that exists and cannot be drawn. Not a spinner: the broker
+                    // minted browser credentials, this is a phone, and saying so is the only
+                    // honest thing on offer — with the session closed by the ordinary path
+                    // the moment he leaves, so the mistake costs one press and not an hour.
+                    cannotDraw
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            meterBar
+            // The chrome arrives when she does. Content inside a fixed position, never a
+            // modifier applied conditionally — see the note on this type.
+            if model.isPresented { meterBar }
         }
-        .safeAreaInset(edge: .top) { leaveBar }
+        .safeAreaInset(edge: .top) {
+            if model.isPresented { leaveBar }
+        }
     }
 
     private var cannotDraw: some View {
@@ -261,11 +285,21 @@ struct FaceRenderer {
     /// room itself. One type cannot answer for both, and the surface must never show a
     /// spinner over a session that is already costing money — see ``LiveFaceView``.
     var canDraw: (FaceSession) -> Bool = { _ in true }
+    /// Draw this session, reporting what the drawing turns out to be doing.
+    ///
+    /// **The second argument is the whole of `syl-chzl.7.2`'s revision.** It is where the
+    /// page's own account of itself — `connected`, `playing`, `sdk_failed` — leaves the
+    /// renderer and reaches something that can act on it. It is a parameter of the *draw*
+    /// rather than of the renderer because the sink belongs to the surface: `AppDelegate`
+    /// builds the renderer and has no model to report to, and a renderer built with a
+    /// captured sink is one every call site can silently forget to supply. This way the
+    /// compiler asks.
+    ///
     /// `@MainActor` because a renderer may build a `UIViewRepresentable`, whose
     /// initialiser is main-actor isolated — the web view is exactly that. Forming the
     /// closure stays free anywhere; only calling it needs the main actor, which every
     /// call site is: a SwiftUI `body`.
-    var view: @MainActor (FaceSession) -> AnyView
+    var view: @MainActor (FaceSession, @escaping @MainActor (String, String) -> Void) -> AnyView
 
     /// The honest default: this build has no realtime client, so it does not pretend to
     /// be loading one.
@@ -277,7 +311,7 @@ struct FaceRenderer {
     /// holding a non-`Sendable` closure, which Swift 6 refuses — correctly, since the
     /// closure builds views and views belong to the main actor.
     static var notInThisBuild: FaceRenderer {
-        FaceRenderer(canDraw: { _ in false }) { _ in
+        FaceRenderer(canDraw: { _ in false }) { _, _ in
             AnyView(
                 VStack(spacing: SylTheme.Metric.step) {
                     Image(systemName: "person.crop.circle.badge.questionmark")

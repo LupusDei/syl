@@ -101,6 +101,70 @@ final class HomeSnapshotRendering: XCTestCase {
         }
     }
 
+    /// The home screen while she is on her way, and when she never arrived.
+    ///
+    /// **This is the render that judges whether the change worked.** The requirement is
+    /// that a long press changes something small over her figure and nothing else: no
+    /// modal, no spinner, no part of the day covered, the doors still reachable. That is
+    /// a claim about a picture, and it is exactly the kind of claim a green suite has no
+    /// opinion about — the tests beside this one prove the *handlers* are alive, and only
+    /// a glance proves the thing on screen is not in the way.
+    func testRenderTheAwakeningNotice() throws {
+        try XCTSkipUnless(enabled, "set SYL_RENDER_SNAPSHOTS=1 to produce design images")
+        let directory = try XCTUnwrap(outputDirectory)
+
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let cases: [(String, FaceNotice, ColorScheme)] = [
+            ("awakening-waking", FaceNotice(kind: .waking, sentence: LiveFace.wakingPhrase), .dark),
+            ("awakening-connecting", FaceNotice(kind: .waking, sentence: "Almost here"), .dark),
+            (
+                "awakening-failed",
+                FaceNotice(
+                    kind: .failed,
+                    // The real one, built the way the model builds it — this is the
+                    // failure he has actually been hitting.
+                    sentence: LiveFace.failure(
+                        forPageState: "failed",
+                        detail: "could not establish signal connection",
+                        wasHere: false
+                    ) ?? "",
+                    offersRetry: true
+                ),
+                .dark
+            ),
+            (
+                "awakening-failed-light",
+                FaceNotice(kind: .failed, sentence: "That is today's face budget spent."),
+                .light
+            ),
+        ]
+
+        for (name, notice, scheme) in cases {
+            let view = HomeView(
+                snapshot: .preview(remaining: 5),
+                presence: .thinking,
+                presenceIntensity: 0.8,
+                now: fixedNoon,
+                onAwaken: {},
+                awakening: notice,
+                scrolls: false
+            )
+            .frame(width: 393, height: 852)
+            .environment(\.colorScheme, scheme)
+            .environment(\.sylAppearance, scheme == .dark ? .night : .day)
+
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+
+            guard let image = renderer.uiImage, let data = image.pngData() else {
+                XCTFail("could not render \(name)")
+                continue
+            }
+            try data.write(to: directory.appendingPathComponent("\(name).png"))
+        }
+    }
+
     /// The day's spine on its own, in every state a tap can put a row into.
     ///
     /// Rendered apart from `HomeView` on purpose. The hero is sized to one whole screen,

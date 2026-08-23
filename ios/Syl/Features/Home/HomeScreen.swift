@@ -108,6 +108,89 @@ struct HomeScreen: View {
     @State private var path = NavigationPath()
 
     var body: some View {
+        ZStack {
+            // **Her surface is FIRST in this stack and its position never moves.**
+            //
+            // It goes in the instant a session opens — while she is still warming, behind
+            // an opaque home screen — and comes out when the session is over. Presenting
+            // her is a change of `zIndex` and nothing structural, because the page inside
+            // it has spent the whole warm-up importing an SDK and joining a room and must
+            // survive being shown. Building it at presentation time would throw that away
+            // and start a second page over the same billing session.
+            //
+            // She arrives without a cross-fade, and that is the trade taken knowingly: a
+            // fade means animating opacity up from zero, and a zero-opacity layer is the
+            // one thing WebKit might reasonably decide is not worth painting. Her video
+            // starting is a real event and it is allowed to look like one.
+            faceLayer
+
+            homeStack
+        }
+        // **The tab bar is the last thing between an in-tree layer and a full screen.**
+        // It is drawn by the `TabView` above this view, so a child cannot paint over it;
+        // it has to be asked to leave. It comes straight back when she does.
+        .toolbar(liveFace.isPresented ? .hidden : .visible, for: .tabBar)
+        .task {
+            model.start()
+            // The list is read on launch, not on open. Its own `.task` below would be
+            // enough to fill it, but the door at the foot of the day carries a count from
+            // this same snapshot — a door that said nothing until it had been opened once
+            // would hide the very to-dos it exists to surface.
+            await list.refresh()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // **Before the day, because this one costs money.** A live face in a
+            // backgrounded app is a silent leak — this project's signature defect — and
+            // the reaper that would eventually find it is a backstop, not the mechanism.
+            // It now covers a session that is merely WARMING too, which is the likelier
+            // one to be abandoned: nothing is covering his home screen, so putting the
+            // phone away mid-wait is the natural thing to do. Foregrounding deliberately
+            // does not reopen anything; see rule 3 on `LiveFaceModel`.
+            Task { await liveFace.scenePhaseChanged(to: phase) }
+
+            // Returning to the app is the moment the day is most likely to be stale —
+            // reminders may have fired while it was backgrounded. The minute loop would
+            // catch up eventually; waiting up to a minute to find out you are late is
+            // not good enough.
+            switch phase {
+            case .active:
+                model.start()
+                Task { await model.refresh() }
+                Task { await list.refresh() }
+            case .background:
+                model.stop()
+            default:
+                break
+            }
+        }
+    }
+
+    /// Her face, built before it is shown.
+    ///
+    /// Hidden by `zIndex` rather than by `opacity(0)` or `.hidden()`, and that is not a
+    /// stylistic call: WebKit throttles timers and suspends media for a view it considers
+    /// not visible, and the page's own readiness check waits on `setTimeout` and on a
+    /// media element actually moving. A layer that is genuinely in the window, full size
+    /// and simply *drawn behind an opaque screen* is visible to WebKit and invisible to
+    /// him — which is exactly the pair of properties this needs.
+    @ViewBuilder
+    private var faceLayer: some View {
+        if liveFace.needsSurface {
+            // **No `ignoresSafeArea` here**, deliberately. Her background and the web view
+            // bleed to the edges from inside; the layer itself keeps its insets, because
+            // the "Let her go" bar is a `safeAreaInset` and a layer with no safe area
+            // puts the only way out from under the notch.
+            LiveFaceView(model: liveFace, renderer: renderer)
+                .zIndex(liveFace.isPresented ? 1 : -1)
+                .allowsHitTesting(liveFace.isPresented)
+                // Not merely invisible: unreachable. VoiceOver must not find a live web
+                // view sitting behind the home screen and read it out.
+                .accessibilityHidden(!liveFace.isPresented)
+        }
+    }
+
+    /// Everything that was here before her face was.
+    private var homeStack: some View {
         NavigationStack(path: $path) {
             HomeView(
                 snapshot: model.snapshot,
@@ -132,7 +215,12 @@ struct HomeScreen: View {
                 onOpenList: { showingList = true },
                 // The whole opening mechanism. It reaches the hero and nothing else —
                 // every closure above still does exactly what it did.
-                onAwaken: { Task { await liveFace.awaken() } }
+                onAwaken: { Task { await liveFace.awaken() } },
+                // What he is told while she is on her way, and what he is told when she
+                // never arrives. Nil in the ordinary case, so the home screen is exactly
+                // the screen it was before this existed.
+                awakening: liveFace.homeNotice,
+                onCancelAwakening: { Task { await liveFace.dismissNotice() } }
             )
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: HomeView.Destination.self) { destination in
@@ -155,27 +243,26 @@ struct HomeScreen: View {
                 }
             }
         }
-        // Her live face, over everything.
+        // **Her face is no longer a `fullScreenCover`, and the reason is the whole bead.**
         //
-        // A cover rather than a sheet, and not for taste: a sheet can be dragged
-        // half-down and left there, which on a surface billing twenty cents a minute is
-        // a session he believes he has dismissed. A cover has exactly one way out, and
-        // that way out closes the session.
+        // A cover is a presentation, and a presentation can only carry a view built at
+        // the moment it appears. That forced the old order — present, *then* start
+        // loading — which is precisely the thirty seconds of "Waking her" the Commander
+        // asked us to delete. Warming behind the home screen and presenting a page that
+        // is already live means the surface must exist before it is shown, and a cover
+        // cannot hold something that already exists.
         //
-        // `isPresented` is derived from the model rather than held here, so there is one
-        // answer to "is a face open" and the screen cannot disagree with the thing that
-        // is paying for it.
-        .fullScreenCover(
-            isPresented: Binding(
-                get: { liveFace.isPresented },
-                set: { shown in
-                    guard !shown else { return }
-                    Task { await liveFace.withdraw() }
-                }
-            )
-        ) {
-            LiveFaceView(model: liveFace, renderer: renderer)
-        }
+        // The argument the cover was chosen for survives intact. It was picked over a
+        // sheet because a sheet can be dragged half-down and left there, billing at
+        // twenty cents a minute behind a screen he thinks he dismissed. A layer in the
+        // tree is stricter still: there is nothing to drag, and the one way out is the
+        // button that settles the session.
+        //
+        // The ground is explicit and edge-to-edge because this view is now the thing
+        // *hiding* a live web view during the warm-up. `HomeView` paints its own
+        // full-bleed veil and always has; saying it again here means the property does
+        // not silently rest on a detail two files away that nobody knows is load-bearing.
+        .background(SylTheme.Colour.veilDeep.ignoresSafeArea())
         .sheet(isPresented: $showingList) {
             TodoListView(
                 snapshot: list.snapshot,
@@ -187,37 +274,6 @@ struct HomeScreen: View {
             // criterion is that it has none — and the veil would stop at its edges.
             .presentationBackground(SylTheme.Colour.veilDeep)
             .task { await list.refresh() }
-        }
-        .task {
-            model.start()
-            // The list is read on launch, not on open. Its own `.task` above would be
-            // enough to fill it, but the door at the foot of the day carries a count from
-            // this same snapshot — a door that said nothing until it had been opened once
-            // would hide the very to-dos it exists to surface.
-            await list.refresh()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            // **Before the day, because this one costs money.** A live face in a
-            // backgrounded app is a silent leak — this project's signature defect — and
-            // the reaper that would eventually find it is a backstop, not the mechanism.
-            // Foregrounding deliberately does not reopen anything; see rule 3 on
-            // `LiveFaceModel`.
-            Task { await liveFace.scenePhaseChanged(to: phase) }
-
-            // Returning to the app is the moment the day is most likely to be stale —
-            // reminders may have fired while it was backgrounded. The minute loop would
-            // catch up eventually; waiting up to a minute to find out you are late is
-            // not good enough.
-            switch phase {
-            case .active:
-                model.start()
-                Task { await model.refresh() }
-                Task { await list.refresh() }
-            case .background:
-                model.stop()
-            default:
-                break
-            }
         }
     }
 

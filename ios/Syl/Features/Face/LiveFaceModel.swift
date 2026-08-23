@@ -27,6 +27,13 @@ import SylKit
 ///    something to read instead. The gesture is a long press with no label, so silence
 ///    would leave him unable to tell a spent budget from a press he did not hold long
 ///    enough — and that reads as a broken app.
+/// 5. **She is not shown until she is live.** The Commander's ruling, 2026-08-23: a
+///    covering screen that says *Waking her* for thirty seconds is worse than no screen
+///    at all, because it takes the phone away from him and gives him nothing. So the
+///    session opens, the page loads and the room is joined **behind the home screen**,
+///    and the only thing that presents her is her video track actually playing — see
+///    ``pageSaid(_:detail:)``. Not the session row existing, not the page having loaded,
+///    and not a timer.
 @MainActor
 final class LiveFaceModel: ObservableObject {
     /// What is on screen, and what is being billed.
@@ -35,7 +42,14 @@ final class LiveFaceModel: ObservableObject {
         case dormant
         /// He pressed. Nothing is billing yet — the broker has not answered.
         case waking
-        /// She is here. **The meter is running from this instant.**
+        /// The session is open and **billing**, and she is not on screen.
+        ///
+        /// The page is loading, the SDK is importing, the room is being joined — all of
+        /// it behind the home screen he is still holding. This is the state that used to
+        /// be a full-screen spinner, and it is the whole point of `syl-chzl.7.2`'s
+        /// revision: the money starts here, the covering screen does not.
+        case warming(FaceSession)
+        /// She is here **and playing**. The face is on screen from this instant.
         case here(FaceSession)
         /// She is not coming, and this is why, in words.
         case refused(FaceRefusal)
@@ -45,9 +59,27 @@ final class LiveFaceModel: ObservableObject {
     /// What this is costing, when the broker has told us. Nil is *unknown*, and the
     /// surface must render it as unknown rather than as free.
     @Published private(set) var report: FaceSessionReport?
+    /// The last thing the page said about itself, as a phrase for the home screen.
+    ///
+    /// Published separately from ``standing`` because it moves several times inside one
+    /// `warming`: the wait is legible only if it visibly progresses, and a hint that
+    /// never changes for thirty seconds is a hint he stops believing.
+    @Published private(set) var phase: String?
 
     private let gateway: FaceGateway
     private let clock: @Sendable () -> Date
+
+    /// When the current warm-up began, for ``LiveFace/readyDeadline``. Nil unless warming.
+    private var warmingSince: Date?
+
+    /// Whether she ever actually reached the screen during this session.
+    ///
+    /// It decides **where a refusal is read**: one that arrives before she was ever shown
+    /// belongs on the home screen, quietly, because that is where he is standing; one
+    /// that arrives while he is looking at her belongs in front of him, because that is
+    /// where he is. Same sentence, two places, and getting it wrong means either a modal
+    /// he never asked for or a face that vanishes without a word.
+    private var wasOnScreen = false
 
     /// Whether he still wants her here **right now**.
     ///
@@ -68,17 +100,69 @@ final class LiveFaceModel: ObservableObject {
 
     // MARK: - What the surface reads
 
-    /// Whether her live surface is up.
+    /// The session being drawn, warming or live. Nil when there is nothing to draw.
     ///
-    /// True for a refusal too, deliberately: the refusal *is* the thing that must be
-    /// visible. A press that dropped straight back to dormant is exactly the silent
-    /// nothing this feature is forbidden to do.
-    var isPresented: Bool { standing != .dormant }
+    /// **Non-nil through `warming` on purpose.** The renderer needs the session before
+    /// she is presented, because the page has to be running for there to be a video
+    /// track to wait for. That is the mechanism: the surface exists, hidden, and becomes
+    /// visible without being rebuilt.
+    var drawnSession: FaceSession? {
+        switch standing {
+        case .warming(let session), .here(let session): return session
+        case .dormant, .waking, .refused: return nil
+        }
+    }
+
+    /// Whether her face is **covering the screen**.
+    ///
+    /// True only once her video is playing — and for a refusal that arrived while it
+    /// was. A warming session is deliberately false: he stays on his home screen while
+    /// she comes through.
+    var isPresented: Bool {
+        switch standing {
+        case .here: return true
+        case .refused: return wasOnScreen
+        case .dormant, .waking, .warming: return false
+        }
+    }
+
+    /// Whether her surface must exist in the view tree at all.
+    ///
+    /// Wider than ``isPresented`` and that gap is the whole design: while warming, the
+    /// surface is built and hidden rather than absent, so that presenting her is a change
+    /// of opacity rather than a construction. Building it at presentation time would
+    /// throw away the page that had just spent thirty seconds connecting and start a
+    /// second one — over a session already billing for the first.
+    var needsSurface: Bool { drawnSession != nil || isPresented }
 
     /// The sentence on screen, when there is one to show. Never empty when non-nil.
     var visibleMessage: String? {
         guard case .refused(let refusal) = standing else { return nil }
         return refusal.sentence
+    }
+
+    /// What the **home screen** owes him right now, if anything.
+    ///
+    /// Nil in the two states where the home screen has nothing to say: nothing is
+    /// happening, or she is already in front of him.
+    var homeNotice: FaceNotice? {
+        switch standing {
+        case .dormant, .here:
+            return nil
+        case .waking:
+            return FaceNotice(kind: .waking, sentence: LiveFace.wakingPhrase)
+        case .warming:
+            return FaceNotice(kind: .waking, sentence: phase ?? LiveFace.wakingPhrase)
+        case .refused(let refusal):
+            // A refusal he is already looking at is drawn where he is looking. Putting it
+            // on the home screen as well would say the same thing twice.
+            guard !wasOnScreen else { return nil }
+            return FaceNotice(
+                kind: .failed,
+                sentence: refusal.sentence,
+                offersRetry: refusal.isWorthAnotherPress
+            )
+        }
     }
 
     /// Whether the screen should offer him another go.
@@ -110,13 +194,18 @@ final class LiveFaceModel: ObservableObject {
     /// after the `await` would let both through.
     func awaken() async {
         switch standing {
-        case .waking, .here:
-            return  // already asked, or already here. One press is one session.
+        case .waking, .warming, .here:
+            // Already asked, already warming, or already here. One press is one session,
+            // and `warming` is the case this revision added: the home screen still looks
+            // idle while she comes through, so a second press is *likelier* now, not
+            // less likely, and it must reach the broker exactly never.
+            return
         case .dormant, .refused:
             break
         }
 
         wanted = true
+        phase = nil
         standing = .waking
 
         do {
@@ -128,7 +217,8 @@ final class LiveFaceModel: ObservableObject {
                 await release(session.sessionId)
                 return
             }
-            standing = .here(session)
+            warmingSince = clock()
+            standing = .warming(session)
         } catch let error as APIError {
             wanted = false
             standing = .refused(.from(error))
@@ -138,10 +228,65 @@ final class LiveFaceModel: ObservableObject {
         }
     }
 
+    /// What the page says about itself, arriving over the web view's host channel.
+    ///
+    /// **This is the signal the whole surface hangs on.** `playing` means a media element
+    /// has data and is moving, which is the only claim that means *she can be spoken to* —
+    /// everything before it (`connected` included) is a room joined with nothing coming
+    /// out of it, and this app has already shown him thirty seconds of exactly that.
+    ///
+    /// The vocabulary is closed and defined server-side in `face/client-report.ts`; a
+    /// word this does not recognise leaves the wait exactly where it was, which is the
+    /// safe direction — an unknown state must never present her and must never hang up
+    /// on her.
+    func pageSaid(_ state: String, detail: String = "") async {
+        guard let session = drawnSession else { return }
+        let wasHere = wasOnScreen
+
+        if state == "playing" {
+            // Only out of `warming`. The page posts to the host on every call, so this
+            // can arrive twice, and the second one must not restart anything.
+            guard case .warming = standing else { return }
+            wasOnScreen = true
+            warmingSince = nil
+            phase = nil
+            standing = .here(session)
+            return
+        }
+
+        if let sentence = LiveFace.failure(forPageState: state, detail: detail, wasHere: wasHere) {
+            // She will never play. The session is open and billing, so it is settled
+            // here rather than left for the reaper — and he is told, which is the part
+            // that is not negotiable.
+            await giveUp(on: session, saying: sentence)
+            return
+        }
+
+        if let phrase = LiveFace.phrase(forPageState: state) {
+            phase = phrase
+        }
+    }
+
     /// He dismissed the refusal. Back to a home screen with nothing on it.
     func acknowledgeRefusal() {
         guard case .refused = standing else { return }
+        wasOnScreen = false
+        phase = nil
         standing = .dormant
+    }
+
+    /// The one button on the home-screen notice.
+    ///
+    /// Cancel a wait, or dismiss a failure — they are the same gesture to him and two
+    /// different acts underneath, and only one of them has a session to settle. Deciding
+    /// here rather than at the call site is what stops the home screen having to know
+    /// which of those it is looking at.
+    func dismissNotice() async {
+        if case .refused = standing {
+            acknowledgeRefusal()
+            return
+        }
+        await withdraw()
     }
 
     // MARK: - Leaving
@@ -157,11 +302,22 @@ final class LiveFaceModel: ObservableObject {
     func relinquish() -> String? {
         wanted = false
 
+        // **Warming counts.** A session that has not finished connecting is billing
+        // exactly as hard as one he is watching, and it is the *likelier* one to be
+        // walked away from — he is still on his home screen, with nothing covering it,
+        // free to put the phone in his pocket. Reading only `here` here would have made
+        // this change introduce the leak it was written to prevent.
         let live: String?
-        if case .here(let session) = standing { live = session.sessionId } else { live = nil }
+        switch standing {
+        case .warming(let session), .here(let session): live = session.sessionId
+        case .dormant, .waking, .refused: live = nil
+        }
 
         standing = .dormant
         report = nil
+        phase = nil
+        warmingSince = nil
+        wasOnScreen = false
         return live
     }
 
@@ -186,6 +342,13 @@ final class LiveFaceModel: ObservableObject {
     /// will be, because `onDisappear` and a background transition both fire when the app
     /// is put away with the face up.
     func withdraw() async {
+        // **A refusal is not a thing to leave.** The surface that holds it is torn down
+        // the moment she stops being drawn, and its `onDisappear` lands here — so without
+        // this guard the act of failing would immediately erase the sentence explaining
+        // the failure, leaving him with a long press that did nothing. There is nothing
+        // open to close in this state, so there is nothing to lose by staying put.
+        if case .refused = standing { return }
+
         guard let sessionId = relinquish() else { return }
         await release(sessionId)
     }
@@ -209,7 +372,28 @@ final class LiveFaceModel: ObservableObject {
     /// Takes the instant rather than reading the clock, because a deadline that reads
     /// `Date()` cannot be tested and every deadline in this project is.
     func tick(at now: Date) async {
-        guard case .here(let session) = standing else { return }
+        let session: FaceSession
+        let live: Bool
+        switch standing {
+        case .warming(let warming): session = warming; live = false
+        case .here(let here): session = here; live = true
+        case .dormant, .waking, .refused: return
+        }
+
+        // **The one case where a clock is allowed to decide anything here.** It does not
+        // decide when to show her — only when to stop waiting. The failures he has
+        // actually hit produce no state at all from inside the page, so without this a
+        // dead session warms silently and bills until the reaper finds it, and he is
+        // left unable to tell a slow success from nothing at all.
+        if !live,
+           let began = warmingSince,
+           now.timeIntervalSince(began) >= LiveFace.readyDeadline {
+            await giveUp(
+                on: session,
+                saying: "I opened a session and never came through. I have closed it."
+            )
+            return
+        }
 
         if let latest = try? await gateway.report(session.sessionId) {
             report = latest
@@ -219,13 +403,27 @@ final class LiveFaceModel: ObservableObject {
             // whole surface exists to avoid.
             if let ended = latest.session.ended {
                 wanted = false
+                warmingSince = nil
                 standing = .refused(.unexplained(LiveFaceModel.sentence(for: ended)))
                 return
             }
         }
 
-        guard session.isExpiring(at: now) else { return }
+        guard live, session.isExpiring(at: now) else { return }
         await renew(replacing: session)
+    }
+
+    /// Stop waiting, settle the session, and leave a sentence behind.
+    ///
+    /// ``FaceRefusal/unavailable(_:)`` rather than `unexplained`, because it is worth
+    /// another press: everything that reaches here is a connection that did not come up,
+    /// and the next one plausibly does.
+    private func giveUp(on session: FaceSession, saying sentence: String) async {
+        wanted = false
+        warmingSince = nil
+        phase = nil
+        standing = .refused(.unavailable(sentence))
+        await release(session.sessionId)
     }
 
     /// Pre-empt the cap: open the next session, put it on screen, then let the old one go.
