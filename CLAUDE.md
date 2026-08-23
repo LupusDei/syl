@@ -337,6 +337,31 @@ to add is about *additional* surfaces and blocks nothing.
   eats them, and it selects for whoever writes the most careful prose. Use
   `<<'EOF'` — quoted, so it expands nothing — and read the output for
   `command not found`, which is the only warning you get.
+- **An assertion about a MECHANISM must match the thing that implements it, never
+  the document that contains it — and this is the same house-style exposure as
+  the backticks above, wearing a different hat.** Our comments cite real
+  identifiers and real URLs *on purpose*, so a whole-file `toContain` is
+  routinely satisfied by a sentence *warning against* the very thing it checks
+  for. It has now cost two assertions in one file in one evening: a check that
+  the page pins its SDK version was answered by a comment citing the version,
+  and a check on the camera fence was answerable by prose arguing about the
+  fence.
+
+  Slice to the rule or the call site first, anchor on something only the real
+  thing has (`https://esm.sh/`, the selector, the call), **and then assert the
+  slice is non-empty** — or the narrowing quietly becomes its own way of
+  checking nothing. That last clause is not theoretical: a props guard written
+  this same evening had its extractor return `[]`, and only the non-empty
+  assertion stopped a test *about things wired to nothing* from shipping wired
+  to nothing.
+
+  Two corollaries earned the same night. **Verify a mutation actually applied
+  before believing a green run** — a substitution that silently failed to land
+  reports exactly like a passing test, and a mutant that never existed proves
+  nothing. And **a captured vendor artifact is DATA, not code**: keep it as
+  `.txt`, because a `.d.ts` under `tests/` is compiled by this workspace and
+  typechecks only while `skipLibCheck` is on, so an ordinary future tightening
+  breaks the whole workspace over a fixture.
 - The shell has `noclobber` set — a plain `>` fails if the file exists. Use `>|`.
 - `--verbose` is mandatory alongside `--output-format stream-json` in `-p` mode.
 - Headless sessions are pre-authorised (`--permission-mode bypassPermissions`)
