@@ -102,6 +102,21 @@ export const CLIENT_STATES = [
   "connecting",
   /** The SDK reported a live connection. */
   "connected",
+  /**
+   * **She can be HEARD.** A media element carrying sound is actually moving.
+   *
+   * The state that closes the worst window this surface has had. Her voice
+   * comes out of `RoomAudioRenderer`, a sibling of the avatar's video inside
+   * `AvatarSession`, and it plays a remote audio track the instant it
+   * subscribes — with no dependence at all on the video track that `playing`
+   * waits for. On 2026-08-23 the Commander heard her about twenty-five seconds
+   * before the layer holding her rose, which is being billed to talk to a
+   * black screen.
+   *
+   * So this is reported separately and the phone presents her on it with no
+   * grace: a face he can hear must be a face he can see.
+   */
+  "audible",
   /** Connected, and a media element is actually playing frames. */
   "playing",
   /**

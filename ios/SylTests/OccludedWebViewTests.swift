@@ -63,6 +63,10 @@ final class OccludedWebViewTests: XCTestCase {
         case transparent
         /// The whole window is hidden.
         case windowHidden
+        /// **Scrolled far outside its scroll view's visible bounds** — his theory,
+        /// 2026-08-23. Still in the window, still in the view tree, just nowhere near
+        /// the screen.
+        case scrolledAway
         /// Not in a window at all. **The control**: WebKit really does stop this one.
         case detached
     }
@@ -173,6 +177,42 @@ final class OccludedWebViewTests: XCTestCase {
                 + "stopped page when there is one to see")
     }
 
+    /// **Scrolling does not kill her.** The Commander's own theory, 2026-08-23:
+    /// *"not sure if it was timing, or if when I scrolled down and up again on the home
+    /// screen, that triggered her live session to show."*
+    ///
+    /// It was worth taking seriously, because the one placement that *does* stop a page
+    /// dead is leaving the window, and a SwiftUI container lazily discarding an offscreen
+    /// branch would be exactly that. If it held, an ordinary gesture could silently kill a
+    /// session he is paying for.
+    ///
+    /// **It does not hold, in either half.** Measured here: a web view scrolled three
+    /// screens past the last visible point keeps `visible`, keeps its clocks, and keeps
+    /// playing — being offscreen is not being out of the window. And structurally it
+    /// cannot arise anyway: `HomeScreen.faceLayer` is a direct child of the body's
+    /// `ZStack`, a *sibling* of `homeStack`, so the scroll view carrying the day cannot
+    /// contain it and cannot take it anywhere.
+    ///
+    /// What he saw was `LiveFace.readyDeadline` — forty-five seconds — arriving while he
+    /// happened to be scrolling. The cause was `syl-chzl.10`: `connected` and `playing`
+    /// were unreachable, so the deadline was the *only* way she was ever presented.
+    func testShouldKeepThePageRunningWhenItIsScrolledOffTheScreen() async throws {
+        let scrolled = try await read(.scrolledAway)
+
+        XCTAssertEqual(
+            scrolled.visibility, "visible",
+            "offscreen inside a scroll view is not out of the window, and WebKit "
+                + "derives page visibility from the window")
+        XCTAssertTrue(
+            scrolled.playing,
+            "a scroll must never be able to stop a session he is being billed for. "
+                + "Error: \(scrolled.error)")
+        XCTAssertGreaterThan(
+            scrolled.frames, 1, "and its animation clock keeps running while it is away")
+        XCTAssertGreaterThan(
+            scrolled.currentTime, 0, "with the frames actually advancing")
+    }
+
     /// **Every view-level way of hiding it is irrelevant to WebKit**, which is worth
     /// writing down because the obvious next edit is to argue about which one to use.
     ///
@@ -234,6 +274,20 @@ final class OccludedWebViewTests: XCTestCase {
             webView.alpha = 0
         case .windowHidden:
             window.isHidden = true
+        case .scrolledAway:
+            // A scroll view four screens tall with the web view at the bottom of it,
+            // scrolled to the top — so the page is in the window, in the tree, laid out,
+            // and a long way past the last visible point.
+            webView.removeFromSuperview()
+            let scroller = UIScrollView(frame: window.bounds)
+            scroller.contentSize = CGSize(width: window.bounds.width, height: window.bounds.height * 4)
+            webView.frame = CGRect(
+                x: 0, y: window.bounds.height * 3,
+                width: window.bounds.width, height: window.bounds.height)
+            scroller.addSubview(webView)
+            window.addSubview(scroller)
+            scroller.setContentOffset(.zero, animated: false)
+            scroller.layoutIfNeeded()
         case .detached:
             webView.removeFromSuperview()
         }

@@ -86,6 +86,11 @@ enum LiveFace {
         ["mic_granted", "mic_denied"],
         ["connecting"],
         ["connected"],
+        // Between the room and the picture, because that is exactly where it
+        // happens: her audio track subscribes and plays without waiting for
+        // her video track. See ``LiveFaceModel/pageSaid(_:detail:)`` — this
+        // rung does not merely count as progress, it presents her.
+        ["audible"],
         ["playing"],
     ]
 

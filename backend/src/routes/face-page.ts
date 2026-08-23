@@ -156,38 +156,60 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
       #070610; }
 
   /* ==================================================================
-     HER FRAMING: FIT THE WIDTH, AND LET THE VEIL HOLD THE REST.
+     HER FRAMING: FULL-BLEED PORTRAIT, THE WAY THE BRIDGE DOES IT.
 
-     Runway streams a 16:9 LANDSCAPE frame. The rule that used to live here
-     stretched the SDK's call widget to the whole viewport and left the inner
-     video fitted by COVER, and in a ~9:19.5 portrait phone that
-     means MATCH THE HEIGHT AND THROW AWAY THE WIDTH — about three quarters of
-     it. That is the face pressed against glass he saw on 2026-08-23: eyes,
-     nose and mouth, no head, no hair, no shoulders. The comment was accurate
-     and the behaviour was still wrong; a full-screen portrait of a landscape
-     source is a crop, described as a fill.
-
-     So the video is now sized from the viewport WIDTH and its 16:9 height is
-     allowed to be whatever that makes it, centred, with \`.veil\` — the app's
-     own dark, already on this page — filling above and below. \`object-fit:
-     contain\` inside that box means nothing is cropped by US whatever ratio
-     actually arrives down the wire.
+     The Commander, 2026-08-23: *"she is in a sort of landscape mode live feed
+     right now. She should be full screen portrait, just like the adjutant
+     bridge."* He has named the reference implementation, and Adjutant's
+     \`/avatar\` page is two rules — \`[data-avatar-call]\` stretched to the
+     viewport, and the inner video \`object-fit: cover\`. So that is what this
+     is. Nothing between him and the edges of his phone.
 
      ------------------------------------------------------------------
-     WHY \`--face-zoom\` CANNOT BRING THE OLD BUG BACK
+     HE COMPLAINED ABOUT BOTH CROPS, AND ONLY ONE OF THEM WAS OURS
 
-     Plain contain leaves her 56.25vw tall — on a 393x852pt phone that is a
-     221pt strip in the middle of a very tall screen, which is honest and
-     small. \`--face-zoom\` buys presence back, and it can only ever spend
-     WIDTH: \`max-height: 100dvh\` caps the box at the screen, so the FULL
-     HEIGHT of Runway's frame is on screen for every zoom up to
-     100dvh / 56.25vw — about 3.8x on that phone. At the 1.35 set here the box
-     is 531x299pt and 13% is trimmed from each SIDE, which is background and
-     the outside of her hair. The top of her head is not reachable from this
-     number, which is the property that matters: the failure to avoid is the
-     one we had.
-     ================================================================== */
-  :root { --face-zoom: 1.35; }
+     Earlier the same day: *"too zoomed, the bounding box is wrong"* — she
+     filled the phone brow to chin with no head on her. The page answered by
+     sizing her from the viewport WIDTH with \`object-fit: contain\`, which
+     letterboxed a landscape source into a 221pt strip and produced the
+     complaint above. Two opposite crops, both wrong, and the second was a
+     over-correction for a cause that was never established.
+
+     **\`cover\` cannot be what took the top of her head, and the geometry says
+     so.** Cover scales until BOTH axes are filled, so the binding axis is the
+     one the source is short of. A landscape source in a portrait viewport is
+     bound by HEIGHT: the whole frame height is on screen for every landscape
+     ratio, and the crop is purely horizontal. On a 393x852pt phone a 16:9
+     source renders 1514x852 — every row of it visible, 74% of the columns
+     gone. You cannot lose a hairline that way. Whatever removed the top of
+     her head did it BEFORE the frame reached this document, and the likeliest
+     candidate is the provider fitting her 1120x832 character portrait into a
+     16:9 stream by trimming top and bottom.
+
+     That is not a CSS problem and it must not be paid for with a CSS
+     compromise — a letterboxed strip does not restore her hair, it only makes
+     her small as well as cropped.
+
+     ------------------------------------------------------------------
+     SO THE PAGE MEASURES RATHER THAN ASSUMING
+
+     Every rule this file has ever carried was written against "Runway streams
+     16:9", which nobody had checked. \`frameHer()\` in the script below reads
+     \`videoWidth\`/\`videoHeight\` off the element the moment there is one,
+     publishes them as \`--face-src-w\`/\`--face-src-h\`, and sends them in the
+     \`playing\` report. The next person to argue about this ratio gets a
+     number off his phone instead of a comment. ================================================================== */
+
+  /* WHERE A CROP LANDS, WHEN THERE IS ONE TO LAND.
+
+     Inert for every landscape source, by the argument above: their crop is
+     horizontal and this only moves the vertical window. It is here as
+     insurance rather than as the fix — if the stream ever arrives portrait or
+     square, cover starts spending HEIGHT, and the default a browser picks
+     (50%) is the one that takes her hair first. Biased above centre so the
+     window keeps her head and gives up her shoulders, which is the trade she
+     would make. */
+  :root { --face-focus-y: 42%; }
 
   #root { position: fixed; inset: 0; z-index: 1; overflow: hidden; }
   #root, #root * { background-color: transparent !important; }
@@ -197,53 +219,54 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
     width: 100vw !important; height: 100vh !important; height: 100dvh !important;
     aspect-ratio: auto !important; max-width: none !important; max-height: none !important;
   }
-  /* The widget's own blurred backdrop. It was invisible while the video filled
-     the screen; now that the video letterboxes, it would be the only thing in
-     the bands where the veil belongs — and the veil is the app's dark, so the
-     page does not flash a different one. */
+  /* The widget's own blurred backdrop, and the veil behind it. Both are dark
+     rectangles under a video that now covers every pixel, so neither is ever
+     seen once she arrives — they are what he looks at WHILE she arrives, and
+     the veil is the app's own dark so the page does not flash a different
+     one. The SDK's \`::before\` is switched off because it is a \`filter:
+     blur()\` container, and one of those traps \`position: fixed\` on
+     everything inside it. */
   [data-avatar-call]::before, [data-avatar-call]::after { display: none !important; }
 
   [data-avatar-video], [data-avatar-video] > * {
     position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important;
   }
   [data-avatar-video] video, [data-avatar-video] canvas {
-    /* \`inset\` FIRST: the rule above sets all four sides with !important and a
-       shorthand written after these would put them back. */
-    inset: auto !important;
     position: absolute !important;
-    left: 50% !important; top: 50% !important;
-    right: auto !important; bottom: auto !important;
-    transform: translate(-50%, -50%) !important;
-    width: calc(100vw * var(--face-zoom)) !important;
-    height: calc(100vw * var(--face-zoom) * 9 / 16) !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    /* The SDK's stylesheet caps its widget; nothing may cap the picture inside
+       a surface whose whole job is to be edge to edge. */
     max-width: none !important;
-    /* The guarantee. Nothing above this line can crop her vertically. */
-    max-height: 100dvh !important;
-    object-fit: contain !important;
+    max-height: none !important;
+    object-fit: cover !important;
+    object-position: 50% var(--face-focus-y) !important;
   }
   /* She looks at him; he is not on camera. No self-view. */
   [data-avatar-user-video] { display: none !important; }
 
   /* THE STATUS SENTENCE, OUT FROM BEHIND THE CONTROLS.
 
-     It used to be pinned to the bottom at z-index 2, which drew "Waking her."
-     straight across the SDK's mic, camera and hang-up buttons AND swallowed
-     the taps meant for them — a label on top of the only controls the surface
-     has. It now sits in the veil directly BELOW her, which is empty by
-     construction now that the video letterboxes: the video's lower edge is at
-     50% + half its height, and half of (100vw * zoom * 9/16) is
-     100vw * zoom * 9/32.
+     It used to be pinned at \`bottom: 0\`, which drew "Waking her." straight
+     across the SDK's mic, camera and hang-up buttons AND swallowed the taps
+     meant for them — a label on top of the only controls the surface has.
+     Then it was derived from the letterbox geometry, and the letterbox is
+     gone: there is no empty band to sit in any more, because she covers the
+     screen.
 
-     \`min()\` keeps it on screen on a short or landscape viewport, where
-     \`max-height\` has already clamped the video and the derived offset would
-     overshoot. \`pointer-events: none\` is the belt: wherever the SDK chooses
-     to put its own furniture, a sentence never eats a press again. */
+     So it clears the SDK's control bar by measurement rather than by
+     arithmetic — \`[data-avatar-control-bar]\` is \`bottom: 0\` with 16px of
+     padding around 48px controls, so 104px is above it with room to spare —
+     and it carries a shadow, because it is now read against her face rather
+     than against the veil. \`pointer-events: none\` is the belt: wherever the
+     SDK chooses to put its own furniture, a sentence never eats a press. */
   #status { position: fixed; left: 0; right: 0; z-index: 2;
     pointer-events: none;
-    top: min(calc(50% + (100vw * var(--face-zoom) * 9 / 32) + 20px),
-             calc(100dvh - 150px));
+    bottom: calc(104px + env(safe-area-inset-bottom));
     padding: 0 18px;
-    text-align: center; font-size: 15px; line-height: 1.4; color: #b9b4d6; }
+    text-align: center; font-size: 15px; line-height: 1.4; color: #b9b4d6;
+    text-shadow: 0 1px 4px rgba(7, 6, 16, .8); }
   #status.err { color: #ff9d9d; }
   .spin { display: inline-block; width: 13px; height: 13px; border: 2px solid #5e7ce2;
     border-top-color: transparent; border-radius: 50%; animation: s .8s linear infinite;
@@ -513,48 +536,160 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
     }
 
     /**
-     * DID ANY OF IT ACTUALLY MOVE?
+     * WHAT THE SDK ACTUALLY TELLS US, AND WHY IT IS READ OFF THE DOM.
      *
-     * \`onConnected\` means the SDK joined a room. It does not mean a frame was
-     * painted or a sound was made, and on iOS those are a different question:
-     * a \`WKWebView\` blocks media that starts without a user gesture, and the
-     * long press that opens this page happens in NATIVE code — so from the web
-     * view's point of view there may have been no gesture at all. A blocked
-     * element is \`paused\` with data ready and everything else looking perfect.
+     * This page used to pass \`onConnected\` and \`onDisconnected\` to
+     * \`AvatarCall\`. **Neither is a prop of \`AvatarCall\`.** Read from the
+     * published declaration of \`@runwayml/avatars-react@0.17.0\` — the exact
+     * version imported below — the component destructures \`avatarId\`,
+     * \`sessionId\`, \`sessionKey\`, \`credentials\`, \`connectUrl\`, \`connect\`,
+     * \`baseUrl\`, \`audio\`, \`video\`, \`avatarImageUrl\`, \`onEnd\`, \`onError\`,
+     * \`onClientEvent\`, \`children\`, \`initialScreenStream\`,
+     * \`__unstable_roomOptions\` **and spreads the rest onto a \`div\`**. Two
+     * unknown handlers on a DOM element: React warns to a console nobody on a
+     * phone can read, and drops them.
      *
-     * One \`play()\` is attempted, because that is the fix when the block is
-     * merely a missing gesture and it costs nothing when it is not. The outcome
-     * either way is reported, which is the point: \`playing\`,
-     * \`autoplay_blocked\` and \`no_media\` are three different bugs that until now
-     * produced one symptom.
+     * So \`tell('connected')\` never fired, the media watch was only ever
+     * called from \`onConnected\` and therefore never ran at all, and
+     * \`playing\`, \`autoplay_blocked\`, \`no_media\` and \`ended\` were unreachable
+     * code in a shipped build. Every row in \`face_sessions\` proves it: the
+     * furthest word any session has ever reported is \`connecting\`.
+     *
+     * That is what put twenty-five seconds between hearing her and seeing her.
+     * With no \`connected\` there is no grace, and with no \`playing\` there is no
+     * signal, so the phone fell through to \`LiveFace.readyDeadline\` — forty-five
+     * seconds — while \`RoomAudioRenderer\` played her from the moment the audio
+     * track subscribed.
+     *
+     * The lifecycle is therefore taken from the one place the SDK publishes it
+     * without a callback: \`[data-avatar-video]\` carries
+     * \`data-avatar-status\`, which is \`useAvatarStatus()\` rendered as an
+     * attribute — \`connecting\`, then \`waiting\` once the ROOM IS ACTIVE and
+     * before any video track exists, then \`ready\`. An attribute cannot be
+     * mistyped into silence.
      */
-    async function watchTheMedia() {
-      for (const wait of [1200, 4000]) {
-        await new Promise((r) => setTimeout(r, wait));
+    const AVATAR_STATUS_WORDS = { connecting: 'connecting', waiting: 'connected', ready: 'connected' };
+
+    /** How often the watch looks. Fine enough that "heard" and "seen" are the same moment. */
+    const WATCH_TICK_MS = 250;
+    /** How long a paused element gets before an explicit \`play()\` is the answer. */
+    const AUTOPLAY_VERDICT_MS = 5000;
+    /** How long nothing at all may happen before the session is settled as dead. */
+    const NOTHING_EVER_PLAYED_MS = 30000;
+
+    /**
+     * HER REAL DIMENSIONS, TAKEN FROM THE ELEMENT.
+     *
+     * Every framing rule this page has ever carried was written against
+     * "Runway streams 16:9", which was never measured. \`videoWidth\` and
+     * \`videoHeight\` are the decoded frame, so this is the provider's own
+     * answer — published as custom properties for anything that wants to size
+     * from them, and sent in the \`playing\` report so the next argument about
+     * her crop is settled with a number off his phone.
+     */
+    function frameHer(video) {
+      const w = video.videoWidth, h = video.videoHeight;
+      if (!w || !h) return '';
+      try {
+        const style = document.documentElement.style;
+        style.setProperty('--face-src-w', String(w));
+        style.setProperty('--face-src-h', String(h));
+      } catch (_) {}
+      return w + 'x' + h;
+    }
+
+    /** Whether an element is carrying sound he could actually hear. */
+    function carriesAudio(element) {
+      if (element.tagName === 'AUDIO') return true;
+      const source = element.srcObject;
+      try { return !!source && source.getAudioTracks && source.getAudioTracks().length > 0; }
+      catch (_) { return false; }
+    }
+
+    /**
+     * ONE LOOP, STARTED WHEN SHE IS RENDERED AND NOT WHEN SOMETHING CALLS BACK.
+     *
+     * **The rule it exists to keep: a face he can hear must be a face he can
+     * see.** Audio does not wait for the video track — \`RoomAudioRenderer\` is
+     * a sibling of the avatar's video inside \`AvatarSession\`, and it plays a
+     * remote audio track the instant it subscribes. So \`audible\` is reported
+     * the moment anything is moving with sound in it, and the phone presents
+     * her on that word with no grace at all. Being billed to talk to a black
+     * screen is worse than either a slow face or a missing one.
+     *
+     * \`playing\` still means what it always meant — frames — and still arrives,
+     * now carrying the dimensions. Nothing here can end the session early: the
+     * two fatal words are reported only after a verdict has actually been
+     * reached, and \`no_media\` only after thirty seconds in which nothing was
+     * ever heard and nothing was ever painted.
+     */
+    async function watchHer() {
+      const began = Date.now();
+      let lastStatus = '';
+      let triedToPlay = false;
+      let heard = false;
+
+      while (root) {
+        await new Promise((r) => setTimeout(r, WATCH_TICK_MS));
         if (!root) return;
+        const waited = Date.now() - began;
+
+        // The SDK's own lifecycle. Reported on the transition, so a word is
+        // said once however many times the attribute is written.
+        const box = document.querySelector('[data-avatar-video]');
+        const status = (box && box.getAttribute('data-avatar-status')) || '';
+        if (status !== lastStatus) {
+          lastStatus = status;
+          const word = AVATAR_STATUS_WORDS[status];
+          // \`tell\` is idempotent per word, so \`waiting\` then \`ready\` reports
+          // \`connected\` once — which is right: the room came up once.
+          if (word) tell(word, 'data-avatar-status=' + status);
+        }
 
         const media = Array.from(document.querySelectorAll('#root video, #root audio'));
-        if (media.length === 0) continue;
-
         const live = media.filter((m) => m.srcObject || m.currentSrc || m.src);
-        if (live.length === 0) continue;
-
         const moving = live.filter((m) => !m.paused && m.readyState >= 2);
-        if (moving.length > 0) { tell('playing', live.length + ' element(s)'); return; }
 
-        const blocked = live.filter((m) => m.paused);
-        if (blocked.length > 0) {
+        // HEARD. The layer rises here, before there is anything to look at.
+        if (!heard && moving.some(carriesAudio)) {
+          heard = true;
+          say('');
+          tell('audible', 'sound at ' + waited + 'ms, ' + moving.length + ' element(s) moving');
+        }
+
+        // SEEN. Frames, with her real size attached.
+        const painted = moving.filter((m) => m.tagName === 'VIDEO' && m.videoWidth > 0);
+        if (painted.length > 0) {
+          say('');
+          tell('playing', frameHer(painted[0]) + ' at ' + waited + 'ms');
+          return;
+        }
+
+        // A \`WKWebView\` blocks media that starts without a user gesture, and
+        // the long press that opened this page happened in NATIVE code — so
+        // from in here there may have been no gesture at all. A blocked
+        // element is \`paused\` with data ready and everything else perfect.
+        // One \`play()\`, once, after the ordinary arrival window has passed.
+        if (!triedToPlay && waited >= AUTOPLAY_VERDICT_MS && live.length > 0 && moving.length === 0) {
+          triedToPlay = true;
           let recovered = false;
-          for (const m of blocked) {
+          for (const m of live) {
             try { await m.play(); recovered = true; } catch (_) {}
           }
-          if (recovered) { tell('playing', 'after an explicit play()'); return; }
-          tell('autoplay_blocked', blocked.length + ' element(s) paused with data ready');
-          say('She is here but her video will not start on this device.', true);
+          if (!recovered) {
+            tell('autoplay_blocked', live.length + ' element(s) paused, and play() was refused');
+            say('She is here but this phone will not start her.', true);
+            return;
+          }
+        }
+
+        // Nothing heard, nothing painted, half a minute gone. Settling it here
+        // is what stops a dead session billing until the phone's own deadline.
+        if (!heard && waited >= NOTHING_EVER_PLAYED_MS) {
+          tell('no_media', 'nothing was ever heard or painted in ' + waited + 'ms');
           return;
         }
       }
-      if (root) tell('no_media', 'connected, and nothing ever played');
     }
 
     // Not awaited: the prompt can sit on screen for as long as he likes, and
@@ -583,13 +718,21 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
         // not use is a permission prompt nobody should have to answer.
         audio: true,
         video: false,
-        onConnected: () => { say(''); tell('connected'); void watchTheMedia(); },
-        onDisconnected: () => { say('She has gone.'); tell('ended'); },
+        // **Only props this component actually destructures.** \`onConnected\`
+        // and \`onDisconnected\` were passed here for a day and are not part of
+        // \`AvatarCall\` — they landed on a \`div\` and did nothing, which took
+        // the whole lifecycle down with them. See the note above \`watchHer\`.
+        // \`onEnd\` is the one that means the room dropped or she finished.
+        onEnd: () => { say('She has gone.'); tell('ended'); },
         onError: (e) => {
           say('Something went wrong drawing her: ' + ((e && e.message) || e), true);
           tell('failed', String((e && e.message) || e));
         },
       }));
+
+      // Started HERE, unconditionally, because a watch that hangs off a
+      // callback is a watch that never runs when the callback is not real.
+      void watchHer();
     } catch (error) {
       // The import graph failed, which on a phone is the likeliest failure of
       // the lot. Say so — the session is already billing, and a blank screen is

@@ -698,6 +698,77 @@ final class LiveFaceTests: XCTestCase {
         XCTAssertEqual(face.standing, .here(aSession()))
     }
 
+    // MARK: - 4c. A face he can hear is a face he can see (`syl-chzl.10`, 2026-08-23)
+
+    /// **The defect, as one assertion.** His words: *"she started talking a good 25
+    /// seconds before the live video feed showed it."*
+    ///
+    /// Her voice does not wait for her picture. The SDK plays a remote audio track the
+    /// instant it subscribes, from a renderer that sits beside the avatar's video and
+    /// knows nothing about it — so `playing` can be a long way behind the first sound, and
+    /// on his phone it was never going to arrive at all. Every second of that window is a
+    /// paid session he is talking into a black screen.
+    ///
+    /// So `audible` presents her on the spot, with no grace: `connected` is a claim that
+    /// media is flowing and this is the media.
+    func testShouldShowHerTheMomentSheCanBeHeard() async {
+        let broker = broker { _ in aSession() }
+        let face = model(broker)
+        await face.awaken()
+        await face.pageSaid("connected")
+
+        await face.pageSaid("audible", detail: "sound at 900ms, 1 element(s) moving")
+
+        XCTAssertTrue(face.isPresented, "he can hear her, so he must be able to see her")
+        XCTAssertEqual(face.standing, .here(aSession()))
+        XCTAssertNil(face.homeNotice, "she is in front of him; the home screen is silent")
+    }
+
+    /// And it does not wait out a grace. The whole failure was a delay between the sound
+    /// and the sight, so putting a delay of our own in front of it would be the same
+    /// defect made deliberate — a beat is never required for her to appear.
+    func testShouldPutNoDelayAtAllBetweenHearingHerAndSeeingHer() async {
+        let broker = broker { _ in aSession() }
+        let face = model(broker)
+        await face.awaken()
+
+        // No `connected` first, and no `tick` afterwards. Nothing but the sound.
+        await face.pageSaid("audible")
+
+        XCTAssertTrue(
+            face.isPresented,
+            "sound is not a claim that media is flowing — it IS the media, and it needs "
+                + "no grace to prove itself")
+    }
+
+    /// It is progress as well as a presentation, and it sits between the room and the
+    /// picture — which is exactly where it happens.
+    func testShouldCountBeingHeardAsGettingFurtherThanAJoinedRoom() {
+        XCTAssertNotNil(LiveFace.reach(forPageState: "audible"))
+        XCTAssertGreaterThan(
+            LiveFace.reach(forPageState: "audible") ?? 0,
+            LiveFace.reach(forPageState: "connected") ?? 0,
+            "hearing her is further along than joining the room she is in")
+        XCTAssertLessThan(
+            LiveFace.reach(forPageState: "audible") ?? .max,
+            LiveFace.reach(forPageState: "playing") ?? .max,
+            "and it is short of a moving picture, which is still the real signal")
+    }
+
+    /// **It must never be mistaken for an ending.** `audible` settles nothing and closes
+    /// nothing — a word on the wrong side of that switch either hangs up on a healthy
+    /// face or leaves a dead one billing.
+    func testShouldNotSettleAnythingWhenSheBecomesAudible() async {
+        let broker = broker { _ in aSession(id: "face-heard") }
+        let face = model(broker)
+        await face.awaken()
+
+        await face.pageSaid("audible")
+
+        XCTAssertNil(LiveFace.failure(forPageState: "audible", detail: "", wasHere: true))
+        XCTAssertTrue(broker.closedIDs.isEmpty, "being heard is not a reason to hang up")
+    }
+
     /// **Progress short of a joined room does not start the grace.** `mic_granted` is the
     /// microphone answered, not a room; presenting on it would put a blank rectangle in
     /// front of him seconds after a press, which is a different failure and not a smaller

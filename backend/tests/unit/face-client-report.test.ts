@@ -79,6 +79,20 @@ describe("the client report ingress", () => {
       expect(sessions.get("rts_one")?.clientState).toBe(CLIENT_STATES.at(-1));
     });
 
+    it("should have a word for she can be HEARD, separate from she can be SEEN", () => {
+      // 2026-08-23: he heard her about twenty-five seconds before the layer
+      // holding her rose. Her voice comes from `RoomAudioRenderer`, which plays
+      // a remote audio track the instant it subscribes and does not wait for
+      // the video track `playing` is about. Two facts, so two words — folding
+      // them into one is what made a billing session invisible while it talked.
+      open();
+
+      expect(CLIENT_STATES).toContain("audible");
+      expect(CLIENT_STATES.indexOf("audible")).toBeLessThan(CLIENT_STATES.indexOf("playing"));
+      expect(reports.report({ sessionId: "rts_one", secret: KEY, state: "audible" }).ok).toBe(true);
+      expect(sessions.get("rts_one")?.clientState).toBe("audible");
+    });
+
     it("should refuse a word it does not publish, and say which words it takes", () => {
       open();
 

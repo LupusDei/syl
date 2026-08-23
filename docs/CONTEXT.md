@@ -3062,3 +3062,84 @@ Both would have survived another round of argument.
 So, concretely, before a number is quoted in a decision: **say what it is a count of, say
 when it was taken, and say what would make it stop being true.** A measurement without
 those three is a claim about the future wearing the clothes of a fact.
+
+### A prop the component never destructures (`syl-chzl.10`, 2026-08-23)
+
+The Commander, from TestFlight 0.13.0: *"she started talking a good 25 seconds before the
+live video feed showed it — not sure if it was timing, or if when I scrolled down and up
+again on the home screen, that triggered her live session to show."*
+
+The design says one to two seconds. `onConnected` starts a one-second grace, the beat that
+checks it runs once a second, and `playing` beats both. Nothing in that model can produce
+twenty-five, so the model was wrong somewhere.
+
+**`AvatarCall` has no `onConnected` and no `onDisconnected`.** From the declaration
+published with `@runwayml/avatars-react@0.17.0` — the exact version the page imports — the
+component destructures `avatarId`, `sessionId`, `sessionKey`, `credentials`, `connectUrl`,
+`connect`, `baseUrl`, `audio`, `video`, `avatarImageUrl`, `onEnd`, `onError`,
+`onClientEvent`, `children`, `initialScreenStream`, `__unstable_roomOptions` **and spreads
+the rest onto a `div`**. We passed two handlers it does not take. React warns to a console
+nobody on a phone can read, and drops them.
+
+The blast radius is much larger than the two callbacks:
+
+- `tell('connected')` never fired, so the grace never started.
+- `watchTheMedia()` was reachable **only** from `onConnected`, so it never ran — which made
+  `playing`, `autoplay_blocked` and `no_media` unreachable code in a shipped build.
+- `onDisconnected` never fired, so `ended` never arrived.
+- `say('')` never ran, so the page's own status line never cleared.
+
+Presentation therefore always fell through to `LiveFace.readyDeadline` — **forty-five
+seconds** — on the `reach >= sdk_loaded` branch, while `RoomAudioRenderer` played her from
+the moment the audio track subscribed. He was not exaggerating; he was under-counting.
+
+**The evidence was already in the database and nobody had queried it.** `face_sessions` in
+`~/.syl/syl.db` keeps the last `client_state` per session. Every row on the Commander's
+phone stops at `connecting`, `camera_blocked` or `left`. **No session has ever reported
+`connected` or `playing`.** That is the exact fingerprint of a callback that does not
+exist, sitting in a column added a day earlier for precisely this purpose. A telemetry
+column is only worth what somebody reads out of it, and the first query anyone runs should
+be *which of the words we publish have never once arrived* — a word that never appears is
+either a state that never happens or a reporter that cannot fire, and both are findings.
+
+Three general lessons:
+
+- **A callback name is a wire format, and it is checked by nobody.** `--strict-mcp-config`,
+  `noUncheckedIndexedAccess`, the whole gate — none of it can see a misspelt prop on a
+  component loaded from a CDN at runtime. The page reads its lifecycle off
+  `[data-avatar-status]` now, which is `useAvatarStatus()` rendered onto the DOM. **An
+  attribute that is missing is visibly missing; a handler that is never called is
+  indistinguishable from a thing that never happened.**
+- **A watch reached only through a callback does not run when the callback is not real.**
+  `watchHer()` is started unconditionally after `root.render`, so the observer's liveness
+  does not depend on the thing it is observing.
+- **His scroll theory was worth taking seriously and it does not hold.** Measured in
+  `OccludedWebViewTests.testShouldKeepThePageRunningWhenItIsScrolledOffTheScreen`: a
+  `WKWebView` scrolled three screens past the last visible point keeps `visible`, keeps its
+  clocks and keeps playing. It could not arise structurally either — `HomeScreen.faceLayer`
+  is a *sibling* of `homeStack`, so the scroll view carrying the day never contains it. He
+  was scrolling when the forty-five seconds happened to elapse. **A user's theory about
+  cause is data about timing, not about mechanism** — the coincidence he noticed was real
+  and pointed at the right second.
+
+#### Cover cannot decapitate her, and the arithmetic says so
+
+The same day, in the other direction: the framing was moved from `object-fit: cover` to a
+width-sized `contain` because he had reported she *"filled the phone brow to chin with no
+head on her"*. That produced *"a sort of landscape mode live feed"* — a 221pt letterboxed
+strip — and a second complaint.
+
+**`cover` was never capable of the first defect.** Cover scales until both axes are
+covered, so it binds on the axis the source is short of. A landscape source in a portrait
+viewport is bound by HEIGHT: on a 393x852pt phone a 16:9 frame renders 1514x852, every row
+of it on screen, 74% of the columns gone. The crop is purely horizontal, and you cannot
+lose a hairline that way. Whatever removed the top of her head did it **before the frame
+reached the document** — most likely the provider fitting her 1120x832 character portrait
+into a 16:9 stream by trimming top and bottom.
+
+So the fix for a provider-side crop was a CSS compromise that made her small *as well as*
+cropped, and it was reached without doing the arithmetic. The page is now full-bleed
+`cover`, the way the Bridge he named as the reference does it, and it **measures**
+`videoWidth`/`videoHeight` off the element and sends them with `playing`. Every framing
+rule this file has ever carried was written against "Runway streams 16:9", which nobody had
+checked; the next argument about her crop gets a number off his phone instead of a comment.

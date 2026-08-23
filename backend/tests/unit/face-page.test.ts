@@ -187,30 +187,177 @@ describe("the live face page", () => {
    * of one render: nothing on this page may crop her vertically.
    */
   describe("her framing", () => {
-    it("should fit her to the width and never cover the viewport with her", () => {
-      // `cover` in a portrait viewport IS the bug: it matches the height and
-      // spends the width. Its absence is the assertion, not `contain`'s
-      // presence — a rule that adds contain and leaves cover later in the
-      // cascade is the same defect with more CSS.
-      expect(FACE_PAGE_HTML).not.toContain("object-fit: cover");
-      expect(FACE_PAGE_HTML).toContain("object-fit: contain");
+    /**
+     * The declarations of the rule that sizes her picture, with the comments
+     * around it left out.
+     *
+     * Sliced rather than searched, because this file argues about `cover` and
+     * `contain` in prose and a `toContain` over the whole document would be
+     * answered by a sentence. The property under test is a property of the
+     * RULE.
+     */
+    function pictureRule(): string {
+      const start = FACE_PAGE_HTML.indexOf("[data-avatar-video] video");
+      expect(start).toBeGreaterThan(-1);
+      return FACE_PAGE_HTML.slice(start, FACE_PAGE_HTML.indexOf("}", start));
+    }
+
+    it("should cover the whole phone with her, the way the Bridge does", () => {
+      // His words, 2026-08-23: "she is in a sort of landscape mode live feed
+      // right now. She should be full screen portrait, just like the adjutant
+      // bridge." A letterboxed strip is the thing being removed, so `contain`
+      // must be gone from the RULE and not merely outranked later in it.
+      const rule = pictureRule();
+
+      expect(rule).toMatch(/object-fit:\s*cover/);
+      expect(rule).not.toMatch(/object-fit:\s*contain/);
     });
 
-    it("should cap her box at the screen, so no zoom can take the top of her head", () => {
-      // The whole safety argument for `--face-zoom`. The box is sized from the
-      // viewport WIDTH, so zoom only ever spends width; `max-height: 100dvh`
-      // is what stops a large one from spending height as well.
-      expect(FACE_PAGE_HTML).toContain("--face-zoom");
-      expect(FACE_PAGE_HTML).toMatch(/max-height:\s*100dvh/);
-      expect(FACE_PAGE_HTML).toMatch(/width:\s*calc\(100vw \* var\(--face-zoom\)\)/);
+    it("should let her picture reach every edge, with nothing capping it", () => {
+      // The widget is the viewport and the picture is the widget. A `max-width`
+      // or `max-height` surviving from the SDK's own stylesheet is how a
+      // full-bleed surface quietly becomes a boxed one again.
+      const rule = pictureRule();
+
+      expect(rule).toMatch(/width:\s*100%/);
+      expect(rule).toMatch(/height:\s*100%/);
+      expect(rule).toMatch(/max-width:\s*none/);
+      expect(rule).toMatch(/max-height:\s*none/);
+      expect(FACE_PAGE_HTML).toMatch(
+        /\[data-avatar-call\][^{]*\{[^}]*height:\s*100dvh[^}]*\}/,
+      );
     });
 
-    it("should leave the veil to fill above and below her, not the widget's own backdrop", () => {
-      // "Do not invent a new background; use the veil that is there." The SDK's
-      // blurred backdrop was invisible under a full-bleed video and would be
-      // the only thing in the letterbox bands now that there are bands.
+    it("should keep her head when a crop has to spend height", () => {
+      // Inert for a landscape source — their crop is horizontal — and the
+      // whole point is that the page no longer assumes the source is
+      // landscape. If the stream ever arrives portrait or square, cover starts
+      // spending height, and the browser's default 50% takes her hair first.
+      const rule = pictureRule();
+      const focus = /--face-focus-y:\s*(\d+)%/.exec(FACE_PAGE_HTML);
+
+      expect(rule).toMatch(/object-position:\s*50% var\(--face-focus-y\)/);
+      expect(focus).not.toBeNull();
+      expect(Number(focus?.[1])).toBeLessThan(50);
+    });
+
+    it("should measure her real size rather than asserting one in CSS", () => {
+      // Every framing rule this page has carried was written against "Runway
+      // streams 16:9", which nobody had checked. The hardcoded ratio is gone
+      // and the element is asked instead — a number off his phone beats a
+      // comment, and it is the only thing that can settle the next argument.
+      expect(FACE_PAGE_HTML).not.toMatch(/9\s*\/\s*16|16\s*\/\s*9/);
+      expect(FACE_PAGE_HTML).toContain("videoWidth");
+      expect(FACE_PAGE_HTML).toContain("videoHeight");
+      expect(FACE_PAGE_HTML).toContain("--face-src-w");
+    });
+
+    it("should report her real size with the frame that proved it", () => {
+      // The measurement is worth nothing on the phone alone. `playing` carries
+      // it to the session row, which is the only place an operator can read it.
+      expect(FACE_PAGE_HTML).toMatch(/tell\('playing',\s*frameHer\(/);
+    });
+
+    it("should still hold the app's own dark behind her while she is coming", () => {
+      // She covers every pixel once she arrives; this is what he looks at
+      // until she does, and it must not be a different dark from the screen
+      // the page is drawn over.
       expect(FACE_PAGE_HTML).toContain('<div class="veil">');
       expect(FACE_PAGE_HTML).toMatch(/\[data-avatar-call\]::before[^{]*\{[^}]*display:\s*none/);
+    });
+  });
+
+  /**
+   * **He heard her twenty-five seconds before he could see her.**
+   *
+   * `AvatarCall` has no `onConnected` and no `onDisconnected` — read from the
+   * declaration published with `@runwayml/avatars-react@0.17.0`, the version
+   * this page imports. Both were passed anyway, landed in the component's
+   * `...props` rest, and were spread onto a `div`. So `connected` never fired,
+   * the media watch hung off a callback that did not exist and therefore never
+   * ran, and `playing`, `autoplay_blocked`, `no_media` and `ended` were
+   * unreachable code in a shipped build.
+   *
+   * The phone fell through to its forty-five second deadline every time, while
+   * `RoomAudioRenderer` played her from the moment the audio track subscribed.
+   */
+  describe("she must never be audible before she is visible", () => {
+    /**
+     * The `AvatarCall` element's props, **with the comments stripped**.
+     *
+     * The comments there name the two dead handlers on purpose, so that nobody
+     * puts them back. A test that read them would be answered by the sentence
+     * warning against the thing instead of by the thing.
+     */
+    function renderedProps(): string {
+      const start = FACE_PAGE_HTML.indexOf("root.render(h(AvatarCall, {");
+      expect(start).toBeGreaterThan(-1);
+      return FACE_PAGE_HTML.slice(start, FACE_PAGE_HTML.indexOf("}));", start)).replaceAll(
+        /^\s*\/\/.*$/gm,
+        "",
+      );
+    }
+
+    it("should pass no handler the SDK does not destructure", () => {
+      // The exact defect, pinned by name. A prop this component does not take
+      // is not inert — it is a lifecycle that silently does not happen.
+      const props = renderedProps();
+
+      expect(props).not.toContain("onConnected");
+      expect(props).not.toContain("onDisconnected");
+    });
+
+    it("should learn that she has gone from the handler that actually exists", () => {
+      // `onEnd` is what `AvatarSession` calls from LiveKit's `onDisconnected`.
+      // Without it `ended` never arrives and a dropped room looks like a slow one.
+      const props = renderedProps();
+
+      expect(props).toMatch(/onEnd:\s*\(\)\s*=>/);
+      expect(props).toContain("tell('ended')");
+    });
+
+    it("should take the room's own lifecycle from the attribute the SDK publishes", () => {
+      // `data-avatar-status` is `useAvatarStatus()` rendered onto the DOM:
+      // `connecting`, then `waiting` the moment the room is ACTIVE and before
+      // any video track exists, then `ready`. An attribute cannot be mistyped
+      // into silence the way a prop name can.
+      expect(FACE_PAGE_HTML).toContain("data-avatar-status");
+      expect(FACE_PAGE_HTML).toMatch(/waiting:\s*'connected'/);
+      expect(FACE_PAGE_HTML).toMatch(/ready:\s*'connected'/);
+    });
+
+    it("should say she is audible the moment anything with sound is moving", () => {
+      // The rule this whole section exists for: a face he can hear must be a
+      // face he can see. Audio does not wait for the video track —
+      // `RoomAudioRenderer` is a sibling of the avatar's video and plays a
+      // remote audio track as soon as it subscribes.
+      expect(FACE_PAGE_HTML).toContain("tell('audible'");
+      expect(FACE_PAGE_HTML).toContain("carriesAudio");
+    });
+
+    it("should start watching when she is rendered, not when something calls back", () => {
+      // The structural half of the fix. A watch reached only through a
+      // callback is a watch that does not run when the callback is not real,
+      // and that is precisely how this failed.
+      const script = FACE_PAGE_HTML.slice(FACE_PAGE_HTML.indexOf("root.render(h(AvatarCall"));
+
+      expect(script).toContain("void watchHer();");
+      expect(FACE_PAGE_HTML).not.toContain("void watchTheMedia()");
+    });
+
+    it("should never call a session dead before it has waited longer than the phone", () => {
+      // `no_media` and `autoplay_blocked` settle a session and cost him the
+      // press. Now that the watch actually runs, a verdict reached too early
+      // would hang up on a face that was merely slow.
+      const verdict = /AUTOPLAY_VERDICT_MS\s*=\s*(\d+)/.exec(FACE_PAGE_HTML);
+      const nothing = /NOTHING_EVER_PLAYED_MS\s*=\s*(\d+)/.exec(FACE_PAGE_HTML);
+
+      expect(Number(verdict?.[1])).toBeGreaterThanOrEqual(3000);
+      expect(Number(nothing?.[1])).toBeGreaterThanOrEqual(20000);
+      // And a session that was heard is never declared dead for lack of a
+      // picture. She is on screen by then, and closing her mid-sentence
+      // because no frame arrived would be worse than a black rectangle.
+      expect(FACE_PAGE_HTML).toMatch(/if \(!heard && waited >= NOTHING_EVER_PLAYED_MS\)/);
     });
   });
 

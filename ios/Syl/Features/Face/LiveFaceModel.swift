@@ -56,6 +56,23 @@ import SylKit
 ///    A face that appears slightly early is a far smaller failure than a face that never
 ///    appears. What does *not* change: every fatal word still fails fast with its own
 ///    sentence, and every path that stops waiting still settles the session.
+/// 7. **A face he can HEAR must be a face he can SEE** (`syl-chzl.10`, 2026-08-23). His
+///    report: *"she started talking a good 25 seconds before the live video feed showed
+///    it."* Rule 5 gated presentation on her picture, and her voice was never gated on
+///    anything — the SDK plays a remote audio track as soon as it subscribes, so there
+///    was a window in which she was live, audible, billing, and invisible. Being charged
+///    to talk to a black screen is worse than either extreme.
+///
+///    The page now says `audible` for the sound itself, and it presents her **with no
+///    grace at all**. That is the difference between it and `connected`: a joined room is
+///    a claim that media is flowing, and this is the media.
+///
+///    The window was forty seconds rather than the two the design implied, because
+///    `connected` and `playing` were **unreachable** — the page passed `onConnected` and
+///    `onDisconnected` to a component that has neither, so they were spread onto a `div`
+///    and dropped. Every row in `face_sessions` stops at `connecting` or earlier. The
+///    page's fix is in `backend/src/routes/face-page.ts`; this rule is what stops the
+///    same window reopening the next time one signal goes quiet.
 @MainActor
 final class LiveFaceModel: ObservableObject {
     /// What is on screen, and what is being billed.
@@ -284,10 +301,23 @@ final class LiveFaceModel: ObservableObject {
         guard let session = drawnSession else { return }
         let wasHere = wasOnScreen
 
-        if state == "playing" {
-            // `present` refuses anything but `warming`. The page posts to the host on
-            // every call, so this can arrive twice, and the second one must not restart
-            // anything.
+        // **`audible` presents her exactly as hard as `playing`, and that is rule 7.**
+        //
+        // Her voice does not wait for her picture. It comes out of the SDK's
+        // `RoomAudioRenderer`, a sibling of the avatar's video inside the same
+        // session, and it plays a remote audio track the instant that track
+        // subscribes — while `playing` waits on a video track that arrives later and
+        // sometimes not at all. On 2026-08-23 he heard her about twenty-five seconds
+        // before the layer holding her rose, which is being billed to talk to a black
+        // screen: worse than a slow face, and worse than no face.
+        //
+        // So there is no grace on this one. `connected` gets a grace because a joined
+        // room is a *claim* that media is flowing; this is the sound itself.
+        //
+        // `present` refuses anything but `warming`. The page posts to the host on
+        // every call, so either word can arrive twice, and the second one must not
+        // restart anything.
+        if state == "playing" || state == "audible" {
             present(session)
             return
         }
