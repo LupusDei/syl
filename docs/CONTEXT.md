@@ -3921,17 +3921,64 @@ instrument that could only say yes was another instrument that could only say ye
 forty minutes later, by someone who had just written the rule down. Whatever gets built for
 `syl-chzl.18` has to be checked against that exact case, or it is the third iteration.
 
+#### The sixth was the FIX for the fifth, and it failed the other way
+
+The replacement monitor, written the same evening in direct response to the four above, was
+wrong twice over. It is the strongest entry in this section because it is not an original
+mistake — **it is the correction failing.**
+
+It required **four** completed workflows, none failing, before declaring green. Two problems,
+and only the first was predicted:
+
+1. **A skipped-but-green TestFlight satisfies it perfectly.** It was blind to the fifth
+   instance by construction, which was noticed while writing it up.
+2. **It was also broken outright, in the opposite direction.** `b106935` ran only *three*
+   workflows — `iOS against a real backend` is path-filtered, so **the number of workflows
+   varies by commit.** The monitor looped for thirty-seven minutes while all three passed and
+   then exited silently. Nobody found out, because a human read `/health` and said the deploy
+   had landed before the monitor's silence became suspicious.
+
+So the same author's two instruments failed in opposite directions:
+
+    the original     filtered to workflowName == "CI"   SAID YES while iOS was red
+    the replacement  required exactly four green        SAID NOTHING while all passed
+
+**The shared fault is not over- or under-reporting. It is assuming the shape of the answer** —
+first that "CI" was the whole gate, then that there were always four. Both assumptions are
+about the *structure* of a result rather than its *content*, which is exactly the part nobody
+validates, because it does not look like a claim. "Is the build green" feels like the
+question; "how many workflows are there" does not feel like an assumption at all.
+
+The correct form asserts nothing about how many:
+
+    none failing  AND  none pending  AND  at least one found
+
+Every clause is checkable without knowing the shape, and the last one is what makes an empty
+result set a failure instead of a pass — the same clause the `--commit` filter needed.
+
+**Three iterations, each written by someone who had just read the lesson.** That is as strong
+a case for mechanism over intention as this file will produce, with the sting that the
+mechanism reached for was itself an unvalidated instrument. There is no bottom to that regress
+except the one discipline that worked all evening: **check the thing against a case whose
+answer you already know.** It was applied exactly once — to the attribution script, which lost
+a metric for scoring the healthy session highest — and to nothing else anyone built.
+
 #### The standing conclusion: every guard here came from a human reading past a summary
 
-Count how each of the five was actually caught, and it is never by an instrument.
+Count how each of the six was actually caught, and it is never by an instrument.
 
 - **The knowledge-base theory** was refuted by reading the *third* transcript. One had already
   been read, and it supported the theory.
 - **The broken iOS build** was found by reading the *unfiltered* `gh run list`. The filtered
   view said complete.
 - **The skipped TestFlight** was found by reading the *job log*. The run list said success.
+- **The landed deploy** was found by reading `/health` directly — and that read is also the
+  only reason anyone noticed the replacement monitor had exited silently thirty-seven minutes
+  earlier. **A human answered the question before the instrument's failure to answer it became
+  suspicious**, which is the one case here where the human did not merely beat the instrument
+  but concealed that it was broken.
 
-Three for three, and in every case the passing-over was reasonable — the summary was
+Four for four, and in every case the passing-over was reasonable — the summary was
 **technically true and said what the reader expected.** `TestFlight: success` was not a lie.
 Neither was `ALL COMPLETE`, given what it had been asked. Nobody was careless; each summary
 answered a narrower question than the one being asked of it, which is what summaries are.
