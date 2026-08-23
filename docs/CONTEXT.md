@@ -857,26 +857,40 @@ signal separated from the noise, and first token is the signal.
 
 `syl-chzl.4.4` and `CLAUDE.md` both expected the bloat to be the conversation —
 *"much of her personality lives in that thread"* — and the pre-chosen remedy
-followed from that. Walking the transcript's **active chain** (the file is
-append-only with branches, so raw bytes overstate it by 2.4x) says otherwise.
-Of 7.56 MB:
+followed from that. Walking the transcript's **active chain** (the file is append-only with
+branches, so raw bytes overstate it by 2.4x) says otherwise — but **the unit
+matters more than the walk, and getting it wrong nearly put a false number in
+front of the Commander.** Base64 images are enormous on disk and comparatively
+cheap to the model, so byte share and token share disagree by a factor of four.
+Of 861,739 tokens, images taken at 1,300-2,000 each:
 
-| what | share |
-|---|---|
-| `mcp__syl__see_myself` images — **76 of them, 5.16 MB of base64** | 68% |
-| her thinking blocks | 9% |
-| non-image tool results | 9% |
-| **his words and hers, together** | **11%** |
+| what | **tokens** | bytes of the active chain |
+|---|---|---|
+| **his words and hers, together** | **31-33%** | 12% |
+| her thinking blocks | 24-25% | 9% |
+| tool results, text | 21-22% | 8% |
+| `see_myself` images — 76 of them | 11-18% | **69%** |
 
-The thread is not full of him. It is full of pictures she looked at once and
-can never put down, because **a tool result is pinned in the conversation
-forever**. 29 `see_myself` calls averaged 188 KB each. His actual conversation
-— thirteen days of it — is a ninth of what every turn pays to replay.
+**The token column is the one to quote.** The first version of this note led
+with the byte column and said his conversation was 11% of the thread and the
+pictures 68%. Both are true of bytes and neither is true of cost: in tokens his
+conversation is nearer a third, and the pictures are a sixth. The correction
+matters because the byte figure was about to be reported to him as evidence that
+his own ruling — no second thread, because "much of her personality lives in
+that thread" — rested on a belief the data did not support. **It does not
+support that reading.** A third of the thread is the conversation; his
+instinct was closer to right than the byte number made it look.
 
-That changed what the fix had to protect, and it is the reason to check before
-acting on a plausible cause: the remedy is the same one either way, but "the
-thread is mostly him" would have argued for compacting gently, and the truth
-argues for compacting hard.
+What survives the correction: the thread is still not *mostly* him, and it
+still carries 76 pictures she looked at once and can never put down, because a
+tool result is pinned forever. The remedy is unchanged either way, which is why
+this is recorded rather than acted on.
+
+**The general lesson is the project's own, in a new costume.** Bytes on disk are
+a consistency check against the file; tokens are the correspondence check
+against what the model is actually charged for. The 2.4x branch factor was
+caught; the 4x unit error nearly was not, because the walk was careful and the
+*units* were assumed.
 
 #### `/compact` is a real mechanism in `-p` mode, and it costs 104 seconds
 

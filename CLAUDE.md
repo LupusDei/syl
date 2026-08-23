@@ -413,8 +413,10 @@ to add is about *additional* surfaces and blocks nothing.
   accident: **the CLI's `--autocompact` flag is deliberately never passed**
   (compaction measured 104,504ms, and letting the CLI choose when means it
   eventually fires on a face question — the exact failure, rearmed), and the
-  thread turned out to be **11% his conversation and 68% `see_myself` images**,
-  so the thing the bloat note was protecting was never what filled the thread.
+  thread is **31-33% his conversation and 11-18% `see_myself` images IN TOKENS**
+  — quote tokens, never bytes: base64 is 69% of the transcript's *bytes* and a
+  sixth of its *cost*, and the byte figure was nearly reported to him as
+  evidence against his own no-second-thread ruling when it is not.
   Three consequences, each of which cost something to find:
   - **Nothing may `reset` that lane.** Every one of those jobs used to start a
     fresh thread for a good reason of its own; on his lane the same call deletes

@@ -25,17 +25,26 @@ import type { TurnResult, TurnRunner } from "./session.js";
  * ceiling that cannot be reached from below however fast the harness is.
  *
  * The bead expected the bloat to be the conversation — "much of her personality
- * lives in that thread". It is not, and the number is worth keeping because it
- * changes what the fix has to protect. Of the 7.56 MB active chain:
+ * lives in that thread". It is a minority of it either way, but **the honest
+ * unit is TOKENS, not bytes**, and the two disagree violently: base64 is
+ * enormous on disk and comparatively cheap to the model. Of 861,739 tokens
+ * (images taken at 1,300-2,000 each, the range for a render of this size):
  *
- * | what | share |
- * |---|---|
- * | `mcp__syl__see_myself` images — **76 of them, 5.16 MB of base64** | 68% |
- * | her thinking blocks | 9% |
- * | **his words and hers, together** | **11%** |
+ * | what | tokens | bytes of the active chain |
+ * |---|---|---|
+ * | **his words and hers, together** | **31-33%** | 12% |
+ * | her thinking blocks | 24-25% | 9% |
+ * | tool results, text | 21-22% | 8% |
+ * | `see_myself` images — 76 of them | 11-18% | **69%** |
  *
- * The thread is not full of him. It is full of pictures she looked at once,
- * pinned in his conversation forever because a tool result never leaves.
+ * **Quote the token column.** The byte column is what a naive `du` on the
+ * transcript shows and it overstates the pictures by a factor of four, which
+ * would have understated his own conversation as a ninth of the thread when it
+ * is nearer a third. Same remedy either way — that is why this is recorded
+ * rather than acted on — but not the same fact about his ruling.
+ *
+ * The thread is still not mostly him, and it still holds 76 pictures she
+ * looked at once that a tool result can never put down.
  *
  * ## Why the CLI's own `/compact` and not something of ours
  *
