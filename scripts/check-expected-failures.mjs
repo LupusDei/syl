@@ -72,6 +72,24 @@ const declared = new Map((manifest.expected ?? []).map((e) => [e.test, e]));
 const seen = new Map();
 /** Every test FILE a pass reported on, absolute. */
 const filesRun = new Set();
+/**
+ * Files that FAILED without producing a single assertion.
+ *
+ * A suite that throws while collecting — a broken import, a `beforeAll` that
+ * builds the backend and cannot — reports as a failed FILE with an empty
+ * `assertionResults`. This checker compares ASSERTIONS, so zero assertions
+ * compared clean and the whole gate passed: observed 2026-08-23 as
+ * `3 failed | 55 passed` with `EXIT=0`, when `service-lifecycle` and
+ * `launchd-entrypoint` both died on a momentarily broken build.
+ *
+ * The same absence-means-two-things defect this file was written about, one
+ * level up: a file with nothing to say and a file that said nothing wrong look
+ * identical. And it is the most expensive instance, because `ops/deploy.ts`
+ * runs this gate with no bypass — so a build breakage confined to the files
+ * that compile the backend would DEPLOY, and those are the files that test
+ * whether she starts at all.
+ */
+const brokeBeforeRunning = new Map();
 
 for (const path of resultsPaths) {
   const absolute = join(root, path);
@@ -89,7 +107,11 @@ for (const path of resultsPaths) {
   const results = JSON.parse(readFileSync(absolute, "utf8"));
   for (const file of results.testResults ?? []) {
     if (typeof file.name === "string") filesRun.add(file.name);
-    for (const assertion of file.assertionResults ?? []) {
+    const assertions = file.assertionResults ?? [];
+    if (file.status === "failed" && !assertions.some((a) => a.status === "failed")) {
+      brokeBeforeRunning.set(file.name, (file.message ?? "").split("\n")[0] ?? "");
+    }
+    for (const assertion of assertions) {
       // `fullName` is the describe chain plus the test name — the same string a
       // human reads in the reporter, so a manifest entry is copy-pasteable.
       // A test that passed in one pass and failed in another cannot happen (no
@@ -155,6 +177,24 @@ if (neverRan.length > 0) {
     "  neither config never runs, and a gate that has stopped covering it says",
     "  nothing — which is this project's signature defect. Fix the include and",
     "  exclude globs in vitest.config.ts / vitest.heavy.config.ts.",
+  );
+}
+
+if (brokeBeforeRunning.size > 0) {
+  problems.push(
+    "",
+    `  ${String(brokeBeforeRunning.size)} test file(s) FAILED WITHOUT RUNNING A TEST:`,
+    ...[...brokeBeforeRunning].map(
+      ([name, why]) =>
+        `    \u2620 ${relative(root, name).split(sep).join("/")}${why === "" ? "" : ` \u2014 ${why}`}`,
+    ),
+    "",
+    "  The suite threw before it could collect — a broken import, or a hook that",
+    "  builds the backend and could not. Its tests are not failing; they never",
+    "  ran, and a gate that compares assertions sees nothing to compare.",
+    "",
+    "  This can NEVER be declared away: tests/expected-failures.json names TESTS,",
+    "  and a file that produced no test has no name to match. Fix the build.",
   );
 }
 
