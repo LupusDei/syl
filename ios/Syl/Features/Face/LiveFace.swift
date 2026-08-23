@@ -48,6 +48,66 @@ enum LiveFace {
     /// the point where he would give up and press again.
     static let readyDeadline: TimeInterval = 45
 
+    /// How long `playing` gets to arrive once the room is joined, before she is presented
+    /// on `connected` alone (`syl-chzl.8`).
+    ///
+    /// **The fallback that stops silence resolving to nothing.** Presenting her used to be
+    /// gated strictly on `playing`, which is right in the abstract — show her when there
+    /// is a moving picture — and made the whole feature depend on the single most fragile
+    /// signal in the system with nothing behind it. When that chain goes quiet he waits
+    /// forty-five seconds behind an opaque screen and is then told the session he paid for
+    /// has been closed. **A face that appears slightly early is a far smaller failure than
+    /// a face that never appears.**
+    ///
+    /// One second, because `connected` and `playing` are milliseconds apart on a healthy
+    /// page — the SDK reports the connection, the media element gets its first frame — so
+    /// a second is several times the margin the race actually needs. The beat that checks
+    /// it runs once a second (`LiveFaceView.beat()`), so what he experiences is one to two
+    /// seconds after the room is joined. Both ends of that are inside the moment he is
+    /// still expecting something to happen from having pressed.
+    static let playingGrace: TimeInterval = 1
+
+    /// The page's lifecycle as rungs, for the states that mean it got **further**.
+    ///
+    /// Mirrors `CLIENT_STATES` in `backend/src/face/client-report.ts`, minus every word
+    /// that is an ending rather than a step — the fatal set belongs to ``failure(
+    /// forPageState:detail:wasHere:)`` and must not appear here, or a failure would count
+    /// as progress and be shown instead of said.
+    ///
+    /// Rungs rather than an index into a flat list because some of these are alternatives
+    /// at the same depth: `camera_blocked` is the fence firing during the same media
+    /// request `mic_requested` announces, and `mic_denied` is as far along as
+    /// `mic_granted` — a mute conversation is still a conversation, and the page carries
+    /// on.
+    private static let ladder: [[String]] = [
+        ["booting"],
+        ["sdk_loaded"],
+        ["mic_requested", "camera_blocked"],
+        ["mic_granted", "mic_denied"],
+        ["connecting"],
+        ["connected"],
+        ["playing"],
+    ]
+
+    /// How far this word says the page got, or nil if it says nothing about that.
+    ///
+    /// One-based, so zero can mean *it has not spoken*.
+    static func reach(forPageState state: String) -> Int? {
+        ladder.firstIndex { $0.contains(state) }.map { $0 + 1 }
+    }
+
+    /// The rung past which giving up on her is the worse answer.
+    ///
+    /// `sdk_loaded`: the parts that draw her are in memory, so there is something behind
+    /// the layer that could be her. Below it there is not — a page that only ever said
+    /// `booting` never loaded the SDK, and raising an empty layer over that would replace
+    /// an honest sentence with a blank rectangle.
+    ///
+    /// Derived rather than written down, so renumbering the ladder cannot silently move
+    /// the threshold. ``Int/max`` if that rung is ever removed, which fails to the safe
+    /// side: she is not presented, and the sentence he gets is the one that exists today.
+    static var reachWorthShowing: Int { reach(forPageState: "sdk_loaded") ?? .max }
+
     /// What the home screen says while nothing has happened yet.
     static let wakingPhrase = "Waking her"
 

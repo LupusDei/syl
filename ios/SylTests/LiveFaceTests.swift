@@ -614,9 +614,18 @@ final class LiveFaceTests: XCTestCase {
         XCTAssertNil(face.homeNotice, "she is in front of him; the home screen is silent")
     }
 
-    /// And on nothing else. Every one of these is the page making progress, and this app
-    /// has already shown him thirty seconds of `connected` with a blank rectangle in it.
-    func testShouldShowHerOnNothingShortOfPlaying() async {
+    /// And **nothing else presents her the moment it is said**. Every one of these is the
+    /// page making progress, and this app has already shown him thirty seconds of
+    /// `connected` with a blank rectangle in it.
+    ///
+    /// Rewritten by `syl-chzl.8`, and the change is one word: *immediately*. `connected`
+    /// now leads to her being presented after a short grace — see
+    /// ``testShouldPresentHerShortlyAfterTheRoomIsJoined`` — because gating on the single
+    /// most fragile signal in the system with no fallback cost the Commander whole
+    /// sessions. What survives unchanged is that no state short of `playing` may put her
+    /// on screen *on arrival*: the race is given a moment to resolve first, and every
+    /// rung below `connected` still waits.
+    func testShouldShowHerOnNothingShortOfPlayingTheMomentItIsSaid() async {
         let broker = broker { _ in aSession() }
         let face = model(broker)
         await face.awaken()
@@ -626,12 +635,213 @@ final class LiveFaceTests: XCTestCase {
             "connecting", "connected",
         ] {
             await face.pageSaid(state)
-            XCTAssertFalse(face.isPresented, "\(state) is not a face he can speak to")
+            XCTAssertFalse(face.isPresented, "\(state) is not yet a face he can speak to")
             XCTAssertEqual(face.standing, .warming(aSession()), "and it is still warming")
         }
 
         await face.pageSaid("playing")
         XCTAssertTrue(face.isPresented, "and then, exactly once, it is")
+    }
+
+    // MARK: - 4b. Silence must never resolve to nothing (`syl-chzl.8`, 2026-08-23)
+
+    /// **The room is joined, so she is coming through — show her.**
+    ///
+    /// `connected` means the SDK has a live connection and media is flowing. `playing`
+    /// should follow within a few hundred milliseconds, and it is given a grace to do so,
+    /// because presenting on the real signal is still better. But when it does not
+    /// arrive — because the report chain died, which is exactly what the Commander's
+    /// sessions show — the honest answer is to raise the layer, not to hold an opaque
+    /// screen over a session he is paying for and then apologise at forty-five seconds.
+    func testShouldPresentHerShortlyAfterTheRoomIsJoined() async {
+        let broker = broker { _ in aSession() }
+        broker.report = { id in aReport(id: id) }
+        let face = model(broker)
+        await face.awaken()
+        await face.pageSaid("connected")
+
+        // A beat inside the grace changes nothing: `playing` may still be on its way.
+        await face.tick(at: now.addingTimeInterval(LiveFace.playingGrace / 2))
+        XCTAssertFalse(face.isPresented, "the real signal gets its moment first")
+
+        await face.tick(at: now.addingTimeInterval(LiveFace.playingGrace))
+
+        XCTAssertTrue(face.isPresented, "and then she is shown, connected being enough")
+        XCTAssertEqual(face.standing, .here(aSession()))
+        XCTAssertTrue(broker.closedIDs.isEmpty, "nothing was given up on")
+        XCTAssertNil(face.homeNotice, "she is in front of him; the home screen is silent")
+    }
+
+    /// The grace is short. It is there to let a signal that is milliseconds away win the
+    /// race, not to be a second waiting period bolted onto the first.
+    func testShouldGiveThePlayingSignalOnlyAMomentToWinTheRace() {
+        XCTAssertGreaterThan(LiveFace.playingGrace, 0, "the race is worth resolving")
+        XCTAssertLessThanOrEqual(
+            LiveFace.playingGrace, 2,
+            "a grace he can perceive as a wait has become the thing it was replacing")
+        XCTAssertLessThan(
+            LiveFace.playingGrace, LiveFace.readyDeadline / 10,
+            "and it must be nothing like the deadline; the whole point is not waiting it out")
+    }
+
+    /// And when `playing` does arrive it still wins, immediately, without waiting out a
+    /// grace it beat. The primary path is untouched.
+    func testShouldStillPresentOnPlayingInsideTheGrace() async {
+        let broker = broker { _ in aSession() }
+        let face = model(broker)
+        await face.awaken()
+        await face.pageSaid("connected")
+
+        await face.pageSaid("playing")
+
+        XCTAssertTrue(face.isPresented, "the real signal never waits for the fallback")
+        XCTAssertEqual(face.standing, .here(aSession()))
+    }
+
+    /// **Progress short of a joined room does not start the grace.** `mic_granted` is the
+    /// microphone answered, not a room; presenting on it would put a blank rectangle in
+    /// front of him seconds after a press, which is a different failure and not a smaller
+    /// one. It waits for the deadline like everything else.
+    func testShouldNotPresentHerForProgressShortOfAJoinedRoom() async {
+        let broker = broker { _ in aSession() }
+        broker.report = { id in aReport(id: id) }
+        let face = model(broker)
+        await face.awaken()
+        await face.pageSaid("mic_granted")
+
+        await face.tick(at: now.addingTimeInterval(LiveFace.playingGrace * 4))
+
+        XCTAssertFalse(face.isPresented, "a microphone is not a room")
+        XCTAssertEqual(face.standing, .warming(aSession()))
+    }
+
+    /// **The Commander's actual failure, and the outcome it should have had.**
+    ///
+    /// The page reported `camera_blocked` at two seconds and then nothing at all for
+    /// forty-four more. The session was open, billing, and — as far as anything on the
+    /// phone could tell — possibly working perfectly, because silence is evidence that
+    /// nothing was HEARD, not that nothing happened. Closing it and apologising was the
+    /// worst available answer: he paid the whole session and saw none of it.
+    ///
+    /// A page that got as far as loading its SDK has done enough that showing her beats
+    /// hanging up on her. If she is not there he sees an empty face with a meter and a way
+    /// out, which is strictly more than an opaque screen and a sentence.
+    func testShouldShowHerAtTheDeadlineWhenThePageProgressedAndThenWentSilent() async {
+        let broker = broker { _ in aSession(id: "face-quiet") }
+        broker.report = { id in aReport(id: id) }
+        let face = model(broker)
+        await face.awaken()
+        for state in ["booting", "sdk_loaded", "mic_requested", "camera_blocked"] {
+            await face.pageSaid(state)
+        }
+
+        await face.tick(at: now.addingTimeInterval(LiveFace.readyDeadline))
+
+        XCTAssertTrue(
+            face.isPresented,
+            "he paid for this session; a page that got this far is shown, not closed")
+        XCTAssertEqual(face.standing, .here(aSession(id: "face-quiet")))
+        XCTAssertTrue(
+            broker.closedIDs.isEmpty,
+            "and nothing he already paid for is thrown away to say sorry for it")
+        XCTAssertNil(face.homeNotice)
+    }
+
+    /// Every rung at or above `sdk_loaded` earns that, one at a time, so a future change
+    /// to the ladder cannot quietly demote one of them back into a closed session.
+    func testShouldShowHerAtTheDeadlineForEveryKindOfForwardProgress() async {
+        for state in [
+            "sdk_loaded", "mic_requested", "camera_blocked", "mic_denied", "mic_granted",
+            "connecting",
+        ] {
+            let broker = broker { _ in aSession(id: "face-\(state)") }
+            broker.report = { id in aReport(id: id) }
+            let face = model(broker)
+            await face.awaken()
+            await face.pageSaid(state)
+
+            await face.tick(at: now.addingTimeInterval(LiveFace.readyDeadline))
+
+            XCTAssertTrue(face.isPresented, "\(state) is the page getting somewhere")
+            XCTAssertTrue(broker.closedIDs.isEmpty, "\(state) must not end in a closed session")
+        }
+    }
+
+    /// **And the sentence is kept for the case it is true of.** A page that only ever said
+    /// it was booting never loaded the parts that draw her, so there is nothing behind the
+    /// layer to raise. That is genuinely "I opened a session and never came through", and
+    /// it still closes the session and says so.
+    func testShouldStillGiveUpWhenThePageNeverGotPastBooting() async {
+        let broker = broker { _ in aSession(id: "face-stillborn") }
+        broker.report = { id in aReport(id: id) }
+        let face = model(broker)
+        await face.awaken()
+        await face.pageSaid("booting")
+
+        await face.tick(at: now.addingTimeInterval(LiveFace.readyDeadline))
+
+        XCTAssertFalse(face.isPresented, "there is nothing behind the layer to show")
+        XCTAssertEqual(face.homeNotice?.kind, .failed)
+        XCTAssertEqual(broker.closedIDs, ["face-stillborn"], "and it stops costing money")
+    }
+
+    /// **A fatal word still wins, whatever the page had managed before it.** The Commander
+    /// needs to read `could not establish signal connection` when that is what happened;
+    /// a fallback that swallowed it would trade one silence for another.
+    func testShouldStillFailFastOnAFatalWordAfterTheRoomWasJoined() async {
+        let broker = broker { _ in aSession(id: "face-dropped") }
+        let face = model(broker)
+        await face.awaken()
+        await face.pageSaid("connected")
+
+        await face.pageSaid("failed", detail: "could not establish signal connection")
+
+        XCTAssertEqual(face.homeNotice?.kind, .failed)
+        XCTAssertTrue(
+            face.homeNotice?.sentence.contains("could not establish signal connection") == true)
+        XCTAssertFalse(face.isPresented)
+        XCTAssertEqual(
+            broker.closedIDs, ["face-dropped"], "a fatal state settles the session as it did")
+    }
+
+    /// **Cancelling still wins too.** The grace is a pending presentation, and a beat that
+    /// lands after he has let her go must not resurrect one. Every path that stops waiting
+    /// settles the session; none of them may un-settle it.
+    func testShouldNotPresentHerAfterHeHasAlreadyLetHerGo() async {
+        let broker = broker { _ in aSession(id: "face-gone") }
+        broker.report = { id in aReport(id: id) }
+        let face = model(broker)
+        await face.awaken()
+        await face.pageSaid("connected")
+
+        await face.withdraw()
+        await face.tick(at: now.addingTimeInterval(LiveFace.playingGrace * 4))
+
+        XCTAssertEqual(face.standing, .dormant, "a cancelled wait stays cancelled")
+        XCTAssertFalse(face.isPresented)
+        XCTAssertEqual(broker.closedIDs, ["face-gone"], "settled exactly once")
+    }
+
+    /// **How far the last page got is not how far this one has got.** The two new pieces of
+    /// state — the rung the page reached and the instant the room was joined — decide
+    /// whether she is presented, so a press that inherited them would raise the layer over
+    /// a page that had not started. Backgrounding mid-wait and pressing again is the
+    /// ordinary way to reach this.
+    func testShouldNotInheritTheLastWaitsProgressOnTheNextPress() async {
+        let broker = broker { ordinal in aSession(id: "face-\(ordinal)") }
+        broker.report = { id in aReport(id: id) }
+        let face = model(broker)
+        await face.awaken()
+        await face.pageSaid("connected")
+        await face.scenePhaseChanged(to: .background)
+
+        await face.awaken()
+        await face.tick(at: now.addingTimeInterval(LiveFace.playingGrace * 4))
+
+        XCTAssertFalse(
+            face.isPresented,
+            "the second page has said nothing; the first one's progress is not its own")
+        XCTAssertEqual(face.standing, .warming(aSession(id: "face-2")))
     }
 
     /// A word the page has never been able to say leaves the wait exactly where it was.
@@ -762,10 +972,15 @@ final class LiveFaceTests: XCTestCase {
         }
     }
 
-    /// **Nothing at all is the failure with no signal to hang off.** The connection
-    /// failures he has actually hit report no state from inside the page whatsoever, so
-    /// the only thing that can end that wait is a deadline — and it ends it by *saying
-    /// so*, which is the opposite of presenting on a timer.
+    /// **Nothing at all is the failure with no signal to hang off.** A page that never
+    /// speaks at all is a document that did not run: no SDK, no room, nothing behind the
+    /// layer to raise. The only thing that can end that wait is a deadline — and it ends
+    /// it by *saying so*.
+    ///
+    /// This is now the narrow case rather than the general one (`syl-chzl.8`). A page that
+    /// said anything at or past `sdk_loaded` is presented here instead; the sentence
+    /// belongs only to a wait in which genuinely nothing progressed, which is why this
+    /// test reports no state whatsoever before the beat.
     func testShouldGiveUpAndSaySoWhenNothingEverPlays() async {
         let broker = broker { _ in aSession(id: "face-silent") }
         broker.report = { id in aReport(id: id) }

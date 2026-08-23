@@ -118,10 +118,11 @@ struct HomeScreen: View {
             // survive being shown. Building it at presentation time would throw that away
             // and start a second page over the same billing session.
             //
-            // She arrives without a cross-fade, and that is the trade taken knowingly: a
-            // fade means animating opacity up from zero, and a zero-opacity layer is the
-            // one thing WebKit might reasonably decide is not worth painting. Her video
-            // starting is a real event and it is allowed to look like one.
+            // She arrives without a cross-fade. That was chosen out of a fear that has
+            // since been measured and found groundless — a zero-opacity layer is not
+            // throttled by WebKit, see `OccludedWebViewTests` — so it is now kept for the
+            // reason that survives: her video starting is a real event and it is allowed
+            // to look like one. A fade would be safe if anyone wants one.
             faceLayer
 
             homeStack
@@ -167,12 +168,24 @@ struct HomeScreen: View {
 
     /// Her face, built before it is shown.
     ///
-    /// Hidden by `zIndex` rather than by `opacity(0)` or `.hidden()`, and that is not a
-    /// stylistic call: WebKit throttles timers and suspends media for a view it considers
-    /// not visible, and the page's own readiness check waits on `setTimeout` and on a
-    /// media element actually moving. A layer that is genuinely in the window, full size
-    /// and simply *drawn behind an opaque screen* is visible to WebKit and invisible to
-    /// him — which is exactly the pair of properties this needs.
+    /// ## What actually keeps the page alive — and it is not `zIndex`
+    ///
+    /// This used to say that `zIndex` was chosen over `opacity(0)` and `.hidden()`
+    /// because WebKit throttles timers and suspends media for a view it considers not
+    /// visible. **Measured on 2026-08-23 and that is false** (`syl-chzl.9`,
+    /// `ios/SylTests/OccludedWebViewTests.swift`): occluded, hidden, fully transparent and
+    /// even in a hidden window, the page runs at full speed and still reports
+    /// `document.visibilityState === "visible"`. iOS derives page visibility from **window
+    /// membership** and application state, not from whether any pixel can be seen.
+    ///
+    /// So the real rule is the one below, and it is stricter than a choice of modifier:
+    /// **the layer must stay in the window.** A view with no window is the one placement
+    /// WebKit does stop — `requestAnimationFrame` halts at its first frame and `play()`
+    /// rejects with `AbortError` — and SwiftUI dropping this branch is exactly that. If
+    /// ``LiveFaceModel/needsSurface`` ever went false mid-warm-up it would not hide her; it
+    /// would kill the page over a session that is still billing.
+    ///
+    /// `zIndex` is kept because it says what is meant. It is no longer load-bearing.
     @ViewBuilder
     private var faceLayer: some View {
         if liveFace.needsSurface {

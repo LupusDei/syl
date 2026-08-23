@@ -27,9 +27,14 @@ import SylKit
 /// ## It is built before it is shown, and that is the mechanism
 ///
 /// This view goes into the tree the instant a session opens and stays **invisible** until
-/// her video track is playing (``LiveFaceModel/isPresented``, applied by `HomeScreen`).
-/// The page inside it is loading, importing and joining a room the whole time — which is
-/// the only way there can be a playing track to present on.
+/// the model presents her (``LiveFaceModel/isPresented``, applied by `HomeScreen`). The
+/// page inside it is loading, importing and joining a room the whole time — which is the
+/// only way there can be a playing track to present on.
+///
+/// **And it must stay in the tree for the whole of that.** Measured in
+/// `OccludedWebViewTests`: being covered, hidden or transparent does not slow the page
+/// down at all, but leaving the window stops it dead. So the invisibility is free and the
+/// *existence* is not optional.
 ///
 /// So nothing in here may be built conditionally on *presented*. The renderer sits at one
 /// position in one branch across the whole of `warming` and `here`; if presenting her
@@ -92,8 +97,13 @@ struct LiveFaceView: View {
 
     /// Restarts the beat when the session changes, and stops it when there is none.
     ///
-    /// **Runs through `warming` as well as `here`**, because the give-up deadline is
-    /// checked on this beat and a wait with no beat behind it is a wait with no end.
+    /// **Runs through `warming` as well as `here`**, because every way of ending a wait is
+    /// checked on this beat — the give-up deadline, and now the grace that presents her
+    /// after a joined room. A wait with no beat behind it is a wait with no end, and since
+    /// `syl-chzl.8` it is also a face that never arrives.
+    ///
+    /// The identity is the session id rather than the standing, so becoming presented does
+    /// not restart the beat mid-session.
     private var tickIdentity: String? { model.drawnSession?.sessionId }
 
     /// One beat a second while she is here: the meter, and the renewal that gets ahead
@@ -102,6 +112,12 @@ struct LiveFaceView: View {
     /// A second is chosen against the cap's thirty-second lead, not against the meter —
     /// a meter that ticks a little coarsely is fine, and being late to a renewal is her
     /// stopping mid-sentence.
+    ///
+    /// **It is also the resolution of ``LiveFace/playingGrace``**, which is the one place
+    /// this interval is visible to him: a one-second grace checked on a one-second beat
+    /// means she appears one to two seconds after the room is joined. Shortening the beat
+    /// would tighten that and would also multiply the meter reads behind it, which is why
+    /// it has not been.
     private func beat() async {
         guard tickIdentity != nil else { return }
         while !Task.isCancelled {

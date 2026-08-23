@@ -31,9 +31,31 @@ import SylKit
 ///    covering screen that says *Waking her* for thirty seconds is worse than no screen
 ///    at all, because it takes the phone away from him and gives him nothing. So the
 ///    session opens, the page loads and the room is joined **behind the home screen**,
-///    and the only thing that presents her is her video track actually playing — see
-///    ``pageSaid(_:detail:)``. Not the session row existing, not the page having loaded,
-///    and not a timer.
+///    and what presents her is her video track actually playing — see
+///    ``pageSaid(_:detail:)``. Not the session row existing, and not the page having
+///    merely loaded.
+/// 6. **And silence never resolves to nothing** (`syl-chzl.8`). Rule 5 was right and it
+///    was built as a single point of failure: presenting her hung on `playing` alone,
+///    arriving over one chain — page, `WKScriptMessage`, coordinator, model — and when
+///    that chain went quiet the outcome was forty-five seconds behind an opaque screen
+///    followed by *I opened a session and never came through*. Maximum spend, zero
+///    delivery, and it reads to him as a feature that does not work. His sessions on
+///    2026-08-23 did exactly that: last word `camera_blocked` at two seconds, then
+///    nothing.
+///
+///    **Silence is evidence that nothing was HEARD, not that nothing happened**, so the
+///    last state known understates progress by construction. Two fallbacks, both behind
+///    the real signal and neither replacing it:
+///    - `connected` is a joined room with media flowing. It starts
+///      ``LiveFace/playingGrace`` for `playing` to win the race, and then she is
+///      presented anyway.
+///    - At the deadline, a page that reached ``LiveFace/reachWorthShowing`` is
+///      **presented** rather than closed. He already paid for the session; an empty face
+///      with a meter and a way out is strictly more than an opaque screen and an apology.
+///
+///    A face that appears slightly early is a far smaller failure than a face that never
+///    appears. What does *not* change: every fatal word still fails fast with its own
+///    sentence, and every path that stops waiting still settles the session.
 @MainActor
 final class LiveFaceModel: ObservableObject {
     /// What is on screen, and what is being billed.
@@ -71,6 +93,21 @@ final class LiveFaceModel: ObservableObject {
 
     /// When the current warm-up began, for ``LiveFace/readyDeadline``. Nil unless warming.
     private var warmingSince: Date?
+
+    /// When the page first said the room was joined, for ``LiveFace/playingGrace``.
+    ///
+    /// Set once and only by `connected`, so a page that says it twice does not keep
+    /// pushing its own presentation into the future.
+    private var connectedSince: Date?
+
+    /// How far the page got, at the **most**. Zero until it says anything.
+    ///
+    /// The maximum rather than the latest, and the difference is the whole of the
+    /// deadline fallback: the last thing the Commander's page said was `camera_blocked`,
+    /// which is a fence firing rather than an advance, and reading only the latest word
+    /// would have thrown away the `sdk_loaded` before it. Progress is not something a
+    /// page can undo by saying something sideways afterwards.
+    private var reach = 0
 
     /// Whether she ever actually reached the screen during this session.
     ///
@@ -205,7 +242,7 @@ final class LiveFaceModel: ObservableObject {
         }
 
         wanted = true
-        phase = nil
+        forgetTheWait()
         standing = .waking
 
         do {
@@ -230,10 +267,14 @@ final class LiveFaceModel: ObservableObject {
 
     /// What the page says about itself, arriving over the web view's host channel.
     ///
-    /// **This is the signal the whole surface hangs on.** `playing` means a media element
-    /// has data and is moving, which is the only claim that means *she can be spoken to* —
-    /// everything before it (`connected` included) is a room joined with nothing coming
-    /// out of it, and this app has already shown him thirty seconds of exactly that.
+    /// **`playing` is the signal and it still presents her on the spot.** A media element
+    /// with data, moving, is the only claim that means *she can be spoken to*, and nothing
+    /// else here puts her on screen at the moment it is said.
+    ///
+    /// What this also does now is **remember how far the page got**, because that is what
+    /// the two fallbacks in rule 6 are read from: `connected` starts the grace, and the
+    /// high-water mark decides what the deadline does. Both are settled on the beat, in
+    /// ``tick(at:)`` — a state arriving is never itself a presentation.
     ///
     /// The vocabulary is closed and defined server-side in `face/client-report.ts`; a
     /// word this does not recognise leaves the wait exactly where it was, which is the
@@ -244,13 +285,10 @@ final class LiveFaceModel: ObservableObject {
         let wasHere = wasOnScreen
 
         if state == "playing" {
-            // Only out of `warming`. The page posts to the host on every call, so this
-            // can arrive twice, and the second one must not restart anything.
-            guard case .warming = standing else { return }
-            wasOnScreen = true
-            warmingSince = nil
-            phase = nil
-            standing = .here(session)
+            // `present` refuses anything but `warming`. The page posts to the host on
+            // every call, so this can arrive twice, and the second one must not restart
+            // anything.
+            present(session)
             return
         }
 
@@ -258,8 +296,22 @@ final class LiveFaceModel: ObservableObject {
             // She will never play. The session is open and billing, so it is settled
             // here rather than left for the reaper — and he is told, which is the part
             // that is not negotiable.
+            //
+            // **Checked before progress is recorded, and that order is load-bearing.** A
+            // fatal word must not be able to raise the layer over a page that has just
+            // said it is dead; the Commander needs to read `could not establish signal
+            // connection` when that is what happened.
             await giveUp(on: session, saying: sentence)
             return
+        }
+
+        if let rung = LiveFace.reach(forPageState: state) {
+            reach = max(reach, rung)
+            // Only `connected` starts the clock, and only the first one. A room joined is
+            // the point at which media is flowing; everything below it is preparation, and
+            // presenting on preparation would put a blank rectangle in front of him
+            // seconds after a press — a different failure, not a smaller one.
+            if state == "connected", connectedSince == nil { connectedSince = clock() }
         }
 
         if let phrase = LiveFace.phrase(forPageState: state) {
@@ -271,8 +323,43 @@ final class LiveFaceModel: ObservableObject {
     func acknowledgeRefusal() {
         guard case .refused = standing else { return }
         wasOnScreen = false
-        phase = nil
+        forgetTheWait()
         standing = .dormant
+    }
+
+    /// **Put her on screen.** The one place `here` is entered from, and every route to
+    /// being presented goes through it: the `playing` report, the grace after a joined
+    /// room, and the deadline over a page that got somewhere.
+    ///
+    /// One method rather than three, because the three of them have to agree about what
+    /// presentation *means* — `wasOnScreen` is what decides whether a later refusal is
+    /// drawn in front of him or quietly on the home screen, and a fallback path that
+    /// forgot to set it would make her vanish mid-conversation with the explanation
+    /// somewhere he is no longer looking.
+    ///
+    /// **Only out of `warming`**, which is what makes every caller idempotent and what
+    /// stops a beat that lands after he has let her go from resurrecting a session that
+    /// has already been settled.
+    private func present(_ session: FaceSession) {
+        guard case .warming = standing else { return }
+        wasOnScreen = true
+        forgetTheWait()
+        standing = .here(session)
+    }
+
+    /// Everything that only means something while she is on her way.
+    ///
+    /// One method rather than the six sites that used to clear `warmingSince` and `phase`
+    /// by hand, two of which cleared only one of the pair — `awaken` left `warmingSince`
+    /// and the ended-branch of ``tick(at:)`` left `phase`. That was survivable while both
+    /// were cosmetic. It is not now: ``reach`` and ``connectedSince`` decide whether she is
+    /// *presented*, so one missed reset is a press that inherits the last wait's progress
+    /// and raises the layer over a page that has not started.
+    private func forgetTheWait() {
+        warmingSince = nil
+        connectedSince = nil
+        reach = 0
+        phase = nil
     }
 
     /// The one button on the home-screen notice.
@@ -315,9 +402,11 @@ final class LiveFaceModel: ObservableObject {
 
         standing = .dormant
         report = nil
-        phase = nil
-        warmingSince = nil
         wasOnScreen = false
+        // **Including how far the page got.** Leaving `reach` or `connectedSince` behind
+        // would arm the next press with the last one's progress, and the next press would
+        // present a page that has not started — see ``forgetTheWait()``.
+        forgetTheWait()
         return live
     }
 
@@ -380,19 +469,43 @@ final class LiveFaceModel: ObservableObject {
         case .dormant, .waking, .refused: return
         }
 
-        // **The one case where a clock is allowed to decide anything here.** It does not
-        // decide when to show her — only when to stop waiting. The failures he has
-        // actually hit produce no state at all from inside the page, so without this a
-        // dead session warms silently and bills until the reaper finds it, and he is
-        // left unable to tell a slow success from nothing at all.
-        if !live,
-           let began = warmingSince,
-           now.timeIntervalSince(began) >= LiveFace.readyDeadline {
-            await giveUp(
-                on: session,
-                saying: "I opened a session and never came through. I have closed it."
-            )
-            return
+        // **Where the wait ends, one way or the other.** Both branches below are the
+        // clock's, and neither of them is the primary way she is shown — `playing` is,
+        // and it has already had every chance by the time either of these fires.
+        if !live {
+            // **The room is joined and `playing` did not follow.** It has had its grace;
+            // she goes on screen anyway. The alternative is holding an opaque screen over
+            // a live connection because the one report that would have proved it went
+            // missing — which is the failure this bead exists to end.
+            if let joined = connectedSince,
+               now.timeIntervalSince(joined) >= LiveFace.playingGrace {
+                present(session)
+                return
+            }
+
+            if let began = warmingSince,
+               now.timeIntervalSince(began) >= LiveFace.readyDeadline {
+                // **The deadline resolves to nothing only when nothing happened.** A page
+                // that loaded the parts that draw her has done enough that raising the
+                // layer beats closing a session he has already paid forty-five seconds
+                // of; if she is not behind it he gets an empty face with a running meter
+                // and the one button that settles it, which is strictly more than an
+                // opaque screen and an apology.
+                if reach >= LiveFace.reachWorthShowing {
+                    present(session)
+                    return
+                }
+
+                // And a page that never spoke, or only ever said it was booting, gets the
+                // sentence — because that one is true. Nothing was loaded, so there is
+                // nothing behind the layer to show, and a session that will never draw
+                // her is settled here rather than left billing for the reaper.
+                await giveUp(
+                    on: session,
+                    saying: "I opened a session and never came through. I have closed it."
+                )
+                return
+            }
         }
 
         if let latest = try? await gateway.report(session.sessionId) {
@@ -403,7 +516,7 @@ final class LiveFaceModel: ObservableObject {
             // whole surface exists to avoid.
             if let ended = latest.session.ended {
                 wanted = false
-                warmingSince = nil
+                forgetTheWait()
                 standing = .refused(.unexplained(LiveFaceModel.sentence(for: ended)))
                 return
             }
@@ -420,8 +533,7 @@ final class LiveFaceModel: ObservableObject {
     /// and the next one plausibly does.
     private func giveUp(on session: FaceSession, saying sentence: String) async {
         wanted = false
-        warmingSince = nil
-        phase = nil
+        forgetTheWait()
         standing = .refused(.unavailable(sentence))
         await release(session.sessionId)
     }
