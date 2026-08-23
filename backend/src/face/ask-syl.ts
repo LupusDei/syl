@@ -1,5 +1,10 @@
 import { systemClock, type Clock } from "../services/clock.js";
-import { verifyAskCredential, type AskRejectionReason } from "./ask-credential.js";
+import {
+  ASK_REJECTION_MESSAGE,
+  verifyAskCredential,
+  type AskRejectionReason,
+  type AskVerification,
+} from "./ask-credential.js";
 import type { FaceSessionStore } from "./face-session-store.js";
 import {
   RUNWAY_RPC_MAX_PARAMETERS,
@@ -37,7 +42,7 @@ import {
  * standing there with nothing to say, which is the failure mode this whole
  * epic exists to avoid.
  *
- * Three rules follow, and they are the reason this file is not just a function
+ * Four rules follow, and they are the reason this file is not just a function
  * call:
  *
  * 1. **A cold lane is refused instantly.** Not attempted, not raced — refused,
@@ -49,7 +54,16 @@ import {
  *    produced silence.
  * 3. **Every path returns something she can say.** There is no branch here that
  *    resolves to nothing and none that rejects. A tool call that throws is a
- *    face that freezes.
+ *    face that freezes. That claim used to be true only of the code *inside*
+ *    the try block — the credential check, the `touch`, the warm-lane predicate
+ *    and the log sink all sat outside it, so a locked database was a rejected
+ *    RPC. {@link AskSylIngress.ask} is now a net around the whole of it.
+ * 4. **One turn per face at a time.** A second question arriving while a turn
+ *    is still running is answered from here, at once. It is NOT queued behind
+ *    the turn that is already too slow — `ConversationService` serialises per
+ *    conversation, so queueing means waiting out the whole of a turn that has
+ *    already missed the deadline and then running another, which cannot fit
+ *    however fast the lane is. See `#single` for the measurement.
  */
 
 /** The tool's name, as the model knows it. */
@@ -126,6 +140,19 @@ export const COLD_LANE_LINE =
 export const TOO_SLOW_LINE =
   "That one is taking me longer than I can stand here for. Ask me again and I will have it.";
 
+/**
+ * A turn for this face is ALREADY RUNNING and he has asked something else.
+ *
+ * Distinct from {@link TOO_SLOW_LINE} because it is a different fact and it
+ * arrives at a different time: this one is instant and it is true — the last
+ * question is genuinely still being worked on — where the too-slow line is what
+ * she says after standing there for 6.5 seconds. Telling him she is still on
+ * the last one is also the only honest thing available, because the answer to
+ * the last one is what he is going to get.
+ */
+export const STILL_THINKING_LINE =
+  "I am still on the last one. Give me a moment and ask me again.";
+
 /** The turn failed outright. */
 export const TURN_FAILED_LINE = "Something went wrong on my end. Say that again?";
 
@@ -151,7 +178,7 @@ export type FaceAnswerer = (input: {
 }) => Promise<string>;
 
 /** Why an `ask_syl` call did not produce her words. */
-export type AskSylFailure = "unauthorised" | "empty" | "cold" | "slow" | "failed";
+export type AskSylFailure = "unauthorised" | "empty" | "cold" | "busy" | "slow" | "failed";
 
 /** What a tool call resolves to. Never a rejection; see the header. */
 export type AskSylOutcome =
@@ -212,17 +239,42 @@ export class AskSylIngress {
   readonly #now: Clock;
   readonly #log: (event: string, fields: Record<string, unknown>) => void;
 
+  /**
+   * The turn each face session has running RIGHT NOW, if any.
+   *
+   * Keyed by session so two faces cannot mute each other, and cleared when the
+   * TURN settles rather than when our wait expires — see {@link #single}.
+   *
+   * Bounded by that, and only by that: an entry lives until its turn settles,
+   * which `runTurn`'s own `DEFAULT_TURN_TIMEOUT_MS` guarantees within ten
+   * minutes. A seam that could hang forever would mute that face for the rest
+   * of its life and leave one entry behind — so if a slower seam is ever put
+   * behind {@link FaceAnswerer}, this needs a clock of its own.
+   */
+  readonly #inFlight = new Map<string, Promise<unknown>>();
+
   constructor(options: AskSylIngressOptions) {
     this.#sessions = options.sessions;
     this.#answer = options.answer;
     this.#isLaneWarm = options.isLaneWarm ?? null;
     this.#deadlineMs = options.deadlineMs ?? ASK_SYL_DEADLINE_MS;
     this.#now = options.now ?? systemClock;
-    this.#log =
+    const sink =
       options.log ??
-      ((event, fields) => {
+      ((event: string, fields: Record<string, unknown>): void => {
         console.info(`[syl] ${event}`, fields);
       });
+    // Wrapped once, here, rather than at each call site. The sink is injected
+    // and a throw from it must never become a rejected RPC — the whole point of
+    // this class is that nothing it does can reach the avatar as an exception,
+    // and losing a log line is a smaller failure than losing her voice.
+    this.#log = (event, fields) => {
+      try {
+        sink(event, fields);
+      } catch {
+        /* A logger that cannot log is not a reason to stop talking. */
+      }
+    };
   }
 
   /** The declaration to hand Runway. Checked against the provider's limits. */
@@ -245,12 +297,43 @@ export class AskSylIngress {
    * Never rejects and never resolves to nothing.
    */
   async ask(request: AskSylRequest): Promise<AskSylOutcome> {
-    const verification = verifyAskCredential({
-      sessions: this.#sessions,
-      sessionId: request.sessionId,
-      secret: request.secret,
-      now: this.#now(),
-    });
+    // THE OUTERMOST NET, and it exists because the contract above was only true
+    // of the part of this method inside the try block. `touch`, the warm-lane
+    // predicate and the answerer's *synchronous* throw all escaped it, so a
+    // locked database was a rejected RPC handler rather than an apology. Every
+    // one of those has its own handling below; this is what catches the next
+    // seam somebody adds without reading this comment.
+    try {
+      return await this.#ask(request);
+    } catch (error) {
+      this.#log("face.ask.crashed", {
+        sessionId: request.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { ok: false, failure: "failed", say: TURN_FAILED_LINE };
+    }
+  }
+
+  async #ask(request: AskSylRequest): Promise<AskSylOutcome> {
+    let verification: AskVerification;
+    try {
+      verification = verifyAskCredential({
+        sessions: this.#sessions,
+        sessionId: request.sessionId,
+        secret: request.secret,
+        now: this.#now(),
+      });
+    } catch (error) {
+      // FAIL CLOSED, and fail *silently* — a check that could not run is not an
+      // authenticated caller. Handing back an apology here would give a
+      // stranger a sentence where the refusal path deliberately gives none.
+      this.#log("face.ask.refused", {
+        sessionId: request.sessionId,
+        reason: "check_failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { ok: false, failure: "unauthorised", message: ASK_REJECTION_MESSAGE };
+    }
 
     if (!verification.ok) {
       // The reason goes to the log, where it answers "why did her face stop
@@ -272,6 +355,14 @@ export class AskSylIngress {
     // those six seconds, or the reaper cuts her off mid-answer.
     this.#sessions.touch(request.sessionId, this.#now());
 
+    // ONE TURN PER FACE, and it is checked before the cold lane because a turn
+    // already running is proof the lane is warm — saying she is not awake yet
+    // while she is mid-answer would be a lie.
+    if (this.#inFlight.has(request.sessionId)) {
+      this.#log("face.ask.busy", { sessionId: request.sessionId });
+      return { ok: false, failure: "busy", say: STILL_THINKING_LINE };
+    }
+
     // FAIL FAST rather than gamble. A cold spawn is ~7,450ms against an 8s
     // ceiling, so attempting one buys a coin flip on silence.
     if (this.#isLaneWarm !== null && !this.#isLaneWarm()) {
@@ -282,7 +373,9 @@ export class AskSylIngress {
     const startedAt = this.#now();
     try {
       const say = await this.#bounded(
-        this.#answer({ sessionId: request.sessionId, question }),
+        this.#single(request.sessionId, () =>
+          this.#answer({ sessionId: request.sessionId, question }),
+        ),
       );
       this.#log("face.ask.answered", {
         sessionId: request.sessionId,
@@ -335,6 +428,61 @@ export class AskSylIngress {
           : { ok: false, say: outcome.say ?? "", failure: outcome.failure };
       },
     };
+  }
+
+  /**
+   * Run the turn, and hold the session's gate until **the turn** settles.
+   *
+   * ## The failure this exists for
+   *
+   * Measured on the Commander's own phone, 2026-08-23, from `syl.log`: four
+   * `ask_syl` calls, four deadline misses, not one answer ever spoken. The
+   * turns behind them took 10,049ms, 7,789ms and 29,852ms against a 6,500ms
+   * deadline and the provider's 8s ceiling.
+   *
+   * The second of those is the one that matters. `ConversationService`
+   * serialises turns per conversation, and **a turn we have stopped waiting for
+   * keeps running and keeps the queue** — see the note above `#bounded`. So the
+   * second question did not merely take as long as the first: it waited out the
+   * whole of the first turn *and then* ran its own, which cannot fit inside the
+   * ceiling however fast her lane is. Three questions in a row and the third is
+   * queued behind two. It never recovers inside one face session, which is
+   * exactly what "she stops answering after a couple of exchanges" looks like
+   * from the other side of the screen.
+   *
+   * There is a second cost and it is the worse one. Every abandoned turn still
+   * lands in his transcript — his question and her unspoken answer — and that
+   * transcript is the `commander` lane whose length is what makes the turns
+   * slow. Queueing them is a ratchet: each unheard answer makes the next answer
+   * later.
+   *
+   * ## Why the gate is held past our own deadline
+   *
+   * Because the deadline is when *we* stop waiting, and the queue is held by
+   * the *turn*. Releasing at the deadline would reopen the gate at precisely
+   * the moment reopening it is useless.
+   *
+   * A refusal is therefore the honest answer and it is instant. What it does
+   * NOT do is make her answer faster — that is `syl-chzl.4.4`, the ceiling
+   * against her real latency — nor rescue the answer the overrun turn went on
+   * to produce, which is `syl-chzl.4.5`. This only stops the second question
+   * making the first one worse.
+   */
+  async #single(sessionId: string, run: () => Promise<string>): Promise<string> {
+    const turn = run();
+    this.#inFlight.set(sessionId, turn);
+    // Settled, not fulfilled: a turn that REJECTED has also left the queue, and
+    // a gate that only opens on success would mute her face for the rest of the
+    // session after one failure.
+    void turn
+      .catch(() => undefined)
+      .finally(() => {
+        // Guarded, so a turn settling after the map moved on cannot evict a
+        // newer one. There is no path that puts a second turn in today; the
+        // check is what keeps that true if one is added.
+        if (this.#inFlight.get(sessionId) === turn) this.#inFlight.delete(sessionId);
+      });
+    return turn;
   }
 
   /**

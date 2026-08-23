@@ -9,6 +9,7 @@ import {
   ASK_SYL_TIMEOUT_SECONDS,
   COLD_LANE_LINE,
   NOTHING_ASKED_LINE,
+  STILL_THINKING_LINE,
   TOO_SLOW_LINE,
   TURN_FAILED_LINE,
   type FaceAnswerer,
@@ -56,6 +57,11 @@ describe("AskSylIngress", () => {
   });
 
   afterEach(() => {
+    // Restored here rather than only in each test's `finally`: a test that
+    // times out never reaches its own cleanup, and fake timers left installed
+    // hang every test after it — which turns one red into five and hides which
+    // one actually broke.
+    vi.useRealTimers();
     database.close();
   });
 
@@ -341,6 +347,203 @@ describe("AskSylIngress", () => {
       const outcome = await ingress().ask(ask("   "));
 
       expect(outcome).toEqual({ ok: false, failure: "empty", say: NOTHING_ASKED_LINE });
+    });
+  });
+
+  /**
+   * The contract in the module header is "never rejects", and until `syl-chzl`
+   * only the part of it *inside* the try block held. The credential check, the
+   * `touch`, the warm-lane predicate and the logger all ran outside it, so a
+   * locked database or a throwing seam became a rejected RPC handler — which is
+   * the one thing the avatar's tool loop is not built to survive.
+   *
+   * These drive each seam to a throw and require a sentence anyway.
+   */
+  describe("a seam that throws rather than failing", () => {
+    /** A store whose every method throws, as a locked database would. */
+    function wedged(): FaceSessionStore {
+      const boom = (): never => {
+        throw new Error("database is locked");
+      };
+      return new Proxy(sessions, {
+        get: () => boom,
+      }) as unknown as FaceSessionStore;
+    }
+
+    it("should refuse rather than reject when the credential cannot be checked", async () => {
+      const outcome = await ingress({ sessions: wedged() }).ask(ask());
+
+      // FAIL CLOSED. A check that could not complete is not an authenticated
+      // caller, so this is the ordinary refusal with nothing to say — never an
+      // apology that tells a stranger the session is real.
+      expect(outcome.ok).toBe(false);
+      expect(outcome).not.toHaveProperty("say");
+    });
+
+    it("should say something rather than reject when marking the session active throws", async () => {
+      const touch = vi.spyOn(sessions, "touch").mockImplementation(() => {
+        throw new Error("database is locked");
+      });
+
+      const outcome = await ingress().ask(ask());
+
+      expect(touch).toHaveBeenCalled();
+      expect(outcome).toEqual({ ok: false, failure: "failed", say: TURN_FAILED_LINE });
+    });
+
+    it("should say something rather than reject when the warm-lane predicate throws", async () => {
+      const outcome = await ingress({
+        isLaneWarm: () => {
+          throw new Error("the lane router is gone");
+        },
+      }).ask(ask());
+
+      expect(outcome).toEqual({ ok: false, failure: "failed", say: TURN_FAILED_LINE });
+    });
+
+    it("should say something rather than reject when the answerer throws synchronously", async () => {
+      const outcome = await ingress({
+        answer: () => {
+          throw new Error("thrown, not rejected");
+        },
+      }).ask(ask());
+
+      expect(outcome).toEqual({ ok: false, failure: "failed", say: TURN_FAILED_LINE });
+    });
+
+    it("should still answer when the log sink itself throws", async () => {
+      const outcome = await ingress({
+        log: () => {
+          throw new Error("the log file is gone");
+        },
+      }).ask(ask());
+
+      expect(outcome).toEqual({ ok: true, say: "Two things are due before lunch." });
+    });
+  });
+
+  /**
+   * The compounding failure, measured on the Commander's own phone on
+   * 2026-08-23: four `ask_syl` calls, four deadline misses, no answer ever
+   * spoken.
+   *
+   * `ConversationService` serialises turns per conversation, and a turn we have
+   * stopped waiting for **keeps running and keeps the queue**. So the second
+   * question did not merely take as long as the first — it waited out the whole
+   * of the first turn and then ran its own, which is a guaranteed miss. From
+   * the log: turn one 10,049ms, turn two queued behind it and 7,789ms of its
+   * own, turn three 29,852ms. Every abandoned turn also lands in his transcript
+   * unspoken, growing the very thread whose length is making the turns slow.
+   *
+   * So a second question arriving while a turn is still running must be
+   * answered from here, at once, with something true — never enqueued behind
+   * the turn that is already too slow.
+   */
+  describe("a second question while her turn is still running", () => {
+    it("should not start a second turn behind the one already running", async () => {
+      const answer = vi.fn<FaceAnswerer>(() => new Promise<string>(() => undefined));
+      const gate = ingress({ answer, deadlineMs: 50 });
+
+      const first = gate.ask(ask("What is on my list?"));
+      const second = await gate.ask(ask("Did you get that?"));
+
+      expect(answer).toHaveBeenCalledTimes(1);
+      expect(second.ok).toBe(false);
+      await first;
+    });
+
+    it("should answer the second question at once rather than waiting out the first", async () => {
+      vi.useFakeTimers();
+      try {
+        const gate = ingress({ answer: () => new Promise<string>(() => undefined) });
+        const first = gate.ask(ask("What is on my list?"));
+
+        // Not one tick of the deadline: the answer is already known.
+        const second = await gate.ask(ask("Did you get that?"));
+
+        expect(second).toEqual({ ok: false, failure: "busy", say: STILL_THINKING_LINE });
+
+        await vi.advanceTimersByTimeAsync(ASK_SYL_DEADLINE_MS);
+        await first;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("should stay closed until the abandoned turn actually settles, not until we stop waiting", async () => {
+      vi.useFakeTimers();
+      try {
+        let finish: ((said: string) => void) | undefined;
+        const answer = vi.fn<FaceAnswerer>(() =>
+          finish === undefined
+            ? new Promise<string>((resolve) => {
+                finish = resolve;
+              })
+            : Promise.resolve("Here it is."),
+        );
+        const gate = ingress({ answer });
+
+        const first = gate.ask(ask("What is on my list?"));
+        await vi.advanceTimersByTimeAsync(ASK_SYL_DEADLINE_MS);
+        await expect(first).resolves.toMatchObject({ failure: "slow" });
+
+        // The deadline passed, so we are no longer waiting — but her turn is
+        // still on the conversation's queue, and the next question would queue
+        // behind it. THAT is what must not happen.
+        await expect(gate.ask(ask("Anything?"))).resolves.toMatchObject({ failure: "busy" });
+        expect(answer).toHaveBeenCalledTimes(1);
+
+        finish?.("The first one, finally.");
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Settled, so the next question runs a turn of its own.
+        await expect(gate.ask(ask("Now?"))).resolves.toEqual({ ok: true, say: "Here it is." });
+        expect(answer).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("should reopen after a turn that failed, not only after one that answered", async () => {
+      const answer = vi.fn<FaceAnswerer>(() => Promise.reject(new Error("the harness is wedged")));
+      const gate = ingress({ answer });
+
+      await expect(gate.ask(ask())).resolves.toMatchObject({ failure: "failed" });
+      await expect(gate.ask(ask())).resolves.toMatchObject({ failure: "failed" });
+
+      expect(answer).toHaveBeenCalledTimes(2);
+    });
+
+    it("should hold the gate per session, so one face cannot mute another", async () => {
+      const minted = mintAskSecret();
+      sessions.open({
+        id: "rts_2",
+        avatarId: "48cbc73d-f47f-41de-bed8-58a532b3b84b",
+        credits: 2,
+        dollars: 0.02,
+        askSecretHash: minted.hash,
+        askExpiresAt: now + 300_000,
+      });
+
+      const answer = vi.fn<FaceAnswerer>(() => new Promise<string>(() => undefined));
+      const gate = ingress({ answer, deadlineMs: 50 });
+
+      const first = gate.ask(ask("What is on my list?"));
+      const other = gate.ask({ sessionId: "rts_2", secret: minted.secret, question: "And me?" });
+
+      await Promise.all([first, other]);
+      expect(answer).toHaveBeenCalledTimes(2);
+    });
+
+    it("should tell the model it is busy rather than handing it an empty sentence", async () => {
+      const gate = ingress({ answer: () => new Promise<string>(() => undefined), deadlineMs: 50 });
+      const handlers = gate.handlerFor("rts_1", secret);
+
+      const first = handlers[ASK_SYL_TOOL_NAME]?.({ question: "What is on my list?" });
+      const second = await handlers[ASK_SYL_TOOL_NAME]?.({ question: "Did you get that?" });
+
+      expect(second).toEqual({ ok: false, say: STILL_THINKING_LINE, failure: "busy" });
+      await first;
     });
   });
 
