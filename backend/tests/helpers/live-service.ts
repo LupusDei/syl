@@ -303,16 +303,34 @@ export async function startLiveService(
   // — see `helpers/fake-claude.ts` for why that is worth a subprocess. What it
   // must never do is find the real CLI: that costs money, needs a login, and is
   // not deterministic. Without one, turns run in process and say nothing.
-  const claude: FakeClaude | null =
-    options.claude === undefined ? null : makeFakeClaude(options.claude);
+  // **ALWAYS BUILT, even when the caller injects a `runner`** — `syl-2vml`.
+  //
+  // This used to be `options.claude === undefined ? null : …`, so a test that
+  // supplied a runner got no `claudeBin` at all, and the paths that spawn for
+  // themselves — the extractor through `runReaderTurn`, the dream, the
+  // consolidation lane — resolved the REAL binary. Forty-three of forty-six
+  // callers were in that state. Measured: `us2` left eleven live
+  // `/Users/Reason/.local/bin/claude` children behind it.
+  //
+  // The runner and the fake are not alternatives and treating them as one was
+  // the whole defect. A `runner` replaces the conversation turn; `claudeBin`
+  // is what every OTHER turn resolves. Both are supplied now, always, so no
+  // configuration of this helper can reach the real CLI —
+  // `refuseRealBinaryUnderTest` is the backstop if one ever does.
+  const claude: FakeClaude = makeFakeClaude(options.claude ?? {});
 
   const apple = options.delivery?.apple;
   const warnings: string[] = [];
   const syl = await startSyl(config, {
     ...(options.clock === undefined ? {} : { clock: options.clock }),
-    ...(claude === null
-      ? { runner: options.runner ?? silentRunner }
-      : { turn: { ...options.turn, claudeBin: claude.bin } }),
+    // `claudeBin` ALWAYS. The runner is layered on top when the caller asked
+    // for one, or when it asked for neither — `silentRunner` is still the
+    // right default for a test that is about a route rather than an answer,
+    // and it now sits over a fake binary rather than over a real one.
+    turn: { ...options.turn, claudeBin: claude.bin },
+    ...(options.claude !== undefined && options.runner === undefined
+      ? {}
+      : { runner: options.runner ?? silentRunner }),
     // A fixed soul, rather than whichever `SOUL.md` happens to be checked out.
     // The fake ignores it; pinning it keeps the argv a test asserts on stable.
     soul: "You are Syl, under test.",

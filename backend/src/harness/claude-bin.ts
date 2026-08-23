@@ -85,8 +85,62 @@ export function resolveClaudeBin(deps: ResolveDeps): string {
   );
 }
 
+/** A test reached for the real CLI. See {@link refuseRealBinaryUnderTest}. */
+export class RealBinaryUnderTestError extends Error {
+  constructor() {
+    super(
+      [
+        "A test tried to resolve the REAL `claude` binary.",
+        "",
+        "That costs money, needs a login, and is not deterministic — and the",
+        "processes are not reliably reaped: on 2026-08-23 one acceptance file",
+        "left eleven live `claude` children behind it, which starved the next",
+        "file in the same serial fork into a 120-second timeout.",
+        "",
+        "Fix: give the turn a FAKE binary instead of letting it resolve one.",
+        "  - through `startLiveService`, which always supplies a `claudeBin`;",
+        "  - or by passing `claudeBin` yourself, from `helpers/fake-claude.ts`.",
+        "",
+        "Injecting a `runner` is NOT enough. It covers the conversation turn,",
+        "and the extraction turn goes out behind it through `runReaderTurn`,",
+        "which resolves a binary of its own.",
+      ].join("\n"),
+    );
+    this.name = "RealBinaryUnderTestError";
+  }
+}
+
+/**
+ * Refuse to hand a test the real CLI — `syl-2vml`.
+ *
+ * The rule already existed, in `tests/helpers/live-service.ts`: *"what it must
+ * never do is find the real CLI: that costs money, needs a login, and is not
+ * deterministic."* It was enforced by every caller remembering to pass a
+ * `claudeBin`, and **forty-three of forty-six `startLiveService` calls did
+ * not** — because they injected a `runner` instead, which reads as "this test
+ * spawns nothing" and is false. The runner covers the conversation turn; the
+ * extraction turn escapes behind it.
+ *
+ * So the rule moves from the callers to the chokepoint. Under test, resolving
+ * the real binary is not a fallback, it is a **loud failure** — a test that
+ * gets here has a bug and should be told so in its own run rather than in
+ * somebody's electricity bill.
+ *
+ * **`CLAUDE_BIN` is deliberately not an escape hatch.** It exists to point a
+ * REAL run at a real CLI, and honouring it here would reopen the hole for
+ * anyone whose shell exports one — which is most developer machines. A test
+ * that genuinely wants a binary passes `claudeBin` at the call, which never
+ * reaches this function.
+ */
+export function refuseRealBinaryUnderTest(env: NodeJS.ProcessEnv): void {
+  const underTest = env["VITEST"] !== undefined || env["NODE_ENV"] === "test";
+  if (!underTest) return;
+  throw new RealBinaryUnderTestError();
+}
+
 /** Resolve against the real process environment and filesystem. */
 export function resolveClaudeBinFromProcess(): string {
+  refuseRealBinaryUnderTest(process.env);
   return resolveClaudeBin({
     env: process.env,
     home: homedir(),
