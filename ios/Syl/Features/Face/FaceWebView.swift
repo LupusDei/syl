@@ -41,9 +41,12 @@ import WebKit
 enum FaceAudioSession {
     static let category: AVAudioSession.Category = .playAndRecord
     static let mode: AVAudioSession.Mode = .voiceChat
+    /// `allowBluetoothHFP`, **not** `allowBluetooth` — the latter is the same constant under a
+    /// name deprecated in iOS 8, and this target builds warnings as errors, so the old spelling
+    /// is a red build rather than a yellow one.
     static let options: AVAudioSession.CategoryOptions = [
         .defaultToSpeaker,
-        .allowBluetooth,
+        .allowBluetoothHFP,
         .allowBluetoothA2DP,
     ]
 
