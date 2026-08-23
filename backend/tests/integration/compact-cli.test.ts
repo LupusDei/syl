@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { freeLoopbackPort } from "../helpers/http.js";
+
 const run = promisify(execFile);
 const REPO_ROOT = join(import.meta.dirname, "..", "..", "..");
 
@@ -44,18 +46,6 @@ async function listenOn(port: number): Promise<Server> {
   return server;
 }
 
-/** A free port below 49152 — macOS hands out ephemeral ports from there up,
- *  and two helpers in this repo have already collided with that pool. */
-async function freePort(): Promise<number> {
-  const probe = createServer();
-  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
-  const address = probe.address();
-  const port = typeof address === "object" && address !== null ? address.port : 0;
-  await new Promise<void>((resolve) => probe.close(() => resolve()));
-  if (port >= 49_152 || port === 0) return 40_000 + Math.floor(Math.random() * 5_000);
-  return port;
-}
-
 async function compact(args: readonly string[], env: Record<string, string>) {
   try {
     const { stdout, stderr } = await run("npx", ["tsx", "backend/src/harness/cli/compact.ts", ...args], {
@@ -86,7 +76,7 @@ afterEach(async () => {
 describe("npm run compact — the operator sweep", () => {
   it("should REFUSE while the service is listening, rather than warn and proceed", async () => {
     writeFileSync(join(home, "sessions", "commander"), "382a8e0d-faae-4713-ad7e-bd45aa671467", "utf8");
-    const port = await freePort();
+    const port = await freeLoopbackPort();
     listener = await listenOn(port);
 
     const result = await compact([], { SYL_PORT: String(port), SYL_DB_PATH: join(home, "syl.db") });
@@ -103,7 +93,7 @@ describe("npm run compact — the operator sweep", () => {
     // The assertion that matters. A guard that prints a warning and compacts
     // anyway would pass a test looking only for the word REFUSED.
     writeFileSync(join(home, "sessions", "commander"), "382a8e0d-faae-4713-ad7e-bd45aa671467", "utf8");
-    const port = await freePort();
+    const port = await freeLoopbackPort();
     listener = await listenOn(port);
 
     const result = await compact([], { SYL_PORT: String(port), SYL_DB_PATH: join(home, "syl.db") });
@@ -113,7 +103,7 @@ describe("npm run compact — the operator sweep", () => {
   });
 
   it("should say plainly that there is nothing to compact when the lane has no session", async () => {
-    const port = await freePort();
+    const port = await freeLoopbackPort();
     const result = await compact([], { SYL_PORT: String(port), SYL_DB_PATH: join(home, "syl.db") });
 
     expect(result.code).toBe(1);
@@ -122,7 +112,7 @@ describe("npm run compact — the operator sweep", () => {
 
   it("should refuse an empty session file rather than resuming nothing", async () => {
     writeFileSync(join(home, "sessions", "commander"), "   ", "utf8");
-    const port = await freePort();
+    const port = await freeLoopbackPort();
 
     const result = await compact([], { SYL_PORT: String(port), SYL_DB_PATH: join(home, "syl.db") });
 
@@ -134,7 +124,7 @@ describe("npm run compact — the operator sweep", () => {
     // Deliberate: the operator wants to see what it would do before stopping
     // her, and a dry run that required downtime would not be consulted.
     writeFileSync(join(home, "sessions", "commander"), "382a8e0d-faae-4713-ad7e-bd45aa671467", "utf8");
-    const port = await freePort();
+    const port = await freeLoopbackPort();
     listener = await listenOn(port);
 
     const result = await compact(["--dry-run"], { SYL_PORT: String(port), SYL_DB_PATH: join(home, "syl.db") });
@@ -156,7 +146,7 @@ describe("npm run compact — the operator sweep", () => {
     // So the command prints the path AND its provenance. A path with no source
     // is the confident-and-wrong shape this repo keeps rediscovering.
     writeFileSync(join(home, "sessions", "commander"), "382a8e0d-faae-4713-ad7e-bd45aa671467", "utf8");
-    const port = await freePort();
+    const port = await freeLoopbackPort();
 
     const result = await compact(["--dry-run"], { SYL_PORT: String(port), SYL_DB_PATH: join(home, "syl.db") });
 
@@ -178,7 +168,7 @@ describe("npm run compact — the operator sweep", () => {
     // instruction is aiming at whichever conversation the machine happens to
     // be running.
     writeFileSync(join(home, "sessions", "commander"), "aaaaaaaa-0000-0000-0000-000000000000", "utf8");
-    const port = await freePort();
+    const port = await freeLoopbackPort();
 
     const result = await compact(["--dry-run"], { SYL_PORT: String(port), SYL_DB_PATH: join(home, "syl.db") });
 
@@ -191,7 +181,7 @@ describe("npm run compact — the operator sweep", () => {
 
   it("should state the append-only guarantee where the operator will read it", async () => {
     writeFileSync(join(home, "sessions", "commander"), "382a8e0d-faae-4713-ad7e-bd45aa671467", "utf8");
-    const port = await freePort();
+    const port = await freeLoopbackPort();
 
     const result = await compact(["--dry-run"], { SYL_PORT: String(port), SYL_DB_PATH: join(home, "syl.db") });
 

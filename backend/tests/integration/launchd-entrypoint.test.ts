@@ -17,6 +17,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { queryLog } from "../../src/ops/log-query.js";
 import { HELPER_DEADLINE_MS } from "../helpers/budget.js";
 import { buildBackendOnce } from "../helpers/built-backend.js";
+import { freeLoopbackPort } from "../helpers/http.js";
 
 /**
  * `scripts/syl-service.sh` — what launchd actually runs.
@@ -104,7 +105,7 @@ async function start(env: Readonly<Record<string, string>> = {}): Promise<Starte
   // is something that deliberately bound it. Binding port 0 would be stronger
   // still, but the port has to be known before the subprocess is spawned,
   // because it is passed in through the environment.
-  const port = 43_000 + Math.floor(Math.random() * 6_000);
+  const port = await freeLoopbackPort();
 
   const child = spawn("/bin/bash", [script], {
     cwd: directory,

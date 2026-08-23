@@ -10,6 +10,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { queryLog } from "../../src/ops/log-query.js";
 import { HELPER_DEADLINE_MS } from "../helpers/budget.js";
 import { buildBackendOnce } from "../helpers/built-backend.js";
+import { freeLoopbackPort } from "../helpers/http.js";
 
 /**
  * Syl, started and stopped as a **process**.
@@ -74,10 +75,6 @@ beforeAll(() => {
  * own. Its twin in `launchd-entrypoint.test.ts` failed exactly that way, with
  * `EADDRINUSE 127.0.0.1:50622`.
  */
-function freePort(): number {
-  return 39_000 + Math.floor(Math.random() * 10_000);
-}
-
 interface Spawned {
   readonly child: ChildProcess;
   readonly port: number;
@@ -107,7 +104,7 @@ async function startProcess(
   const directory = options.directory ?? mkdtempSync(join(tmpdir(), "syl-proc-"));
   const logDirectory = join(directory, "logs");
   const databasePath = join(directory, "syl.db");
-  const port = options.port ?? freePort();
+  const port = options.port ?? (await freeLoopbackPort());
 
   // Stripped exactly as `scripts/syl-service.sh` strips them, and for the same
   // reason: a set key silently outranks the claude.ai login and reroutes
@@ -274,7 +271,7 @@ describe("the service as a process", () => {
       cwd: repoRoot,
       env: {
         ...process.env,
-        SYL_PORT: String(freePort()),
+        SYL_PORT: String(await freeLoopbackPort()),
         NODE_ENV: "development",
         SYL_DB_PATH: join(directory, "syl.db"),
         SYL_LOG_DIR: join(directory, "logs"),

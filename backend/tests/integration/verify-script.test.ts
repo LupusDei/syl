@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { HELPER_DEADLINE_MS } from "../helpers/budget.js";
+import { freeLoopbackPort } from "../helpers/http.js";
 
 /**
  * `scripts/syl-verify.sh` — the proof-of-life runner for `syl-007.4.2`.
@@ -95,6 +96,10 @@ function supervised(port: number): { directory: string; stub: string; pidFile: s
     `const http=require("node:http");` +
     `const s=http.createServer((q,r)=>{r.writeHead(200,{"content-type":"application/json"});` +
     `r.end(JSON.stringify({success:true,data:{status:"ok"}}))});` +
+    // BINDS THE PORT IT IS GIVEN, unlike `healthServer` below. This stub is
+    // respawned by the bash launchctl stub with its output sent to /dev/null,
+    // so there is no channel for it to report a port back on — the caller has
+    // to know it in advance. `freeLoopbackPort` is what makes that safe.
     `s.listen(${String(port)},"127.0.0.1");`;
 
   writeFileSync(
@@ -115,10 +120,6 @@ printf '\\tpid = %s\\n' "$pid"
 
   directories.push(directory);
   return { directory, stub, pidFile };
-}
-
-function freePort(): number {
-  return 41_000 + Math.floor(Math.random() * 15_000);
 }
 
 /**
@@ -169,8 +170,8 @@ describe("syl-verify.sh", () => {
     expect(parsed).toBe("4129");
   });
 
-  it("should confirm that a killed service is brought back, as a different process", () => {
-    const port = freePort();
+  it("should confirm that a killed service is brought back, as a different process", async () => {
+    const port = await freeLoopbackPort();
     const { stub, pidFile } = supervised(port);
     const env = {
       SYL_LAUNCHCTL: stub,
@@ -237,7 +238,7 @@ describe("syl-verify.sh", () => {
      * names: an assertion resting on a delay somebody hoped was long enough.
      * Polling is both faster on an idle machine and correct on a busy one.
      */
-    async function healthServer(port: number, build: unknown): Promise<void> {
+    async function healthServer(build: unknown): Promise<number> {
       const directory = mkdtempSync(join(tmpdir(), "syl-verify-health-"));
       directories.push(directory);
       const script = join(directory, "server.js");
@@ -248,12 +249,62 @@ describe("syl-verify.sh", () => {
           `startedAt:"2026-08-09T05:12:44.001Z",now:"2026-08-09T07:00:03.114Z",checks:[],` +
           `build:${JSON.stringify(build)}}});` +
           `const s=http.createServer((q,r)=>{r.writeHead(200,{"content-type":"application/json"});r.end(body)});` +
-          `s.listen(${String(port)},"127.0.0.1");`,
+          `s.listen(0,"127.0.0.1",()=>{process.stdout.write("PORT="+s.address().port+"\\n")});`,
       );
-      const child = spawn(process.execPath, [script], { detached: true, stdio: "ignore" });
-      child.unref();
+      // THE CHILD CHOOSES THE PORT AND TELLS US — `syl-zui3`.
+      //
+      // This used to guess a port in the parent and hand it to the child, and
+      // on 2026-08-23 the guess collided: the bind failed, `stdio: "ignore"`
+      // threw the `EADDRINUSE` away, and forty seconds later CI reported
+      // `nothing bound 127.0.0.1:53040` — a message that describes the symptom
+      // perfectly and names none of the cause.
+      //
+      // Binding 0 in the CHILD has no window at all: nothing can take the port
+      // between the choice and the bind, because they are the same operation.
+      // stderr is piped for the same reason the port is reported — a process
+      // whose only job is to bind must be able to say why it did not.
+      const child = spawn(process.execPath, [script], {
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let complaint = "";
+      child.stderr?.setEncoding("utf8");
+      child.stderr?.on("data", (chunk: string) => (complaint += chunk));
       servers.push(child);
+
+      const port = await new Promise<number>((resolve, reject) => {
+        let seen = "";
+        const deadline = setTimeout(() => {
+          reject(
+            new Error(
+              `the health stub never reported a port within ${String(HELPER_DEADLINE_MS)}ms` +
+                (complaint === "" ? "" : `; it said: ${complaint.trim()}`),
+            ),
+          );
+        }, HELPER_DEADLINE_MS);
+        deadline.unref();
+        child.stdout?.setEncoding("utf8");
+        child.stdout?.on("data", (chunk: string) => {
+          seen += chunk;
+          const match = /PORT=(\d+)/.exec(seen);
+          if (match?.[1] !== undefined) {
+            clearTimeout(deadline);
+            resolve(Number(match[1]));
+          }
+        });
+        child.once("exit", (code) => {
+          clearTimeout(deadline);
+          reject(
+            new Error(
+              `the health stub exited (${String(code)}) before reporting a port` +
+                (complaint === "" ? "" : `: ${complaint.trim()}`),
+            ),
+          );
+        });
+      });
+      child.unref();
       await untilListening(port);
+      return port;
     }
 
     /** A real repository with one commit, so HEAD is a real SHA. */
@@ -284,9 +335,8 @@ describe("syl-verify.sh", () => {
     }
 
     it("should pass when the running build is the commit at HEAD", async () => {
-      const port = freePort();
-      const { directory, head } = repository();
-      await healthServer(port, { commit: head, builtAt: "2026-08-10T00:18:00.000Z", dirty: false, branch: "main" });
+            const { directory, head } = repository();
+      const port = await healthServer({ commit: head, builtAt: "2026-08-10T00:18:00.000Z", dirty: false, branch: "main" });
 
       const result = run(["stale"], {
         SYL_LAUNCHCTL: stubbedLaunchctl(),
@@ -301,9 +351,8 @@ describe("syl-verify.sh", () => {
     it("should fail, and say STALE, when the running build is not HEAD", async () => {
       // The three-hour failure, reproduced: the service is up, healthy, and
       // running code from before the fix landed.
-      const port = freePort();
-      const { directory, head } = repository();
-      await healthServer(port, {
+            const { directory, head } = repository();
+      const port = await healthServer({
         commit: "49ac2dce862dfca27edaeb6c2e69c157ea434eda",
         builtAt: "2026-08-09T19:58:11.000Z",
         dirty: false,
@@ -323,9 +372,8 @@ describe("syl-verify.sh", () => {
     });
 
     it("should fail when the service reports no build stamp at all", async () => {
-      const port = freePort();
-      const { directory } = repository();
-      await healthServer(port, null);
+            const { directory } = repository();
+      const port = await healthServer(null);
 
       const result = run(["stale"], {
         SYL_LAUNCHCTL: stubbedLaunchctl(),
@@ -338,9 +386,8 @@ describe("syl-verify.sh", () => {
     });
 
     it("should say so when a build was made from a dirty tree, even if the commit matches", async () => {
-      const port = freePort();
-      const { directory, head } = repository();
-      await healthServer(port, { commit: head, builtAt: "2026-08-10T00:18:00.000Z", dirty: true, branch: "main" });
+            const { directory, head } = repository();
+      const port = await healthServer({ commit: head, builtAt: "2026-08-10T00:18:00.000Z", dirty: true, branch: "main" });
 
       const result = run(["stale"], {
         SYL_LAUNCHCTL: stubbedLaunchctl(),
