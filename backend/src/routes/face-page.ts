@@ -119,23 +119,38 @@ export const FACE_PAGE_API_BASE = "/api/v1";
  *
  * ## What is and is not available as a control
  *
- * Measured against esm.sh on 2026-08-23, rather than assumed:
+ * Measured against esm.sh on 2026-08-23, rather than assumed. **Two of these
+ * three are controls that are real, adjacent, and do not cover the thing they
+ * appear to cover** — which is the most dangerous kind, because a reviewer who
+ * sees them stops looking.
  *
- * - **A pinned URL is served `cache-control: public, max-age=31536000,
- *   immutable`.** That is a promise about *caching*, made by the same party that
- *   serves the bytes. It is not integrity: a cold fetch on a phone that has
- *   never seen the URL gets whatever is served then.
- * - **Subresource Integrity does not reach a dynamic `import()`.** SRI is
- *   available on `<link rel="modulepreload">` and on the stylesheet, but a
- *   preload whose hash fails is merely discarded — the `import()` behind it then
- *   re-fetches with no check at all, so a hash there is a hint and not a gate.
- *   The only mechanism that would cover the import itself is an import map with
- *   `integrity`, whose support in the iOS `WKWebView` is unverified here and
- *   must be measured before it is relied on.
+ * - **`cache-control: public, max-age=31536000, immutable` IS NOT AN INTEGRITY
+ *   CONTROL, AND IT READS EXACTLY LIKE ONE.** That is the single most dangerous
+ *   sentence in this file, and it is written at this strength because the
+ *   agent who measured it very nearly reported it as the answer and closed
+ *   `syl-chzl.13` on it. Read what it actually says: it is a promise about
+ *   **caching**, made by the party that serves the bytes, about how long a
+ *   client may reuse a response it already has. It says nothing whatsoever about
+ *   what a *cold* fetch returns — and every fetch on a phone that has never
+ *   opened this page is a cold one. The word `immutable` in an HTTP header is
+ *   the server describing its own intentions. It is not a hash, nobody checks
+ *   it, and nothing breaks if it is untrue.
+ * - **Subresource Integrity does not reach a dynamic `import()`, and a hash
+ *   here would LOOK like a gate.** SRI is available on
+ *   `<link rel="modulepreload">` and on the stylesheet, so it is perfectly
+ *   possible to add one, feel safer, and be wrong: a preload whose hash fails is
+ *   merely **discarded**, and the `import()` behind it then re-fetches with no
+ *   check at all. It is a hint, not a gate, and the failure mode is that the
+ *   next reviewer sees a hash and moves on. The only mechanism that would cover
+ *   the import itself is an import map with `integrity`, whose support in the
+ *   iOS `WKWebView` is **unverified here** and must be measured before it is
+ *   relied on — stated as unknown rather than assumed either way, on a subsystem
+ *   where several confident claims have turned out to be about mechanisms that
+ *   were never wired.
  * - **The pin does not even cover the whole graph.** The `deps=react@18` query
  *   resolves at esm.sh's discretion: today's response reports
  *   `react-dom@18.3.1,react@18.3.1` in its `x-esm-path`, chosen by them and not
- *   by us. See `syl-chzl.12`.
+ *   by us. Measured from a live response, not suspected. See `syl-chzl.12`.
  *
  * So the pin is the only control that exists today, and it is a weak one: it
  * removes the *silent* change and leaves the deliberate one. **The real answer

@@ -3263,3 +3263,75 @@ The generalisation worth keeping: **at every boundary with something we do not b
 down what we believe the other side accepts, and let a test compare that belief with the
 other side's own description of itself.** A comment is not a mechanism; a captured
 declaration is.
+
+#### A control that is real, adjacent, and does not cover the thing it appears to cover
+
+The three answers about what actually protects the CDN import were measured, and **two of
+them are the dangerous kind**: not wrong, but true about something narrower than they look.
+
+- **`cache-control: … immutable` is not an integrity control.** It is a promise about
+  *caching* — how long a client may reuse a response it already has — made by the party
+  that serves the bytes. It says nothing about what a **cold** fetch returns, and every
+  fetch on a phone that has not opened the page is cold. The word `immutable` in an HTTP
+  header is a server describing its own intentions: not a hash, nobody checks it, nothing
+  breaks if it is untrue. This was one sentence away from being written up as the answer
+  and closing `syl-chzl.13` on it.
+- **SRI does not reach a dynamic `import()`.** It is available on `modulepreload` and on
+  the stylesheet, so it is entirely possible to add a hash, feel safer, and be wrong: a
+  preload whose hash fails is *discarded*, and the import behind it re-fetches unchecked.
+  The failure mode is not the missing check — it is that the next reviewer sees a hash and
+  stops looking.
+
+**The shared shape is worth more than either instance.** A control that is genuine, sits
+right next to the hazard, and stops one step short of it is more dangerous than no control,
+because it terminates the search. The question to ask of anything that looks like a
+protection is not *is this real* but **what exactly does it cover, and is that the thing I
+am worried about**. Both of these pass the first test and fail the second.
+
+Related, and the reason the third finding matters: `deps=react@18` resolving to
+`react-dom@18.3.1,react@18.3.1` at the CDN's discretion was read off a live response rather
+than suspected, which is what turned `syl-chzl.12` from a hunch into a fact.
+
+#### Two process findings from the same night
+
+**A mutation that silently does not apply reports GREEN, and that is indistinguishable from
+a test that does not bite.** Mutation-testing the exact-version assertion, one of four
+mutants passed — and the cause was `perl` escaping, not a weak test: the substitution had
+never landed. A mutant that never existed proves nothing and looks exactly like proof.
+**Verify the mutation is in the file before believing what the run says about it** — one
+`grep` for the mutated text, every time.
+
+**An assertion can be answered by the file's own prose, and this repo is unusually exposed
+to it.** Twice in `face-page.test.ts` in one evening: a whole-document `toContain` for
+`object-fit: contain` was satisfied by the comment explaining why contain was removed, and
+a scan for the pinned SDK version matched the camera fence's prose citation of the shipped
+bundle. Both would have passed while checking nothing.
+
+It is the house style that does it. Our comments name real identifiers and real URLs in
+backticks *on purpose*, because a comment citing the thing it is about is the convention —
+so the one codebase where the names are everywhere is the one where a text assertion finds
+them. It is the same exposure that makes `git commit -m` eat our backticks, wearing a
+different hat.
+
+The rule: **an assertion about a mechanism must match the thing that implements the
+mechanism, not the document that contains it.** Slice to the CSS rule, the call site, the
+URL — and anchor on something only the real thing has (`https://esm.sh/`, an eight-space
+indent, a `declare function` line). Then assert the slice is non-empty, or the narrowing
+becomes its own way of checking nothing.
+
+#### Upload state is decided by main, not by your branch
+
+`f9eeed8`'s message says *"0.14.0 was never uploaded, so this is free."* **That is false and
+the commit is already on `origin/main`**, so it is corrected here rather than rewritten —
+history surgery to recover a message costs more than the message.
+
+0.14.0 *was* uploaded: `3444c58` was pushed at 17:31, the TestFlight job logged
+`0.14.0 has never been uploaded — shipping it` at 17:33:09 and
+`Successfully uploaded the new binary` at 17:44:39. The bump to 0.15.0 remains correct; the
+claim about why it was free was not.
+
+The mechanism, since this will recur: **the job asks App Store Connect whether that version
+already exists.** So the answer is a property of what reached `main` and of what is already
+in App Store Connect — never of your own branch. A version you have already bumped past can
+have shipped from a commit you did not push, while your working tree shows no sign of it.
+Do not infer upload state from local history; ask, or read the workflow log.
