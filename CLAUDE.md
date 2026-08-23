@@ -403,8 +403,19 @@ to add is about *additional* surfaces and blocks nothing.
   personality lives in that thread"*, extended the same day to the brief.
   **The bloat is accepted, not overlooked** — *"if it causes bloat on that
   thread we can solve it later"* — so the answer when it bites is summarisation
-  inside that thread, not a second thread beside it. Three consequences, each of
-  which cost something to find:
+  inside that thread, not a second thread beside it.
+  **It bit, and later arrived on 2026-08-23** (`syl-chzl.4.4`): the lane reached
+  **861,739 tokens**, never once compacted, putting the first token of every
+  turn 9-16s away and making her face physically incapable of answering inside
+  Runway's 8s ceiling — *not one `face.ask.answered` line existed in the whole
+  log*. `harness/compaction.ts` is the promised summarisation, run by the hourly
+  ping while he sleeps. Two things there are load-bearing and easy to undo by
+  accident: **the CLI's `--autocompact` flag is deliberately never passed**
+  (compaction measured 104,504ms, and letting the CLI choose when means it
+  eventually fires on a face question — the exact failure, rearmed), and the
+  thread turned out to be **11% his conversation and 68% `see_myself` images**,
+  so the thing the bloat note was protecting was never what filled the thread.
+  Three consequences, each of which cost something to find:
   - **Nothing may `reset` that lane.** Every one of those jobs used to start a
     fresh thread for a good reason of its own; on his lane the same call deletes
     his conversation. None of their `Voice` types offers the method any more.

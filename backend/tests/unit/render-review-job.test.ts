@@ -123,6 +123,7 @@ function said(text: string, tools: readonly string[] = []): TurnResult {
     spoken: text,
     costUsd: 0.03,
     numTurns: 1,
+    contextTokens: 0,
     init: {
       kind: "init",
       sessionId: "sess-studio",

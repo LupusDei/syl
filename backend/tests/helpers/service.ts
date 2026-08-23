@@ -208,6 +208,7 @@ export const silentRunner: TurnRunner = (_prompt, options) => {
     spoken: "",
     costUsd: 0,
     numTurns: 1,
+    contextTokens: 0,
     init: {
       kind: "init",
       sessionId,
@@ -246,6 +247,7 @@ export function replyingRunner(text: string, options: { readonly delayMs?: numbe
       spoken: text,
       costUsd: 0,
       numTurns: 1,
+      contextTokens: 0,
       init: {
         kind: "init",
         sessionId,

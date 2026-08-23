@@ -334,6 +334,7 @@ function aModelThatUsesHerTools(hands: Hands): TurnRunner {
       spoken: text,
       costUsd: 0,
       numTurns: 1,
+      contextTokens: 0,
       init: {
         kind: "init",
         sessionId,

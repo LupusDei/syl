@@ -402,6 +402,7 @@ export class PersistentSession {
       spoken: assembleReply(events, result.result),
       costUsd: result.costUsd,
       numTurns: result.numTurns,
+      contextTokens: result.contextTokens,
       init,
       events,
     };

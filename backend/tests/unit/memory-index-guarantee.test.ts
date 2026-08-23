@@ -99,6 +99,7 @@ function turnResult(sessionId = "s-1"): TurnResult {
     spoken: "ok",
     costUsd: 0,
     numTurns: 1,
+    contextTokens: 0,
     init: { kind: "init", sessionId, tools: [], apiKeySource: "none" },
     events: [],
   } as unknown as TurnResult;

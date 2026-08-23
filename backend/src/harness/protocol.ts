@@ -85,6 +85,21 @@ export interface ResultEvent extends BaseEvent {
   readonly result: string;
   readonly costUsd: number;
   readonly numTurns: number;
+  /**
+   * Everything the turn had to replay — fresh input, cache reads and cache
+   * writes added together.
+   *
+   * The three are summed because they are one quantity for the only question
+   * anyone asks of this number: **how big is this conversation now**. Which
+   * third it landed in is a caching detail that moves between turns of the same
+   * size (a cache miss on his lane is the same 861,739 tokens as the hit before
+   * it, and cost 29,852ms instead of 7,789ms), so reading any one of them alone
+   * makes the same thread look like three different threads.
+   *
+   * `0` when the CLI reported no usage at all. Callers must read that as "not
+   * stated" and never as "empty" — see `LaneContextSizes.record`.
+   */
+  readonly contextTokens: number;
 }
 
 /** SessionStart hook chatter. Usually noise; surfaced so callers may log it. */
@@ -103,6 +118,23 @@ type JsonObject = Record<string, unknown>;
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * How much context a turn replayed, from the CLI's own `usage` block.
+ *
+ * Summed rather than picked apart; see {@link ResultEvent.contextTokens}. A
+ * missing or malformed `usage` yields `0`, which every caller is required to
+ * read as "not stated" — `harness/compaction.ts` refuses to act on it, which is
+ * the safe direction for a decision worth 104 seconds of his lane.
+ */
+function contextTokensOf(usage: unknown): number {
+  if (!isObject(usage)) return 0;
+  return (
+    num(usage["input_tokens"]) +
+    num(usage["cache_read_input_tokens"]) +
+    num(usage["cache_creation_input_tokens"])
+  );
 }
 
 function str(value: unknown, fallback = ""): string {
@@ -208,6 +240,7 @@ export function parseEvent(line: string): SylEvent | null {
       result: str(raw["result"]),
       costUsd: num(raw["total_cost_usd"]),
       numTurns: num(raw["num_turns"]),
+      contextTokens: contextTokensOf(raw["usage"]),
     };
   }
 

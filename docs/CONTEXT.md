@@ -824,6 +824,184 @@ function and no option turns the check off** — asserted over every combination
 of every option in `deploy-gate.test.ts`, so a bypass added later fails the
 suite rather than shipping.
 
+### Her face could never have answered: 861,739 tokens on his lane — `syl-chzl.4.4`
+
+**Not one `face.ask.answered` line existed in the entire log.** Fourteen
+`ask_syl` calls, fourteen `face.ask.slow`. The Commander spent a day talking to
+a face that was physically incapable of replying, and the cause was not in the
+face path at all.
+
+Measured 2026-08-23 on **CLI 2.1.235**, against the real binary, resuming his
+real lane — forked with `--fork-session` every time, so his thread was never
+touched and the live service kept resuming it throughout. The prompt's entire
+answer is the word `ACK`, so this is context cost and nothing else:
+
+```
+context 861,739 tokens   13844ms 23645ms 15729ms   first token  9147-15819ms
+context  80,392 tokens    4283ms  4285ms  4135ms   first token  3525-3959ms
+context   8,873 tokens    3308ms  9007ms 12432ms   first token  2644-2879ms
+```
+
+Against `ASK_SYL_DEADLINE_MS` of 6,500ms inside Runway's hard 8s ceiling.
+**Nine seconds to the first token is not a slow turn; it is a ceiling that
+cannot be reached from below however fast the harness is.** No amount of warm
+lane fixes it — `syl-per1`'s 4.7x is real and applies to the *spawn*, which is
+2.5s of a 9s problem.
+
+**Read `firstToken`, not the total.** The totals have a heavy tail (19.5s on a
+run whose first token came at 4.0s) that is teardown under fleet load, not
+context. A measurement taken on a machine running a hundred agents needs the
+signal separated from the noise, and first token is the signal.
+
+#### The bead's hypothesis was wrong, and the number is why that matters
+
+`syl-chzl.4.4` and `CLAUDE.md` both expected the bloat to be the conversation —
+*"much of her personality lives in that thread"* — and the pre-chosen remedy
+followed from that. Walking the transcript's **active chain** (the file is
+append-only with branches, so raw bytes overstate it by 2.4x) says otherwise.
+Of 7.56 MB:
+
+| what | share |
+|---|---|
+| `mcp__syl__see_myself` images — **76 of them, 5.16 MB of base64** | 68% |
+| her thinking blocks | 9% |
+| non-image tool results | 9% |
+| **his words and hers, together** | **11%** |
+
+The thread is not full of him. It is full of pictures she looked at once and
+can never put down, because **a tool result is pinned in the conversation
+forever**. 29 `see_myself` calls averaged 188 KB each. His actual conversation
+— thirteen days of it — is a ninth of what every turn pays to replay.
+
+That changed what the fix had to protect, and it is the reason to check before
+acting on a plausible cause: the remedy is the same one either way, but "the
+thread is mostly him" would have argued for compacting gently, and the truth
+argues for compacting hard.
+
+#### `/compact` is a real mechanism in `-p` mode, and it costs 104 seconds
+
+Verified live: sending `/compact` as an ordinary user frame in
+`-p --input-format stream-json` works. It emits a typed `compact_boundary`
+frame carrying `preTokens` and `durationMs`, **keeps the session id**, and took
+
+```
+861,739 → 8,873 tokens   in 104,504ms   follow-up turn 2,920ms
+```
+
+So the Commander's pre-chosen remedy — summarisation *inside* that thread — is
+implemented by the vendor, and needs no second thread and no reset.
+
+**The 104 seconds is the whole design constraint.** It is why
+**`--autocompact <tokens>` was rejected**, and that rejection is the load-bearing
+decision in `harness/compaction.ts`. It is the tempting one-flag answer and it
+gets the timing exactly backwards: the CLI decides *when*, so the 104-second
+compaction fires on whichever turn crosses the threshold — and that turn is
+eventually a face question. It would rearm the exact failure being fixed, on a
+trigger nobody controls, and the symptom would be identical. **We must own the
+timing**, so compaction is a scheduled turn and the flag is never passed.
+
+Also rejected: a second thread (refused by the Commander, 2026-08-11), and
+`reset` (it deletes his conversation; `HeartbeatVoice` is
+`Pick<SylAgent, "ask" | "busy">` and `compactLane` is handed an `ask` and
+nothing else, so there is nothing in the path that could call one).
+
+#### Where it runs, and why the hourly ping hosts it
+
+The hour is already the scheduled visitor to his lane: it resumes that session,
+it already stands aside for anything that outranks it, and it already knows
+whether he is asleep. A job of its own would have cost a new `JobKind`, which is
+generated from `shared/openapi.yaml` — and a contract change is not separable
+from the Swift client. `jobs/render-review-job.ts` made the same call for the
+same reason.
+
+Every gate is in `whyNotCompact`, and every ambiguous answer is *do not*:
+over budget, in quiet hours, lane idle, **and the size actually known**. That
+last one is the safe direction for a decision worth 104 seconds of his lane —
+absence refuses, so a caller that never wires the measurement loses the sweep
+rather than getting an unmeasured one.
+
+Quiet hours are the right window for the *other* reason the window exists:
+not "he must not be disturbed" but "nobody is waiting on this lane". The dream
+and the brief already run inside it.
+
+#### The size is read from the CLI, never counted by us
+
+`ResultEvent.contextTokens` sums `input + cache_read + cache_creation` off the
+CLI's own `usage`. Counting characters in our own model of the conversation
+would be a **consistency check against ourselves** — this project's named worst
+defect class — and it would have been wrong by 2.4x here, because the active
+chain is not the file. The three usage fields are summed because which third a
+turn lands in is a caching detail that moves between turns of the same size:
+his lane cost 861,739 tokens as a cache hit at 7,789ms and the same 861,739 as
+a miss at 29,852ms. Reading one field alone makes one thread look like three.
+
+**`0` means "the CLI did not say", never "empty".** `LaneContextSizes.record`
+discards a zero rather than storing it, because a zero stored is an
+861,739-token lane that looks fresh and silently stops being swept — the
+failure the module exists to end, re-entering through its own instrument.
+
+#### Nothing is silently dropped, structurally
+
+Compaction is lossy, so constraint 4's ethos is paid three ways, none of which
+depends on anyone remembering: the transcript is **append-only** and every byte
+before the boundary is still on disk; the CLI's summary **ends with the absolute
+path of the transcript it was made from**, so the recovery route travels inside
+the thing that replaced the detail; and a compaction that did not shrink
+anything is recorded as a **failure**, not a quiet no-op — otherwise she spends
+104 seconds every night achieving nothing under a green run record.
+
+The summary was read before this was accepted. It keeps his verbatim quotes,
+his format preferences and her standing voice notes ("Jokes are always good
+too"), which is the 11% that mattered.
+
+#### Two things only the measurement could have told us
+
+Both were found by running the real thing after the code was written and
+believed correct, and the second is a defect that would have shipped.
+
+**The warm process survives a compaction, and the AFTER number is the one that
+matters.** The heartbeat goes through `WarmLanes` -> `PersistentSession`, so the
+compaction turn lands in a process that then has to serve the next turn — and
+the first capture had spawned a *fresh* process for its follow-up, which
+verifies the resumed case and says nothing about this one. Driven through the
+real harness (`scripts/experiments/warm-lane-compaction.mts`), one live process:
+
+```
+turn 1 (pays the spawn)   4112ms      turn 4  /compact  (in the same process)
+turn 2 WARM               3118ms      turn 5 WARM after compact   4816ms
+turn 3 WARM               3497ms      turn 6 WARM after compact   4729ms
+```
+
+Same session id throughout, `apiKeySource=none` on all six. **A warm turn on the
+compacted lane is 3.1-3.5s against a 6,500ms deadline** — which is the number
+the epic was costed against, restored.
+
+**A `/compact` turn reports NO `usage` at all**, and reading that absence as a
+number was a real defect in the first version of `harness/compaction.ts`. It is
+the one turn whose result frame carries no usage block, so the rewritten thread
+cannot report its own new size. Two consequences, and the second is worse:
+
+- `describeCompaction` announced *"861,739 → 0 tokens (861,739 saved)"* — a
+  fabricated saving, stated with complete confidence, in the run ledger.
+- `LaneContextSizes` discards a zero (correctly, for ordinary turns), so the
+  lane **kept its pre-sweep size**. Still over budget, still quiet, still idle —
+  so the hour would compact again at 04:07, and 05:07, and 06:07, every night.
+
+The fix is `LaneContextSizes.forget`, called after the sweep whether it
+succeeded or failed: **compaction invalidates what we know about the lane**, and
+`whyNotCompact` already refuses on an unknown size, so the honest state routes
+to the safe one with no new gate. This is the same shape as constraint 3's
+`0` handling one level down — *absence is not zero* — and it cost nothing to fix
+only because the measurement was taken before it shipped.
+
+#### It also stops the image ratchet, without a second mechanism
+
+There is no way to un-pin a tool result once a turn has returned it, so the 76
+images cannot be removed except by compaction — which sweeps them with
+everything else. That caps the ratchet at one night's accumulation, about five
+images a day at her observed rate. Capping what a single `see_myself` may return
+is still worth doing (`syl-9fcr`), but it is hygiene now rather than the fix.
+
 ### A window has two ends, and this one was taken from the wrong one
 
 `LocalStore.messages(conversationId:limit:)` ordered **ascending** and took the

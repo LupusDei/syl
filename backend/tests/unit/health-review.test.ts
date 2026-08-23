@@ -81,6 +81,7 @@ function scriptedRunner(stub: Stub = {}): {
       spoken: text,
       costUsd: 0.01,
       numTurns: 1,
+      contextTokens: 0,
       init: {
         kind: "init",
         sessionId: options.sessionId ?? "stub",
@@ -107,6 +108,7 @@ function scriptedRunner(stub: Stub = {}): {
           result: text,
           costUsd: 0.01,
           numTurns: 1,
+          contextTokens: 0,
         },
       ],
     } as unknown as TurnResult;

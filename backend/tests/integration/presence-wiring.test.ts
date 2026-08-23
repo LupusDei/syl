@@ -152,6 +152,7 @@ describe("presence on the live socket", () => {
           spoken: "Yes.",
           costUsd: 0,
           numTurns: 1,
+          contextTokens: 0,
           init: {
             kind: "init",
             sessionId: "held-session",

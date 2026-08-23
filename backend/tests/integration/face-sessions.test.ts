@@ -108,6 +108,7 @@ describe("the face session routes", () => {
             spoken: `You asked: ${prompt}`,
             costUsd: 0,
             numTurns: 1,
+            contextTokens: 0,
             init: { apiKeySource: "none" } as unknown as TurnResult["init"],
             events: [],
           }),

@@ -320,6 +320,16 @@ export interface TurnResult {
   /** Reported cost. On subscription rails this is an estimate, not a charge. */
   readonly costUsd: number;
   readonly numTurns: number;
+  /**
+   * How much context this turn had to replay, as the CLI reported it.
+   *
+   * The size of the conversation, in the only units that decide what a turn
+   * costs in *time*. `harness/compaction.ts` is the reason it is carried up
+   * here: his lane reached 861,739 tokens and nothing in this service could
+   * see it, so nothing could act on it. `0` means the CLI did not say — never
+   * that the thread is empty.
+   */
+  readonly contextTokens: number;
   readonly init: InitEvent;
   readonly events: readonly SylEvent[];
 }
@@ -461,6 +471,7 @@ export async function runTurn(prompt: string, options: TurnOptions = {}): Promis
     spoken: assembleReply(events, result.result),
     costUsd: result.costUsd,
     numTurns: result.numTurns,
+    contextTokens: result.contextTokens,
     init,
     events,
   };

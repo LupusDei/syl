@@ -144,6 +144,7 @@ describe("an unattended turn", () => {
           spoken: "Filed.",
           costUsd: 0,
           numTurns: 1,
+          contextTokens: 0,
           init: {
             kind: "init",
             sessionId,

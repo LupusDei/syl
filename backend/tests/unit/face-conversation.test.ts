@@ -37,6 +37,7 @@ describe("FaceConversation", () => {
       spoken: reply,
       costUsd: 0,
       numTurns: 1,
+      contextTokens: 0,
       init: {
         type: "system",
         subtype: "init",

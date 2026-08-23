@@ -310,6 +310,7 @@ function aModelThatKeepsHisList(hands: Hands, wrongId?: string): TurnRunner {
       spoken: text,
       costUsd: 0,
       numTurns: 1,
+      contextTokens: 0,
       init: {
         kind: "init",
         sessionId,

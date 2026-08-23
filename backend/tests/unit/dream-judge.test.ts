@@ -154,6 +154,7 @@ function scriptedRunner(script: readonly StubTurn[]): {
       spoken: step?.text ?? acceptEverything(),
       costUsd: 0.02,
       numTurns: 1,
+      contextTokens: 0,
       init: {
         kind: "init",
         sessionId,
@@ -180,6 +181,7 @@ function scriptedRunner(script: readonly StubTurn[]): {
           result: step?.text ?? acceptEverything(),
           costUsd: 0.02,
           numTurns: 1,
+          contextTokens: 0,
         },
       ],
     } as unknown as TurnResult;

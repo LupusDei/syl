@@ -70,6 +70,7 @@ function coldResult(): TurnResult {
     spoken: "cold",
     costUsd: 0,
     numTurns: 1,
+    contextTokens: 0,
     init: {
       kind: "init",
       sessionId: "cold-session",

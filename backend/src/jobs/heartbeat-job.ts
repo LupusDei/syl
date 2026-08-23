@@ -1,6 +1,12 @@
 import type { Job, JobKind } from "@syl/shared";
 
-import type { SylAgent } from "../harness/agent.js";
+import { LANES, type SylAgent } from "../harness/agent.js";
+import {
+  compactLane,
+  describeCompaction,
+  whyNotCompact,
+  type LaneContextSizes,
+} from "../harness/compaction.js";
 import type { SylEvent } from "../harness/protocol.js";
 import {
   isWithinQuietHours,
@@ -432,6 +438,39 @@ export interface HeartbeatDeps {
    * table, which nobody tails.
    */
   readonly log?: Pick<Logger, "log">;
+  /**
+   * What his thread currently costs to replay, so the hour can sweep it.
+   *
+   * ## Why the hourly ping is where compaction lives
+   *
+   * `syl-chzl.4.4`: his lane reached **861,739 tokens** and had never been
+   * compacted, which put the first token of every turn 9-16 seconds away and
+   * made her face physically incapable of answering inside Runway's 8s ceiling.
+   * The remedy the Commander chose in advance is summarisation *inside* that
+   * thread, and `harness/compaction.ts` holds the mechanism and the argument.
+   *
+   * It is hosted here rather than given a job of its own for three reasons,
+   * and the first is the one that decided it:
+   *
+   *  - **The hour is already the scheduled visitor to his lane.** It resumes
+   *    that session, it already stands aside for anything that outranks it, and
+   *    it already knows whether he is asleep. A compaction is lane housekeeping
+   *    and this is the recurring turn that holds the lane.
+   *  - **A job of its own would cost a `JobKind`**, which is generated from
+   *    `shared/openapi.yaml` — and `docs/CONTEXT.md` records that a contract
+   *    change is not separable from the Swift client. That is a large, risky
+   *    edit in a shared worktree for a latency fix. `jobs/render-review-job.ts`
+   *    made the same call for the same reason; see `RENDER_REVIEW_KIND`.
+   *  - **It must never be a face's problem.** Compaction measured 104,504ms
+   *    against the real binary. Hosting it in a scheduled job — rather than in
+   *    `--autocompact`, which would fire it on whichever turn crossed the
+   *    threshold — is what keeps those 104 seconds off `ask_syl` forever.
+   *
+   * Optional, and absence means never compact: {@link whyNotCompact} refuses on
+   * an unknown size, so a caller that does not wire this loses the sweep rather
+   * than getting an unmeasured one.
+   */
+  readonly contextSizes?: Pick<LaneContextSizes, "tokens" | "forget">;
   // No clock. Every instant this handler needs is `context.now` — the instant
   // the runner leased the job at, and the one the run record and the lateness
   // are measured from. A second clock here could disagree with it.
@@ -613,6 +652,52 @@ export function createHeartbeatHandler(deps: HeartbeatDeps): JobHandler {
     // *"if it causes bloat on that thread we can solve it later."*
 
     const inQuietHours = isWithinQuietHours(new Date(now), deps.quiet, deps.tz);
+
+    // HOUSEKEEPING FIRST, AND ONLY WHILE HE IS ASLEEP.
+    //
+    // A thread over budget makes every later turn slow — including the face
+    // turns that must finish inside 6,500ms — so sweeping it outranks anything
+    // this hour would otherwise have thought about. It replaces the hour's own
+    // turn rather than running beside it: both are turns on one session, they
+    // would serialise anyway, and a 104-second compaction followed by a
+    // heartbeat is two minutes of his lane for a pass that usually ends in
+    // nothing.
+    //
+    // `whyNotCompact` holds every gate, so this branch cannot open by accident:
+    // over budget, quiet hours, and an idle lane, with an unknown size refusing.
+    const before = deps.contextSizes?.tokens(LANES.commander);
+    const notNow = whyNotCompact({ tokens: before, inQuietHours, busy: deps.voice.busy() });
+    if (notNow === null && before !== undefined) {
+      const outcome = await compactLane({ ask: (text) => deps.voice.ask(text), before });
+      // FORGET THE OLD SIZE, whether it worked or not. The compaction turn
+      // reports no usage, so nothing here can learn the new size — and the
+      // stale one is still over budget, which would make the next hour compact
+      // again, and the one after that, all night, each reporting a saving
+      // computed from a number that no longer describes anything.
+      // `whyNotCompact` refuses on an unknown size, so the lane waits for the
+      // next real turn to say. On a FAILED compaction this is equally right:
+      // whatever went wrong, what we believed about the thread is now a guess.
+      deps.contextSizes?.forget(LANES.commander);
+      deps.log?.log(outcome.ok ? "info" : "error", "heartbeat.compacted", {
+        at: instant(now),
+        before: outcome.before,
+        after: outcome.after ?? null,
+        error: outcome.error,
+      });
+      return {
+        // A failed compaction is a failed hour: it is loud, it is nowhere near
+        // him, and the circuit breaker should see a sweep that never works.
+        outcome: outcome.ok ? "success" : "failure",
+        spoke: false,
+        turns: 1,
+        costUsd: 0,
+        summary: describeCompaction(outcome),
+        error: outcome.error,
+        // No `nextRunAt`, as everywhere else here: the interval trigger computes
+        // the next hour. `null` would take the job out of `due` forever.
+      };
+    }
+
     const prompt = heartbeatPrompt({
       now,
       tz: deps.tz,

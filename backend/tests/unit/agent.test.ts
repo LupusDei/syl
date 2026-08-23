@@ -37,6 +37,7 @@ function fakeResult(sessionId: string, text = "ok"): TurnResult {
     spoken: text,
     costUsd: 0.001,
     numTurns: 1,
+    contextTokens: 0,
     init: {
       kind: "init",
       sessionId,

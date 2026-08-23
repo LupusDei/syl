@@ -19,6 +19,7 @@ import {
   ensureNightlyDreamJob,
   type NightDreamer,
 } from "./jobs/dream-job.js";
+import { LaneContextSizes, recordLaneContext } from "./harness/compaction.js";
 import {
   createHeartbeatHandler,
   describeHeartbeat,
@@ -984,6 +985,16 @@ export interface Bootstrapped {
    */
   readonly agent: SylAgent;
   /**
+   * What each lane's last turn cost to replay, learned from the turns
+   * themselves.
+   *
+   * Exposed for the same reason `agent` is: the hourly ping is constructed
+   * outside `bootstrap` and is the job that sweeps his thread. See
+   * `harness/compaction.ts` — this lane reached 861,739 tokens unnoticed,
+   * which is why her face could never answer inside Runway's 8s ceiling.
+   */
+  readonly laneSizes: LaneContextSizes;
+  /**
    * The warm-lane router, and therefore **a process to close** — `syl-u72z`.
    *
    * Returned rather than hidden because it is the one thing `bootstrap` builds
@@ -1237,6 +1248,14 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
    * `close()` it. `startSyl` does, after the chat has drained. A `bootstrap`
    * caller that takes warm turns and never closes leaks a resident CLI.
    */
+  /**
+   * What his thread costs to replay, learned from every turn and read by the
+   * hourly ping so it can sweep the thread while he sleeps. See
+   * `harness/compaction.ts`: this lane reached 861,739 tokens unnoticed, which
+   * is why her face could never answer inside Runway's 8-second ceiling.
+   */
+  const laneSizes = new LaneContextSizes();
+
   const warmLanes = new WarmLanes();
 
   /**
@@ -1487,7 +1506,13 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
     // not about which runner ran. Whether a memory can be found again is a
     // guarantee this service holds; leaving it to the model lost the
     // Commander's canary on a haiku turn (`syl-03d`).
-    runner: withMemoryIndex(recordHisWords(options.runner ?? warmLanes.runner)),
+    // OUTSIDE the router, for the same reason `recordHisWords` is: the warm
+    // path is the Commander's own lane, and that is the ONLY lane large enough
+    // for compaction to matter. Wrapped round the router's fallback instead,
+    // the one thread this measurement exists for would be the one thread never
+    // measured — and `harness/compaction.ts` refuses on an unknown size, so the
+    // sweep would simply never happen, silently, with nothing red.
+    runner: recordLaneContext(laneSizes)(withMemoryIndex(recordHisWords(options.runner ?? warmLanes.runner))),
   });
   // How conversation becomes graph.
   //
@@ -1946,6 +1971,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   return {
     database,
     agent,
+    laneSizes,
     agentKey,
     warmLanes,
     // What was decided, not what was intended — the boot notice is derived from
@@ -2258,7 +2284,7 @@ export async function startSyl(
   config: SylConfig,
   options: StartSylOptions = {},
 ): Promise<RunningSyl> {
-  const { database, deps: bootstrapped, agent, agentKey, hands, warmLanes } = bootstrap(
+  const { database, deps: bootstrapped, agent, agentKey, hands, warmLanes, laneSizes } = bootstrap(
     config,
     options,
   );
@@ -2395,6 +2421,13 @@ export async function startSyl(
           // IS `commander`, and a view of it would be a second object standing
           // for the same thread.
           voice: agent,
+          // WHAT HIS THREAD COSTS, so the hour can sweep it while he sleeps.
+          //
+          // The hour is the scheduled visitor to his lane and therefore the
+          // place a 104-second compaction can be taken without anybody waiting
+          // on it. `harness/compaction.ts` holds every gate — over budget,
+          // quiet hours, idle lane — and refuses on an unknown size.
+          contextSizes: laneSizes,
           // The ledger is the runs table: how often she has reached him today
           // is a query over runs of this very job, in his zone, resetting with
           // the local day for free. No new store, and nothing to migrate.

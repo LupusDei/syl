@@ -144,6 +144,7 @@ describe("urgency, through the machine that has to enforce it", () => {
           spoken: failure === null ? "Done." : `I could not: ${failure}`,
           costUsd: 0,
           numTurns: 1,
+          contextTokens: 0,
           init: {
             kind: "init",
             sessionId,

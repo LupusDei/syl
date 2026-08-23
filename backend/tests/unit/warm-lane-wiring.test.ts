@@ -187,15 +187,37 @@ describe("1. the wrappers still apply, to warm turns exactly as to cold ones", (
     expect(readFileSync(turnFilePath(one.home), "utf8")).toBe("Remind me about the roof.");
   });
 
-  it("should keep BOTH wrappers outside the router, so neither can hold on half the turns", () => {
+  it("should keep EVERY wrapper outside the router, so none can hold on half the turns", () => {
     // Asserted on the composition rather than on a behaviour, because the
     // failure it guards is an ORDERING one: `WarmLanes` takes a `fallback`
     // precisely so the wrappers sit outside it and cover warm and cold alike.
-    // Wrap the fallback instead and every warm turn slips past both, which no
+    // Wrap the fallback instead and every warm turn slips past them, which no
     // single-turn test can see — the wrapped path still works perfectly.
+    //
+    // `recordLaneContext` joined the stack for `syl-chzl.4.4` and belongs to
+    // the same argument, sharpened: the Commander's lane is the WARM one and
+    // the only thread ever large enough for compaction to matter. Measured
+    // round the fallback, the one lane the measurement exists for would be the
+    // one lane never measured — and `whyNotCompact` refuses on an unknown size,
+    // so the nightly sweep would simply never happen, silently, with nothing
+    // red. That is the worst version of this failure yet: not a guarantee
+    // holding on half the turns, but a guarantee that never fires at all.
     const source = codeOf(resolve(BACKEND_SRC, "index.ts")).replace(/\s+/gu, "");
 
-    expect(source).toContain("runner:withMemoryIndex(recordHisWords(options.runner??warmLanes.runner))");
+    expect(source).toContain(
+      "runner:recordLaneContext(laneSizes)(withMemoryIndex(recordHisWords(options.runner??warmLanes.runner)))",
+    );
+  });
+
+  it("should never wrap the router's FALLBACK, which is where each of these would hide", () => {
+    // The mistake the composition above prevents, stated as its own check so
+    // that a future edit which moves a wrapper inward goes red for the right
+    // reason rather than merely failing a string match.
+    const source = codeOf(resolve(BACKEND_SRC, "index.ts")).replace(/\s+/gu, "");
+
+    for (const wrapper of ["recordHisWords", "withMemoryIndex", "recordLaneContext"]) {
+      expect(source).not.toContain(`fallback:${wrapper}`);
+    }
   });
 });
 

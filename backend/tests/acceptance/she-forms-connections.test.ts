@@ -111,6 +111,7 @@ function scriptedRunner(reply: string): TurnRunner {
       spoken: reply,
       costUsd: 0,
       numTurns: 1,
+      contextTokens: 0,
       init: {
         kind: "init",
         sessionId,

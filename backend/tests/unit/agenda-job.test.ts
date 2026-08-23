@@ -79,6 +79,7 @@ function said(text: string, tools: readonly string[] = []): TurnResult {
     spoken: text,
     costUsd: 0.02,
     numTurns: 1,
+    contextTokens: 0,
     init: {
       kind: "init",
       sessionId: "sess-agenda",
