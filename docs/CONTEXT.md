@@ -3545,6 +3545,15 @@ are most of what this document and `CLAUDE.md` are for. What it kills is the
 idea that writing it down **discharges** the obligation. Write it down AND make
 something red, wherever the shape permits.
 
+**And the operational form of all of it, which is the sentence to keep if only
+one survives: IT IS NEVER THE SIZE OF THE CHANGE THAT MAKES IT SAFE TO START,
+IT IS WHETHER THE NEXT STEP IS A MEASUREMENT OR AN EDIT.** A four-second stall
+on the reply path was handed over as a small, separable task — and the eight
+hypotheses that died before anything was touched included the two most likely
+to have been chased, both of them favourites of the person who held them. They
+cost nothing *only because they died to a code read rather than to an edit.*
+The task being small is not the safeguard. Reporting before changing is.
+
 ## The page is DEPLOYED; the app's understanding of it is RELEASED
 
 A constraint in its own right, found on 2026-08-23 while shipping `syl-chzl.11`'s second
