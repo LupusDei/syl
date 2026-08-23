@@ -107,10 +107,32 @@ async function main() {
       FIXTURE_PATH,
       // The version goes IN the file. The test compares it with the page's pin,
       // so bumping one without re-running this script fails rather than drifts.
+      //
+      // And the rule is stated at the artifact rather than only at the script,
+      // because the person about to edit this file is reading THIS file.
       `// CAPTURED, NOT WRITTEN. ${spec}\n` +
         `// Source: ${tarball}\n` +
         `// Refresh: node backend/scripts/capture-avatar-sdk-declaration.mjs\n` +
-        `// Do not edit to make a test pass — see the script's header.\n` +
+        `//\n` +
+        `// A CAPTURED ARTIFACT IS DATA, NOT CODE.\n` +
+        `//\n` +
+        `// Two things follow, and both have already mattered:\n` +
+        `//\n` +
+        `// 1. DO NOT EDIT THIS TO MAKE A TEST PASS. It is the vendor's own\n` +
+        `//    description of itself, and its only value is that we did not\n` +
+        `//    write it. Editing it turns the guard in\n` +
+        `//    tests/unit/face-page-vendor-props.test.ts into a mirror. If a\n` +
+        `//    test disagrees with this file, the code is wrong or the pin\n` +
+        `//    moved — re-run the refresh above, never a text editor.\n` +
+        `//\n` +
+        `// 2. IT IS .txt AND MUST STAY .txt. backend/tsconfig.json compiles\n` +
+        `//    tests/**/*.ts, so naming this .d.ts makes it a real declaration\n` +
+        `//    file in the build — and it imports @livekit/components-react,\n` +
+        `//    livekit-client and @runwayml/avatars, none of which are\n` +
+        `//    installed. It typechecked only because skipLibCheck is on in\n` +
+        `//    tsconfig.base.json. Turning that flag off is an ordinary\n` +
+        `//    tightening someone will propose, and it would have broken the\n` +
+        `//    whole workspace's typecheck over a test fixture.\n` +
         declaration,
       "utf8",
     );

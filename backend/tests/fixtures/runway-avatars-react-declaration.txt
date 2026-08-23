@@ -1,7 +1,26 @@
 // CAPTURED, NOT WRITTEN. @runwayml/avatars-react@0.17.0
 // Source: https://registry.npmjs.org/@runwayml/avatars-react/-/avatars-react-0.17.0.tgz
 // Refresh: node backend/scripts/capture-avatar-sdk-declaration.mjs
-// Do not edit to make a test pass — see the script's header.
+//
+// A CAPTURED ARTIFACT IS DATA, NOT CODE.
+//
+// Two things follow, and both have already mattered:
+//
+// 1. DO NOT EDIT THIS TO MAKE A TEST PASS. It is the vendor's own
+//    description of itself, and its only value is that we did not
+//    write it. Editing it turns the guard in
+//    tests/unit/face-page-vendor-props.test.ts into a mirror. If a
+//    test disagrees with this file, the code is wrong or the pin
+//    moved — re-run the refresh above, never a text editor.
+//
+// 2. IT IS .txt AND MUST STAY .txt. backend/tsconfig.json compiles
+//    tests/**/*.ts, so naming this .d.ts makes it a real declaration
+//    file in the build — and it imports @livekit/components-react,
+//    livekit-client and @runwayml/avatars, none of which are
+//    installed. It typechecked only because skipLibCheck is on in
+//    tsconfig.base.json. Turning that flag off is an ordinary
+//    tightening someone will propose, and it would have broken the
+//    whole workspace's typecheck over a test fixture.
 import * as _livekit_components_react from '@livekit/components-react';
 import { TrackReference, TrackReferenceOrPlaceholder } from '@livekit/components-react';
 export { RoomAudioRenderer as AudioRenderer, VideoTrack, isTrackReference } from '@livekit/components-react';

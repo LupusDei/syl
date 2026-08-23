@@ -63,14 +63,31 @@ const FIXTURE = path.join(
 const declaration = readFileSync(FIXTURE, "utf8");
 
 /**
- * The names `AvatarCall` destructures out of its props, from the captured
- * declaration.
+ * The names `AvatarCall` **destructures**, from the captured declaration.
  *
- * A prop NOT in this list is not merely ignored — it lands in the component's
- * `...props` rest and is spread onto a `div`. For `className` that is harmless
- * and intended; for a handler it is the silent failure above. So membership of
- * the destructured list is the bar, and a page that one day genuinely wants a
- * DOM attribute has to come here and say so.
+ * # DESTRUCTURED, NOT DECLARED — and the obvious simplification is wrong
+ *
+ * The tempting version of this function reads `AvatarCallProps`. It is shorter,
+ * it is what a types-first instinct reaches for, and **it would not have caught
+ * the bug this whole file exists for.** `AvatarCallProps` extends
+ * `ComponentPropsWithoutRef<'div'>`, so it admits every DOM attribute and every
+ * DOM event handler — `onClick`, `onLoad`, hundreds of names. It is a set
+ * defined by what React will *tolerate*, not by what this component *reads*.
+ *
+ * What the component reads is the destructuring list in its own signature.
+ * Everything else falls into the `...props` rest and is spread onto a `div`:
+ *
+ * - for `className` or `style`, that is intended and harmless;
+ * - for a **handler**, it is a callback that type-checks, renders, and is never
+ *   invoked. `onConnected` was accepted by `AvatarCallProps` and dropped by the
+ *   component, and that combination is exactly why nothing caught it for a day.
+ *
+ * So membership of the destructured list is the bar. A page that one day
+ * genuinely wants a DOM attribute has to come here and say so, which is the
+ * correct amount of friction: it is the difference between "React allows this"
+ * and "this component does something with it".
+ *
+ * **If you are here to simplify this, that is the thing you would be deleting.**
  */
 function propsTheComponentTakes(): readonly string[] {
   const signature = /declare function AvatarCall<[^>]*>\(\{([^}]*)\}/.exec(declaration);
@@ -128,9 +145,25 @@ describe("the props the page hands the avatar SDK", () => {
     const taken = propsTheComponentTakes();
     const passed = propsThePagePasses();
 
-    // Neither extraction may be vacuous — a regex that matched nothing would
-    // make this test pass by having no work to do, which is the exact shape of
-    // meaningless green this project has already shipped once.
+    // ================================================================
+    // THESE FOUR LINES ALREADY EARNED THEIR PLACE, ON THIS TEST'S FIRST RUN.
+    //
+    // Neither extraction may be vacuous: a regex that matched nothing would
+    // make the loop below iterate zero times and the test pass by having no
+    // work to do. That is the meaningless green this project has shipped once
+    // before and rewrote a whole rule about.
+    //
+    // It was not hypothetical here. **`propsThePagePasses()` returned `[]` the
+    // first time this ran** — the parser I wrote counted brace depth from the
+    // wrong place and matched nothing at all. Without the line below, this test
+    // would have gone green, been committed, and stood as *the* guard against
+    // props wired to nothing while itself being wired to nothing.
+    //
+    // A test for the wrong-wiring class, wrongly wired, caught only by the one
+    // assertion whose entire job is to prove the test is doing something. Do
+    // not remove these as noise; they are the only part of this file that can
+    // fail for the right reason when everything else is subtly broken.
+    // ================================================================
     expect(taken).toContain("sessionId");
     expect(taken.length).toBeGreaterThan(8);
     expect(passed).toContain("sessionKey");
