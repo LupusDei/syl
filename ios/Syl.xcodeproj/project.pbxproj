@@ -310,6 +310,7 @@
 				   tester, while CI reports a clean success. */
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Syl uses the microphone only while her live face is open, so she can hear you speak to her. It is not used at any other time, and nothing is recorded on this phone.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Syl asks for the camera because the live-call SDK that draws her face requests it when a session opens. She does not need to see you and nothing from the camera is sent anywhere or kept. Declining is fine — her face and her voice still work.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Syl reads your health data so she can notice what is changing and tell you when something looks worth knowing. She reads only; she never writes to Health.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Syl never writes to your Health data. Apple requires this text from any app that can reach Health at all, so it is here to satisfy that rule rather than because Syl asks for write access.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -322,7 +323,7 @@
 					"@executable_path/Frameworks",
 				);
 				DEVELOPMENT_TEAM = 2BRYAM5Q52;
-				MARKETING_VERSION = 0.11.0;
+				MARKETING_VERSION = 0.11.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jmm.syl;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -347,6 +348,7 @@
 				   tester, while CI reports a clean success. */
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Syl uses the microphone only while her live face is open, so she can hear you speak to her. It is not used at any other time, and nothing is recorded on this phone.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Syl asks for the camera because the live-call SDK that draws her face requests it when a session opens. She does not need to see you and nothing from the camera is sent anywhere or kept. Declining is fine — her face and her voice still work.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Syl reads your health data so she can notice what is changing and tell you when something looks worth knowing. She reads only; she never writes to Health.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Syl never writes to your Health data. Apple requires this text from any app that can reach Health at all, so it is here to satisfy that rule rather than because Syl asks for write access.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -359,7 +361,7 @@
 					"@executable_path/Frameworks",
 				);
 				DEVELOPMENT_TEAM = 2BRYAM5Q52;
-				MARKETING_VERSION = 0.11.0;
+				MARKETING_VERSION = 0.11.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jmm.syl;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -375,7 +377,7 @@
 				CURRENT_PROJECT_VERSION = 22;
 				GENERATE_INFOPLIST_FILE = YES;
 				DEVELOPMENT_TEAM = 2BRYAM5Q52;
-				MARKETING_VERSION = 0.11.0;
+				MARKETING_VERSION = 0.11.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jmm.syl.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -392,7 +394,7 @@
 				CURRENT_PROJECT_VERSION = 22;
 				GENERATE_INFOPLIST_FILE = YES;
 				DEVELOPMENT_TEAM = 2BRYAM5Q52;
-				MARKETING_VERSION = 0.11.0;
+				MARKETING_VERSION = 0.11.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jmm.syl.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
