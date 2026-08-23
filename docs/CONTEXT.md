@@ -3335,3 +3335,72 @@ already exists.** So the answer is a property of what reached `main` and of what
 in App Store Connect — never of your own branch. A version you have already bumped past can
 have shipped from a commit you did not push, while your working tree shows no sign of it.
 Do not infer upload state from local history; ask, or read the workflow log.
+
+### Load is the explanation that is always available (2026-08-23, later)
+
+The resolution of the entry above, and the reason it is worth a section rather
+than a line: **every wrong answer that evening was a plausible statement about
+LOAD, and the true answer was a specific process nobody had looked for.**
+
+A face session had died mid-conversation. The chase went: fleet load (three
+agents were working) — dead, it failed again with the fleet idle, and got
+twenty-five seconds *slower* while three other files got faster. Agent turn
+activity — dead, same run. The live Syl service contending for the
+subscription — dead, and killed the cheapest way available: its own log
+recorded **zero events** across both failing windows, so there was nothing to
+contend with and nobody had to take a live service down to find out. Rate
+limiting — dead, the tests do not reach the real API at all. Position in the
+run — dead, and the evidence for it had been *misread*: vitest orders files by
+size, so the file believed to be running first was running second.
+
+Five explanations, all about the environment, all wrong. **The machine is the
+first thing to blame and the last thing to check, because it is the only
+hypothesis that is always available and never quite disprovable.** What finally
+worked was `process.getActiveResourcesInfo()` in a throwaway file sized to run
+immediately after the suspect: eleven `ChildProcess` handles, and printing their
+`spawnfile` named them — `/Users/…/.local/bin/claude`. The real binary, in the
+test suite, eleven live copies, `killed=false`.
+
+**The decoy is the part worth remembering.** A leaked-process hypothesis had
+been offered and there *were* leaked processes: seven `syl-fake-claude` from
+nine and fourteen days earlier, plus sixteen abandoned temp directories. Real,
+unbounded, worth its own bead — and 0% CPU, 0% memory, about a minute of CPU
+time each across a fortnight. Inert. Refusing it was correct and it is also
+what fixed the search on the wrong string: the live processes were called
+`claude`, and `grep syl-fake-claude` walked straight past them.
+**The most dangerous hypothesis is not the wrong one. It is the one that is
+true, adjacent, and irrelevant** — it survives scrutiny, satisfies whoever
+proposed it, and quietly ends the search.
+
+Two mechanisms came out of it, and both are the same shape as the traps above.
+
+**An orphan is not a child that outlived its timeout. It is a child whose
+timeout was cremated with its parent.** `runTurn` bounds a wedged CLI with
+SIGTERM and then SIGKILL — correct, and unreachable in the case that happened,
+because `setTimeout` lives in the parent. Kill the parent and the child is
+reparented to `ppid 1` with no bound at all. Nobody found this by reading the
+code, because the ladder is right there and looks fine; the bug is that nothing
+calls it. The fix is a registry and `process.once("exit")`, and it is SIGKILL
+rather than SIGTERM because the CLI ignores SIGTERM — measured, not assumed.
+
+**A guard enforced by callers is not a guard.** `live-service.ts` said the tests
+must never find the real CLI, and enforced it by every caller remembering to
+pass a `claudeBin`. Forty-three of forty-six did not — not carelessly, but
+because they injected a `runner` instead, which reads as "this test spawns
+nothing" and is false: the runner covers the conversation turn and the
+extraction turn escapes behind it. The rule moved to the one function that
+reaches the real process. That is the third time this repository has written
+that sentence down, after the reader's auto-memory and the reader's tool
+surface, and the third instance is the one that should make it a habit rather
+than a lesson.
+
+**And the argument against bumping the tolerance, which came free.** The
+timeout the suite was blowing had a comment deriving it from a real
+measurement: the reference file took "~10s alone" against a 20s cap, so 6x left
+headroom. Under the leak that file took 79.8s and the headroom was gone, and
+the obvious fix — raise the cap — was refused because nobody could say *why*
+the new number would be right. After the leak was fixed the file was back under
+its original figure and the constant never moved. **The number was never wrong;
+the suite had quietly stopped deserving it.** Raising it would have destroyed
+the only evidence that anything was wrong, and that is the answer to every
+"just increase the tolerance" proposal this project will ever receive.
