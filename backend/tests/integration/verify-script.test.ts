@@ -303,7 +303,20 @@ describe("syl-verify.sh", () => {
         });
       });
       child.unref();
-      await untilListening(port);
+      // The last place a silence could still get through. The child reported a
+      // port, so it bound one — but if it dies between saying so and our
+      // connect, `untilListening` would throw the same cause-free sentence
+      // this whole change exists to abolish. Whatever it said comes with it,
+      // VERBATIM.
+      try {
+        await untilListening(port);
+      } catch (error) {
+        const said = complaint.trim();
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)}` +
+            (said === "" ? " (the stub said nothing)" : `; the stub said: ${said}`),
+        );
+      }
       return port;
     }
 
