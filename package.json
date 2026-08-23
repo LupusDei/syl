@@ -60,6 +60,7 @@
     "preping": "npm run check:env",
     "ping": "tsx backend/src/harness/cli/ping.ts",
     "when": "tsx backend/src/harness/cli/when.ts",
+    "compact": "tsx backend/src/harness/cli/compact.ts",
     "prepair": "npm run check:env",
     "pair": "tsx backend/src/ops/cli/pair.ts",
     "prelogs": "npm run check:env",
