@@ -174,6 +174,116 @@ describe("the live face page", () => {
     });
   });
 
+  /**
+   * How much of her is on screen — the 2026-08-23 over-crop.
+   *
+   * He saw his own phone filled brow to chin: no head, no hair, no shoulders,
+   * a face pressed against glass. Runway streams 16:9 landscape and the page
+   * was `object-fit: cover`-ing it into a ~9:19.5 portrait viewport, which
+   * keeps the full height and throws away about three quarters of the width.
+   *
+   * These assert against the SOURCE because there is no viewport in a unit
+   * test, and the property that matters is a property of the rule rather than
+   * of one render: nothing on this page may crop her vertically.
+   */
+  describe("her framing", () => {
+    it("should fit her to the width and never cover the viewport with her", () => {
+      // `cover` in a portrait viewport IS the bug: it matches the height and
+      // spends the width. Its absence is the assertion, not `contain`'s
+      // presence — a rule that adds contain and leaves cover later in the
+      // cascade is the same defect with more CSS.
+      expect(FACE_PAGE_HTML).not.toContain("object-fit: cover");
+      expect(FACE_PAGE_HTML).toContain("object-fit: contain");
+    });
+
+    it("should cap her box at the screen, so no zoom can take the top of her head", () => {
+      // The whole safety argument for `--face-zoom`. The box is sized from the
+      // viewport WIDTH, so zoom only ever spends width; `max-height: 100dvh`
+      // is what stops a large one from spending height as well.
+      expect(FACE_PAGE_HTML).toContain("--face-zoom");
+      expect(FACE_PAGE_HTML).toMatch(/max-height:\s*100dvh/);
+      expect(FACE_PAGE_HTML).toMatch(/width:\s*calc\(100vw \* var\(--face-zoom\)\)/);
+    });
+
+    it("should leave the veil to fill above and below her, not the widget's own backdrop", () => {
+      // "Do not invent a new background; use the veil that is there." The SDK's
+      // blurred backdrop was invisible under a full-bleed video and would be
+      // the only thing in the letterbox bands now that there are bands.
+      expect(FACE_PAGE_HTML).toContain('<div class="veil">');
+      expect(FACE_PAGE_HTML).toMatch(/\[data-avatar-call\]::before[^{]*\{[^}]*display:\s*none/);
+    });
+  });
+
+  /**
+   * The status sentence sat at `bottom: 0` on top of the SDK's mic, camera and
+   * hang-up buttons: "Waking her." drawn across the only controls the surface
+   * has, and eating the taps meant for them.
+   */
+  describe("the status sentence and the controls", () => {
+    it("should not be pinned to the bottom of the screen, where the controls live", () => {
+      const status = FACE_PAGE_HTML.slice(
+        FACE_PAGE_HTML.indexOf("#status {"),
+        FACE_PAGE_HTML.indexOf("#status.err"),
+      );
+
+      expect(status).not.toMatch(/bottom:\s*0/);
+    });
+
+    it("should never be able to swallow a press meant for a control", () => {
+      // The belt, and it is the half that survives the SDK moving its own
+      // furniture: wherever the buttons end up, a label is not a target.
+      const status = FACE_PAGE_HTML.slice(
+        FACE_PAGE_HTML.indexOf("#status {"),
+        FACE_PAGE_HTML.indexOf("#status.err"),
+      );
+
+      expect(status).toMatch(/pointer-events:\s*none/);
+    });
+  });
+
+  /**
+   * Thirty-five seconds of "Waking her." at about twenty cents a minute.
+   *
+   * The page's share of that is its own: a render-blocking stylesheet in front
+   * of its first line, and three module downloads run end to end.
+   */
+  describe("how long she takes to appear", () => {
+    it("should not let a CDN stylesheet block its own first line", () => {
+      // A parser-inserted script waits for every stylesheet declared before it,
+      // so this round trip ran BEFORE `tell('booting')` — the line whose job is
+      // to prove the document executed at all.
+      expect(FACE_PAGE_HTML).toMatch(
+        /<link rel="stylesheet"[^>]*styles\.css"[\s\S]{0,80}media="print"/,
+      );
+    });
+
+    it("should preload every module it imports, at exactly the URL it imports", () => {
+      // A correspondence check, not a comment. A preload whose URL differs from
+      // the import specifier by one character is a second download dressed as a
+      // head start, and it would look completely fine in the source.
+      const imported = [...FACE_PAGE_HTML.matchAll(/await import\(\s*'([^']+)'/g)].map(
+        (match) => match[1],
+      );
+      const preloaded = [...FACE_PAGE_HTML.matchAll(/rel="modulepreload" href="([^"]+)"/g)].map(
+        (match) => (match[1] ?? "").replaceAll("&amp;", "&"),
+      );
+
+      expect(imported).toHaveLength(3);
+      for (const specifier of imported) {
+        expect(preloaded).toContain(specifier);
+      }
+    });
+
+    it("should still import them one at a time", () => {
+      // Parallel DOWNLOAD is the fix; parallel EVALUATION is the WKWebView bug
+      // Adjutant already measured. Gathering these imports must not come back
+      // as an optimisation later — the call, not the word, which the comment at
+      // the import site names on purpose.
+      expect(FACE_PAGE_HTML).not.toMatch(/Promise\.all\s*\(/);
+      expect([...FACE_PAGE_HTML.matchAll(/await import\(/g)]).toHaveLength(3);
+    });
+  });
+
   it("should be reachable without a bearer token", async () => {
     const app = await serve();
 

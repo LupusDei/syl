@@ -29,8 +29,9 @@ import {
  * {@link FaceSessionStore} (durability).
  *
  * ```
- * startSession()      WARM HER UP → warm gate → cost gate → create → charge
- *                     → poll to READY
+ * startSession()      START WARMING HER → cost gate → create → charge
+ *                     → poll to READY → warm gate, now that the turn has had
+ *                       the whole open to run in
  *                     → one-shot client credentials + a per-session credential
  * renewSession()      the same path again; a realtime session cannot be
  *                     extended, so a renew is a fresh, re-gated, re-charged create
@@ -59,12 +60,21 @@ import {
  * charged them; the ledger says so. A guard that under-counts is worse than no
  * guard, because it reports a safety it has not verified.
  *
- * ## Two gates, both free, both before any money moves
+ * ## Two gates, both free, and the warm one moved
  *
- * The **warm-lane** gate first: a cold spawn is ~7,450ms against the provider's
- * 8-second tool ceiling, so a face opened on a cold path is a face that pays
- * ~$0.20/minute to be unable to answer. Then the **ceiling**. Neither costs
- * anything to check, and no HTTP call is made until both have passed.
+ * The **warm-lane** gate exists because a cold spawn is ~7,450ms against the
+ * provider's 8-second tool ceiling, so a face opened on a cold path is a face
+ * that pays ~$0.20/minute to be unable to answer. The **ceiling** gate is
+ * unchanged and still runs before any HTTP call.
+ *
+ * The warm gate now runs **after READY** rather than before the create, and
+ * the reason is a measurement rather than a preference: making it work meant
+ * awaiting a keep-warm turn, and two real opens put that turn at 20.6s and
+ * 22.4s. Twenty seconds of black screen, before Runway had even been asked for
+ * a session. So the turn is started first and *judged* last, which spends the
+ * same twenty seconds alongside the create and the poll instead of in front of
+ * them. A lane that could not be warmed is still refused; see `startSession`
+ * step 4a for the three outcomes and `#beginWarmUp` for the numbers.
  *
  * Polling, the clock and the entropy are injected, so the whole lifecycle is
  * unit-testable with no real timers and no network.
@@ -109,6 +119,27 @@ const DEFAULT_CREDENTIAL_TTL_MS = 5 * 60 * 1_000;
  * is explicitly the placeholder that phase replaces.
  */
 export const SYL_AVATAR_ID = "48cbc73d-f47f-41de-bed8-58a532b3b84b";
+
+/**
+ * A keep-warm turn that is running right now, as the open needs to see it.
+ *
+ * Three fields and no more: whether one was taken at all (which is what the
+ * pre-create gate reads), whether it has finished (which is what the
+ * post-READY gate reads), and the promise itself for a caller that genuinely
+ * wants to wait — the open deliberately does not.
+ */
+interface WarmUpInFlight {
+  readonly started: boolean;
+  readonly finished: () => boolean;
+  readonly settled: Promise<void>;
+}
+
+/** No turn was taken: no warmer, already warm, or no budget to open at all. */
+const NO_WARM_UP: WarmUpInFlight = {
+  started: false,
+  finished: () => true,
+  settled: Promise.resolve(),
+};
 
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
@@ -298,7 +329,23 @@ export class FaceSessionBroker {
   }
 
   /**
-   * Take a keep-warm turn if — and only if — one would be worth taking.
+   * START a keep-warm turn if — and only if — one would be worth taking, and
+   * **return without waiting for it**.
+   *
+   * ## Why it is no longer awaited, which is a measured decision
+   *
+   * It used to be: `startSession` awaited the whole warm turn and only then
+   * created the session. Two real opens on 2026-08-23 put numbers on that —
+   * `lane.warm.taken` at **20,559ms** and **22,369ms**, with the Runway create
+   * following 0.5s later in both cases. Twenty seconds of a long press spent
+   * on a black screen before the provider had even been asked for a session,
+   * and the page then had its own wake to do on top.
+   *
+   * The turn cannot be made cheap: a lane goes warm only by taking a turn, and
+   * what makes it slow is exactly the cold context ingestion that makes it
+   * warm afterwards (`harness/keep-warm.ts`). So it is **hidden behind the
+   * create and the poll** instead of run in front of them — the same twenty
+   * seconds, spent alongside work that had to happen anyway.
    *
    * Three refusals, in the order that spends least:
    *
@@ -311,23 +358,35 @@ export class FaceSessionBroker {
    *   though the *gate* order stays lane-then-ceiling, which is asserted in
    *   `face-session-broker.test.ts` and unaffected: this is not a gate.
    *
-   * Never rethrows. `harness/keep-warm.ts` already resolves on failure; this is
-   * the belt for a caller that supplies something else, because a preparation
-   * that can fail an open is not a preparation.
+   * The returned promise never rejects — everything is caught inside — so a
+   * caller may drop it. `harness/keep-warm.ts` already resolves on failure;
+   * the `catch` here is the belt for a caller that supplies something else,
+   * because a preparation that can fail an open is not a preparation.
    */
-  async #warmUp(): Promise<void> {
-    if (this.#warmLane === null) return;
-    if (this.#isLaneWarm !== null && this.#isLaneWarm()) return;
-    if (!this.#guard.canStartSession()) return;
+  #beginWarmUp(): WarmUpInFlight {
+    if (this.#warmLane === null) return NO_WARM_UP;
+    if (this.#isLaneWarm !== null && this.#isLaneWarm()) return NO_WARM_UP;
+    if (!this.#guard.canStartSession()) return NO_WARM_UP;
 
-    try {
-      const outcome = await this.#warmLane();
-      this.#log("face.lane.warmed", { outcome });
-    } catch (error) {
-      this.#log("face.lane.warm_failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    const warmLane = this.#warmLane;
+    const startedAt = this.#now();
+    let done = false;
+
+    const settled = (async (): Promise<void> => {
+      try {
+        const outcome = await warmLane();
+        this.#log("face.lane.warmed", { outcome, elapsedMs: this.#now() - startedAt });
+      } catch (error) {
+        this.#log("face.lane.warm_failed", {
+          elapsedMs: this.#now() - startedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        done = true;
+      }
+    })();
+
+    return { started: true, finished: (): boolean => done, settled };
   }
 
   /**
@@ -339,17 +398,28 @@ export class FaceSessionBroker {
    *   became usable. The row is settled `failed` and the spend is recorded.
    */
   async startSession(): Promise<OpenedFaceSession> {
-    // 0. WARM HER, BEFORE THE GATE JUDGES HER. `syl-chzl.2.3`: the lane goes
-    //    cold after fifteen idle minutes and there is no free pre-warm — the
-    //    CLI emits nothing until a frame arrives, so a lane becomes warm only
-    //    by taking a turn. Without this, the ordinary case (he has not spoken
-    //    to her in a while and long-presses her face) hits the refusal below
-    //    every single time, which is a correct gate answering a question
-    //    nobody had to lose.
-    await this.#warmUp();
+    // 0. WARM HER, ALONGSIDE THE OPEN RATHER THAN IN FRONT OF IT.
+    //    `syl-chzl.2.3`: the lane goes cold after fifteen idle minutes and
+    //    there is no free pre-warm — the CLI emits nothing until a frame
+    //    arrives, so a lane becomes warm only by taking a turn. Without this,
+    //    the ordinary case (he has not spoken to her in a while and
+    //    long-presses her face) hits the refusal below every single time.
+    //
+    //    **Started, not awaited.** Measured at 20.6s and 22.4s on two real
+    //    opens; see `#beginWarmUp`. It now runs for the length of the create
+    //    and the poll instead of before them.
+    const warming = this.#beginWarmUp();
 
     // 1. The free gates, cheapest first. Neither makes an HTTP call.
-    if (this.#isLaneWarm !== null && !this.#isLaneWarm()) throw new FaceColdLaneError();
+    //
+    //    The cold gate refuses only when NOTHING IS BEING DONE ABOUT IT. With
+    //    a turn already in flight the lane's coldness is a fact about this
+    //    instant and not about the instant her face appears, and refusing on
+    //    it would refuse precisely the case `#beginWarmUp` exists to serve.
+    //    The re-check after READY is where a warm-up that failed is caught.
+    if (this.#isLaneWarm !== null && !warming.started && !this.#isLaneWarm()) {
+      throw new FaceColdLaneError();
+    }
     if (!this.#guard.canStartSession()) {
       throw new FaceCostCeilingError(this.#guard.dailyCreditCeiling, this.#guard.spentToday());
     }
@@ -376,7 +446,9 @@ export class FaceSessionBroker {
 
     // 3. Create. Runway charges here, so everything after this point records
     //    the spend whatever else happens.
+    const createStartedAt = this.#now();
     const created = await this.#runway.createRealtimeSession(input);
+    const createMs = this.#now() - createStartedAt;
     const sessionId = created.id;
     const upfront = this.#upfrontCredits();
 
@@ -393,10 +465,53 @@ export class FaceSessionBroker {
       // distinguishable — see the migration.
       askExpiresAt: this.#expiryOf(created) ?? this.#now() + DEFAULT_CREDENTIAL_TTL_MS,
     });
-    this.#log("face.session.opened", { sessionId, avatarId: this.#avatarId, credits: upfront });
+    this.#log("face.session.opened", {
+      sessionId,
+      avatarId: this.#avatarId,
+      credits: upfront,
+      // **Stage timings, because "waking her" for thirty-five seconds was
+      // unanswerable without them.** Every number the wake is made of is
+      // logged at the stage that spent it: this one, `readyMs` below,
+      // `face.lane.warmed`'s `elapsedMs`, and `face.rpc.attached`'s in
+      // `routes/face.ts`. A latency nobody can attribute is a latency nobody
+      // can cut.
+      createMs,
+      warmingLane: warming.started,
+    });
 
     // 4. Poll to READY.
+    const readyStartedAt = this.#now();
     const ready = await this.#pollToReady(sessionId);
+    const readyMs = this.#now() - readyStartedAt;
+    this.#log("face.session.ready", { sessionId, readyMs, pollIntervalMs: this.#pollIntervalMs });
+
+    // 4a. THE COLD GATE, ASKED AT THE MOMENT IT ACTUALLY MATTERS.
+    //
+    //     The warm turn has now had the create and the whole poll to run in,
+    //     and there are three answers:
+    //
+    //     - **warm**: the ordinary one, and nothing to say.
+    //     - **still warming**: hand the face over. Her page has its own wake
+    //       to do — imports, a room join, a first frame — and he has to speak
+    //       before anything asks her anything. If a question does beat the
+    //       turn, `AskSylIngress` has its own cold gate and answers it in
+    //       words. Refusing a session that is drawing correctly, to protect
+    //       against a question nobody has asked, is the trade the old serial
+    //       warm made and it cost twenty seconds every single time.
+    //     - **finished and STILL cold**: the warm-up failed. That is the case
+    //       the gate is for, and it still refuses — the row is settled
+    //       `failed` and the upfront the provider already charged is on it,
+    //       exactly as for a session that never readied.
+    if (this.#isLaneWarm !== null && !this.#isLaneWarm()) {
+      if (warming.finished()) {
+        this.#fail(sessionId);
+        throw new FaceColdLaneError();
+      }
+      this.#log("face.lane.still_warming", {
+        sessionId,
+        note: "the face is ready before the keep-warm turn is; the ask ingress guards the gap",
+      });
+    }
 
     // The provider only reports its cap once the session is up, so the
     // credential's floor written above is replaced by the real thing now.

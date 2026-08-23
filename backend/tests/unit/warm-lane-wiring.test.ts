@@ -4,7 +4,6 @@ import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FaceColdLaneError } from "../../src/face/face-session-broker.js";
 import { LANES } from "../../src/harness/agent.js";
 import { bootstrap, sylHome, type Bootstrapped } from "../../src/index.js";
 import { IN_MEMORY, INTERACTIVE_CONVERSATION_ID } from "../../src/services/database.js";
@@ -76,11 +75,14 @@ afterEach(async () => {
 /**
  * Stop the broker one step past the gates, without touching a network.
  *
- * `startSession` runs warm-up, then the cold gate, then the ceiling, then the
- * avatar check — and only after all four does it construct a `RunwayClient` and
- * make an HTTP call. An empty avatar id is therefore a probe that reaches
- * exactly as far as the gates and no further: a suite must never depend on
- * whether the machine running it has `RUNWAYML_API_SECRET` set.
+ * `startSession` STARTS the warm-up, then runs the cold gate, the ceiling and
+ * the avatar check — and only after all three does it construct a
+ * `RunwayClient` and make an HTTP call. An empty avatar id is therefore a probe
+ * that reaches exactly as far as the gates and no further: a suite must never
+ * depend on whether the machine running it has `RUNWAYML_API_SECRET` set.
+ *
+ * The warm-up is no longer awaited in front of them, so a test that wants the
+ * turn's OUTCOME has to wait for it — see `vi.waitFor` below.
  */
 function stopAtTheAvatar(): void {
   vi.stubEnv("SYL_FACE_AVATAR_ID", "");
@@ -280,27 +282,54 @@ describe("4. apiKeySource is asserted PER TURN, not once at spawn", () => {
  * face, since the lane is cold until something warms it.
  */
 describe("warming the lane at the moment his face opens", () => {
-  it("should take a warming turn on a cold lane, then let the open proceed", async () => {
+  it("should start a warming turn on a cold lane and let the open past without waiting for it", async () => {
+    // **The twenty seconds.** Two real opens on 2026-08-23 logged
+    // `lane.warm.taken` at 20,559ms and 22,369ms with the Runway create
+    // following half a second later, because the open AWAITED the turn. The
+    // turn cannot be made cheap — a lane goes warm only by taking one, and
+    // what makes it slow is the cold context ingestion that makes it warm
+    // afterwards — so it is started here and judged after READY instead.
     stopAtTheAvatar();
     const one = boot();
     expect(one.built.warmLanes.status(LANES.commander)?.warm).toBe(false);
 
-    // Past the cold gate, stopped at the avatar — so the gate did not refuse.
+    // Past the cold gate, stopped at the avatar — so the gate did not refuse a
+    // lane that something was already being done about.
     await expect(one.built.deps.face.broker.startSession()).rejects.toThrow(NO_AVATAR);
 
-    expect(one.built.warmLanes.status(LANES.commander)?.warm).toBe(true);
+    // And the turn is real rather than merely started: it lands, and the lane
+    // is warm — just not on the open's critical path.
+    await vi.waitFor(
+      () => {
+        expect(one.built.warmLanes.status(LANES.commander)?.warm).toBe(true);
+      },
+      { timeout: 15_000, interval: 50 },
+    );
     expect(hisSpawns(one.fake)).toHaveLength(1);
   }, 20_000);
 
-  it("should still refuse when the warming turn could not make her warm", async () => {
-    // The gate is not weakened, only better informed. A face opened on a lane
-    // that cannot answer inside eight seconds costs about $0.20 a minute to be
-    // silent, which is worse than the refusal.
+  it("should not refuse the open early merely because the warming turn died", async () => {
+    // The gate is not weakened, it is asked later — after READY, when the turn
+    // has had the create and the whole poll to finish in. Refusing here would
+    // put us straight back to a serial warm, because "has it finished yet" at
+    // this instant is always no.
+    //
+    // The refusal ITSELF is asserted where it can be reached without a network:
+    // `face-session-broker.test.ts`, "should still refuse when the warm-up
+    // finished and the lane is cold anyway", which also pins that the row we
+    // already paid Runway for is settled rather than left looking live.
+    stopAtTheAvatar();
     const one = boot([{ lines: [], die: 1 }]);
 
-    await expect(one.built.deps.face.broker.startSession()).rejects.toBeInstanceOf(
-      FaceColdLaneError,
+    await expect(one.built.deps.face.broker.startSession()).rejects.toThrow(NO_AVATAR);
+
+    await vi.waitFor(
+      () => {
+        expect(hisSpawns(one.fake)).toHaveLength(1);
+      },
+      { timeout: 15_000, interval: 50 },
     );
+    expect(one.built.warmLanes.status(LANES.commander)?.warm).toBe(false);
   }, 20_000);
 
   it("should leave no trace of the warming turn anywhere he can see", async () => {

@@ -104,9 +104,44 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Syl</title>
-<link rel="stylesheet" href="https://esm.sh/@runwayml/avatars-react/styles.css" />
 <link rel="preconnect" href="https://esm.sh" crossorigin />
 <link rel="dns-prefetch" href="https://esm.sh" />
+<!--
+  THE SDK'S STYLESHEET, AND IT MAY NOT BLOCK THE DOCUMENT.
+
+  A parser-inserted script element waits for every stylesheet declared before
+  it, so a plain \`link rel=stylesheet\` pointing at a CDN put a full round trip
+  to esm.sh in FRONT of this page's own first line — including \`tell('booting')\`,
+  whose entire job is to prove the document ran. She is billing for that round
+  trip at about twenty cents a minute.
+
+  \`media="print"\` makes it non-blocking; the \`onload\` swap applies it the
+  moment it lands, which is still long before the SDK it styles has finished
+  importing. Same origin, same file, nothing new fetched.
+-->
+<link rel="stylesheet" href="https://esm.sh/@runwayml/avatars-react/styles.css"
+      media="print" onload="this.media='all'" />
+<!--
+  FETCHED IN PARALLEL, EVALUATED IN ORDER.
+
+  The three imports at the bottom of this document stay serial on purpose —
+  Adjutant measured importing them all at once tripping a WKWebView "Importing
+  a module script failed". But serial EVALUATION does not require serial
+  DOWNLOAD, and it was paying for three round trips end to end: react, then
+  react-dom, then a bundle of some size.
+
+  These preloads start all three requests while the parser is still in the
+  head, so by the time react has evaluated the other two are already in the
+  cache and the \`await import\` chain is three cache reads. The order of
+  evaluation is unchanged, which is the property the WKWebView bug cares about.
+
+  The hrefs must match the import specifiers CHARACTER FOR CHARACTER, or a
+  preload is a second download rather than a head start — \`face-page.test.ts\`
+  asserts exactly that correspondence.
+-->
+<link rel="modulepreload" href="https://esm.sh/react@18" crossorigin />
+<link rel="modulepreload" href="https://esm.sh/react-dom@18/client" crossorigin />
+<link rel="modulepreload" href="https://esm.sh/@runwayml/avatars-react?bundle&amp;deps=react@18,react-dom@18" crossorigin />
 <style>
   :root { color-scheme: dark; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #070610;
@@ -120,29 +155,94 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
       radial-gradient(ellipse 60% 45% at 22% 86%, rgba(140,110,220,.14), transparent 62%),
       #070610; }
 
-  /* Fill the screen in PORTRAIT. The SDK's call widget is a 16/9 strip; its
-     inner video already does object-fit: cover, so overriding the container to
-     the full viewport crops the landscape source to a full-screen portrait.
-     (Targeting the SDK's own container is what works — its ::before blur traps
-     position: fixed on anything inside it.) */
+  /* ==================================================================
+     HER FRAMING: FIT THE WIDTH, AND LET THE VEIL HOLD THE REST.
+
+     Runway streams a 16:9 LANDSCAPE frame. The rule that used to live here
+     stretched the SDK's call widget to the whole viewport and left the inner
+     video fitted by COVER, and in a ~9:19.5 portrait phone that
+     means MATCH THE HEIGHT AND THROW AWAY THE WIDTH — about three quarters of
+     it. That is the face pressed against glass he saw on 2026-08-23: eyes,
+     nose and mouth, no head, no hair, no shoulders. The comment was accurate
+     and the behaviour was still wrong; a full-screen portrait of a landscape
+     source is a crop, described as a fill.
+
+     So the video is now sized from the viewport WIDTH and its 16:9 height is
+     allowed to be whatever that makes it, centred, with \`.veil\` — the app's
+     own dark, already on this page — filling above and below. \`object-fit:
+     contain\` inside that box means nothing is cropped by US whatever ratio
+     actually arrives down the wire.
+
+     ------------------------------------------------------------------
+     WHY \`--face-zoom\` CANNOT BRING THE OLD BUG BACK
+
+     Plain contain leaves her 56.25vw tall — on a 393x852pt phone that is a
+     221pt strip in the middle of a very tall screen, which is honest and
+     small. \`--face-zoom\` buys presence back, and it can only ever spend
+     WIDTH: \`max-height: 100dvh\` caps the box at the screen, so the FULL
+     HEIGHT of Runway's frame is on screen for every zoom up to
+     100dvh / 56.25vw — about 3.8x on that phone. At the 1.35 set here the box
+     is 531x299pt and 13% is trimmed from each SIDE, which is background and
+     the outside of her hair. The top of her head is not reachable from this
+     number, which is the property that matters: the failure to avoid is the
+     one we had.
+     ================================================================== */
+  :root { --face-zoom: 1.35; }
+
   #root { position: fixed; inset: 0; z-index: 1; overflow: hidden; }
   #root, #root * { background-color: transparent !important; }
+  /* (Targeting the SDK's own container is what works — its ::before blur traps
+     position: fixed on anything inside it.) */
   [data-avatar-call] {
     width: 100vw !important; height: 100vh !important; height: 100dvh !important;
     aspect-ratio: auto !important; max-width: none !important; max-height: none !important;
   }
+  /* The widget's own blurred backdrop. It was invisible while the video filled
+     the screen; now that the video letterboxes, it would be the only thing in
+     the bands where the veil belongs — and the veil is the app's dark, so the
+     page does not flash a different one. */
+  [data-avatar-call]::before, [data-avatar-call]::after { display: none !important; }
+
   [data-avatar-video], [data-avatar-video] > * {
     position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important;
   }
   [data-avatar-video] video, [data-avatar-video] canvas {
-    position: absolute !important; inset: 0 !important;
-    width: 100% !important; height: 100% !important; object-fit: cover !important;
+    /* \`inset\` FIRST: the rule above sets all four sides with !important and a
+       shorthand written after these would put them back. */
+    inset: auto !important;
+    position: absolute !important;
+    left: 50% !important; top: 50% !important;
+    right: auto !important; bottom: auto !important;
+    transform: translate(-50%, -50%) !important;
+    width: calc(100vw * var(--face-zoom)) !important;
+    height: calc(100vw * var(--face-zoom) * 9 / 16) !important;
+    max-width: none !important;
+    /* The guarantee. Nothing above this line can crop her vertically. */
+    max-height: 100dvh !important;
+    object-fit: contain !important;
   }
   /* She looks at him; he is not on camera. No self-view. */
   [data-avatar-user-video] { display: none !important; }
 
-  #status { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2;
-    padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
+  /* THE STATUS SENTENCE, OUT FROM BEHIND THE CONTROLS.
+
+     It used to be pinned to the bottom at z-index 2, which drew "Waking her."
+     straight across the SDK's mic, camera and hang-up buttons AND swallowed
+     the taps meant for them — a label on top of the only controls the surface
+     has. It now sits in the veil directly BELOW her, which is empty by
+     construction now that the video letterboxes: the video's lower edge is at
+     50% + half its height, and half of (100vw * zoom * 9/16) is
+     100vw * zoom * 9/32.
+
+     \`min()\` keeps it on screen on a short or landscape viewport, where
+     \`max-height\` has already clamped the video and the derived offset would
+     overshoot. \`pointer-events: none\` is the belt: wherever the SDK chooses
+     to put its own furniture, a sentence never eats a press again. */
+  #status { position: fixed; left: 0; right: 0; z-index: 2;
+    pointer-events: none;
+    top: min(calc(50% + (100vw * var(--face-zoom) * 9 / 32) + 20px),
+             calc(100dvh - 150px));
+    padding: 0 18px;
     text-align: center; font-size: 15px; line-height: 1.4; color: #b9b4d6; }
   #status.err { color: #ff9d9d; }
   .spin { display: inline-block; width: 13px; height: 13px; border: 2px solid #5e7ce2;

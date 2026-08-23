@@ -273,29 +273,44 @@ export function createFaceRouter(options: FaceRouterOptions): Router {
       // and the session is still handed over — a face that cannot answer is
       // better than a face that was paid for and thrown away.
       if (options.attachRpc) {
+        // **STARTED HERE, NOT WAITED FOR HERE.** The attach dynamically
+        // imports a native module, fetches room credentials from Runway and
+        // then JOINS A LIVEKIT ROOM — a WebRTC connect, seconds of it on a
+        // first open. None of that is anything the phone is waiting on: it
+        // needs the four credential fields to start drawing, and the avatar
+        // cannot call `ask_syl` until he has spoken, which is a long way after
+        // the page has finished its own wake. Awaiting it here put a room join
+        // in front of the first frame, on a session that was already billing.
+        //
         // **LOGGED ON SUCCESS TOO, and that is the point of this block.** It
         // used to log only the failure, which made a healthy attach and an
         // attach that never ran indistinguishable in the record — and on
         // 2026-08-23 that ambiguity was the reason nobody could say whether
         // the avatar had ever had a tool to call. An absence that means "fine"
         // must not look like an absence that means "never happened".
+        //
+        // Every outcome is handled inside, so nothing floats unhandled: a
+        // rejected attach must not become an unhandled rejection on a service
+        // that has already answered 201.
         const startedAt = Date.now();
-        try {
-          await options.attachRpc({
+        void options
+          .attachRpc({
             sessionId: opened.credentials.sessionId,
             askSecret: opened.askSecret,
+          })
+          .then(() => {
+            log("face.rpc.attached", {
+              sessionId: opened.credentials.sessionId,
+              elapsedMs: Date.now() - startedAt,
+            });
+          })
+          .catch((error: unknown) => {
+            log("face.rpc.attach_failed", {
+              sessionId: opened.credentials.sessionId,
+              elapsedMs: Date.now() - startedAt,
+              error: error instanceof Error ? error.message : String(error),
+            });
           });
-          log("face.rpc.attached", {
-            sessionId: opened.credentials.sessionId,
-            elapsedMs: Date.now() - startedAt,
-          });
-        } catch (error) {
-          log("face.rpc.attach_failed", {
-            sessionId: opened.credentials.sessionId,
-            elapsedMs: Date.now() - startedAt,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
       } else {
         // No transport at all. The face will open and be mute, and a line
         // saying so is worth more than the silence that used to stand for it.

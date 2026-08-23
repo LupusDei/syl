@@ -401,10 +401,10 @@ describe("FaceSessionBroker", () => {
       expect(opened.credentials.sessionId).toBe("rts_1");
     });
 
-    it("should warm before anything is created or charged", async () => {
-      // Ordering is the entire feature, and it runs both ways. A warmer called
-      // after the gate warms a lane for a session already refused; a warmer
-      // called after the create pays Runway before finding out she can speak.
+    it("should start warming before anything is created", async () => {
+      // Ordering still runs both ways, and the first half is unchanged: a
+      // warmer called after the gate warms a lane for a session already
+      // refused. What changed is only that the create no longer WAITS.
       const warm = warmer();
       const order: string[] = [];
       runway.createRealtimeSession = (input): Promise<RealtimeSessionRow> => {
@@ -425,15 +425,80 @@ describe("FaceSessionBroker", () => {
       expect(guard.spentToday()).toBeGreaterThan(0);
     });
 
-    it("should still refuse when the warm-up could not make the lane warm", async () => {
-      // The gate is not weakened, only better informed. A warm-up that failed
-      // leaves a lane that cannot answer inside the ceiling, and opening a face
-      // on it is paying about $0.20 a minute to be silent.
+    it("should create the session while the warm turn is still running, not after it", async () => {
+      // **The twenty seconds.** Measured on two real opens, 2026-08-23:
+      // `lane.warm.taken` at 20,559ms and 22,369ms, with the Runway create
+      // following half a second later in both. A lane goes warm only by taking
+      // a turn and the turn is slow for exactly the reason it works, so the
+      // only place the time can go is alongside work that had to happen
+      // anyway. The create must therefore be reached with the turn UNFINISHED.
+      let createdWhileWarming = false;
+      let releaseWarm = (): void => {};
+      const warmed = new Promise<void>((resolve) => {
+        releaseWarm = resolve;
+      });
+      let warm = false;
+
+      runway.createRealtimeSession = (input): Promise<RealtimeSessionRow> => {
+        createdWhileWarming = !warm;
+        runway.createCalls.push(input);
+        // The turn lands while the poll is in flight, which is the point.
+        warm = true;
+        releaseWarm();
+        return Promise.resolve({ id: "rts_1", status: "PENDING" });
+      };
+
+      const opened = await broker({
+        isLaneWarm: () => warm,
+        warmLane: () => warmed.then(() => "warmed"),
+      }).startSession();
+
+      expect(createdWhileWarming).toBe(true);
+      expect(opened.credentials.sessionId).toBe("rts_1");
+    });
+
+    it("should hand over a face that is ready before the warm turn is", async () => {
+      // The turn outlives the whole open. She is drawing, he has not spoken
+      // yet, and `AskSylIngress` has its own cold gate for a question that
+      // somehow beats the turn — so refusing a session that renders correctly,
+      // to guard against a question nobody has asked, is the trade the old
+      // serial warm made and it cost twenty seconds every single time.
+      const faceLog: { event: string }[] = [];
+
+      const opened = await broker({
+        isLaneWarm: () => false,
+        // Never resolves within the open.
+        warmLane: () => new Promise<string>(() => {}),
+        log: (event) => faceLog.push({ event }),
+      }).startSession();
+
+      expect(opened.credentials.sessionId).toBe("rts_1");
+      expect(faceLog.map((entry) => entry.event)).toContain("face.lane.still_warming");
+    });
+
+    it("should still refuse when the warm-up finished and the lane is cold anyway", async () => {
+      // The gate is not weakened, only asked later. A warm-up that ran to
+      // completion and left the lane cold is a lane that cannot answer inside
+      // the provider's eight seconds, and opening a face on it is paying about
+      // $0.20 a minute to be silent.
       await expect(
         broker({ isLaneWarm: () => false, warmLane: () => Promise.resolve("failed") }).startSession(),
       ).rejects.toBeInstanceOf(FaceColdLaneError);
-      expect(runway.createCalls).toHaveLength(0);
-      expect(guard.spentToday()).toBe(0);
+    });
+
+    it("should settle the row it already paid for when it refuses a cold lane after READY", async () => {
+      // The cost of asking the gate later, stated rather than hidden. Runway
+      // charges at create, so the refusal now happens with the upfront already
+      // spent — exactly as for a session that never readied. The row must be
+      // closed, not left looking like a live leak, and the ledger must say
+      // what the provider took.
+      await expect(
+        broker({ isLaneWarm: () => false, warmLane: () => Promise.resolve("failed") }).startSession(),
+      ).rejects.toBeInstanceOf(FaceColdLaneError);
+
+      expect(sessions.live()).toHaveLength(0);
+      expect(sessions.get("rts_1")?.ended).toBe("failed");
+      expect(guard.spentToday()).toBe(sessions.get("rts_1")?.credits);
     });
 
     it("should not fail the open when the warm-up itself rejects", async () => {
