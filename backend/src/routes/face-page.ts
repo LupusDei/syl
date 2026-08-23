@@ -305,6 +305,22 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
    * exactly when \`left\` is sent. Never awaited by anything that draws, and
    * never allowed to throw: a page failing at one thing must not fail at two.
    */
+  /**
+   * A rejected media request, in words an operator can act on.
+   *
+   * \`name\` is the part that decides what to do — \`NotAllowedError\` is a
+   * refusal and means check the usage descriptions and the capture delegate,
+   * \`NotFoundError\` means there is no such device, \`NotReadableError\` means
+   * something else holds it. \`message\` alone is vendor prose that varies by
+   * WebKit version, so both go in and the name goes FIRST.
+   */
+  function describeErr(err) {
+    if (!err) return 'no error given';
+    const name = err.name || 'Error';
+    const message = err.message || String(err);
+    return name + ': ' + message;
+  }
+
   const reported = Object.create(null);
   function tell(state, detail) {
     try { host && host.postMessage({ state: state, detail: detail || '' }); } catch (_) {}
@@ -373,12 +389,30 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
      * \`mediaDevices.getUserMedia\` before the SDK loads puts this innermost:
      * the adapter shims the bundle installs wrap OUR function, so they delegate
      * inward and cannot get round it. A request that asked for video and audio
-     * proceeds with audio alone; one that asked for video ONLY is refused with
-     * a \`NotAllowedError\`, which is the shape callers already handle — and is
-     * emphatically better than the \`TypeError\` an all-false constraint throws.
+     * proceeds with audio alone.
      *
-     * Every strip is REPORTED, which turns "does the SDK ask for the camera?"
-     * into a fact in the log after one press rather than an argument.
+     * ## The fence must never be able to fail the call
+     *
+     * It used to refuse a video-ONLY request with a \`NotAllowedError\`, on the
+     * reasoning that a denied camera is a shape every caller already handles.
+     * That reasoning is sound and it is still not worth the risk: \`getDevices\`
+     * asks exactly that way (\`kind === 'videoinput'\` gives
+     * \`{ video: true, audio: false }\`), and a rejection there is OUR code
+     * deciding a connection fails. **A guard against a capability we do not use
+     * must not be able to stop the session** — so a video-only request now
+     * resolves with an EMPTY \`MediaStream\`. No camera opens, no track exists,
+     * and nothing throws. A caller that enumerates gets unlabelled video
+     * devices, which is harmless in a page that never publishes video.
+     *
+     * ## Why the outcome is reported and not just the strip
+     *
+     * The strip was reported and the RESULT was not, so \`camera_blocked\` became
+     * the last thing four sessions ever said — and that was read as "the fence
+     * broke it", which the evidence does not actually support. A report that
+     * says what we DID without saying what CAME BACK moves the blind spot one
+     * line down and looks like a diagnosis. The inner call's own failure is the
+     * far likelier story and it was invisible: a rejected microphone inside a
+     * device enumeration surfaces here and nowhere else.
      */
     (function fenceTheCamera() {
       const devices = navigator.mediaDevices;
@@ -386,14 +420,30 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
       const inner = devices.getUserMedia.bind(devices);
       devices.getUserMedia = function (constraints) {
         const asked = constraints || {};
-        if (!asked.video) return inner(asked);
-        tell('camera_blocked', 'a media request asked for video; the page does not use a camera');
+        if (!asked.video) {
+          // Not our business — but still report a FAILURE, or an audio request
+          // that the OS refuses disappears inside the SDK without a word.
+          return inner(asked).catch((err) => {
+            tell('failed', 'an audio-only media request was refused: ' + describeErr(err));
+            throw err;
+          });
+        }
         const audioOnly = Object.assign({}, asked, { video: false });
         if (!audioOnly.audio) {
-          return Promise.reject(new DOMException(
-            'This page never uses the camera.', 'NotAllowedError'));
+          tell('camera_blocked', 'a video-only request was answered with an empty stream');
+          return Promise.resolve(new MediaStream());
         }
-        return inner(audioOnly);
+        tell('camera_blocked', 'a media request asked for video; retrying it as audio alone');
+        return inner(audioOnly).then(
+          (stream) => {
+            tell('mic_granted', 'the audio half of a camera request succeeded');
+            return stream;
+          },
+          (err) => {
+            tell('failed', 'the audio half of a camera request was refused: ' + describeErr(err));
+            throw err;
+          },
+        );
       };
       // The legacy shims, for completeness. Both are documented to route into
       // \`mediaDevices\` on modern WebKit, so this is belt rather than braces —

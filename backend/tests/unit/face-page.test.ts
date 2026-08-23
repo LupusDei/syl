@@ -284,6 +284,152 @@ describe("the live face page", () => {
     });
   });
 
+  /**
+   * The camera fence, RUN rather than read.
+   *
+   * This is the one piece of the page whose failure mode is a session that
+   * costs money and shows him nothing, so it is the one piece worth executing
+   * in a test instead of matching against its own source. A `toMatch` here
+   * would pass on a fence that rejects every call, which is precisely the
+   * defect these tests exist to catch.
+   *
+   * The fence is lifted out of the rendered document and run against a stub
+   * `navigator`, so what is exercised is the code that actually ships.
+   */
+  describe("the camera fence", () => {
+    interface FenceRun {
+      /** Constraints the fence passed INWARD, in order. Empty if it never delegated. */
+      readonly inner: unknown[];
+      /** `[state, detail]` for every report the fence made. */
+      readonly told: readonly (readonly [string, string])[];
+      readonly getUserMedia: (constraints: unknown) => Promise<unknown>;
+    }
+
+    /** Install the shipped fence over a stub `getUserMedia` and hand back the seams. */
+    function installFence(inner: (constraints: unknown) => Promise<unknown>): FenceRun {
+      const start = FACE_PAGE_HTML.indexOf("(function fenceTheCamera() {");
+      expect(start, "the fence must still be in the page").toBeGreaterThan(-1);
+      const end = FACE_PAGE_HTML.indexOf("\n    })();", start);
+      expect(end, "the fence must still be a self-contained IIFE").toBeGreaterThan(start);
+      const source = FACE_PAGE_HTML.slice(start, end + "\n    })();".length);
+
+      const seen: unknown[] = [];
+      const told: (readonly [string, string])[] = [];
+      const devices = {
+        getUserMedia(constraints: unknown) {
+          seen.push(constraints);
+          return inner(constraints);
+        },
+      };
+      const navigatorStub = { mediaDevices: devices } as Record<string, unknown>;
+
+      // `describeErr` is a sibling of the fence in the page; the fence calls it,
+      // so the harness supplies the same contract rather than a copy of it.
+      const run = new Function(
+        "navigator",
+        "tell",
+        "MediaStream",
+        "describeErr",
+        `${source}\n return navigator.mediaDevices.getUserMedia;`,
+      ) as (
+        n: unknown,
+        t: (s: string, d?: string) => void,
+        m: unknown,
+        d: (e: unknown) => string,
+      ) => (constraints: unknown) => Promise<unknown>;
+
+      const getUserMedia = run(
+        navigatorStub,
+        (state: string, detail?: string) => told.push([state, detail ?? ""] as const),
+        class FakeMediaStream {
+          getTracks(): unknown[] {
+            return [];
+          }
+        },
+        (err: unknown) => String((err as Error)?.name ?? "Error"),
+      );
+
+      return { inner: seen, told, getUserMedia };
+    }
+
+    /** What `DeviceManager.getDevices('videoinput')` asks for, verbatim. */
+    const VIDEO_ONLY = { video: true, audio: false };
+
+    it("should never reject a video-only request, because a guard must not fail the session", async () => {
+      // The regression. It used to answer this with a `NotAllowedError`, which
+      // is OUR code deciding a connection fails — over a capability the page
+      // does not use. `getDevices('videoinput')` asks exactly this way.
+      const fence = installFence(() => Promise.reject(new Error("must not be reached")));
+
+      await expect(fence.getUserMedia(VIDEO_ONLY)).resolves.toBeDefined();
+    });
+
+    it("should open no camera when it answers a video-only request", async () => {
+      const fence = installFence(() => Promise.reject(new Error("must not be reached")));
+
+      const stream = (await fence.getUserMedia(VIDEO_ONLY)) as { getTracks(): unknown[] };
+
+      // Resolving is only safe because nothing was captured to resolve WITH.
+      expect(fence.inner).toHaveLength(0);
+      expect(stream.getTracks()).toHaveLength(0);
+    });
+
+    it("should keep the audio half when a request asks for both", async () => {
+      const granted = { id: "audio-only" };
+      const fence = installFence(() => Promise.resolve(granted));
+
+      await expect(fence.getUserMedia({ video: true, audio: { deviceId: "x" } })).resolves.toBe(
+        granted,
+      );
+      expect(fence.inner).toEqual([{ video: false, audio: { deviceId: "x" } }]);
+    });
+
+    it("should pass an audio-only request straight through, untouched", async () => {
+      const granted = { id: "mic" };
+      const fence = installFence(() => Promise.resolve(granted));
+
+      await expect(fence.getUserMedia({ audio: true })).resolves.toBe(granted);
+      expect(fence.inner).toEqual([{ audio: true }]);
+    });
+
+    it("should report what came BACK, not only what it stripped", async () => {
+      // The blind spot that made `camera_blocked` the last word four sessions
+      // ever said: the strip was reported and the result was not, so a refusal
+      // inside the retried call was indistinguishable from a page that stopped.
+      const fence = installFence(() =>
+        Promise.reject(Object.assign(new Error("denied"), { name: "NotAllowedError" })),
+      );
+
+      await expect(fence.getUserMedia({ video: true, audio: true })).rejects.toThrow();
+
+      const states = fence.told.map(([state]) => state);
+      expect(states).toContain("camera_blocked");
+      expect(states).toContain("failed");
+      expect(fence.told.find(([state]) => state === "failed")?.[1]).toContain("NotAllowedError");
+    });
+
+    it("should report a refused audio-only request, which it never even strips", async () => {
+      // Nothing about this call is the fence's business, and it is still the
+      // only place the refusal is visible from.
+      const fence = installFence(() =>
+        Promise.reject(Object.assign(new Error("no mic"), { name: "NotFoundError" })),
+      );
+
+      await expect(fence.getUserMedia({ audio: true })).rejects.toThrow();
+
+      expect(fence.told.map(([state]) => state)).toContain("failed");
+    });
+
+    it("should let a refusal keep propagating, so the SDK still sees its own error", async () => {
+      // Reporting must observe, never swallow. A fence that absorbed the
+      // rejection would leave the SDK waiting on a promise that never settles.
+      const refusal = Object.assign(new Error("denied"), { name: "NotAllowedError" });
+      const fence = installFence(() => Promise.reject(refusal));
+
+      await expect(fence.getUserMedia({ video: true, audio: true })).rejects.toBe(refusal);
+    });
+  });
+
   it("should be reachable without a bearer token", async () => {
     const app = await serve();
 
