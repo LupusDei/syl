@@ -337,8 +337,12 @@ describe("AskSylIngress, and the answer it banks", () => {
       sessions.settle({ id: "rts_1", ended: "closed", credits: 4, dollars: 0.04 });
       const outcome = await subject.ask(ask("What is on today?"));
 
-      expect(outcome).toMatchObject({ ok: false, failure: "unauthorised" });
-      expect(outcome.ok === false && outcome.say).toBeUndefined();
+      // `syl-chzl.4.6` landed the ending path this test was written against, so
+      // the refusal now has a sentence — `expired`, and she says the time is
+      // up. THE INVARIANT THIS TEST EXISTS FOR IS UNCHANGED and is the line
+      // below: whatever she says, it is not the stale answer.
+      expect(outcome).toMatchObject({ ok: false, failure: "expired" });
+      expect(JSON.stringify(outcome)).not.toContain("Two things.");
     });
 
     it("should stop serving a banked answer once the credential has expired", async () => {
@@ -368,8 +372,11 @@ describe("AskSylIngress, and the answer it banks", () => {
       now += 3_600_000;
       const outcome = await subject.ask(ask("What is on today?"));
 
-      expect(outcome).toMatchObject({ ok: false, failure: "unauthorised" });
-      expect(outcome.ok === false && outcome.say).toBeUndefined();
+      // The prediction in the comment above held exactly: the bank sits behind
+      // `verifyAskCredential`, so `syl-chzl.4.6` needed no hand-sequencing to
+      // make the ending win. What changed is only that the refusal now SAYS
+      // something — the ending line, never the banked answer.
+      expect(outcome).toMatchObject({ ok: false, failure: "expired" });
       expect(JSON.stringify(outcome)).not.toContain("Two things.");
     });
   });

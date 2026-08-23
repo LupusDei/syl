@@ -8,8 +8,10 @@ import {
   ASK_SYL_TOOL_NAME,
   ASK_SYL_TIMEOUT_SECONDS,
   COLD_LANE_LINE,
+  ENDING_SOON_LEAD_MS,
   HEARD_HIM_TOOL,
   HEARD_HIM_TOOL_NAME,
+  SESSION_OVER_LINE,
   NOTHING_ASKED_LINE,
   STILL_THINKING_LINE,
   TOO_SLOW_LINE,
@@ -208,7 +210,12 @@ describe("AskSylIngress", () => {
       const outcome = await ingress().ask(ask());
 
       expect(outcome.ok).toBe(false);
-      expect(outcome.ok === false && outcome.failure).toBe("unauthorised");
+      // `expired` rather than `unauthorised` since `syl-chzl.4.6`. A settled
+      // row is reachable only AFTER the hash matched, so the caller is the
+      // credential holder and gets the ending said out loud — see
+      // `SESSION_OVER_LINE`. No turn runs either way, which is what this test
+      // is really guarding.
+      expect(outcome.ok === false && outcome.failure).toBe("expired");
     });
 
     it("should give an unauthorised caller nothing to say at all", async () => {
@@ -658,6 +665,185 @@ describe("AskSylIngress", () => {
       await expect(handlers[HEARD_HIM_TOOL_NAME]?.({})).resolves.toEqual({ ok: true });
 
       expect(sessions.get("rts_1")?.lastActivityAt).toBe(new Date(now).toISOString());
+    });
+  });
+
+  /**
+   * The provider's cap, and the two things that must happen at it.
+   *
+   * A realtime session is capped by Runway at just over five minutes, and
+   * `adoptProviderExpiry` writes that one instant into BOTH `provider_cap_at`
+   * and `ask_expires_at`. So at the cap she loses her brain and her heartbeat
+   * in the same tick, and the reaper settles the row on its next sweep.
+   *
+   * Until now she was handed `say: ""` at exactly that moment and left to
+   * improvise in front of him. That is the silently-mute-while-billing case,
+   * and constraint 4's ethos forbids it: an honest ending beats a running
+   * meter in front of a face that has stopped answering.
+   */
+  describe("when the provider's cap has passed", () => {
+    /** Move the credential's expiry into the past, as the cap does. */
+    function capPassed(): void {
+      sessions.adoptProviderExpiry("rts_1", now - 1);
+    }
+
+    it("should give her something to say instead of an empty string", async () => {
+      capPassed();
+
+      const outcome = await ingress().ask(ask());
+
+      expect(outcome).toEqual({ ok: false, failure: "expired", say: SESSION_OVER_LINE });
+    });
+
+    it("should not run a turn — there is nothing left to answer into", async () => {
+      const answer = vi.fn<FaceAnswerer>(() => Promise.resolve("too late"));
+      capPassed();
+
+      await ingress({ answer }).ask(ask());
+
+      expect(answer).not.toHaveBeenCalled();
+    });
+
+    it("should say the same thing once the row itself is settled", async () => {
+      // The other half of the same fact. `settled` and `expired` are both
+      // reachable ONLY after the hash matched, and both mean exactly "this
+      // session is over" — so both get the ending rather than silence.
+      sessions.settle({ id: "rts_1", ended: "expired", credits: 4, dollars: 0.04 });
+
+      await expect(ingress().ask(ask())).resolves.toEqual({
+        ok: false,
+        failure: "expired",
+        say: SESSION_OVER_LINE,
+      });
+    });
+
+    it("should still tell a stranger absolutely nothing", async () => {
+      // THE SECURITY PROPERTY, and the reason the line above is safe. `expired`
+      // and `settled` are returned only after `hashesMatch` succeeded, so a
+      // caller who reaches them already holds this session's credential and is
+      // not a stranger. Everything a stranger CAN reach still gets nothing.
+      for (const secretAttempt of ["syl_face_wrongwrongwrong", "not-even-the-right-shape"]) {
+        const outcome = await ingress().ask({
+          sessionId: "rts_1",
+          secret: secretAttempt,
+          question: "What is on today?",
+        });
+        expect(outcome).toMatchObject({ ok: false, failure: "unauthorised" });
+        expect(outcome).not.toHaveProperty("say");
+      }
+
+      const unknown = await ingress().ask({ sessionId: "nope", secret, question: "Hello?" });
+      expect(unknown).toMatchObject({ ok: false, failure: "unauthorised" });
+      expect(unknown).not.toHaveProperty("say");
+    });
+
+    it("should hand the ending to the avatar rather than an empty sentence", async () => {
+      capPassed();
+      const handlers = ingress().handlerFor("rts_1", secret);
+
+      await expect(handlers[ASK_SYL_TOOL_NAME]?.({ question: "Anything?" })).resolves.toEqual({
+        ok: false,
+        say: SESSION_OVER_LINE,
+        failure: "expired",
+      });
+    });
+  });
+
+  /**
+   * The warning, and WHICH CHANNEL IT RIDES ON.
+   *
+   * The obvious home is the successful `ask_syl` result — and it is the wrong
+   * one, for the reason that produced `syl-chzl.3.6` this morning. `touch()`
+   * was liveness, liveness rode on `ask_syl`, and the moment `ask_syl` got
+   * rarer the meaning silently broke. We spent today deliberately making that
+   * channel rare. Hanging the ending warning on it reproduces the same defect
+   * one day later in the same file.
+   *
+   * So it rides on `note_he_spoke`, which fires every time he speaks to her —
+   * which is exactly when a warning is useful, because he is mid-conversation.
+   * It is on the ask result too, because a second carrier is nearly free. One
+   * carrier that is going away is not a carrier.
+   */
+  describe("the last thirty seconds", () => {
+    /** Put the cap `ms` into the future. */
+    function capIn(ms: number): void {
+      sessions.adoptProviderExpiry("rts_1", now + ms);
+    }
+
+    it("should tell her on the heartbeat, which is the channel that always fires", async () => {
+      capIn(ENDING_SOON_LEAD_MS - 1_000);
+
+      await expect(ingress().heard({ sessionId: "rts_1", secret })).resolves.toEqual({
+        ok: true,
+        endingSoon: true,
+      });
+    });
+
+    it("should say nothing about it while there is still time", async () => {
+      capIn(ENDING_SOON_LEAD_MS + 1_000);
+
+      const outcome = await ingress().heard({ sessionId: "rts_1", secret });
+
+      expect(outcome).toEqual({ ok: true });
+    });
+
+    it("should tell her on a successful ask too, as the second carrier", async () => {
+      capIn(ENDING_SOON_LEAD_MS - 1_000);
+
+      await expect(ingress().ask(ask())).resolves.toEqual({
+        ok: true,
+        say: "Two things are due before lunch.",
+        endingSoon: true,
+      });
+    });
+
+    it("should leave a successful ask unmarked while there is still time", async () => {
+      capIn(ENDING_SOON_LEAD_MS + 1_000);
+
+      await expect(ingress().ask(ask())).resolves.toEqual({
+        ok: true,
+        say: "Two things are due before lunch.",
+      });
+    });
+
+    it("should warn on whichever runs out first, the cap or the credential", async () => {
+      // They are written from one instant by `adoptProviderExpiry` and so are
+      // normally equal. They are NOT equal on the path where the provider never
+      // reported a cap: `provider_cap_at` stays NULL and the credential keeps
+      // its five-minute floor. Warning on the earlier of the two is the only
+      // reading that is right in both cases.
+      expect(sessions.get("rts_1")?.providerCapAt).toBeNull();
+      // The floor from `open` is what ends this one, and it is inside the lead.
+      now = (sessions.get("rts_1")?.askExpiresAt ?? "") === ""
+        ? now
+        : Date.parse(sessions.get("rts_1")?.askExpiresAt ?? "") - (ENDING_SOON_LEAD_MS - 1_000);
+
+      await expect(ingress().heard({ sessionId: "rts_1", secret })).resolves.toEqual({
+        ok: true,
+        endingSoon: true,
+      });
+    });
+
+    it("should reach the avatar on both tools, because it is a fact she must act on", async () => {
+      capIn(ENDING_SOON_LEAD_MS - 1_000);
+      const handlers = ingress().handlerFor("rts_1", secret);
+
+      await expect(handlers[HEARD_HIM_TOOL_NAME]?.({})).resolves.toEqual({
+        ok: true,
+        endingSoon: true,
+      });
+      await expect(handlers[ASK_SYL_TOOL_NAME]?.({ question: "What is on today?" })).resolves.toEqual(
+        { ok: true, say: "Two things are due before lunch.", endingSoon: true },
+      );
+    });
+
+    it("should tell her what to do about it, in both declarations", () => {
+      // A tool description is the instruction the model obeys — 57bde0e is the
+      // whole lesson. A flag she is handed and never told about is a flag she
+      // will not act on, and the warning only exists to be spoken.
+      for (const tool of AskSylIngress.toolDefinitions()) {
+        expect(tool.description).toContain("endingSoon");
+      }
     });
   });
 

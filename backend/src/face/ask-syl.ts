@@ -1,4 +1,4 @@
-import { systemClock, type Clock } from "../services/clock.js";
+import { parseInstant, systemClock, type Clock } from "../services/clock.js";
 import {
   ASK_REJECTION_MESSAGE,
   verifyAskCredential,
@@ -11,7 +11,7 @@ import {
   spokenBankedAnswer,
   type BankedAnswer,
 } from "./banked-answer.js";
-import type { FaceSessionStore } from "./face-session-store.js";
+import type { FaceSession, FaceSessionStore } from "./face-session-store.js";
 import {
   RUNWAY_RPC_MAX_PARAMETERS,
   RUNWAY_RPC_MAX_TIMEOUT_SECONDS,
@@ -129,7 +129,9 @@ export const ASK_SYL_TOOL: RunwayRpcToolDef = {
     "DO NOT call it for greetings, acknowledgements, chat, or anything conversational. " +
     "When you do call it, say you are checking before you call, so he knows which of you he is " +
     "talking to. Speak the answer you get back. If it says something went wrong, say that rather " +
-    "than guessing — and never invent anything about him, his data or his day.",
+    "than guessing — and never invent anything about him, his data or his day. " +
+    "If the result comes back with endingSoon set, your time together is nearly up: tell him so " +
+    "in your own words, once, at the next natural break, and do not repeat it.",
   parameters: [
     {
       name: "question",
@@ -224,6 +226,8 @@ export const HEARD_HIM_TOOL: RunwayRpcToolDef = {
     "You do NOT need to call it when you call ask_syl — that already counts. " +
     "Never mention this call, never say you are making it, and never let it delay your reply: " +
     "answer him first, then call it. " +
+    "If the result comes back with endingSoon set, your time together is nearly up: tell him so " +
+    "in your own words, once, at the next natural break, and do not repeat it. " +
     "If you stop calling it while he is still talking to you, his session will be closed on him " +
     "mid-conversation, because to the server a conversation it cannot hear looks like an empty " +
     "room.",
@@ -262,8 +266,60 @@ export const TOO_SLOW_LINE =
 export const STILL_THINKING_LINE =
   "I am still on the last one. Give me a moment and ask me again.";
 
+/**
+ * The session is over — the provider's cap has passed.
+ *
+ * ## Why she gets a sentence here at all
+ *
+ * A realtime session is capped by Runway at just over five minutes, and
+ * `adoptProviderExpiry` writes that one instant into BOTH `provider_cap_at`
+ * and `ask_expires_at`. So the cap takes her brain and her heartbeat in the
+ * same tick. Until this line existed she was handed `say: ""` at exactly that
+ * moment and left to improvise in front of him, on a face that was still
+ * billing — the silently-mute-while-billing case, which constraint 4's ethos
+ * forbids. **An honest ending beats a running meter in front of a woman who
+ * has stopped answering.**
+ *
+ * ## Why saying it discloses nothing
+ *
+ * Read the order in `verifyAskCredential`: `expired` and `settled` are
+ * returned only *after* `hashesMatch` succeeded. **A caller who reaches either
+ * one already holds this session's credential**, so they are not a stranger and
+ * there is nothing here they did not already know. `malformed`,
+ * `unknown_session` and `mismatch` — everything a stranger can actually
+ * reach — still get the ordinary indistinguishable refusal with no `say` at
+ * all. The rule exists to stop us telling an attacker which door is which; it
+ * was never meant to gag her in front of the person who authenticated.
+ *
+ * ## Why it does not offer to continue
+ *
+ * Because we do not renew, deliberately. A renew is a fresh create with a
+ * fresh upfront charge and a new session id; it supersedes the session it
+ * renews, and the page keeps a `stk_…` key it cannot re-mint. Above all it
+ * would spend his money unprompted, which is the same principle that keeps
+ * Syl's own credential off `/face` entirely. So she says the time is up and
+ * leaves the next one to him.
+ */
+export const SESSION_OVER_LINE =
+  "That is our time — I have to go. Bring me back when you want me and we will pick it up.";
+
 /** The turn failed outright. */
 export const TURN_FAILED_LINE = "Something went wrong on my end. Say that again?";
+
+/**
+ * How long before the end she starts telling him it is coming.
+ *
+ * The same thirty seconds as the broker's dormant `renewLeadMs`, and
+ * deliberately **not** read from it: that constant answers "should a caller
+ * pre-empt the cap by renewing", and we have decided not to renew, so wiring
+ * the warning through it would couple this to a design we rejected. Same
+ * number, different question — if renewal is ever built, reconcile them then
+ * rather than pretending they were always one thing.
+ *
+ * Thirty seconds is long enough to finish a thought and short enough that she
+ * is not talking about the clock instead of to him.
+ */
+export const ENDING_SOON_LEAD_MS = 30_000;
 
 /** Nothing to answer. */
 export const NOTHING_ASKED_LINE = "I did not catch that. Say it again?";
@@ -287,7 +343,14 @@ export type FaceAnswerer = (input: {
 }) => Promise<string>;
 
 /** Why an `ask_syl` call did not produce her words. */
-export type AskSylFailure = "unauthorised" | "empty" | "cold" | "busy" | "slow" | "failed";
+export type AskSylFailure =
+  | "unauthorised"
+  | "expired"
+  | "empty"
+  | "cold"
+  | "busy"
+  | "slow"
+  | "failed";
 
 /** What a tool call resolves to. Never a rejection; see the header. */
 export type AskSylOutcome =
@@ -303,6 +366,12 @@ export type AskSylOutcome =
        * with the distinction and `say` already explains itself out loud.
        */
       readonly banked?: true;
+      /**
+       * The session ends inside {@link ENDING_SOON_LEAD_MS} and she should say
+       * so. See the note beside {@link banked} in `handlerFor` for why this one
+       * IS forwarded to the avatar and that one is not.
+       */
+      readonly endingSoon?: true;
     }
   | {
       readonly ok: false;
@@ -325,7 +394,11 @@ export type AskSylOutcome =
  * gives. `message` exists for the log's benefit, not the caller's.
  */
 export type HeardOutcome =
-  | { readonly ok: true }
+  | {
+      readonly ok: true;
+      /** See {@link ENDING_SOON_LEAD_MS}. Absent means there is still time. */
+      readonly endingSoon?: true;
+    }
   | { readonly ok: false; readonly message: string };
 
 export interface AskSylIngressOptions {
@@ -496,7 +569,14 @@ export class AskSylIngress {
         sessionId: request.sessionId,
         reason: verification.reason satisfies AskRejectionReason,
       });
-      return { ok: false, failure: "unauthorised", message: verification.message };
+      // THE SESSION IS OVER, as against SOMEBODY ELSE IS KNOCKING. Both are
+      // refusals; only one of them is happening to a person who is standing
+      // there listening. See {@link SESSION_OVER_LINE} for why answering the
+      // first with a sentence discloses nothing: these two reasons are
+      // reachable only after the credential matched.
+      return isSessionOver(verification.reason)
+        ? { ok: false, failure: "expired", say: SESSION_OVER_LINE }
+        : { ok: false, failure: "unauthorised", message: verification.message };
     }
 
     const question = request.question.trim();
@@ -572,7 +652,10 @@ export class AskSylIngress {
       // water under the bridge now, and serving it on his next ask would be the
       // non-sequitur this whole mechanism is shaped to avoid.
       this.#bank.drop(request.sessionId);
-      return { ok: true, say };
+      // The SECOND carrier for the ending warning. Cheap, so worth having —
+      // but never the only one, because this channel is the rare one. See
+      // `heard`.
+      return this.#endingSoon(verification.session) ? { ok: true, say, endingSoon: true } : { ok: true, say };
     } catch (error) {
       const slow = error instanceof AskSylDeadlineError;
       this.#log(slow ? "face.ask.slow" : "face.ask.failed", {
@@ -713,7 +796,13 @@ export class AskSylIngress {
       }
 
       this.#sessions.touch(request.sessionId, this.#now());
-      return { ok: true };
+      // THE CHANNEL THE WARNING RIDES ON, and the choice is the whole point.
+      // The obvious home was the successful `ask_syl` result — and that is the
+      // channel we spent today deliberately making rare, so hanging the
+      // warning there would reproduce `syl-chzl.3.6` exactly: a meaning that
+      // silently breaks when its carrier gets less frequent. This one fires
+      // every time he speaks, which is precisely when a warning is useful.
+      return this.#endingSoon(verification.session) ? { ok: true, endingSoon: true } : { ok: true };
     } catch (error) {
       this.#log("face.heard.failed", {
         sessionId: request.sessionId,
@@ -746,18 +835,40 @@ export class AskSylIngress {
         // The model reads this and speaks `say`. `ok` is there so the persona
         // can tell an answer from an apology; there is no path that returns
         // neither.
+        //
+        // WHAT CROSSES THIS BOUNDARY AND WHAT DOES NOT, since there are now two
+        // flags on the outcome and they go opposite ways. **Forward what she
+        // must ACT on; do not forward what is already said.** `endingSoon` is a
+        // fact only she can deliver — nobody else can tell him the time is
+        // nearly up, so withholding it makes the ending a surprise. `banked` is
+        // provenance, and `spokenBankedAnswer` has already put the referent
+        // into the words ("You asked me … — here it is"), so there is nothing
+        // left for the model to do with it.
         return outcome.ok
-          ? { ok: true, say: outcome.say }
+          ? {
+              ok: true,
+              say: outcome.say,
+              ...(outcome.endingSoon === true ? { endingSoon: true } : {}),
+            }
           : { ok: false, say: outcome.say ?? "", failure: outcome.failure };
       },
       // No `say` on either path, deliberately. There is nothing for her to
       // speak about her own bookkeeping, and a key named `say` is an invitation
-      // to speak it.
+      // to speak it. `endingSoon` is the exception that proves it: a fact, not
+      // a sentence, and the tool description is where she is told what to do
+      // with it.
       [HEARD_HIM_TOOL_NAME]: async () => {
         const outcome = await this.heard({ sessionId, secret });
-        return outcome.ok ? { ok: true } : { ok: false };
+        if (!outcome.ok) return { ok: false };
+        return outcome.endingSoon === true ? { ok: true, endingSoon: true } : { ok: true };
       },
     };
+  }
+
+  /** Is this session inside its last {@link ENDING_SOON_LEAD_MS}? */
+  #endingSoon(session: FaceSession): boolean {
+    const ends = endsAt(session);
+    return ends !== null && ends - this.#now() <= ENDING_SOON_LEAD_MS;
   }
 
   /**
@@ -855,6 +966,37 @@ export class AskSylIngress {
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * Is this refusal "your session ended" rather than "you are not who you say"?
+ *
+ * The two reasons here are the only ones `verifyAskCredential` returns **after**
+ * the hash has already matched, which is exactly why they are the two that may
+ * be answered out loud. Keep that property when adding to this set: a reason
+ * reachable without the credential must never appear in it.
+ */
+function isSessionOver(reason: AskRejectionReason): boolean {
+  return reason === "expired" || reason === "settled";
+}
+
+/**
+ * When this session stops working, whichever clock gets there first.
+ *
+ * Normally one instant: `adoptProviderExpiry` writes the provider's cap into
+ * `provider_cap_at` and `ask_expires_at` together. They diverge on the path
+ * where **the provider never reported a cap** — `provider_cap_at` stays NULL so
+ * the reaper has nothing to expire against, while the credential keeps the
+ * five-minute floor `open` gave it. Taking the earlier of the two is the only
+ * reading that is right in both cases, because either one running out is an
+ * ending as far as he is concerned.
+ */
+function endsAt(session: FaceSession): number | null {
+  const credential = parseInstant(session.askExpiresAt);
+  const cap = session.providerCapAt === null ? null : parseInstant(session.providerCapAt);
+  if (credential === null) return cap;
+  if (cap === null) return credential;
+  return Math.min(credential, cap);
 }
 
 /** The turn did not finish inside the window the provider will wait. */

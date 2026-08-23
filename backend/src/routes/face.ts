@@ -199,6 +199,15 @@ export function createFaceRouter(options: FaceRouterOptions): Router {
           next(unauthorized());
           return;
         }
+        // **`expired` DELIBERATELY DOES NOT COME THROUGH HERE**, and it is worth
+        // saying so rather than leaving it to the shape of the condition above.
+        // A session past the provider's cap is refused with `expired`, which is
+        // returned only after the credential matched — so the caller is the
+        // avatar holding this session's own secret, not a stranger, and it gets
+        // a 200 carrying the ending she should speak. A 401 there would be the
+        // silently-mute-while-billing failure wearing an HTTP status. Both
+        // doors answer this the same way, which is the point of one gate.
+        //
         // Everything else is a 200 with something she can say. A tool call that
         // gets an HTTP error has nothing to speak, and a face with nothing to
         // speak is a face that freezes — which is the failure this whole

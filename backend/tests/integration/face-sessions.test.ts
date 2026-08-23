@@ -463,21 +463,46 @@ describe("the face session routes", () => {
       expect(response.status).toBe(401);
     });
 
-    it("should stop accepting the credential once the session has ended", async () => {
+    /**
+     * A SESSION THAT ENDED IS NOT A STRANGER AT THE DOOR, and since
+     * `syl-chzl.4.6` the two are answered differently on purpose.
+     *
+     * The credential stops WORKING either way — no turn runs and she answers
+     * nothing. What changed is that a caller who proved it holds this session's
+     * secret now gets the ending said out loud instead of a bare 401, because
+     * a 401 here is the silently-mute-while-billing failure wearing an HTTP
+     * status. Reachable only after the hash matched, so nothing is disclosed;
+     * the non-disclosure test below is the guard on that and stays 401.
+     */
+    it("should stop answering once the session has ended, and say so rather than 401", async () => {
       const token = await deviceToken();
       const secret = await openAndTakeSecret();
       expect((await ask(secret)).status).toBe(200);
+      const before = messages.list(INTERACTIVE_CONVERSATION_ID, { limit: 50 }).items.length;
 
       await call("DELETE", "/face/sessions/rts_1", { token });
 
-      expect((await ask(secret)).status).toBe(401);
+      const response = await ask(secret);
+      expect(response.status).toBe(200);
+      const data = dataOf<{ ok: boolean; say: string; failure?: string }>(await response.json());
+      expect(data.ok).toBe(false);
+      expect(data.failure).toBe("expired");
+      expect(data.say).not.toBe("");
+      // The part that matters as much as the sentence: nothing ran.
+      expect(messages.list(INTERACTIVE_CONVERSATION_ID, { limit: 50 }).items).toHaveLength(before);
     });
 
-    it("should stop accepting the credential once the reaper has cut the session", async () => {
+    it("should stop answering once the reaper has cut the session", async () => {
       const secret = await openAndTakeSecret();
       face.broker.recordSessionEnd("rts_1", "reaped");
+      const before = messages.list(INTERACTIVE_CONVERSATION_ID, { limit: 50 }).items.length;
 
-      expect((await ask(secret)).status).toBe(401);
+      const response = await ask(secret);
+
+      expect(response.status).toBe(200);
+      const data = dataOf<{ ok: boolean; failure?: string }>(await response.json());
+      expect(data.failure).toBe("expired");
+      expect(messages.list(INTERACTIVE_CONVERSATION_ID, { limit: 50 }).items).toHaveLength(before);
     });
 
     it("should not disclose whether a session id exists", async () => {
