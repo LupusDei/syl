@@ -2730,3 +2730,75 @@ never reported `connected` and which has never been asked anything, at 45 second
 accepted risk is stated in the code rather than hidden — a working face whose reports
 cannot reach us is cut early — and it is narrow, because the report shares an origin and a
 connection with the document it came from.
+
+### The liveness signal nobody declared, and two corrections in one day (2026-08-23)
+
+Four fixes, all correct on their own, and the day's real lesson is about what they did to
+each other. Recorded because none of it is visible from any single file.
+
+**HER FACE HAD NEVER ONCE ANSWERED A QUESTION.** Not that day — *ever*. The service log:
+`face.ask` fourteen times, `face.ask.answered` zero, `face.ask.slow` fourteen. Runway's
+tool ceiling is a hard 8s and turns on the `commander` lane were taking 7.8s to 30s. The
+cause is one line of the log read sideways — notional turn cost, **$8.38 / $8.46 / $8.89 /
+$9.32 on his lane against $0.43 everywhere else**. Twenty times the prompt.
+
+That is the `commander`-thread bloat this document already records as *accepted* ("if it
+causes bloat on that thread we can solve it later"). The ruling was right and the bill
+came due somewhere nobody was watching: **the live face was costed on a 1,635ms warm turn
+(spike `28746b5`) and that measurement had quietly stopped being true of the one lane the
+face uses.** The existing note says load-bearing measurements against someone else's binary
+need a version stamp and a re-run. This is the harder case — the measurement was of OUR
+system, it was accurate when taken, and it decayed because of an accepted decision made
+elsewhere for good reasons. **A measurement that a downstream feature is costed on needs to
+name the conditions it holds under, or it becomes a claim about the future.**
+
+**A LIVENESS SIGNAL THAT IS A SIDE EFFECT OF AN UNRELATED BEHAVIOUR.** `last_activity_at`
+is the idle reaper's only input, and `touch()` had exactly one caller in the tree:
+`ask-syl.ts`. Nothing anywhere declared "her calling the brain is how we know he is still
+here" — it merely happened to be true. So when `57bde0e` correctly stopped her forwarding
+every remark, it silently changed how long a session survives. **The better she got at
+answering him herself, the faster the reaper would cut her off.** Two changes, each right,
+jointly fatal; no test could catch it because neither is wrong.
+
+The general shape: *an invariant that holds by coincidence of implementation is not an
+invariant, and the coupling is invisible precisely because nobody wrote it down.* Where a
+signal means something load-bearing, the thing that produces it must be the thing the
+meaning refers to. Speech is the honest signal that a conversation is alive; a tool call
+was a proxy that happened to correlate until it didn't.
+
+**TWICE IN ONE DAY A CORRELATION WAS READ AS A CAUSE, and the second one was caught by an
+agent rather than by me.** Both are worth stating because they are different traps.
+
+1. *The last thing reported before a silence is not the cause of the silence.* Four
+   sessions ended with `camera_blocked` as their final word, which read as "the camera
+   fence broke it". But the fence and the reporting **shipped in the same commit**, so
+   "nothing was reported before the fence" was guaranteed by construction and proved
+   nothing at all. A confounded comparison that happens to point at a real defect is still
+   a confounded comparison — the fence *did* have a latent bug, which made the wrong
+   reasoning feel confirmed.
+2. *Evidence gathered before a change cannot test that change.* The reaped sessions offered
+   as proof of the heartbeat coupling were all from **hours before** the commit blamed for
+   it. Worse, it inverts: before that commit she forwarded everything, so a session with no
+   asks is a session nobody was talking to. **The rows were the reaper working correctly,
+   cited as evidence of a bug.**
+
+**REPORTING WHAT WE DID WITHOUT REPORTING WHAT CAME BACK** is what made trap 1 possible.
+The fence logged that it stripped a request and never logged the outcome of the retried
+one, so a refused microphone was indistinguishable from a page that stopped executing.
+This is the same family as the note above about an attach path that only logged on failure:
+**a telemetry point that records an action but not its result moves the blind spot one line
+down and disguises it as a diagnosis.** Log the outcome, including the successful one.
+
+**AND THE FIXES ARMED THE TRAP THEY DID NOT SPRING.** Every session that day was killed by
+the client's 45s deadline, well short of the reaper's 120s — one missed it by four seconds.
+So the heartbeat coupling was real, inevitable, and *had not yet fired*. Shipping the fixes
+that let a session live past 45 seconds is precisely what would let it reach 120. **A latent
+failure masked by an earlier failure becomes reachable the moment the earlier one is fixed**,
+so the fix list has to be read as a whole rather than one item at a time.
+
+One process note, self-inflicted and already written down elsewhere: the full gate was run
+in a worktree while two agents were spawning `claude` subprocesses in it. Two real-turn
+acceptance tests timed out at 120s, one of them a **security** test, and for a moment that
+looked like a regression. `us6b` passes alone in 23s. The heavy pass runs alone for a
+reason; creating the fleet load yourself and then measuring it is the same error as reading
+a shared tree.
