@@ -152,11 +152,19 @@ describe("the live face page", () => {
       const booting = FACE_PAGE_HTML.indexOf("'booting'");
       const requested = FACE_PAGE_HTML.indexOf("'mic_requested'");
       const firstImport = FACE_PAGE_HTML.indexOf("await import(");
-      const getUserMedia = FACE_PAGE_HTML.indexOf("getUserMedia({ audio: true");
+      // **The NEXT capture after the report, not a literal spelling of one.**
+      // This used to search for `getUserMedia({ audio: true` and went green
+      // when that call gained its processing constraints and wrapped onto a
+      // second line — `indexOf` returned -1, and `requested < -1` is false, so
+      // it failed loudly. It could just as easily have been written the way
+      // round that passes. What the test means is "the report precedes the
+      // call", so it now asks that and nothing about how the call is written.
+      const getUserMedia = FACE_PAGE_HTML.indexOf("getUserMedia(", requested);
 
       expect(booting).toBeGreaterThan(-1);
       expect(booting).toBeLessThan(firstImport);
       expect(requested).toBeGreaterThan(-1);
+      expect(getUserMedia).toBeGreaterThan(-1);
       expect(requested).toBeLessThan(getUserMedia);
     });
 
@@ -552,10 +560,17 @@ describe("the live face page", () => {
 
     /** Install the shipped fence over a stub `getUserMedia` and hand back the seams. */
     function installFence(inner: (constraints: unknown) => Promise<unknown>): FenceRun {
-      const start = FACE_PAGE_HTML.indexOf("(function fenceTheCamera() {");
-      expect(start, "the fence must still be in the page").toBeGreaterThan(-1);
-      const end = FACE_PAGE_HTML.indexOf("\n    })();", start);
-      expect(end, "the fence must still be a self-contained IIFE").toBeGreaterThan(start);
+      // **From AUDIO_PROCESSING, not from the IIFE.** The fence calls
+      // `withAudioProcessing`, so a slice that started at the IIFE would run
+      // shipped code against a helper this harness had invented — which is the
+      // copy-of-the-contract mistake the `describeErr` note below avoids. Taking
+      // both means the constraints these tests observe are the real ones.
+      const start = FACE_PAGE_HTML.indexOf("const AUDIO_PROCESSING = {");
+      expect(start, "the audio constraints must still be in the page").toBeGreaterThan(-1);
+      const fenceAt = FACE_PAGE_HTML.indexOf("(function fenceTheCamera() {", start);
+      expect(fenceAt, "the fence must still be in the page").toBeGreaterThan(-1);
+      const end = FACE_PAGE_HTML.indexOf("\n    })();", fenceAt);
+      expect(end, "the fence must still be a self-contained IIFE").toBeGreaterThan(fenceAt);
       const source = FACE_PAGE_HTML.slice(start, end + "\n    })();".length);
 
       const seen: unknown[] = [];
@@ -619,22 +634,59 @@ describe("the live face page", () => {
       expect(stream.getTracks()).toHaveLength(0);
     });
 
-    it("should keep the audio half when a request asks for both", async () => {
+    /** What every capture on this page must end up asking for. See `syl-chzl.4.9`. */
+    const PROCESSED = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+
+    it("should keep the audio half when a request asks for both, and process it", async () => {
       const granted = { id: "audio-only" };
       const fence = installFence(() => Promise.resolve(granted));
 
       await expect(fence.getUserMedia({ video: true, audio: { deviceId: "x" } })).resolves.toBe(
         granted,
       );
-      expect(fence.inner).toEqual([{ video: false, audio: { deviceId: "x" } }]);
+      // The caller's own constraint survives; ours are added to it.
+      expect(fence.inner).toEqual([
+        { video: false, audio: { deviceId: "x", ...PROCESSED } },
+      ]);
     });
 
-    it("should pass an audio-only request straight through, untouched", async () => {
+    it("should process an audio-only request, which is the branch the SDK takes", async () => {
+      // **This test used to assert "straight through, untouched", and that was
+      // the bug.** The page passes `video: false`, so livekit's own capture
+      // arrives here as audio-only — this branch is the entire microphone path
+      // for the session, and letting it through unconstrained is how she came
+      // to hear herself and answer. See `syl-chzl.4.9`; the transcript of
+      // session `b547219a` has her own voice in the user channel.
       const granted = { id: "mic" };
       const fence = installFence(() => Promise.resolve(granted));
 
       await expect(fence.getUserMedia({ audio: true })).resolves.toBe(granted);
-      expect(fence.inner).toEqual([{ audio: true }]);
+      expect(fence.inner).toEqual([{ audio: PROCESSED }]);
+    });
+
+    it("should overrule a caller that asks for echo cancellation to be off", async () => {
+      // Ours win on purpose: the caller is a vendor SDK whose capture settings
+      // are otherwise invisible to us, and a fence that can be talked out of
+      // the one constraint that matters is not a fence.
+      const fence = installFence(() => Promise.resolve({ id: "mic" }));
+
+      await fence.getUserMedia({ audio: { echoCancellation: false } });
+
+      expect(fence.inner).toEqual([{ audio: PROCESSED }]);
+    });
+
+    it("should leave a request that wants no audio alone", async () => {
+      // No audio, nothing to process — and inventing an `audio` key here would
+      // turn a video-only probe into a microphone prompt.
+      const fence = installFence(() => Promise.resolve({ id: "none" }));
+
+      await fence.getUserMedia(VIDEO_ONLY);
+
+      expect(fence.inner).toHaveLength(0);
     });
 
     it("should report what came BACK, not only what it stripped", async () => {

@@ -1330,6 +1330,29 @@ final class LiveFaceTests: XCTestCase {
         XCTAssertEqual(FaceWebPage.Coordinator.decision(for: .cameraAndMicrophone), .deny)
     }
 
+    /// **She must not be able to hear herself** (`syl-chzl.4.9`).
+    ///
+    /// The web page asks for echo cancellation on its own capture, and this is the other
+    /// half: iOS only engages the hardware voice-processing path — the one that subtracts
+    /// what the speaker is playing from what the microphone hears — for a session in
+    /// `.voiceChat` mode. `.playAndRecord` because both directions are live at once, and
+    /// `.defaultToSpeaker` because a face he is holding at arm's length is useless on the
+    /// earpiece.
+    ///
+    /// **These were never set.** Not set wrongly — the whole iOS target configured no
+    /// audio session for the face at all, so her voice went out of whatever route WebKit
+    /// happened to pick, next to an unprocessed open microphone. Session `b547219a` has
+    /// her own words coming back as his in Runway's transcript.
+    func testShouldConfigureAnAudioSessionThatCannotHearItself() {
+        XCTAssertEqual(FaceAudioSession.category, .playAndRecord)
+        // The load-bearing one. `.default` or `.videoChat` here and the AEC changes or
+        // disappears; this is the mode whose entire purpose is two-way voice.
+        XCTAssertEqual(FaceAudioSession.mode, .voiceChat)
+        XCTAssertTrue(
+            FaceAudioSession.options.contains(.defaultToSpeaker),
+            "her voice belongs on the loudspeaker, not the earpiece")
+    }
+
     /// The page's own report of what it is doing reaches the host. A web view that
     /// renders nothing and says nothing is the stalled face this epic exists to prevent,
     /// and the host cannot see inside the document.

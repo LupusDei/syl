@@ -591,6 +591,59 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
      * The second leaves exactly the same evidence and is invisible to every
      * instrument pointed at the first.
      */
+    /**
+     * WHAT HIS MICROPHONE MUST DO TO HER VOICE BEFORE IT COMES BACK IN.
+     *
+     * ## THESE WERE NEVER SET. They were not set WRONGLY.
+     *
+     * Say that plainly, because the distinction changes how freely the next
+     * reader may touch them: there is no history of anyone measuring something
+     * and settling on these values. Until \`syl-chzl.4.9\` the words
+     * \`echoCancellation\`, \`noiseSuppression\` and \`autoGainControl\` did not
+     * appear anywhere in this repository — not in the page, not in the iOS
+     * target, not in the admin. The page opened a bare \`{ audio: true }\` and
+     * left the real capture to the SDK's defaults. Change them if you have a
+     * reason; you are not overturning a judgement, only filling an absence.
+     *
+     * ## What it cost
+     *
+     * She could hear herself. Runway keeps a verbatim transcript of every
+     * session (\`GET /v1/avatar_conversations/{sessionId}\`, free, keyed on an id
+     * we already store), and session \`b547219a\` has this in the **user**
+     * channel: *"You are Silv. Powered by Syl and spreading powers."* He never
+     * said it — that is her own voice, round the loop, through speech
+     * recognition, arriving as an assertion about who she is. She answered it
+     * ("I'm Syl, powered by Runway") four times, feeding each answer back in.
+     * The Commander experienced that as a generic fallback identity replacing
+     * everything she knows, and it was nothing of the kind: the same transcripts
+     * show her reciting six of her seven documents unprompted.
+     *
+     * ## Ours wins, deliberately
+     *
+     * The merge puts these LAST, so a caller asking for
+     * \`echoCancellation: false\` does not get it. That is not an oversight to be
+     * tidied into a polite default — the caller here is a vendor SDK whose
+     * capture settings we cannot otherwise see, and the whole point of the fence
+     * is that no capture on this page escapes them.
+     */
+    const AUDIO_PROCESSING = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+
+    /**
+     * Merge {@link AUDIO_PROCESSING} into whatever a caller asked for.
+     *
+     * Handles the boolean form (\`audio: true\`) and the object form alike, and
+     * leaves a request that wants no audio at all untouched.
+     */
+    function withAudioProcessing(asked) {
+      if (!asked || !asked.audio) return asked;
+      const wanted = asked.audio === true ? {} : Object.assign({}, asked.audio);
+      return Object.assign({}, asked, { audio: Object.assign(wanted, AUDIO_PROCESSING) });
+    }
+
     (function fenceTheCamera() {
       const devices = navigator.mediaDevices;
       if (!devices || typeof devices.getUserMedia !== 'function') return;
@@ -598,14 +651,21 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
       devices.getUserMedia = function (constraints) {
         const asked = constraints || {};
         if (!asked.video) {
-          // Not our business — but still report a FAILURE, or an audio request
-          // that the OS refuses disappears inside the SDK without a word.
-          return inner(asked).catch((err) => {
+          // **THE BRANCH LIVEKIT TAKES**, and therefore the one that decides
+          // whether she can hear herself. The page passes \`video: false\`, so
+          // the SDK's own capture arrives here as audio-only and would
+          // otherwise pass straight through with whatever defaults it chose.
+          // Not our business to change the camera half; entirely our business
+          // to make sure the microphone is processed.
+          //
+          // Still report a FAILURE, or an audio request the OS refuses
+          // disappears inside the SDK without a word.
+          return inner(withAudioProcessing(asked)).catch((err) => {
             tell('failed', 'an audio-only media request was refused: ' + describeErr(err));
             throw err;
           });
         }
-        const audioOnly = Object.assign({}, asked, { video: false });
+        const audioOnly = withAudioProcessing(Object.assign({}, asked, { video: false }));
         if (!audioOnly.audio) {
           tell('camera_blocked', 'a video-only request was answered with an empty stream');
           return Promise.resolve(new MediaStream());
@@ -630,9 +690,9 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
         const shim = legacy.bind(navigator);
         const fenced = function (constraints, onOk, onErr) {
           const asked = constraints || {};
-          if (!asked.video) return shim(asked, onOk, onErr);
+          if (!asked.video) return shim(withAudioProcessing(asked), onOk, onErr);
           tell('camera_blocked', 'a legacy getUserMedia asked for video');
-          return shim(Object.assign({}, asked, { video: false }), onOk, onErr);
+          return shim(withAudioProcessing(Object.assign({}, asked, { video: false })), onOk, onErr);
         };
         try { navigator.getUserMedia = fenced; } catch (_) {}
         try { navigator.webkitGetUserMedia = fenced; } catch (_) {}
@@ -681,7 +741,12 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
         // failure that killed the caller. If this is the last word on the row,
         // she died asking for media.
         tell('mic_requested');
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        // Constrained like every other capture. It goes through the fence too,
+        // so this is belt — but a probe that asks for something different from
+        // what the session will use is a probe that answers the wrong question,
+        // and \`getUserMedia\` can refuse on constraints alone.
+        const stream = await navigator.mediaDevices.getUserMedia(
+          withAudioProcessing({ audio: true, video: false }));
         stream.getTracks().forEach((t) => { try { t.stop(); } catch (_) {} });
         tell('mic_granted');
       } catch (error) {
@@ -936,6 +1001,16 @@ export const FACE_PAGE_HTML = `<!DOCTYPE html>
         // not use is a permission prompt nobody should have to answer.
         audio: true,
         video: false,
+        // **SAY IT DECLARATIVELY AS WELL AS THROUGH THE FENCE**, because the
+        // two fail in different ways. This is the vendor's own supported route
+        // to livekit's capture defaults — the only prop in the published
+        // declaration that reaches them — and it applies to a track the SDK
+        // creates by any means, including one that never touches
+        // \`navigator.mediaDevices\`. The fence covers a rename of this
+        // \`@internal\` prop; this covers a capture that bypasses the fence.
+        // Neither alone is enough, and the redundancy is the point: she could
+        // hear herself for a full day and no instrument here said a word.
+        __unstable_roomOptions: { audioCaptureDefaults: AUDIO_PROCESSING },
         // **Only props this component actually destructures.** \`onConnected\`
         // and \`onDisconnected\` were passed here for a day and are not part of
         // \`AvatarCall\` — they landed on a \`div\` and did nothing, which took

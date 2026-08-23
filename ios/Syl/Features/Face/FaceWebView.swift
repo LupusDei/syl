@@ -1,6 +1,70 @@
+import AVFoundation
 import SwiftUI
 import SylKit
 import WebKit
+
+/// The audio route a two-way face needs, so she cannot hear herself.
+///
+/// ## THIS WAS NEVER SET. It was not set WRONGLY.
+///
+/// Worth stating plainly, because it tells the next reader how freely to change it:
+/// until `syl-chzl.4.9` the iOS target configured **no** audio session for the face.
+/// There is no measurement behind these values that you would be overturning, only an
+/// absence. The only `AVAudioSession` call anywhere in the app was — and still is —
+/// `AttachmentView`'s unrelated `.ambient`.
+///
+/// ## What the absence cost
+///
+/// Her voice played out of whatever route WebKit happened to choose, centimetres from an
+/// open microphone with no processing on it. Runway keeps a verbatim transcript of every
+/// realtime session, and session `b547219a` records her own sentence arriving back in the
+/// **user** channel, mangled by speech recognition into an assertion about who she is —
+/// which she then answered, four times over. The Commander saw a generic identity
+/// replacing everything she knows; it was a feedback loop.
+///
+/// ## Why these three
+///
+/// - `.playAndRecord` — both directions are live at once. Anything else makes one of them
+///   a second-class citizen, and `.ambient` (the app's other call site) cannot record.
+/// - `.voiceChat` — **the load-bearing one.** iOS engages the hardware voice-processing
+///   I/O unit, which subtracts what the speaker is playing from what the microphone
+///   hears, only for this mode. Without it the category alone buys nothing.
+/// - `.defaultToSpeaker` — a face held at arm's length is useless on the earpiece, and
+///   the earpiece is what `.playAndRecord` picks by default.
+///
+/// ## The honest limit
+///
+/// WebKit manages its own audio session while a capture is active and may override this.
+/// That is precisely why the page asks for `echoCancellation` on the track as well: two
+/// independent requests for the same property, because neither can be proven sufficient
+/// from here. See `withAudioProcessing` in `backend/src/routes/face-page.ts`.
+enum FaceAudioSession {
+    static let category: AVAudioSession.Category = .playAndRecord
+    static let mode: AVAudioSession.Mode = .voiceChat
+    static let options: AVAudioSession.CategoryOptions = [
+        .defaultToSpeaker,
+        .allowBluetooth,
+        .allowBluetoothA2DP,
+    ]
+
+    /// Apply it. **Never throws outward**: a face that draws and sounds imperfect beats a
+    /// face that refuses to open, and she is already billing by the time this runs.
+    static func begin(_ session: AVAudioSession = .sharedInstance()) {
+        do {
+            try session.setCategory(category, mode: mode, options: options)
+            try session.setActive(true)
+        } catch {
+            // Nothing to say to the user about this, and nowhere on this surface to say
+            // it. The page's own constraints are the other half and are unaffected.
+        }
+    }
+
+    /// Hand the route back when the face goes away, so the rest of the app is not left
+    /// recording. Deliberately non-throwing for the same reason as ``begin(_:)``.
+    static func end(_ session: AVAudioSession = .sharedInstance()) {
+        try? session.setActive(false, options: [.notifyOthersOnDeactivation])
+    }
+}
 
 /// What actually draws her, and why it is a web page (`syl-chzl.7.5`, T025).
 ///
@@ -101,6 +165,11 @@ struct FaceWebPage: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> WKWebView {
+        // **Before the web view exists, not after.** WebKit configures its own audio
+        // session when a capture starts; setting ours first means the mode is already
+        // `.voiceChat` when it does, rather than a change fought over mid-call.
+        FaceAudioSession.begin()
+
         let configuration = WKWebViewConfiguration()
         // Her video plays in place and starts on its own. Without both of these the
         // stream waits for a tap that this surface has no control for — a face that
@@ -159,6 +228,10 @@ struct FaceWebPage: UIViewRepresentable {
             .removeScriptMessageHandler(forName: LiveFacePage.hostChannel)
         webView.uiDelegate = nil
         if let blank = URL(string: "about:blank") { webView.load(URLRequest(url: blank)) }
+
+        // Give the route back. Leaving the app in `.playAndRecord` after the face is gone
+        // would follow her out of the screen and into everything else it plays.
+        FaceAudioSession.end()
     }
 
     /// The page's voice, and the microphone's gate.
