@@ -340,6 +340,38 @@ describe("AskSylIngress, and the answer it banks", () => {
       expect(outcome).toMatchObject({ ok: false, failure: "unauthorised" });
       expect(outcome.ok === false && outcome.say).toBeUndefined();
     });
+
+    it("should stop serving a banked answer once the credential has expired", async () => {
+      // THE ENDING BEATS A STALE ANSWER, and this is where that is decided.
+      //
+      // `syl-chzl.4.6` adds a path that ends a session when the PROVIDER's cap
+      // passes. The question it raises is whether a banked answer waiting at
+      // that moment could still be spoken into a session that is already over.
+      //
+      // It cannot, and the reason is ordering rather than coincidence: the
+      // bank is read strictly AFTER `verifyAskCredential`, which refuses both a
+      // settled row and an expired `askExpiresAt`. So the bank sits behind the
+      // credential gate and inherits the session's lifetime for free. Nothing
+      // in `AskSylIngress` needs to sequence the two checks by hand.
+      //
+      // What the ending path must do is expire the CREDENTIAL — settle the row
+      // or move `askExpiresAt` back — rather than only speaking its line. This
+      // test is here so that requirement is written down as an assertion and
+      // not as an assumption.
+      vi.useFakeTimers();
+      const { subject, first } = withSlowFirstTurn();
+      await overrunThenLand(subject, first, "What is on today?", "Two things.");
+      vi.useRealTimers();
+
+      // The provider's cap passes. The row is still open; only the credential
+      // has run out.
+      now += 3_600_000;
+      const outcome = await subject.ask(ask("What is on today?"));
+
+      expect(outcome).toMatchObject({ ok: false, failure: "unauthorised" });
+      expect(outcome.ok === false && outcome.say).toBeUndefined();
+      expect(JSON.stringify(outcome)).not.toContain("Two things.");
+    });
   });
 
   /**
