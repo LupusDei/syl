@@ -3404,3 +3404,125 @@ its original figure and the constant never moved. **The number was never wrong;
 the suite had quietly stopped deserving it.** Raising it would have destroyed
 the only evidence that anything was wrong, and that is the answer to every
 "just increase the tolerance" proposal this project will ever receive.
+
+### Make the rule fail (2026-08-23, the night's last lesson)
+
+A rule that is only written down is the weakest thing you can build. The
+evidence is one file: `compact-cli.test.ts`, written that night by an author who
+**already knew** about the port collisions, who **wrote a comment saying two
+helpers in this repo had already collided with that pool**, who then bound port
+0 correctly — and who **kept a guess as the fallback anyway.** The sentence was
+there, in the same file, in the same hand, in the same hour. It did not hold.
+
+So: **make the rule fail, by whatever means the defect's shape allows.**
+
+- **A scan, when the defect has a syntactic fingerprint.** `freePort` was
+  greppable all along — arithmetic on `Math.random()` producing a port.
+  `one-way-to-get-a-port.test.ts` and `quiet-window.test.ts` are this, and it is
+  the strongest form available because it goes red rather than hoping to be read.
+- **A behaviour test, when it has an observable consequence.** Most defects:
+  the heartbeat coupling, the timeout nothing calls, a helper reaching the real
+  CLI. None greppable; all catchable by asserting what should happen.
+- **Prose, only when it has neither** — ordering, judgement, why a decision was
+  made. Those genuinely cannot be tests, and `CLAUDE.md` is their right home.
+  The failure is not writing a rule down; it is writing one down for a case
+  that had a shape and could have been mechanised.
+
+**And a fourth, for the defects whose signature is SILENCE.** These defeat a
+naive behaviour test, because the thing you would assert — *no failure
+occurred* — is exactly what the broken version produces:
+
+    the gate comparing assertions          zero assertions compared clean
+    the unattended job never loaded        no deploys looks like nothing to deploy
+    the attach path logging only failure   healthy and never-ran both logged nothing
+    a stub dying into `stdio: "ignore"`    forty seconds of nothing
+
+**You cannot test for the absence of a failure when absence is the failure's own
+signature.** Assert a positive trace instead: the job must log "nothing to
+deploy", so that quiet proves it ran rather than proving nothing.
+
+Two refinements, because the rule is easy to apply wastefully.
+
+**First: most silence is information DISCARDED, not information absent.** Check
+for an existing signal before manufacturing one. The gate did not need a new
+trace — vitest was already emitting `status: "failed"` per file and the checker
+was reading only `assertionResults`. The stub did not need a new channel — the
+kernel was already reporting `EADDRINUSE` and `stdio: "ignore"` was throwing it
+away.
+
+In both cases **the information was destroyed by a line somebody wrote for a
+good reason.** `assertionResults` is the natural field to read; `stdio: "ignore"`
+is the natural thing to write for a stub. That is a nastier failure than an
+absent signal, because the discarding line looks correct in isolation and only
+the PAIR is wrong.
+
+## Prefer the signal the other side already produces
+
+Two agents reached this the same night, in different subsystems, without
+contact, and the pair is worth more than either half.
+
+From the observability side: **a signal the platform emits for you cannot be
+forgotten, and one you must remember to emit can.** The kernel will report
+`EADDRINUSE` whether or not anyone thought about it; a log line only exists if
+someone wrote it and stays only if nobody tidies it away.
+
+From the measurement side, working on compaction: context size must be read from
+**the CLI's own usage block** (`ResultEvent.contextTokens`) and never counted
+from our own model of the conversation, because *"that would be a consistency
+check against ourselves"* — proved, because counting would have been wrong by
+2.4x on a transcript with branches. **A value you derive yourself can only ever
+check you against you.**
+
+Same rule from two directions: **do not trust your own side of a boundary.**
+Three of this night's lessons are really that one — this, the vendor-declaration
+guard, and *ask the service, not the ledger*.
+
+So the precedence is: **look for the discarded signal first, manufacture one
+only when there is none — and either way, make something red when it goes
+missing.**
+
+**Second: a positive trace is only a mechanism if something FAILS when it is
+missing.** `face.rpc.attached` now logs on success as well as failure, which is
+a real improvement and is *still not a guard* — nothing asserts on it, so it
+helps a human already reading the log and nobody else. A trace with no assertion
+behind it is prose with a timestamp. Pair it with something that goes red, or be
+honest that it is documentation.
+
+**Footnote to the entry above, earned the same evening.** That entry says a
+measurement must carry what it counts, when it was taken, and what would make it
+stop being true. That is necessary and not sufficient: the deployed commit was
+read honestly from `/api/v1/health` at 17:13, quoted at 18:0x as though current,
+and was two deploys stale by then. **A timestamped measurement is not safe
+either, if the person quoting it drops the timestamp.** The rule needs both
+halves or it only protects whoever took the reading.
+
+## Why mechanise it: two authors, one evening, both of them the expert
+
+The argument for the scan is usually *people do not read comments*, and everyone
+discounts that version because it sounds like a complaint about other people.
+The real argument is narrower and much worse.
+
+**Both of the night's rule-breaks were committed by the person best placed to
+apply the rule, at the moment they were most focused on it.**
+
+- The author of `compact-cli.test.ts` **knew.** They wrote a comment saying two
+  helpers in this repo had already collided with that pool, bound port 0
+  correctly — and kept a guess as the fallback. Same file, same hand, same hour.
+- Whoever proposed the positive-trace rule **produced a trace nothing checks**,
+  in the same message that proposed it. `face.rpc.attached` logs success and
+  fails nothing; it is `syl-chzl.3.11`.
+
+So **prose is weakest exactly where you would expect it to be strongest: with
+the person who just wrote it, on the subject they are currently thinking
+about.** If it does not hold there, expecting it to hold for a stranger reading
+the file in six weeks is not caution. It is a false belief about how rules work.
+
+It is not an attention problem and cannot be fixed by writing more clearly.
+**Knowing a rule and applying a rule are different acts, and only one of them
+can be automated.**
+
+**What this does NOT license.** The prose still has to exist. Judgement,
+ordering, the reason a decision went one way — those cannot be tests, and they
+are most of what this document and `CLAUDE.md` are for. What it kills is the
+idea that writing it down **discharges** the obligation. Write it down AND make
+something red, wherever the shape permits.
