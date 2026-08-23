@@ -3652,3 +3652,127 @@ tree and a conversation are all records of what *you* did. Publication, deployme
 upload are facts about a shared world, and every one of them has a one-line query. The
 expensive failures this evening were all silent mechanisms; the embarrassing ones were all
 confident answers to questions nobody put to the thing that knew.
+
+### Then ask whether the system already keeps a TRANSCRIPT (2026-08-23)
+
+The companion to the entry above, and it cost a whole day to learn.
+
+The Commander reported that his face answered *"I am Syl, powered by Runway"* to every
+question. We spent the day inferring her behaviour from the only instruments we had built:
+state transitions, spend rows, `face.ask.slow` timings. From those we produced a tidy,
+confident and **wrong** theory — that her knowledge base had never reached her, and that
+fourteen forwarded questions out of fourteen proved it.
+
+`GET /v1/avatar_conversations/{sessionId}` returns the **verbatim transcript** of a realtime
+session: every user and assistant utterance, every `toolCall`, every `toolResult`. It is
+free. It is keyed on the realtime session id, which we already store in `face_sessions`.
+**Nobody had ever called it.**
+
+One call refuted the theory. Session `d1aa66dd` has her listing six of her seven attached
+documents unprompted, with no tool call in the turn, using his name — which appears nowhere
+but those documents. The knowledge base had been working the whole time.
+
+So: *ask the system, not the transcript* has a companion, and it is not a contradiction —
+**check whether the system already keeps a transcript.** The rule above is about not
+substituting your own record for the world's. This one is about the world keeping a better
+record than you thought, in a place you never looked, because you were busy building
+instruments. Before writing telemetry to answer a question about a third-party system,
+enumerate that system's read endpoints and ask what each one already knows.
+
+**The tell is spending a day on inference about a system you have API access to.** Every
+hour of that day was spent reasoning about what she must have said. Her actual words were
+one unauthenticated-cost call away.
+
+#### The same transcript then produced two live hypotheses, and neither is proven
+
+Worth recording because the temptation was to stop at the first.
+
+The transcript's user channel contains *"You are Silv. Powered by Syl and spreading
+powers."* — which he plausibly never said, and which reads as her own voice returning
+through the microphone. No echo cancellation was configured anywhere in the repository
+(`syl-chzl.4.9`). But it also reads as him repeating her back incredulously, which is
+exactly what a person does when an assistant says something absurd.
+
+Separately and independently: the tool was named **`ask_syl`** and described as *"Ask Syl's
+own mind"*, while her personality opens *"You are Syl."* We told her she IS Syl and that
+there is a separate Syl to consult (`syl-chzl.4.10`).
+
+Both are real defects and both were fixed. **Neither is established as the cause**, and the
+evidence actively complicates the second: she refers to Syl in the third person in exactly
+one session — the same one that shows the loop — while another session under the *identical*
+tool description forwarded twice and stayed entirely in first person. The discriminator
+between the session that worked and the one that broke was input quality, not tooling.
+
+The discipline that holds here: **fix what is yours and cheap regardless of causation, and
+do not let having shipped a fix become the claim that you found the cause.** A confirmation
+test that costs nothing — in this case, opening the face wearing headphones — is worth more
+than a third plausible mechanism.
+
+### A test can lock the defect in as a requirement, and it reads as coverage
+
+`syl-chzl.4.9` again, and this is the sharpest instance the project has produced.
+
+The face page's camera fence had a branch for audio-only requests that passed them through
+untouched. The page passes `video: false`, so **that branch is the entire microphone path
+for every session** — every capture, unconstrained. Beside it sat this test:
+
+    it("should pass an audio-only request straight through, untouched", …)
+
+The author wrote the fence and then wrote an assertion locking its defect in as intended
+behaviour, in the same morning. It was green, it was specific, and it was guarding the bug.
+
+This is the `should leave the Commander talking to himself` failure — the one the whole
+expected-failures rule exists for — arriving in a new disguise. There, a test asserted
+current behaviour because the correct behaviour was unbuilt. Here, nobody knew the behaviour
+was wrong: the test was written in good faith, describing what the code did, by someone who
+believed that was what it should do. **The expected-failures rule cannot catch this**, because
+there is no bead, no red test and no known gap. A green suite claimed the microphone path was
+deliberate.
+
+There is no mechanism for it and this entry does not pretend otherwise. The nearest thing:
+when a test's name asserts that something is deliberately *not* done — "untouched",
+"straight through", "unchanged", "as-is" — that is a claim about intent, and it is worth one
+sentence of justification in the test. `should pass an audio-only request straight through,
+untouched` had none, because there was no reason, only an omission wearing a requirement's
+clothes.
+
+### One comparison operator from the eighth thing wired to nothing
+
+Same change, and it is the near-miss that matters more than the hit.
+
+A test asserted that `tell('mic_requested')` is reported before the capture that can kill the
+process — real, load-bearing, iOS terminates rather than refusing an undeclared capture. It
+located the call by literal string:
+
+    const getUserMedia = FACE_PAGE_HTML.indexOf("getUserMedia({ audio: true");
+    expect(requested).toBeLessThan(getUserMedia);
+
+When that call gained its processing constraints and wrapped onto a second line, `indexOf`
+returned **-1**. `requested < -1` is false, so it failed loudly and was fixed.
+
+**It is one character from the version that does not.** Had the assertion been written
+`toBeGreaterThan`, or had the two operands been ordered the other way, -1 would have
+satisfied it silently and the ordering guard would have been dead while still appearing in
+the suite. Seventh thing wired to nothing in this epic; one operator from the eighth.
+
+The rule, and it generalises past this file: **a locator that can return a sentinel must be
+asserted to have found something.** `expect(index).toBeGreaterThan(-1)` on every `indexOf`
+before comparing it, always — the same non-vacuity discipline
+`face-page-vendor-props.test.ts` already applies to its regexes, for the same reason, learned
+the same way. A scan that matched nothing must never be able to satisfy the thing it feeds.
+
+### Her personality lives at the vendor, and nothing here can see it
+
+`syl-chzl.4.10` renamed a tool the model calls. Her personality — which instructs her to call
+it by name — is a row on the Runway avatar, not a file in this repository.
+
+So the two halves of one prompt live in two systems with no shared gate. No test, no
+typecheck and no deploy gate reads the vendor's copy, and the first symptom of drift would be
+her being told to call a tool that is not in her session: silent, on his phone, indefinitely.
+`syl-chzl.16` is the read-only check that closes it.
+
+**This is the vendor-declaration guard pointed at configuration rather than at code.** We
+already learned that a prop the vendor does not accept is a feature wired to nothing. This is
+the same shape: a name the vendor's *stored configuration* does not match is an instruction
+wired to nothing. Any time a value must agree with something held in a third party's
+database, either fetch and assert it, or write down that you chose not to.
