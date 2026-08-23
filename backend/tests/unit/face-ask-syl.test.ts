@@ -93,8 +93,31 @@ describe("AskSylIngress", () => {
       expect(ASK_SYL_DEADLINE_MS).toBeLessThan(ASK_SYL_TIMEOUT_SECONDS * 1_000);
     });
 
-    it("should tell the model to ask her rather than answer for her", () => {
-      expect(ASK_SYL_TOOL.description).toMatch(/never answer from your own knowledge/i);
+    it("should forbid her face inventing anything about him", () => {
+      // The durable half. Whatever else the description says about WHEN to
+      // call, a face that makes something up about his life is the failure
+      // that is hard to undo — she named it herself as her first hard rule.
+      expect(ASK_SYL_TOOL.description).toMatch(/never invent/i);
+    });
+
+    it("should scope the call to LIVE things, not to every remark he makes", () => {
+      // This assertion replaces one that required the phrase "never answer
+      // from your own knowledge", and the replacement is the point rather
+      // than a loosening.
+      //
+      // That wording was written before she had a knowledge base, when
+      // forwarding everything was the only way she could be right. Once her
+      // documents were attached it became the reason EVERY remark — including
+      // a greeting — raced an 8-second ceiling against a turn measuring 3-7
+      // seconds warm, so the Commander heard the timeout line whatever he
+      // asked. A tool description is not documentation; it is the instruction
+      // the model obeys, and it outranked her personality because it sits
+      // nearer the decision.
+      //
+      // So the property now worth protecting is the opposite one: the
+      // description must RESTRICT the call rather than demand it.
+      expect(ASK_SYL_TOOL.description).toMatch(/only when/i);
+      expect(ASK_SYL_TOOL.description).not.toMatch(/for every question/i);
     });
   });
 

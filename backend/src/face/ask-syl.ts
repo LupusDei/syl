@@ -75,11 +75,27 @@ export const ASK_SYL_DEADLINE_MS = 6_500;
 export const ASK_SYL_TOOL: RunwayRpcToolDef = {
   type: "backend_rpc",
   name: ASK_SYL_TOOL_NAME,
+  // WHEN TO CALL THIS IS THE WHOLE PERFORMANCE BUDGET, and the first version of
+  // this string said "call this for EVERY question". It was written before she
+  // had a knowledge base, when forwarding everything was the only way she could
+  // be right. With her documents attached it became the reason every single
+  // remark — including "hello" — raced an 8-second ceiling against a turn that
+  // measures 3-7 seconds warm, so the Commander heard the timeout line
+  // regardless of what he asked.
+  //
+  // A tool description is not documentation. It is the instruction the model
+  // actually obeys, and it outranked her personality because it is nearer the
+  // decision.
   description:
-    "Ask Syl herself. Call this for EVERY question, request or remark the Commander makes — " +
-    "you are her face and her voice, not her mind, and you must never answer from your own " +
-    "knowledge or invent anything about him, his reminders, his goals or his day. Speak the " +
-    "answer you get back. If it says something went wrong, say that instead of guessing.",
+    "Ask Syl's own mind, for anything LIVE. Call this ONLY when the answer depends on something " +
+    "that changes: his to-dos, reminders, goals, calendar, health, what happened today, what he " +
+    "said earlier, or anything you would otherwise be guessing at. " +
+    "DO NOT call it for things your own documents already answer — who you are, who he is, his " +
+    "people, his work, what he is trying to do, how you speak. Answer those yourself, at once. " +
+    "DO NOT call it for greetings, acknowledgements, chat, or anything conversational. " +
+    "When you do call it, say you are checking before you call, so he knows which of you he is " +
+    "talking to. Speak the answer you get back. If it says something went wrong, say that rather " +
+    "than guessing — and never invent anything about him, his data or his day.",
   parameters: [
     {
       name: "question",
