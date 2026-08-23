@@ -337,7 +337,7 @@ describe("AskSylIngress, and the answer it banks", () => {
       sessions.settle({ id: "rts_1", ended: "closed", credits: 4, dollars: 0.04 });
       const outcome = await subject.ask(ask("What is on today?"));
 
-      // `syl-chzl.4.6` landed the ending path this test was written against, so
+      // `syl-chzl.4.7` landed the ending path this test was written against, so
       // the refusal now has a sentence — `expired`, and she says the time is
       // up. THE INVARIANT THIS TEST EXISTS FOR IS UNCHANGED and is the line
       // below: whatever she says, it is not the stale answer.
@@ -348,7 +348,7 @@ describe("AskSylIngress, and the answer it banks", () => {
     it("should stop serving a banked answer once the credential has expired", async () => {
       // THE ENDING BEATS A STALE ANSWER, and this is where that is decided.
       //
-      // `syl-chzl.4.6` adds a path that ends a session when the PROVIDER's cap
+      // `syl-chzl.4.7` adds a path that ends a session when the PROVIDER's cap
       // passes. The question it raises is whether a banked answer waiting at
       // that moment could still be spoken into a session that is already over.
       //
@@ -373,7 +373,7 @@ describe("AskSylIngress, and the answer it banks", () => {
       const outcome = await subject.ask(ask("What is on today?"));
 
       // The prediction in the comment above held exactly: the bank sits behind
-      // `verifyAskCredential`, so `syl-chzl.4.6` needed no hand-sequencing to
+      // `verifyAskCredential`, so `syl-chzl.4.7` needed no hand-sequencing to
       // make the ending win. What changed is only that the refusal now SAYS
       // something — the ending line, never the banked answer.
       expect(outcome).toMatchObject({ ok: false, failure: "expired" });

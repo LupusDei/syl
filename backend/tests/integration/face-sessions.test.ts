@@ -465,7 +465,7 @@ describe("the face session routes", () => {
 
     /**
      * A SESSION THAT ENDED IS NOT A STRANGER AT THE DOOR, and since
-     * `syl-chzl.4.6` the two are answered differently on purpose.
+     * `syl-chzl.4.7` the two are answered differently on purpose.
      *
      * The credential stops WORKING either way — no turn runs and she answers
      * nothing. What changed is that a caller who proved it holds this session's

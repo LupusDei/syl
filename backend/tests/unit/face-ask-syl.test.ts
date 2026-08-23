@@ -210,7 +210,7 @@ describe("AskSylIngress", () => {
       const outcome = await ingress().ask(ask());
 
       expect(outcome.ok).toBe(false);
-      // `expired` rather than `unauthorised` since `syl-chzl.4.6`. A settled
+      // `expired` rather than `unauthorised` since `syl-chzl.4.7`. A settled
       // row is reachable only AFTER the hash matched, so the caller is the
       // credential holder and gets the ending said out loud — see
       // `SESSION_OVER_LINE`. No turn runs either way, which is what this test
