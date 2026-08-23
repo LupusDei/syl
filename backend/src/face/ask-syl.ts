@@ -5,6 +5,12 @@ import {
   type AskRejectionReason,
   type AskVerification,
 } from "./ask-credential.js";
+import {
+  AnswerBank,
+  isSameQuestion,
+  spokenBankedAnswer,
+  type BankedAnswer,
+} from "./banked-answer.js";
 import type { FaceSessionStore } from "./face-session-store.js";
 import {
   RUNWAY_RPC_MAX_PARAMETERS,
@@ -42,7 +48,7 @@ import {
  * standing there with nothing to say, which is the failure mode this whole
  * epic exists to avoid.
  *
- * Four rules follow, and they are the reason this file is not just a function
+ * Five rules follow, and they are the reason this file is not just a function
  * call:
  *
  * 1. **A cold lane is refused instantly.** Not attempted, not raced — refused,
@@ -64,6 +70,20 @@ import {
  *    conversation, so queueing means waiting out the whole of a turn that has
  *    already missed the deadline and then running another, which cannot fit
  *    however fast the lane is. See `#single` for the measurement.
+ * 5. **An overrun turn's answer is KEPT, and the next ask gets it.**
+ *    {@link TOO_SLOW_LINE} promises "ask me again and I will have it", and
+ *    until `syl-chzl.4.5` that was false every single time: the abandoned turn
+ *    ran to completion, produced a good answer, and this file dropped it.
+ *    Fourteen out of fourteen on 2026-08-23 — her face had never once answered
+ *    a question. See `banked-answer.ts` for the bank, the ninety-second bound
+ *    on it, and why she says what the answer is an answer to.
+ *
+ * **Rule 5 is a fallback and must never become a substitute.** A question he
+ * asks is answered by running it, every time; the bank only ever fills in for
+ * an apology. When `syl-chzl.4.4` makes the turn fit inside the ceiling this
+ * whole mechanism stops firing on its own, because nothing overruns and so
+ * nothing is ever banked. Anything that makes it serve a banked answer *in
+ * preference to* a fresh one would leave her permanently one question behind.
  */
 
 /** The tool's name, as the model knows it. */
@@ -271,7 +291,19 @@ export type AskSylFailure = "unauthorised" | "empty" | "cold" | "busy" | "slow" 
 
 /** What a tool call resolves to. Never a rejection; see the header. */
 export type AskSylOutcome =
-  | { readonly ok: true; readonly say: string }
+  | {
+      readonly ok: true;
+      readonly say: string;
+      /**
+       * These are her words from a turn that overran an EARLIER ask and was
+       * kept rather than dropped — see `banked-answer.ts`. Still `ok`, because
+       * it is a real answer she really produced; flagged so the log and the
+       * tests can tell the two apart. Deliberately not forwarded to the avatar
+       * in {@link AskSylIngress.handlerFor}: the model has nothing useful to do
+       * with the distinction and `say` already explains itself out loud.
+       */
+      readonly banked?: true;
+    }
   | {
       readonly ok: false;
       readonly failure: AskSylFailure;
@@ -352,6 +384,16 @@ export class AskSylIngress {
    * behind {@link FaceAnswerer}, this needs a clock of its own.
    */
   readonly #inFlight = new Map<string, Promise<unknown>>();
+
+  /**
+   * The answer an overrunning turn produced, kept for the next ask.
+   *
+   * `syl-chzl.4.5`, and the reason {@link TOO_SLOW_LINE} is no longer a lie.
+   * Owned here rather than injected because its lifetime is exactly this
+   * object's: it holds the resolutions of promises this process is waiting on,
+   * and a bank that outlived the process could speak a dead turn's answer.
+   */
+  readonly #bank = new AnswerBank();
 
   constructor(options: AskSylIngressOptions) {
     this.#sessions = options.sessions;
@@ -467,6 +509,19 @@ export class AskSylIngress {
     // those six seconds, or the reaper cuts her off mid-answer.
     this.#sessions.touch(request.sessionId, this.#now());
 
+    // HE ASKED THE SAME THING AGAIN, which is what she TOLD him to do, and this
+    // time she has it. Served before the in-flight and cold gates because both
+    // of those are reasons she cannot produce NEW words, and neither is a
+    // reason to withhold words she already has.
+    //
+    // Only for a repeat, though. If a turn is already running it is running on
+    // something newer, and "I am still on the last one" is the honest answer —
+    // she has not abandoned the question in front of the banked one.
+    const banked = this.#bank.peek(request.sessionId, this.#now());
+    if (banked !== null && isSameQuestion(banked.question, question)) {
+      return this.#serveBanked(request.sessionId, banked, false);
+    }
+
     // ONE TURN PER FACE, and it is checked before the cold lane because a turn
     // already running is proof the lane is warm — saying she is not awake yet
     // while she is mid-answer would be a lie.
@@ -479,16 +534,30 @@ export class AskSylIngress {
     // ceiling, so attempting one buys a coin flip on silence.
     if (this.#isLaneWarm !== null && !this.#isLaneWarm()) {
       this.#log("face.ask.cold", { sessionId: request.sessionId });
-      return { ok: false, failure: "cold", say: COLD_LANE_LINE };
+      // Real words she actually produced beat "I am not properly awake yet",
+      // even when they answer the question before this one. Nothing is running,
+      // so there is no newer turn to promise him.
+      return banked === null
+        ? { ok: false, failure: "cold", say: COLD_LANE_LINE }
+        : this.#serveBanked(request.sessionId, banked, false);
     }
 
     const startedAt = this.#now();
+    // Set by {@link #bounded} the instant its timer fires, and the ONLY
+    // evidence that decides whether a landing answer gets banked. It is exact
+    // rather than approximate: the timer firing is precisely the event that
+    // makes `#ask` return the too-slow line instead of the answer, and
+    // `clearTimeout` in `#bounded`'s `finally` runs on a microtask, which
+    // always beats a pending macrotask timer. So `gaveUp.yes` is true if and
+    // only if he did not hear this turn.
+    const gaveUp = { yes: false };
+    const turn = this.#single(request.sessionId, () =>
+      this.#answer({ sessionId: request.sessionId, question }),
+    );
+    this.#keep(request.sessionId, question, startedAt, gaveUp, turn);
+
     try {
-      const say = await this.#bounded(
-        this.#single(request.sessionId, () =>
-          this.#answer({ sessionId: request.sessionId, question }),
-        ),
-      );
+      const say = await this.#bounded(turn, gaveUp);
       this.#log("face.ask.answered", {
         sessionId: request.sessionId,
         ms: this.#now() - startedAt,
@@ -496,9 +565,14 @@ export class AskSylIngress {
       });
       // A turn that succeeded with nothing to say is still a turn the face has
       // to close. Silence here would be the avatar freezing on a success.
-      return say.trim() === ""
-        ? { ok: false, failure: "failed", say: TURN_FAILED_LINE }
-        : { ok: true, say };
+      if (say.trim() === "") {
+        return this.#insteadOfApologising(request.sessionId, "failed", TURN_FAILED_LINE);
+      }
+      // She has answered something NEWER, out loud. Whatever he never heard is
+      // water under the bridge now, and serving it on his next ask would be the
+      // non-sequitur this whole mechanism is shaped to avoid.
+      this.#bank.drop(request.sessionId);
+      return { ok: true, say };
     } catch (error) {
       const slow = error instanceof AskSylDeadlineError;
       this.#log(slow ? "face.ask.slow" : "face.ask.failed", {
@@ -506,10 +580,96 @@ export class AskSylIngress {
         ms: this.#now() - startedAt,
         error: error instanceof Error ? error.message : String(error),
       });
+      // `slow` means THIS turn is still running and will bank its own answer
+      // when it lands, so the fallback promises him the new one as well.
       return slow
-        ? { ok: false, failure: "slow", say: TOO_SLOW_LINE }
-        : { ok: false, failure: "failed", say: TURN_FAILED_LINE };
+        ? this.#insteadOfApologising(request.sessionId, "slow", TOO_SLOW_LINE, true)
+        : this.#insteadOfApologising(request.sessionId, "failed", TURN_FAILED_LINE);
     }
+  }
+
+  /**
+   * Hand him a banked answer, saying what it is an answer to.
+   *
+   * Dropping it as it goes out, unconditionally: once it has been spoken it
+   * must not be spoken again, or she repeats one sentence on every ask for the
+   * rest of the session. Every caller reaches the bank through here, so there
+   * is exactly one place that can forget to.
+   */
+  #serveBanked(sessionId: string, answer: BankedAnswer, stillWorking: boolean): AskSylOutcome {
+    this.#bank.drop(sessionId);
+    this.#log("face.ask.served_banked", {
+      sessionId,
+      ageMs: this.#now() - answer.askedAt,
+      stillWorking,
+    });
+    return { ok: true, banked: true, say: spokenBankedAnswer(answer, { stillWorking }) };
+  }
+
+  /**
+   * The apology, unless there is a real answer to give instead.
+   *
+   * Re-reads the bank rather than reusing the entry `#ask` captured at the top,
+   * because an `await` has been crossed since then and another call on this
+   * session may have consumed it. Serving a captured copy would speak the same
+   * answer twice.
+   */
+  #insteadOfApologising(
+    sessionId: string,
+    failure: AskSylFailure,
+    line: string,
+    stillWorking = false,
+  ): AskSylOutcome {
+    const answer = this.#bank.peek(sessionId, this.#now());
+    return answer === null
+      ? { ok: false, failure, say: line }
+      : this.#serveBanked(sessionId, answer, stillWorking);
+  }
+
+  /**
+   * Keep the answer of a turn he never heard.
+   *
+   * This is the whole of `syl-chzl.4.5`. Before it, the overrun turn ran to
+   * completion, wrote both halves into his transcript, and the answer was
+   * discarded — so `TOO_SLOW_LINE`'s "ask me again and I will have it" was
+   * false fourteen times out of fourteen, and asking again merely started an
+   * identical turn that overran identically.
+   *
+   * Attached to the turn rather than awaited, because `#ask` has already
+   * returned by the time this fires. It cannot reject: the rejection handler is
+   * supplied, and the body is wrapped, so a throw in here can never surface as
+   * an unhandled rejection in a process whose job is to keep talking.
+   */
+  #keep(
+    sessionId: string,
+    question: string,
+    askedAt: number,
+    gaveUp: { yes: boolean },
+    turn: Promise<string>,
+  ): void {
+    void turn.then(
+      (say) => {
+        try {
+          // He heard it. There is nothing to keep.
+          if (!gaveUp.yes) return;
+          const words = say.trim();
+          // A turn that came back with nothing is a failure, not an answer, and
+          // banking it would make her say "here it is" about an empty sentence.
+          if (words === "") return;
+          this.#bank.put(sessionId, { question, say: words, askedAt });
+          this.#log("face.ask.banked", {
+            sessionId,
+            ms: this.#now() - askedAt,
+            characters: words.length,
+          });
+        } catch {
+          /* Losing a banked answer is a nuisance; a crash here is her voice. */
+        }
+      },
+      () => {
+        /* A turn that rejected produced nothing to keep. `#ask` has said so. */
+      },
+    );
   }
 
   /**
@@ -634,9 +794,16 @@ export class AskSylIngress {
    *
    * A refusal is therefore the honest answer and it is instant. What it does
    * NOT do is make her answer faster — that is `syl-chzl.4.4`, the ceiling
-   * against her real latency — nor rescue the answer the overrun turn went on
-   * to produce, which is `syl-chzl.4.5`. This only stops the second question
-   * making the first one worse.
+   * against her real latency. Rescuing the answer the overrun turn went on to
+   * produce is `syl-chzl.4.5` and is now built: see {@link #keep}. This only
+   * stops the second question making the first one worse.
+   *
+   * The two fit together deliberately. This gate keeps the queue honest so an
+   * overrun turn is never made later by a question stacked behind it, and
+   * {@link #keep} makes sure the answer that turn finally produces is not
+   * thrown away. Neither is much use without the other: banking the answer of
+   * a turn that has three questions queued behind it would bank it minutes
+   * late, well past the point where it could be served.
    */
   async #single(sessionId: string, run: () => Promise<string>): Promise<string> {
     const turn = run();
@@ -661,8 +828,14 @@ export class AskSylIngress {
    * The turn is not ours to kill — `ConversationService` owns it and has its own,
    * far longer timeout — so a slow turn keeps running and lands in his
    * transcript. What this stops is the avatar standing silent while it does.
+   *
+   * `gaveUp` is flipped the instant the timer fires and is what
+   * {@link #keep} reads to decide whether the landing answer was ever heard.
+   * It is set INSIDE the timer callback rather than in `#ask`'s catch on
+   * purpose: the catch runs after an `await`, and the turn could in principle
+   * land in between, which would bank an answer he had already been given.
    */
-  async #bounded(turn: Promise<string>): Promise<string> {
+  async #bounded(turn: Promise<string>, gaveUp: { yes: boolean }): Promise<string> {
     if (this.#deadlineMs <= 0) return turn;
 
     let timer: NodeJS.Timeout | undefined;
@@ -671,6 +844,7 @@ export class AskSylIngress {
         turn,
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => {
+            gaveUp.yes = true;
             reject(new AskSylDeadlineError(this.#deadlineMs));
           }, this.#deadlineMs);
           // Unreffed so a lost race cannot hold the process open.
