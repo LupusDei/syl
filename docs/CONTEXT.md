@@ -3875,3 +3875,48 @@ the one broken and two healthy sessions.
 that disagree.** Every failure above is the same discipline not applied — to a compiler
 invocation, a `gh` filter, a shell pipeline and a `jq` selector, none of which anyone thought
 of as a diagnostic worth validating.
+
+#### The fifth was not improvised. It is committed, and it deserves a guard rather than a lesson
+
+The four above were tools someone reached for in the moment. The fifth runs on every push and
+has been correct for months.
+
+`e0d2f83` added the `.playAndRecord` / `.voiceChat` audio session — the half of `syl-chzl.4.9`
+that engages iOS's hardware echo cancellation, and the one that has to be *compiled into the
+app*. TestFlight reported success:
+
+    Has the version changed?  ->  success,  version=0.15.0
+    Build and upload          ->  SKIPPED
+
+`testflight/v0.15.0` was already tagged, so the gate correctly took its `changed=false`
+branch. **The workflow was green and shipped nothing.**
+
+Nothing here is broken. Skipping is the right answer when the version has already shipped —
+that is the entire point of the gate, and it has been quietly doing it correctly on every
+non-bump push since it was written. The defect is that
+**skipping-because-correct and skipping-because-somebody-forgot produce an identical green,
+and only one of them is fine.**
+
+That is why this one is different in kind from the other four. An improvised instrument that
+can only say yes is a mistake you make once and learn from. **A permanent one is a mistake
+that keeps being made correctly until the day it isn't**, and no amount of remembering the
+lesson helps, because the person pushing is not thinking about TestFlight at all. So:
+`syl-chzl.18`, and the formulation matters more than the intent —
+
+    iOS SOURCE changed  AND  no build was produced  ->  FAIL
+
+not *warn on skip*. Skipping is usually right; a warning that fires constantly is a warning
+nobody reads, which is the reasoning that already rejected a `dirty-tree` warning. Only the
+**conjunction** is never intended.
+
+**Two ways to get it wrong**, both worth the thirty seconds: the workflow's own
+`paths: ['ios/**']` filter means running at all *already implies* iOS changed, so no separate
+diff is needed — and `ios/README.md` matches that filter too, so a naive version fires on
+documentation and becomes noise inside a week.
+
+And the part that should be uncomfortable: **the monitor written that same evening in
+response to the other four would have passed this.** It required four completed workflows
+with none failing; a skipped-but-green TestFlight satisfies that perfectly. The fix for an
+instrument that could only say yes was another instrument that could only say yes, built
+forty minutes later, by someone who had just written the rule down. Whatever gets built for
+`syl-chzl.18` has to be checked against that exact case, or it is the third iteration.
