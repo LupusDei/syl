@@ -3615,3 +3615,31 @@ real size with the frame that proved it` was written as
 into a variable so the resampler could compare against it. Behaviour identical; the
 assertion was pinned to the shape of a line. Same family as the prose problem — name the
 fact you are defending, not the syntax that currently happens to express it.
+
+### Ask origin, not your log (2026-08-23)
+
+Three people made this mistake in one evening, in three different registers, and the third
+one was reporting it *while writing up the first two*.
+
+- A commit message claimed *"0.14.0 was never uploaded"* — inferred from an unpushed local
+  commit. It had shipped.
+- A status report listed four commits as unpushed. **Three were already on `origin/main`**,
+  pushed twenty minutes earlier and carried along as ancestors of a fourth.
+- An embargo was phrased against a command rather than against what a script calls.
+
+All three are the same act: **reading local state and reporting it as the world's state.**
+None of them needed an experiment, an argument or a re-run. Each needed one question asked
+of the system that actually holds the answer.
+
+    git merge-base --is-ancestor <sha> origin/main && echo on-origin || echo unpushed
+
+**And `origin/main` is itself a local artifact** — a remote-tracking ref, as stale as your
+last fetch. `git fetch` first, or the one-liner answers confidently from a snapshot of
+whenever you last looked, which is the same error wearing the costume of its own fix.
+
+The general rule, and it is the cheap half of every finding tonight: **ask the system, not
+the transcript — and for anything shared, ask origin, not your log.** A branch, a working
+tree and a conversation are all records of what *you* did. Publication, deployment and
+upload are facts about a shared world, and every one of them has a one-line query. The
+expensive failures this evening were all silent mechanisms; the embarrassing ones were all
+confident answers to questions nobody put to the thing that knew.
