@@ -69,7 +69,9 @@
     "launchd": "tsx backend/src/ops/cli/launchd.ts",
     "predeploy": "npm run check:env",
     "deploy": "tsx backend/src/ops/cli/deploy.ts",
-    "video": "node scripts/video/generate.mjs",
+    "prebackfill:charges": "npm run check:env",
+  "backfill:charges": "tsx backend/src/ops/cli/backfill-charges.ts",
+  "video": "node scripts/video/generate.mjs",
     "check:nul": "node scripts/check-no-nul-bytes.mjs"
   },
   "//devDependencies": [
