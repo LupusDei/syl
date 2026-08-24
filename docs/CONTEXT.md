@@ -3994,3 +3994,44 @@ that was technically true.** The mechanisms are worth building precisely because
 does not scale and will not happen reliably — but the reading is what produces them, and no
 instrument has yet produced one. When something matters and the summary is green, open the
 thing the summary summarises. That is the whole method.
+
+## A call that fails because the thing does not exist must say so
+
+Two rules, both learned from one outage in which `ask_agent` was dead for a day and the failure
+Syl reported named nothing that would find it.
+
+**A parse failure must report what it failed to parse.** The client ran `JSON.parse` over a tool
+reply, and on a throw said *"Adjutant's answer to ask X was not readable."* Every word of that is
+true, and it is a statement about **our parser standing in the place where the cause belongs**.
+The cause was in the discarded text the whole time — the answer was a perfectly readable
+unknown-tool error — so the sentence sent one reader to look at the transport and another to
+check whether the neighbour was down. Neither was wrong to look there; the message told them to.
+A report about the reader's failure, offered instead of the thing read, is worse than no report:
+it is confidently about the wrong subject, so it does not merely fail to help, it misdirects.
+`unreadable()` now quotes the text, truncated, and says *empty* when the body was empty — "it
+said nothing" and "it said something I could not read" have different causes.
+
+**A tool name is a cross-service reference, and nothing type-checks it.** The client called a
+tool the running server did not register. Nothing in either repository could notice: two
+services, two deploys, one string, no compiler or lockfile in between.
+`tests/unit/adjutant-tools-exist.test.ts` closes it by capturing the server's own `tools/list`
+into a fixture and asserting every name we call appears in it.
+
+The distinction worth keeping is **which side is wrong**. The obvious reading of a failing call
+is that our name is stale and should be adapted to what exists — and here the client was correct
+and had always been correct; the tool was built, tested, and sitting on an unmerged branch of our
+*own* system. The adaptation was written before that was known, and it would have replaced a
+correct client with a materially weaker one (no live-session injection, no delivery count — the
+`syl-5kdv` hole reopened) while the real fix was one merge away. So: *"our side is wrong"* and
+*"their side has not shipped yet"* are different diagnoses, the second is invisible from inside
+one repository, and **the vendor-guard instinct actively points at the wrong one when the other
+side is us.** Check whether the other half exists before adapting to its absence.
+
+Two properties keep the guard honest, and both were designed against the ways this class of test
+rots. It is captured from a **live** server, so regenerating it against a server that lacks the
+tool reproduces the same red — the refresh is simultaneously the correct response to a failure
+and incapable of hiding one, which matters because our own services change under us far more
+often than a pinned vendor package does. And appearing in a captured list proves the tool
+**exists**, never that we may **call** it: `tools/list` is not filtered by caller, and Adjutant
+gates some tools on identity. A guard believed to prove more than it does is how the next one of
+these gets through.
