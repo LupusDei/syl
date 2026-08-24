@@ -62,6 +62,37 @@ import { Wardrobe } from "./wardrobe.js";
  * store is a second thing to get wrong, and the file that must be right is the
  * one that says what made the video.
  *
+ * ## The record must not assert what the system did not observe
+ *
+ * The rule this file learned the expensive way, and it is worth stating before
+ * anything below, because three separate defects turned out to be one defect
+ * wearing three costumes — all of them on the same render:
+ *
+ * - `status: "failed"` over a file that exists;
+ * - a ledger total over a rate that was never charged;
+ * - *"Runway ended this render as FAILED"* over an error nobody ever read.
+ *
+ * Each is a record stating something confidently that nothing had checked.
+ * `holdsLikeness` was the first instance and the pattern is the same every
+ * time: **derive it from what can be shown, or read it from whoever knows, and
+ * never write down what we merely expect.**
+ *
+ * ## Nothing here needs recovering. It needs re-pointing.
+ *
+ * Read this before reaching for a repair script. When a two-part render lost
+ * its second half, **the bytes were never thrown away — every view that could
+ * lead anyone back to them was.** The first half SUCCEEDED, downloaded, cost
+ * 120 credits and went into `parts[0].video`; then the record was written
+ * `status: "failed"`, `video: null`, and `list`, `latest`, `see_myself` and
+ * `frames()` all read the record. The mp4 sat in `parts/`, complete and
+ * playable, reachable only by someone who opened the sidecar by hand.
+ *
+ * So there is no lost data to reconstruct and nothing to re-download. There
+ * were four honest facts on disk and a summary in front of them that
+ * contradicted all four. {@link settledStatus} is the fix, and it is a
+ * *reading* rather than a repair: it asks the disk, on every load, and takes
+ * its answer over what the file says about itself.
+ *
  * ## What this deliberately does not do
  *
  * There is no approval gate, no per-day cap and no confirmation. The
