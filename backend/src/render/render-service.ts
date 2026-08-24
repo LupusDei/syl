@@ -65,12 +65,22 @@ import { Wardrobe } from "./wardrobe.js";
  * ## The record must not assert what the system did not observe
  *
  * The rule this file learned the expensive way, and it is worth stating before
- * anything below, because three separate defects turned out to be one defect
- * wearing three costumes — all of them on the same render:
+ * anything below, because four separate defects turned out to be one defect
+ * wearing four costumes — all of them on the same render:
  *
  * - `status: "failed"` over a file that exists;
  * - a ledger total over a rate that was never charged;
- * - *"Runway ended this render as FAILED"* over an error nobody ever read.
+ * - *"Runway ended this render as FAILED"* over an error nobody ever read;
+ * - and the subtle one: **a record that changed its mind about itself between
+ *   being written and being read.** A render that stopped left its unattempted
+ *   halves saying `rendering`, while the reader derived `failed` for those same
+ *   halves — so the file said one thing at rest and another when loaded. That
+ *   is not a record asserting what it did not observe; it is a record asserting
+ *   two different things depending on who asked. Downstream it was worse than
+ *   it sounds: `resume` chases anything at `rendering` and the review job
+ *   defers instead of waking her, so she would have waited for something that
+ *   was never coming. **A writer and a reader that disagree are two records,
+ *   and one of them is always wrong.**
  *
  * Each is a record stating something confidently that nothing had checked.
  * `holdsLikeness` was the first instance and the pattern is the same every
