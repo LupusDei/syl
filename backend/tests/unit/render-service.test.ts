@@ -131,12 +131,29 @@ function fakeBackend(options: FakeOptions = {}): RenderBackend & { readonly spec
       // chase either of them up.
       return options.submit ?? { ok: true, data: { id: `task-${String(specs.length)}` } };
     },
-    task: async () => {
+    task: async (id) => {
       const status = statuses[Math.min(polls, statuses.length - 1)];
       polls += 1;
+      // WHAT RUNWAY CHARGES, worked out the way Runway charges it: the model's
+      // rate for the seconds THIS generation asked for, and nothing at all for
+      // one that failed. The fake reaches for the spec behind the task id
+      // rather than a constant, because a render is often two generations of
+      // different lengths and one flat number would make the arithmetic in
+      // these tests meaningless.
+      const spec = specs[Number(id.replace("task-", "")) - 1];
+      const charged =
+        spec === undefined
+          ? // A task this fake never saw submitted — which is what a service
+            // that RESUMED someone else's render sees. It cannot know the
+            // charge, and saying `0` would be the fake asserting a render was
+            // free.
+            null
+          : status?.status === "SUCCEEDED"
+            ? RATE * spec.duration
+            : 0;
       return {
         ok: true,
-        data: { output: [], failureCode: null, failure: null, ...status } as RunwayTask,
+        data: { output: [], failureCode: null, failure: null, charged, ...status } as RunwayTask,
       };
     },
     download: async (_url, to) => {
@@ -1335,7 +1352,7 @@ describe("a render that was half made", () => {
 });
 
 describe("what she has spent", () => {
-  it("should price a finished render from the published rate and hold it on the record", async () => {
+  it("should hold what Runway said it charged, not what we predicted it would cost", async () => {
     const service = serviceWith(fakeBackend());
 
     const started = await service.start(ASK);
@@ -1344,11 +1361,94 @@ describe("what she has spent", () => {
     await service.drain();
 
     const record = service.get(started.record.name);
-    // The house model's own rate, fifteen seconds, a credit is a cent. The
-    // number is Runway's, not ours, and it follows the model rather than
-    // standing still while the model changes underneath it.
+    // Fifteen seconds at the house model's rate — the same number as before,
+    // and arrived at a different way: Runway reported it per generation and
+    // this added them up. The rate card is now only an estimate.
     expect(record?.credits).toBe(RATE * 15);
     expect(record?.usd).toBeCloseTo(RATE * 0.15, 5);
+    expect(record?.parts.map((part) => part.charged)).toEqual([RATE * 8, RATE * 7]);
+  });
+
+  it("should report what Runway charged for a failure, whatever its refund policy turns out to be", async () => {
+    // THE TEST THAT REPLACES A BELIEF WITH A READING. It used to assert that a
+    // failed render costs full credits, citing `RUNWAY_API_INDEX.md` on
+    // moderated generations not being refunded — and the tasks behind the 23-24
+    // August failures were charged zero, so every failure she has ever had was
+    // billed to him at the rate card.
+    //
+    // The fix is not the opposite belief. Both cases below run the same code
+    // and the ledger follows whatever Runway said, so this stays true if the
+    // policy changes next month, which no assertion about refunds can.
+    const refunded = serviceWith(
+      fakeBackend({ statuses: [{ id: "t", status: "FAILED", charged: 0 }] }),
+    );
+    await refunded.start({ ...ASK, framing: "face_turned_away" });
+    await refunded.drain();
+
+    expect(refunded.spend().failed).toBe(1);
+    expect(refunded.spend().credits).toBe(0);
+
+    // The same render, on a day when Runway charges for failures.
+    root = mkdtempSync(join(tmpdir(), "syl-studio-"));
+    studio = studioAt(root);
+    mkdirSync(dirname(studio.reference()), { recursive: true });
+    writeFileSync(studio.reference(), REFERENCE_BYTES);
+    writeFileSync(studio.opening(), OPENING_BYTES);
+    const charged = serviceWith(
+      fakeBackend({ statuses: [{ id: "t", status: "FAILED", charged: RATE * 15 }] }),
+    );
+    await charged.start({ ...ASK, framing: "face_turned_away" });
+    await charged.drain();
+
+    expect(charged.spend().credits).toBe(RATE * 15);
+  });
+
+  it("should keep what it expected to cost apart from what it was charged", async () => {
+    // The two used to be one number, which is how a record came to assert a
+    // charge nobody had made. They are kept apart rather than reconciled: the
+    // gap between them is a real fact about a render — this one was estimated
+    // at fifteen seconds and charged for eight — not a discrepancy to paper
+    // over.
+    const service = serviceWith(
+      fakeBackend({
+        statuses: [
+          { id: "task-1", status: "SUCCEEDED", output: ["https://example.invalid/half.mp4"] },
+          { id: "task-2", status: "FAILED", failure: "Invalid input" },
+        ],
+      }),
+    );
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    // At the moment she asks, there is an estimate and no charge at all.
+    expect(started.record.estimated).toBe(RATE * 15);
+    expect(started.record.credits).toBeNull();
+    await service.drain();
+
+    const record = service.get(started.record.name);
+    expect(record?.estimated).toBe(RATE * 15);
+    expect(record?.credits).toBe(RATE * 8);
+  });
+
+  it("should count a render whose charge nobody reported as unpriced, never as free", async () => {
+    // A missing number must not silently become a confident one — in either
+    // direction. Falling back to the rate card is the defect this replaced;
+    // falling back to zero would be the same defect, cheaper.
+    const service = serviceWith(
+      fakeBackend({
+        statuses: [
+          { id: "t", status: "SUCCEEDED", output: ["https://example.invalid/x.mp4"], charged: null },
+        ],
+      }),
+    );
+
+    await service.start({ ...ASK, framing: "face_turned_away" });
+    await service.drain();
+
+    const spend = service.spend();
+    expect(spend.credits).toBe(0);
+    expect(spend.unpriced).toBe(1);
   });
 
   it("should total everything on disk, so the answer cannot drift from the records", async () => {
@@ -1369,25 +1469,32 @@ describe("what she has spent", () => {
     expect(spend.seconds).toBe(30);
   });
 
-  it("should count a failed render as spent, because Runway charges for it", async () => {
-    // `RUNWAY_API_INDEX.md`: moderated generations still cost full credits, no
-    // refund. A ledger that only counted the good ones would understate what
-    // she has actually spent, which is the direction that matters.
-    //
-    // The reel framing, so this is one generation and the number is the whole
-    // fifteen seconds. What a HALF-made render costs is a different question
-    // with a different answer, and it has its own test.
+  it("should bill a half-made render for the half that was actually charged", async () => {
+    // The 23 August shape, and the number he was actually owed an answer about.
+    // Part 0 SUCCEEDED and was charged; part 1 FAILED and was charged nothing.
+    // The record used to claim the rate card for both, so the two of these cost
+    // him 240 credits each in the ledger and 120 each in reality.
     const service = serviceWith(
-      fakeBackend({ statuses: [{ id: "t", status: "FAILED", output: [] }] }),
+      fakeBackend({
+        statuses: [
+          { id: "task-1", status: "SUCCEEDED", output: ["https://example.invalid/half.mp4"] },
+          { id: "task-2", status: "FAILED", failureCode: "THIRD_PARTY.INPUT_VALIDATION", failure: "Invalid input" },
+        ],
+      }),
     );
 
-    await service.start({ ...ASK, framing: "face_turned_away" });
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
     await service.drain();
 
-    const spend = service.spend();
-    expect(spend.renders).toBe(1);
-    expect(spend.failed).toBe(1);
-    expect(spend.credits).toBe(RATE * 15);
+    const record = service.get(started.record.name);
+    expect(record?.status).toBe("partial");
+    // The first half's eight seconds and nothing for the second, rather than
+    // the fifteen the render was going to be.
+    expect(record?.credits).toBe(RATE * 8);
+    expect(record?.parts[1]?.charged).toBe(0);
+    expect(service.spend().credits).toBe(RATE * 8);
   });
 
   it("should start at nothing on a machine that has never rendered", () => {

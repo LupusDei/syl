@@ -315,8 +315,15 @@ export class VoiceService {
       because,
       startedAt: instant(this.#clock()),
       reason: null,
-      credits: submitted.data.estimatedCredits,
-      usd: submitted.data.estimatedCredits === null ? null : usdOf(submitted.data.estimatedCredits),
+      // NOTHING HAS BEEN CHARGED THAT ANYONE HAS TOLD US ABOUT YET. The speech
+      // API answers with an estimate at submission and the real number when the
+      // task finishes, and this used to write the estimate into the field the
+      // ledger totals — so a voiced clip in flight reported a charge that had
+      // not happened. Same rule as `RenderPart.charged` (`syl-o0vy`): the
+      // estimate is kept, in the field that means estimate.
+      credits: null,
+      usd: null,
+      estimated: submitted.data.estimatedCredits,
       video: null,
       voicedFrom: source.name,
       voice: {

@@ -120,8 +120,29 @@ export interface RenderPart {
   readonly last: string | null;
   /** Where this half is on disk once it has arrived. Kept, never cleaned up. */
   readonly video: string | null;
-  /** What this half cost, or `null` where there is no published rate. */
+  /**
+   * What this half was EXPECTED to cost, at the model's published rate.
+   *
+   * An estimate, and since `syl-o0vy` it is only that: it is what the roster
+   * says a generation of this length costs, worked out before anything was
+   * sent. {@link RenderPart.charged} is what actually happened, and the ledger
+   * reports that one. `null` where the model has no published rate.
+   */
   readonly credits: number | null;
+  /**
+   * What Runway said it actually charged for this generation.
+   *
+   * **The ledger's number.** A `FAILED` generation is charged nothing and a
+   * `SUCCEEDED` one is charged in full, so pricing a record from the rate card
+   * billed him for every failure he ever had: the two half-made renders on 23
+   * August were recorded at 240 credits each and charged 120, and the two that
+   * bought nothing at all were recorded at 240 and 450 and charged zero.
+   *
+   * `null` means Runway said nothing about the cost, which is not the same as
+   * free and is not an invitation to fall back on the estimate above. A render
+   * holding one of these is `unpriced` rather than cheap.
+   */
+  readonly charged: number | null;
   /**
    * How this one generation went, which is not how the render went.
    *
@@ -263,14 +284,35 @@ export interface RenderRecord {
   /** Why it failed, when it did. A sentence, never a code. */
   readonly reason: string | null;
   /**
-   * What has been bought so far, summed over the halves that were submitted.
+   * What has been CHARGED so far, summed over the halves Runway priced.
    *
-   * `null` when there is no published rate — never a guess. A render whose
-   * second half never reached Runway is billed for the first half only, which
-   * is the truth and is the number `spend()` has to be able to stand behind.
+   * The ledger's number, and since `syl-o0vy` it is read rather than worked
+   * out: see {@link RenderPart.charged}. `null` when nobody has reported a
+   * charge yet — which is every render still in flight, and which reads as
+   * `unpriced` rather than free. A render whose second half never reached
+   * Runway is billed for the first half only, which is the truth and is the
+   * number `spend()` has to be able to stand behind.
    */
   readonly credits: number | null;
   readonly usd: number | null;
+  /**
+   * What it was expected to cost, at the rate card, before anything was sent.
+   *
+   * **Its own field so that {@link RenderRecord.credits} can mean one thing.**
+   * Blending "what we think this costs" with "what we were charged" into a
+   * single number is how the ledger came to bill him for four failures that
+   * cost nothing — a record asserting something the system never observed.
+   *
+   * It is also the answer to the question she asks at the moment she asks for a
+   * render, when no charge exists yet: `render_me` returns immediately, and a
+   * record that said nothing at all about cost until minutes later would have
+   * taken away the only figure she has when deciding whether to ask.
+   *
+   * `null` where the model has no published rate. Never reconciled against
+   * `credits`: the gap between them is a real fact about a render, not a defect
+   * to paper over.
+   */
+  readonly estimated: number | null;
   /** Absolute path to the mp4, once there is one. The joined clip, if it was joined. */
   readonly video: string | null;
   /**
@@ -624,19 +666,40 @@ function wasBought(part: RenderPart): boolean {
   return part.taskId !== null || part.video !== null;
 }
 
-/** What has been bought so far: the halves that reached Runway, added up. */
+/**
+ * What has been charged so far: what RUNWAY SAID each half cost, added up.
+ *
+ * **Read, never inferred.** This used to sum the rate card over every half that
+ * reached Runway, which quietly encoded a belief about somebody else's billing:
+ * that a generation which failed still costs full credits. Runway reports the
+ * actual charge on every task, so the belief was never needed — and it was
+ * wrong in the direction that costs him money. Four failures were recorded at
+ * 240, 240, 240 and 450 credits and were charged 120, 120, 0 and 0.
+ *
+ * Reading the number is also the only version of this that cannot rot: it is
+ * true under either refund policy, and it stays true if Runway changes its
+ * policy next month.
+ *
+ * A half whose charge is unknown makes the whole render unpriced rather than
+ * cheap, and rather than quietly falling back to the estimate. Same rule as
+ * `creditsFor`, and the same reason: a confident wrong number is worse than an
+ * absent one, and `spend()` already reports what it could not account for.
+ */
 function billed(parts: readonly RenderPart[]): {
   readonly credits: number | null;
   readonly usd: number | null;
+  readonly estimated: number | null;
 } {
+  const estimated = parts.some((part) => part.credits === null)
+    ? null
+    : parts.reduce((total, part) => total + (part.credits ?? 0), 0);
+
   const bought = parts.filter(wasBought);
-  // An unpriced half makes the whole render unpriced rather than cheap. Same
-  // rule as `creditsFor`: a confident wrong number is worse than an absent one.
-  if (bought.length === 0 || bought.some((part) => part.credits === null)) {
-    return { credits: null, usd: null };
+  if (bought.length === 0 || bought.some((part) => part.charged === null)) {
+    return { credits: null, usd: null, estimated };
   }
-  const credits = bought.reduce((total, part) => total + (part.credits ?? 0), 0);
-  return { credits, usd: usdOf(credits) };
+  const credits = bought.reduce((total, part) => total + (part.charged ?? 0), 0);
+  return { credits, usd: usdOf(credits), estimated };
 }
 
 /**
@@ -697,17 +760,26 @@ function whyItStopped(status: string, task: RunwayTask): string {
  * was said about — see `#await`.
  */
 type Arrival =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly charged: number | null }
   | {
       readonly ok: false;
       readonly reason: string;
       readonly failureCode: string | null;
       readonly failure: string | null;
+      /** What Runway charged for the generation that failed. Usually nothing. */
+      readonly charged: number | null;
     };
 
-/** An end with no upstream words behind it: ours, and only ours. */
+/**
+ * An end with no upstream words behind it: ours, and only ours.
+ *
+ * `charged: null` rather than `0`, because these are the endings where we never
+ * heard what the task cost — a timeout, an unreachable API, a download that
+ * broke. The generation may well have been charged for, and writing `0` would
+ * be the ledger claiming a render was free because we stopped listening.
+ */
 function stopped(reason: string): Arrival {
-  return { ok: false, reason, failureCode: null, failure: null };
+  return { ok: false, reason, failureCode: null, failure: null, charged: null };
 }
 
 /** One generation, planned but not yet sent. Paths are absolute. */
@@ -1100,6 +1172,10 @@ export class RenderService {
       status: "rendering",
       failureCode: null,
       failure: null,
+      // Nothing has been charged that anyone has told us about yet. The number
+      // arrives with the task, so until then this render is `unpriced` rather
+      // than priced at what we think it will cost.
+      charged: null,
     }));
 
     const record: RenderRecord = {
@@ -1182,10 +1258,25 @@ export class RenderService {
   /**
    * What she has spent, totalled over the records.
    *
-   * A failed render counts. `RUNWAY_API_INDEX.md` is explicit that a moderated
-   * generation still costs full credits with no refund, and a ledger that only
-   * counted the successes would understate the bill — which is the one
-   * direction an honest one must not err in.
+   * **Every number here is one Runway reported, never one we worked out.** This
+   * used to price a render from our own rate card, defended by a line in
+   * `RUNWAY_API_INDEX.md` saying a moderated generation still costs full
+   * credits with no refund — so a failed render counted in full, on the
+   * argument that understating the bill is the one direction an honest ledger
+   * must not err in.
+   *
+   * The argument was sound and the premise was not: the tasks behind the 23-24
+   * August failures were charged **zero**. Every failure she has ever had was
+   * therefore billed to him at the rate card, and she reported a number that
+   * was ours rather than hers.
+   *
+   * The fix is not the opposite belief — "a failure costs nothing" is just as
+   * much a guess about somebody else's billing. Runway states the charge on
+   * every task, so we carry no belief at all: see {@link RenderPart.charged}.
+   * That answer is true under either policy and survives Runway changing it.
+   *
+   * A render whose charge nobody reported is `unpriced` rather than free, so
+   * the total is legible as a floor with its gaps named beside it.
    */
   spend(): Spend {
     const { records, unreadable } = this.#scan();
@@ -1554,14 +1645,16 @@ export class RenderService {
       const arrived = await this.#await(taskId, to);
       if (!arrived.ok) {
         // Runway's own words travel with the half they were said about, so a
-        // record with two generations can say which one was refused and why.
+        // record with two generations can say which one was refused and why —
+        // and so does what it charged, which for a refusal is nothing.
         this.#stop(current, index, arrived.reason, {
           failureCode: arrived.failureCode,
           failure: arrived.failure,
+          charged: arrived.charged,
         });
         return;
       }
-      current = this.#patch(current, index, { video: to, status: "ready" });
+      current = this.#patch(current, index, { video: to, status: "ready", charged: arrived.charged });
     }
 
     if (current.parts.length > 1) {
@@ -1614,6 +1707,9 @@ export class RenderService {
             reason: whyItStopped(task.data.status, task.data),
             failureCode: task.data.failureCode,
             failure: task.data.failure,
+            // What it cost, from the same answer that says it failed. Usually
+            // nothing — which is the number the ledger was getting wrong.
+            charged: task.data.charged,
           };
         }
         const url = task.data.output[0];
@@ -1623,8 +1719,13 @@ export class RenderService {
 
         mkdirSync(dirname(to), { recursive: true });
         const downloaded = await backend.download(url, to);
-        if (!downloaded.ok) return stopped(downloaded.failure.message);
-        return { ok: true };
+        if (!downloaded.ok) {
+          // The generation SUCCEEDED and was charged for; only the download
+          // broke. The charge is carried onto the record anyway, or the failure
+          // to fetch a file would erase the credits that made it.
+          return { ...stopped(downloaded.failure.message), charged: task.data.charged };
+        }
+        return { ok: true, charged: task.data.charged };
       }
 
       if (attempt >= this.#giveUpAfterPolls) {
@@ -1682,10 +1783,11 @@ export class RenderService {
     record: RenderRecord,
     at: number | null,
     reason: string,
-    said: { readonly failureCode: string | null; readonly failure: string | null } = {
-      failureCode: null,
-      failure: null,
-    },
+    said: {
+      readonly failureCode: string | null;
+      readonly failure: string | null;
+      readonly charged: number | null;
+    } = { failureCode: null, failure: null, charged: null },
   ): void {
     // Read from disk rather than from the caller's copy: `#patch` writes each
     // half's progress as it happens, so the file knows about halves that were
@@ -1707,7 +1809,13 @@ export class RenderService {
             // The upstream words go on the generation they were said about, and
             // nowhere else: a half that was never submitted has no refusal of
             // its own, and copying one onto it would invent evidence.
-            ...(index === at ? { failureCode: said.failureCode, failure: said.failure } : {}),
+            ...(index === at
+              ? { failureCode: said.failureCode, failure: said.failure, charged: said.charged }
+              : {}),
+            // A generation that never reached Runway was charged nothing, and
+            // that is a fact rather than an assumption: `wasBought` is false
+            // for it, so it is not in the total either way. It stays `null`,
+            // which says "nobody ever told us a number".
           },
     );
     const settled: RenderRecord = {
@@ -1975,6 +2083,13 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
     status: status === "ready" ? "ready" : status === "rendering" ? "rendering" : "failed",
     failureCode: null,
     failure: null,
+    // The record's own total, which for a sidecar with no `parts` IS this one
+    // generation's charge. Every record written before `syl-o0vy` holds a
+    // rate-card estimate here rather than a charge, and that is exactly what it
+    // is: the best number anyone wrote down at the time. It is kept rather than
+    // nulled, because a back catalogue with no numbers at all is a worse answer
+    // than one whose old numbers are estimates.
+    charged: credits,
   });
 
   if (missing.length > 0 || framing === null || status === null || duration === null) {
@@ -2017,6 +2132,13 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
       reason,
       credits,
       usd,
+      // Derived from the halves rather than read, so a sidecar written before
+      // the estimate and the charge were separate fields still answers the
+      // question. Its `credits` WAS an estimate; this is where that reading
+      // belongs now.
+      estimated: parts.some((part) => part.credits === null)
+        ? null
+        : parts.reduce((total, part) => total + (part.credits ?? 0), 0),
       video,
       parts,
     },
@@ -2088,6 +2210,8 @@ function partsFrom(
     const credits = part["credits"];
     const failureCode = part["failureCode"];
     const failure = part["failure"];
+    const charged = part["charged"];
+    const estimate = typeof credits === "number" && Number.isFinite(credits) ? credits : null;
     parts.push({
       taskId: typeof taskId === "string" ? taskId : null,
       prompt,
@@ -2095,16 +2219,43 @@ function partsFrom(
       first,
       last: typeof last === "string" ? last : null,
       video: typeof video === "string" ? video : null,
-      credits: typeof credits === "number" && Number.isFinite(credits) ? credits : null,
+      credits: estimate,
       status: partStatusFrom(part["status"], typeof video === "string", status),
       // `null` for every sidecar written before we kept these, which is the
       // truth about them: what Runway said was never recorded, and inventing a
       // code now would be worse than the silence that made this necessary.
       failureCode: typeof failureCode === "string" ? failureCode : null,
       failure: typeof failure === "string" ? failure : null,
+      // A sidecar written before charges were read has no `charged` on its
+      // halves, and its `credits` is the rate-card estimate that was the best
+      // anyone had. Reading that forward keeps the back catalogue's totals
+      // exactly as they have always been rather than blanking forty renders —
+      // the change is to what NEW records claim, not a re-audit of old ones.
+      charged: chargedFrom(charged, estimate),
     });
   }
   return parts;
+}
+
+/**
+ * What a half was charged, for a sidecar that never recorded a charge.
+ *
+ * The estimate that was written beside it, which is the honest reading: it is
+ * what somebody believed at the time, and it is the number his ledger has
+ * always shown. **This is deliberately NOT a re-audit of the back catalogue.**
+ * Nulling forty renders' worth of totals to say "we never asked Runway" would
+ * take a working, slightly-wrong number and replace it with no number at all,
+ * and the four records where the difference is known and material are named in
+ * `syl-o0vy` rather than silently rewritten here.
+ */
+function chargedFrom(declared: unknown, estimate: number | null): number | null {
+  // ABSENT and NULL are different facts and only one of them takes the
+  // estimate. Absent means the sidecar predates charges being read at all;
+  // `null` means this service wrote one deliberately, because nobody ever told
+  // us a number for that generation — and quietly filling it in with what we
+  // predicted is the exact move this whole change exists to stop.
+  if (declared === undefined) return estimate;
+  return typeof declared === "number" && Number.isFinite(declared) ? declared : null;
 }
 
 /**

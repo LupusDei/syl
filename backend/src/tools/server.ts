@@ -1684,6 +1684,8 @@ async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
       readonly anchor: string | null;
       readonly because: string;
       readonly credits: number | null;
+      /** What it was expected to cost. Not the same question as `credits`. */
+      readonly estimated?: number | null;
       readonly model: string;
       /** `null` on every sidecar written before models could be chosen. */
       readonly keyframes: number | null;
@@ -1729,7 +1731,15 @@ async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
         opening: record.reference,
         face: record.anchor,
         holdsLikeness: record.holdsLikeness,
+        // WHAT IT WAS CHARGED, which since `syl-o0vy` is a number Runway
+        // reported rather than one we worked out from a rate card. `null` means
+        // nobody has said — a render still in flight, or one whose task carried
+        // no cost — and it is never the estimate wearing the ledger's name.
         credits: record.credits,
+        // What it was expected to cost, kept beside it rather than blended into
+        // it. She asks for a render and gets an answer before anything is
+        // charged; this is the figure that exists at that moment.
+        estimated: record.estimated ?? null,
         // WHY IT DID NOT FINISH, in the words of whoever refused it. The log
         // used to carry `status` alone, so five failures with at least two
         // distinct causes were one indistinguishable row repeated five times —

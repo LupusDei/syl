@@ -379,6 +379,7 @@ export function testReadyRenders(): RenderSource {
         last: "renders/reference.png",
         video: "/studio/videos/parts/syl-20260811t090000z-close-1.mp4",
         credits: 60,
+        charged: 60,
         status: "ready",
         failureCode: null,
         failure: null,
@@ -391,6 +392,7 @@ export function testReadyRenders(): RenderSource {
         last: "renders/opening-ribbon.png",
         video: "/studio/videos/parts/syl-20260811t090000z-close-2.mp4",
         credits: 60,
+        charged: 60,
         status: "ready",
         failureCode: null,
         failure: null,
@@ -402,6 +404,7 @@ export function testReadyRenders(): RenderSource {
     startedAt: "2026-08-11T09:00:00.000Z",
     reason: null,
     credits: 120,
+    estimated: 120,
     usd: 1.2,
     video: "/studio/videos/syl-20260811t090000z-close.mp4",
   });

@@ -142,6 +142,22 @@ export interface RunwayTask {
   readonly failureCode: string | null;
   /** What Runway said, in its own words. Trimmed if it is long; never rewritten. */
   readonly failure: string | null;
+  /**
+   * What this task was ACTUALLY CHARGED, as Runway reports it on every task.
+   *
+   * **This field is here so that nobody has to hold a belief about someone
+   * else's billing.** The ledger used to price a render from our own rate card
+   * and a claim copied out of `RUNWAY_API_INDEX.md` — that a moderated
+   * generation still costs full credits with no refund. Observed task data says
+   * a `FAILED` task is charged `0`. Rather than decide which of those is right,
+   * we read the number: it is true under either policy, and it stays true if
+   * Runway changes its policy next month, which no assertion about refunds can.
+   *
+   * `null` when the response carries no cost at all — never `0`, and never the
+   * rate we predicted. **A missing number must not silently become a confident
+   * one**; that is the whole defect this file was fixed for, in miniature.
+   */
+  readonly charged: number | null;
 }
 
 /**
@@ -219,6 +235,20 @@ function excerpt(text: string): string {
  * into a failure message reads as `[object Object]` in the one field whose
  * whole job is to be quotable.
  */
+/**
+ * What a task's `cost` says it was charged, in credits.
+ *
+ * Read strictly, and `null` for anything that is not a number Runway put there.
+ * The alternative — treating an absent or unrecognised `cost` as `0`, or
+ * falling back to what we predicted — is how a number nobody measured ends up
+ * in a total he is asked to trust.
+ */
+function chargeOf(cost: unknown): number | null {
+  if (typeof cost !== "object" || cost === null) return null;
+  const credits = (cost as { credits?: unknown }).credits;
+  return typeof credits === "number" && Number.isFinite(credits) ? credits : null;
+}
+
 function said(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const kept = excerpt(value);
@@ -273,6 +303,7 @@ export class RunwayClient implements RenderBackend {
       artifacts?: unknown;
       failure?: unknown;
       failureCode?: unknown;
+      cost?: unknown;
     };
     // Both spellings, because the API has used both and `generate.mjs` reads
     // both. A finished render whose URL is under the field we did not check
@@ -290,6 +321,7 @@ export class RunwayClient implements RenderBackend {
         // own words loses the explanation.
         failureCode: said(body.failureCode),
         failure: said(body.failure),
+        charged: chargeOf(body.cost),
       },
     };
   }

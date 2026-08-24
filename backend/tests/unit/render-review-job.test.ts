@@ -101,7 +101,7 @@ function render(overrides: Partial<RenderRecord> = {}): RenderRecord {
     // cares about the finished clip, so this is here to make the record whole
     // rather than because anything below reads it.
     parts: [
-      { taskId: "task-1", prompt: "…", duration: 15, first: "renders/opening-ribbon.png", last: null, video: "/studio/syl-2026-08-11-135500-medium.mp4", credits: 120, status: "ready", failureCode: null, failure: null },
+      { taskId: "task-1", prompt: "…", duration: 15, first: "renders/opening-ribbon.png", last: null, video: "/studio/syl-2026-08-11-135500-medium.mp4", credits: 120, charged: 120, status: "ready", failureCode: null, failure: null },
     ],
     scene: "I am turning towards him as the ribbon unravels.",
     holdsLikeness: true,
@@ -109,6 +109,7 @@ function render(overrides: Partial<RenderRecord> = {}): RenderRecord {
     startedAt: instant(AFTERNOON - FIRST_LOOK_MS),
     reason: null,
     credits: 120,
+    estimated: 120,
     usd: 1.2,
     video: "/studio/syl-2026-08-11-135500-medium.mp4",
     ...overrides,

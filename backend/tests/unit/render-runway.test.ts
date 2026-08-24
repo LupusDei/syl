@@ -221,6 +221,69 @@ describe("following a task", () => {
     });
   });
 
+  /**
+   * What it was charged, which is not what we predicted it would cost.
+   *
+   * The ledger used to price a render from our own rate card plus a belief
+   * about Runway's refund policy — that a moderated generation still costs full
+   * credits. Runway reports the actual charge on every task, so the belief was
+   * never needed: reading the number is true under either policy and survives
+   * Runway changing its mind.
+   */
+  describe("what it charged", () => {
+    async function taskSaying(body: Record<string, unknown>) {
+      const client = new RunwayClient({ secret: "sk-test", fetch: async () => jsonResponse(200, body) });
+      return client.task("t");
+    }
+
+    it("should read the charge Runway reports rather than working one out", async () => {
+      const task = await taskSaying({
+        id: "4b3c1a1f",
+        status: "SUCCEEDED",
+        output: ["https://x.invalid/a.mp4"],
+        cost: { credits: 120 },
+      });
+
+      expect(task.ok).toBe(true);
+      if (!task.ok) return;
+      expect(task.data.charged).toBe(120);
+    });
+
+    it("should read a charge of nothing as nothing, not as missing", async () => {
+      // The case the whole change turns on: a FAILED task is charged 0, and the
+      // ledger has been billing him for every one of them.
+      const task = await taskSaying({
+        id: "c7c678c8",
+        status: "FAILED",
+        failureCode: "THIRD_PARTY.INPUT_VALIDATION",
+        failure: "Invalid input",
+        cost: { credits: 0 },
+      });
+
+      expect(task.ok).toBe(true);
+      if (!task.ok) return;
+      expect(task.data.charged).toBe(0);
+    });
+
+    it("should say it does not know rather than guess when there is no cost on the task", async () => {
+      // Never `0` and never the rate we predicted. A missing number that
+      // silently becomes a confident one is this defect in miniature.
+      const task = await taskSaying({ id: "t", status: "SUCCEEDED", output: ["https://x.invalid/a.mp4"] });
+
+      expect(task.ok).toBe(true);
+      if (!task.ok) return;
+      expect(task.data.charged).toBeNull();
+    });
+
+    it("should refuse a cost in a shape it does not recognise instead of reading a number out of it", async () => {
+      const task = await taskSaying({ id: "t", status: "SUCCEEDED", output: [], cost: "120 credits" });
+
+      expect(task.ok).toBe(true);
+      if (!task.ok) return;
+      expect(task.data.charged).toBeNull();
+    });
+  });
+
   it("should read the output url from either field Runway uses for it", async () => {
     const artifacts = new RunwayClient({
       secret: "sk-test",

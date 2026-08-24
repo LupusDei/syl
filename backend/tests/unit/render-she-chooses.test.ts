@@ -72,7 +72,7 @@ function fakeBackend(): RenderBackend & { readonly specs: SubmitSpec[] } {
     task: async () =>
       ({
         ok: true,
-        data: { id: "t", status: "PENDING", output: [], failureCode: null, failure: null } satisfies RunwayTask,
+        data: { id: "t", status: "PENDING", output: [], failureCode: null, failure: null, charged: null } satisfies RunwayTask,
       }) as const,
     download: async () => ({ ok: true, data: 0 }),
   };
@@ -345,6 +345,10 @@ describe("how long the shot is", () => {
     // can choose lands. Taken from the registry rather than typed: `36` was
     // `seedance2`'s, and it stayed right here for exactly as long as
     // `seedance2` was the default.
-    expect(started.record.credits).toBe(6 * (HOUSE_MODEL.creditsPerSecond.sd ?? 0));
+    // The ESTIMATE, which is what exists at the moment she asks: `render_me`
+    // answers immediately and nothing has been charged yet. What it was
+    // actually charged arrives with the task and lands in `credits`.
+    expect(started.record.estimated).toBe(6 * (HOUSE_MODEL.creditsPerSecond.sd ?? 0));
+    expect(started.record.credits).toBeNull();
   });
 });

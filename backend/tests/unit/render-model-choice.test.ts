@@ -67,7 +67,7 @@ function fakeBackend(): RenderBackend & { readonly specs: SubmitSpec[] } {
       return { ok: true, data: { id: `task-${String(specs.length)}` } };
     },
     task: async () =>
-      ({ ok: true, data: { id: "t", status: "PENDING", output: [], failureCode: null, failure: null } satisfies RunwayTask }) as const,
+      ({ ok: true, data: { id: "t", status: "PENDING", output: [], failureCode: null, failure: null, charged: null } satisfies RunwayTask }) as const,
     download: async () => ({ ok: true, data: 0 }),
   };
 }
@@ -161,7 +161,11 @@ describe("RenderService.start", () => {
     const started = await serviceWith(fakeBackend()).start(TEMPLATE);
     expect(started.ok).toBe(true);
     if (!started.ok) return;
-    expect(started.record.credits).toBe((rate ?? 0) * 15);
+    // The ESTIMATE at submission. `credits` is what Runway said it charged,
+    // and at this instant nobody has said anything — a record that answered
+    // with a charge here would be asserting something never observed.
+    expect(started.record.estimated).toBe((rate ?? 0) * 15);
+    expect(started.record.credits).toBeNull();
   });
 
   it("should let her name another model and send that one instead", async () => {
@@ -173,7 +177,7 @@ describe("RenderService.start", () => {
     expect(backend.specs[0]?.model).toBe("seedance2");
     expect(started.record.model).toBe("seedance2");
     // And it is priced at seedance2's rate, not at the house model's.
-    expect(started.record.credits).toBe((modelNote("seedance2")?.creditsPerSecond.sd ?? 0) * 15);
+    expect(started.record.estimated).toBe((modelNote("seedance2")?.creditsPerSecond.sd ?? 0) * 15);
   });
 
   it("should record the model in the sidecar, so the back catalogue stays explicable", async () => {

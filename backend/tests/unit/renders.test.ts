@@ -88,11 +88,26 @@ function jpeg(width: number, height: number, salt: number): Buffer {
 
 /** A backend that always succeeds, and a `ffmpeg` that always writes a still. */
 function fakeBackend(): RenderBackend {
+  // What each generation was asked for, so the charge this reports is the one
+  // Runway would report: the model's rate for THIS generation's seconds. A flat
+  // number would bill a two-part render twice over, which is the arithmetic the
+  // spend assertions below exist to check.
+  const seconds: number[] = [];
   return {
-    submit: async () => ({ ok: true, data: { id: "task-1" } }),
-    task: async () => ({
+    submit: async (spec) => {
+      seconds.push(spec.duration);
+      return { ok: true, data: { id: `task-${String(seconds.length)}` } };
+    },
+    task: async (id) => ({
       ok: true,
-      data: { id: "task-1", status: "SUCCEEDED", output: ["https://cdn.invalid/x.mp4"], failureCode: null, failure: null },
+      data: {
+        id,
+        status: "SUCCEEDED",
+        output: ["https://cdn.invalid/x.mp4"],
+        failureCode: null,
+        failure: null,
+        charged: (HOUSE_MODEL.creditsPerSecond.sd ?? 0) * (seconds[Number(id.replace("task-", "")) - 1] ?? 0),
+      },
     }),
     download: async (_url, to) => {
       mkdirSync(dirname(to), { recursive: true });
@@ -405,7 +420,7 @@ describe("GET /renders/{name}/frames", () => {
       studio: studioAt(root),
       backend: {
         ...fakeBackend(),
-        task: async () => ({ ok: true, data: { id: "task-1", status: "PENDING", output: [], failureCode: null, failure: null } }),
+        task: async () => ({ ok: true, data: { id: "task-1", status: "PENDING", output: [], failureCode: null, failure: null, charged: null } }),
       },
       clock: fixedClock(NOW),
       sleep: () => new Promise<void>(() => undefined),
