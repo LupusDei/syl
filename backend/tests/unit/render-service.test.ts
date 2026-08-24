@@ -1283,6 +1283,13 @@ describe("a render that was half made", () => {
     expect(record?.status).toBe("partial");
     expect(record?.parts[0]?.status).toBe("ready");
     expect(record?.parts[1]?.status).toBe("failed");
+    // NOBODY EVER ASKED RUNWAY WHAT THIS COST, and the record says so rather
+    // than reading its own estimate forward as though it were an observation.
+    // The estimate is still there, in the field that means estimate, and the
+    // total the sidecar has always shown is untouched.
+    expect(record?.parts.map((part) => part.charged)).toEqual([null, null]);
+    expect(record?.parts.map((part) => part.credits)).toEqual([120, 120]);
+    expect(record?.credits).toBe(240);
     // And it is the thing that was actually paid for that she can now look at.
     const looked = await service.frames(name);
     expect(looked.ok).toBe(true);

@@ -2124,13 +2124,11 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
     status: status === "ready" ? "ready" : status === "rendering" ? "rendering" : "failed",
     failureCode: null,
     failure: null,
-    // The record's own total, which for a sidecar with no `parts` IS this one
-    // generation's charge. Every record written before `syl-o0vy` holds a
-    // rate-card estimate here rather than a charge, and that is exactly what it
-    // is: the best number anyone wrote down at the time. It is kept rather than
-    // nulled, because a back catalogue with no numbers at all is a worse answer
-    // than one whose old numbers are estimates.
-    charged: credits,
+    // NOT `credits`. A sidecar with no `parts` predates charges being read, so
+    // its number is an estimate — and putting an estimate in the field that
+    // means "what Runway charged" is how a reader comes to believe a guess was
+    // an observation. The estimate is in `credits`, one line up.
+    charged: null,
   });
 
   if (missing.length > 0 || framing === null || status === null || duration === null) {
@@ -2267,12 +2265,11 @@ function partsFrom(
       // code now would be worse than the silence that made this necessary.
       failureCode: typeof failureCode === "string" ? failureCode : null,
       failure: typeof failure === "string" ? failure : null,
-      // A sidecar written before charges were read has no `charged` on its
-      // halves, and its `credits` is the rate-card estimate that was the best
-      // anyone had. Reading that forward keeps the back catalogue's totals
-      // exactly as they have always been rather than blanking forty renders —
-      // the change is to what NEW records claim, not a re-audit of old ones.
-      charged: chargedFrom(charged, estimate),
+      // `null` for a sidecar written before charges were read, because nobody
+      // ever told us a number for it. The ESTIMATE is above, in the field that
+      // means estimate, and the record's own total is read straight off the
+      // file — so honesty here costs his history nothing.
+      charged: chargedFrom(charged),
     });
   }
   return parts;
@@ -2281,21 +2278,22 @@ function partsFrom(
 /**
  * What a half was charged, for a sidecar that never recorded a charge.
  *
- * The estimate that was written beside it, which is the honest reading: it is
- * what somebody believed at the time, and it is the number his ledger has
- * always shown. **This is deliberately NOT a re-audit of the back catalogue.**
- * Nulling forty renders' worth of totals to say "we never asked Runway" would
- * take a working, slightly-wrong number and replace it with no number at all,
- * and the four records where the difference is known and material are named in
- * `syl-o0vy` rather than silently rewritten here.
+ * **`null`, always — nobody observed one.** This briefly read the rate-card
+ * estimate forward instead, to keep his historical totals from collapsing, and
+ * that was the same defect this file exists to fix wearing yet another costume:
+ * it made `charged` mean *"charged, or what we guessed, whichever we have"*,
+ * which nothing can read correctly. The backfill tool caught it by refusing to
+ * touch four records on the grounds that they "already recorded a charge" —
+ * they recorded an estimate, and the field could not tell anyone which.
+ *
+ * **The totals were never at risk.** {@link recordFrom} reads `credits`
+ * straight off the sidecar; `billed()` only runs when a record is WRITTEN. So a
+ * back catalogue whose halves honestly say "nobody told us" keeps every total
+ * it has ever shown, and the four records where the difference is known and
+ * material are corrected deliberately by `render/backfill-charges.ts` rather
+ * than silently by a reader.
  */
-function chargedFrom(declared: unknown, estimate: number | null): number | null {
-  // ABSENT and NULL are different facts and only one of them takes the
-  // estimate. Absent means the sidecar predates charges being read at all;
-  // `null` means this service wrote one deliberately, because nobody ever told
-  // us a number for that generation — and quietly filling it in with what we
-  // predicted is the exact move this whole change exists to stop.
-  if (declared === undefined) return estimate;
+function chargedFrom(declared: unknown): number | null {
   return typeof declared === "number" && Number.isFinite(declared) ? declared : null;
 }
 
