@@ -6,6 +6,7 @@ import {
   MCP_PROTOCOL_VERSION,
   parseMcpBody,
   READ_LIMIT_MAX,
+  UNREADABLE_EXCERPT_MAX,
   type AdjutantClientOptions,
   type InboundMessage,
 } from "../../src/agents/adjutant-client.js";
@@ -1063,5 +1064,130 @@ describe("the timestamps Adjutant hands back", () => {
     // A fabricated timestamp is a lie told confidently. A visibly odd string is
     // a thing somebody notices.
     expect(adjutantTimeToIso("sometime last week")).toBe("sometime last week");
+  });
+});
+
+/** A `tools/call` answer whose `content[0].text` is NOT JSON. */
+function rawToolAnswer(text: string, id = 2): Canned {
+  return {
+    headers: { "content-type": "text/event-stream" },
+    text: sse({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text }] } }),
+  };
+}
+
+/**
+ * **A parse failure must report what it failed to parse.**
+ *
+ * This is the diagnosability half of the `direct_message` outage, and on its
+ * own it cost more than the bug did. Adjutant reports an unknown tool as
+ * ordinary prose; the client ran `JSON.parse` over it, threw, and said
+ * *"Adjutant's answer to ask X was not readable."*
+ *
+ * Every word of that is true, and it describes **the wrong side of the call.**
+ * It is a statement about our parser, offered in the place where the cause
+ * should be. The cause was in the discarded text the whole time — the tool does
+ * not exist — and Syl repeated the useless sentence hourly for five hours while
+ * it sent one reader to look at the transport and another to check whether
+ * Adjutant was down. Neither was wrong to look there; the message told them to.
+ *
+ * A message about the reader's failure, standing in for the thing read, is
+ * worse than no message: it is confidently about the wrong subject, so it does
+ * not merely fail to help, it actively misdirects.
+ */
+describe("an answer that cannot be read", () => {
+  it("should quote the unreadable text, so the cause is in the sentence", async () => {
+    // THE regression test, with the exact bytes from the outage. The failure
+    // must carry the unknown-tool error, because that is the sentence that
+    // would have ended a day-long outage in seconds.
+    const { client } = clientWith([
+      initializeAnswer(),
+      acceptedAnswer,
+      rawToolAnswer("MCP error -32602: Tool direct_message not found"),
+    ]);
+
+    const result = await client.ask("treasurer", "What does his insurance cost?");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.kind).toBe("malformed");
+      expect(result.failure.message).toContain("Tool direct_message not found");
+      // And still says whose failure it was and which operation did not happen.
+      expect(result.failure.message).toMatch(/not readable/iu);
+      expect(result.failure.message).toContain("ask treasurer");
+    }
+  });
+
+  it("should bound how much of it she repeats", async () => {
+    // This reaches a turn and eventually him, so an unbounded server body in
+    // her mouth is its own problem. Truncation is not a licence to drop it,
+    // which is effectively what the old sentence did.
+    const { client } = clientWith([
+      initializeAnswer(),
+      acceptedAnswer,
+      rawToolAnswer("x".repeat(5_000)),
+    ]);
+
+    const result = await client.ask("treasurer", "Anything.");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.message.length).toBeLessThan(UNREADABLE_EXCERPT_MAX + 200);
+      expect(result.failure.message).toContain("xxx");
+    }
+  });
+
+  it("should say an EMPTY answer is empty, not quote nothing at it", async () => {
+    // "It said: " followed by nothing is a worse sentence than the one it
+    // replaced. Nothing-came-back and something-unreadable-came-back have
+    // different causes and deserve different sentences.
+    const { client } = clientWith([initializeAnswer(), acceptedAnswer, rawToolAnswer("   ")]);
+
+    const result = await client.ask("treasurer", "Anything.");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.message).toMatch(/empty/iu);
+      expect(result.failure.message).not.toMatch(/It said:\s*$/u);
+    }
+  });
+
+  it("should quote a non-object answer too, not just an unparseable one", async () => {
+    // Valid JSON that is not an object — a bare string, a number, `null`. The
+    // same rule applies: say what came back. Rendered through `JSON.stringify`
+    // so a quoted string is visibly a quoted string rather than passing for
+    // prose.
+    const { client } = clientWith([
+      initializeAnswer(),
+      acceptedAnswer,
+      rawToolAnswer('"rate limited"'),
+    ]);
+
+    const result = await client.ask("treasurer", "Anything.");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.kind).toBe("malformed");
+      expect(result.failure.message).toContain("rate limited");
+    }
+  });
+
+  it("should keep reporting a structured refusal as a refusal, not as unreadable", async () => {
+    // Adjutant reports a refused tool call as `{"error": "..."}` inside a
+    // successful HTTP 200. That IS readable and must stay `refused`: the new
+    // quoting is for text that could not be parsed at all, and must not
+    // swallow the case that already worked.
+    const { client } = clientWith([
+      initializeAnswer(),
+      acceptedAnswer,
+      toolAnswer({ error: "Coordination tools are restricted to the adjutant agent" }),
+    ]);
+
+    const result = await client.ask("treasurer", "Anything.");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.kind).toBe("refused");
+      expect(result.failure.message).toContain("restricted to the adjutant agent");
+    }
   });
 });

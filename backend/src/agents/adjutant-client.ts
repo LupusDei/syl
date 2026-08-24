@@ -63,6 +63,40 @@ import { mayReach, notOnTheRoster } from "./roster.js";
 /** The MCP revision Adjutant answered on 2.1.226-era 0.2.2. */
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 
+/**
+ * Every Adjutant tool this client calls, in one place a test can read.
+ *
+ * `tests/unit/adjutant-tools-exist.test.ts` asserts each of these appears in a
+ * captured `tools/list`, and scans this file for a bare string literal reaching
+ * `#callTool`, so a tool name cannot be added without passing through here.
+ *
+ * ## Why the constant exists at all
+ *
+ * `ask` called `direct_message` for over a day against a running Adjutant that
+ * does not register it, and every `ask_agent` failed — seven attempts, hourly,
+ * with findings queued behind them. **The client was right.** `direct_message`
+ * is built, tested and correct on the Adjutant branch
+ * `feat/syl-j8fa-direct-message`; it has simply never been merged, so
+ * `messaging.ts` on main registers it zero times. Our two halves shipped
+ * separately, and nothing between a string literal here and a tool registry in
+ * another service could notice.
+ *
+ * So the tool names are declared rather than scattered, and a test holds them
+ * against what a live Adjutant actually advertises. See that test for why the
+ * red it produces must be fixed by MERGING and not by re-capturing.
+ */
+export const ADJUTANT_TOOLS = {
+  /**
+   * Deliver to an agent's live session AND report how many injections landed.
+   *
+   * Deliberately not `send_message` — see {@link AdjutantClient.ask} for the
+   * argument, which is `syl-5kdv` and is the Commander's explicit preference.
+   * **Pending the Adjutant merge above**, so the guard test is currently red on
+   * purpose.
+   */
+  directMessage: "direct_message",
+} as const;
+
 /** Where Adjutant's MCP server lives, relative to its base URL. */
 export const MCP_PATH = "/mcp";
 
@@ -380,6 +414,32 @@ function failure(
   return { ok: false, failure: { kind, operation, message, retryable } };
 }
 
+/** How much of an unreadable answer to quote back. Enough to name the cause. */
+export const UNREADABLE_EXCERPT_MAX = 300;
+
+/**
+ * "I could not read this, and here is what it was."
+ *
+ * The second half is the whole point — see the call site in `#toolPayload` for
+ * the day it cost. An empty body is called out as empty rather than rendered as
+ * a pair of quotes with nothing between them, because "it said nothing" and "it
+ * said something I could not read" are different faults with different causes
+ * and send a reader to different places.
+ */
+function unreadable(operation: string, raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return `Adjutant's answer to ${operation} was empty, so there is nothing to say happened.`;
+  }
+
+  const excerpt =
+    trimmed.length > UNREADABLE_EXCERPT_MAX
+      ? `${trimmed.slice(0, UNREADABLE_EXCERPT_MAX)}…`
+      : trimmed;
+
+  return `Adjutant's answer to ${operation} was not readable. It said: ${excerpt}`;
+}
+
 /**
  * `n sessions on record`, or `one session on record`.
  *
@@ -598,7 +658,7 @@ export class AdjutantClient {
     // lets an answer be matched back to the question that provoked it — so the
     // delivering tool and the correlated one have to be the same call.
     const called = await this.#callTool(
-      "direct_message",
+      ADJUTANT_TOOLS.directMessage,
       {
         to: who,
         body,
@@ -884,11 +944,30 @@ export class AdjutantClient {
     try {
       payload = JSON.parse(text);
     } catch {
-      return failure("malformed", operation, `Adjutant's answer to ${operation} was not readable.`, false);
+      // **A PARSE FAILURE MUST REPORT WHAT IT FAILED TO PARSE.**
+      //
+      // This sentence used to end at "was not readable", and that cost a day.
+      // Adjutant reports an unknown tool as ordinary prose — `MCP error -32602:
+      // Tool direct_message not found` — which is not JSON, so `JSON.parse`
+      // threw and this branch reported OUR failure to read the answer. Every
+      // word of it was true and it described the wrong side of the call: the
+      // diagnosis was sitting in `text`, discarded unread, seven times over
+      // five hours. It sent one reader to look at the transport and another to
+      // check whether Adjutant was down, and the real answer — *the tool does
+      // not exist* — was in the string we threw away.
+      //
+      // So the raw text goes in the sentence. Truncated, because this reaches
+      // a turn and eventually him — but present, because "not readable" plus
+      // the thing she could not read is a diagnosis, and "not readable" alone
+      // is a dead end pointing at the wrong subject.
+      return failure("malformed", operation, unreadable(operation, text), false);
     }
 
     if (typeof payload !== "object" || payload === null) {
-      return failure("malformed", operation, `Adjutant's answer to ${operation} was not readable.`, false);
+      // Valid JSON that is not an object — a bare string, a number, `null`.
+      // Same rule: say what came back. `JSON.stringify` rather than the raw
+      // text so a quoted string is visibly a quoted string.
+      return failure("malformed", operation, unreadable(operation, JSON.stringify(payload)), false);
     }
 
     // Adjutant reports a refused tool call as `{"error": "..."}` inside a
