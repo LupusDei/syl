@@ -5,7 +5,7 @@ import type { SylEvent } from "../harness/protocol.js";
 import { isWithinQuietHours, wallClockIn, type QuietHours } from "../harness/schedule.js";
 import type { TurnResult } from "../harness/session.js";
 import type { Logger } from "../ops/logging.js";
-import type { RenderRecord } from "../render/render-service.js";
+import { salvagedParts, type RenderRecord } from "../render/render-service.js";
 import { instant } from "../services/clock.js";
 import type { JobHandler, JobResult } from "../services/job-runner.js";
 import type { JobStore } from "../services/job-store.js";
@@ -132,7 +132,16 @@ export const SENDS_TO_HIM: readonly string[] = ["show_him"];
 const SUMMARY_LIMIT = 500;
 
 /** What the render turned out to be, at the moment she is woken. */
-export type ReviewOutcome = "ready" | "failed" | "gone" | "never_finished";
+/**
+ * What became of the render she is being woken about.
+ *
+ * `partial` is the fifth, and it exists because the other four made her lie to
+ * herself. A render whose first generation SUCCEEDED at 120 credits and whose
+ * second FAILED for nothing was read as `failed` and she was told *"There is no
+ * clip"* — about a render with four seconds of finished video on disk. That
+ * sentence is the whole input to what she decides next.
+ */
+export type ReviewOutcome = "ready" | "partial" | "failed" | "gone" | "never_finished";
 
 // ---------------------------------------------------------------------------
 // The catalogue entry
@@ -247,8 +256,17 @@ export interface RenderReviewMoment {
   /** Why she made it, carried from the render's own record. */
   readonly because: string;
   readonly outcome: ReviewOutcome;
-  /** Why the render failed, when it did. */
+  /**
+   * Why the render failed, when it did.
+   *
+   * Carries Runway's own words as well as ours since `syl-render-partial` —
+   * what the provider said, in quotes, with its code. She is the one deciding
+   * what to do next, and *"Runway ended this render as FAILED"* is not
+   * something anyone can decide anything from.
+   */
   readonly reason: string | null;
+  /** How many generations were made and are on disk. Zero for most outcomes. */
+  readonly salvaged: number;
   /** Her own words for the shot, so she is reminded what she was going for. */
   readonly scene: string;
   /** Whether this framing is one her reference can anchor. See `render/framing.ts`. */
@@ -310,6 +328,23 @@ function outcomeClause(moment: RenderReviewMoment): string {
         `If you do not, say so and stop. Not sending is a real answer and most renders should ` +
         `get it; you made this to see whether it was any good, and "it was not" is a finding ` +
         `rather than a failure.`,
+    ].join("\n\n");
+  }
+
+  if (moment.outcome === "partial") {
+    // Never "there is no clip". Something was made and something was charged
+    // for, and the two things she needs are that it is there and that it is not
+    // the thing she asked for.
+    const made =
+      moment.salvaged === 1 ? "One generation of it" : `${String(moment.salvaged)} generations of it`;
+    return [
+      `It did not finish as asked: ${moment.reason ?? "no reason was recorded."}`,
+      `${made} was made, paid for, and is on disk. \`see_myself\` with this render's name pulls ` +
+        `stills out of the part that survived and hands them to you as pictures, so you can see ` +
+        `what you actually got — it will tell you which part of how many you are looking at.`,
+      `What you cannot do is send it: half a render is not the clip you asked for, and ` +
+        `\`show_him\` will refuse it. So look, decide whether the idea is worth making again, ` +
+        `and say what you concluded. Nothing is lost by leaving it — it stays where it is.`,
     ].join("\n\n");
   }
 
@@ -538,7 +573,18 @@ export function createRenderReviewHandler(deps: RenderReviewDeps): JobHandler {
     }
 
     const outcome: ReviewOutcome =
-      record === null ? "gone" : stillGoing ? "never_finished" : record.status === "ready" ? "ready" : "failed";
+      record === null
+        ? "gone"
+        : stillGoing
+          ? "never_finished"
+          : record.status === "ready"
+            ? "ready"
+            : // NOT folded into `failed`. The prompt for a failure tells her
+              // there is no clip, which about a half-made render is false and
+              // is the sentence she decides from.
+              record.status === "partial"
+              ? "partial"
+              : "failed";
 
     // OUT OF THE DUE SET BEFORE THE TURN, NOT AFTER. A turn that sends and then
     // dies would otherwise leave a watch that is still due, and the next pass
@@ -563,6 +609,7 @@ export function createRenderReviewHandler(deps: RenderReviewDeps): JobHandler {
       because: watch.because,
       outcome,
       reason: record?.reason ?? null,
+      salvaged: record === null ? 0 : salvagedParts(record).length,
       scene: record?.scene ?? "",
       holdsLikeness: record?.holdsLikeness ?? false,
       spentToday,
@@ -680,6 +727,11 @@ function abandonedNote(watch: RenderWatch): string {
 function fallbackNote(outcome: ReviewOutcome, spoke: boolean): string {
   if (spoke) return "Sent it, without saying why.";
   if (outcome === "ready") return "Looked at it and did not send it, without saying why.";
+  // A half-made render HAS footage, so the note that stands in for her words
+  // must not deny it — this line is the only record of what became of it.
+  if (outcome === "partial") {
+    return "Only part of it was made, and nothing was said about what to do with that part.";
+  }
   return "There was no clip to send, and nothing was said about it.";
 }
 

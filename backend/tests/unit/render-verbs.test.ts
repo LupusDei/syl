@@ -849,6 +849,118 @@ describe("looking at more than one render", () => {
     expect(envelope["spent"]).toEqual(SPEND);
   });
 
+  /**
+   * The log used to carry `status: "failed"` and nothing else about it — no
+   * reason, no code, no words from anyone. So five failures with at least two
+   * distinct causes were one indistinguishable row repeated, and the only way
+   * to tell them apart was to query Runway by hand.
+   */
+  it("should say why a render did not finish, in the words of whoever refused it", async () => {
+    const refused = {
+      ...RECORD,
+      name: "syl-20260823t181519158z-close-portrait",
+      status: "partial",
+      video: null,
+      reason:
+        "Runway ended this render as FAILED. The model provider declined the prompt: " +
+        '"blocked by this model provider\'s content moderation system" ' +
+        "(INPUT_PREPROCESSING.SAFETY.THIRD_PARTY).",
+      parts: [
+        { taskId: "492915a3", status: "ready", video: "/home/syl/renders/parts/a-1.mp4", credits: 120, failureCode: null, failure: null },
+        {
+          taskId: "b38a00cb",
+          status: "failed",
+          video: null,
+          credits: 120,
+          failureCode: "INPUT_PREPROCESSING.SAFETY.THIRD_PARTY",
+          failure: "blocked by this model provider's content moderation system",
+        },
+      ],
+    };
+    const api = fakeApi({
+      "/renders": () => ok({ items: [refused], unreadable: [], spend: SPEND, verdicts: [] }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", { of: "renders" });
+
+    const row = (envelope["subject"] as { items?: readonly Record<string, unknown>[] }).items?.[0];
+    expect(row?.["status"]).toBe("partial");
+    expect(String(row?.["reason"])).toContain("content moderation");
+    // The KIND, beside the code, because they are different problems with
+    // different owners: a moderation block is somebody's decision about the
+    // prompt and is not a bug, and reading it as one sends her hunting for a
+    // defect that is not there.
+    expect(row?.["failureKind"]).toBe("moderation");
+    expect(row?.["failureCode"]).toBe("INPUT_PREPROCESSING.SAFETY.THIRD_PARTY");
+    // And that something survived, so a render she paid for is findable from
+    // the log rather than only from the file on disk.
+    expect(row?.["salvaged"]).toBe(1);
+  });
+
+  it("should not read an invalid-input rejection as a moderation block, or the other way round", async () => {
+    const rejected = {
+      ...RECORD,
+      status: "failed",
+      video: null,
+      reason: 'Runway ended this render as FAILED. Runway rejected what was sent: "Invalid input" (THIRD_PARTY.INPUT_VALIDATION).',
+      parts: [
+        {
+          taskId: "ba127d05",
+          status: "failed",
+          video: null,
+          credits: 240,
+          failureCode: "THIRD_PARTY.INPUT_VALIDATION",
+          failure: "Invalid input",
+        },
+      ],
+    };
+    const api = fakeApi({
+      "/renders": () => ok({ items: [rejected], unreadable: [], spend: SPEND, verdicts: [] }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", { of: "renders" });
+
+    const row = (envelope["subject"] as { items?: readonly Record<string, unknown>[] }).items?.[0];
+    expect(row?.["failureKind"]).toBe("rejected_input");
+    expect(row?.["salvaged"]).toBe(0);
+  });
+
+  it("should tell her when the stills she is holding are half a render rather than the clip", async () => {
+    // She is being shown four pictures. Without this she has no way to know
+    // they came out of four seconds of an eight-second render that was never
+    // finished, and she would judge the shot as though it were the shot.
+    const api = fakeApi({
+      "/renders/latest/frames": () =>
+        ok({
+          render: { ...RECORD, status: "partial", video: null },
+          looked: { video: "/home/syl/renders/parts/a-1.mp4", seconds: 4, part: 1, parts: 2 },
+          frames: [{ atSeconds: 0.6, mimeType: "image/jpeg", base64: FRAME_B64, path: "/f.jpg" }],
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
+
+    const subject = envelope["subject"] as { showing?: { part?: number; of?: number; seconds?: number } };
+    expect(subject.showing?.part).toBe(1);
+    expect(subject.showing?.of).toBe(2);
+    expect(subject.showing?.seconds).toBe(4);
+  });
+
+  it("should say nothing about halves when what she is shown is the whole clip", async () => {
+    const api = fakeApi({
+      "/renders/latest/frames": () =>
+        ok({
+          render: RECORD,
+          looked: null,
+          frames: [{ atSeconds: 0.6, mimeType: "image/jpeg", base64: FRAME_B64, path: "/f.jpg" }],
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", {});
+
+    expect((envelope["subject"] as { showing?: unknown }).showing).toBeNull();
+  });
+
   it("should still look at one render when she names none of the three", async () => {
     const api = fakeApi({
       "/renders/latest/frames": () =>

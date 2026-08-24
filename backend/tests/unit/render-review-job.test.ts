@@ -101,7 +101,7 @@ function render(overrides: Partial<RenderRecord> = {}): RenderRecord {
     // cares about the finished clip, so this is here to make the record whole
     // rather than because anything below reads it.
     parts: [
-      { taskId: "task-1", prompt: "…", duration: 15, first: "renders/opening-ribbon.png", last: null, video: "/studio/syl-2026-08-11-135500-medium.mp4", credits: 120 },
+      { taskId: "task-1", prompt: "…", duration: 15, first: "renders/opening-ribbon.png", last: null, video: "/studio/syl-2026-08-11-135500-medium.mp4", credits: 120, status: "ready", failureCode: null, failure: null },
     ],
     scene: "I am turning towards him as the ribbon unravels.",
     holdsLikeness: true,
@@ -520,6 +520,35 @@ describe("when the render failed", () => {
     expect(watches.get(created.id)?.state).toBe("decided");
   });
 
+  it("should never tell her there is no clip when a half of one was made and paid for", async () => {
+    // The 23 August shape: part 0 SUCCEEDED at 120 credits and part 1 FAILED
+    // for nothing. Waking her with "there is no clip" is a false statement
+    // about her own work — four seconds of finished video are on disk — and it
+    // is the sentence that decides what she does next.
+    const { jobs, watches } = stores();
+    const job = ensureRenderReviewJob(jobs, AFTERNOON);
+    watches.watch({ renderName: RENDER, because: "…", checkAt: AFTERNOON });
+    const { handler, voice: speaker } = harness({
+      watches,
+      jobs,
+      record: render({
+        status: "partial",
+        video: null,
+        reason: 'Runway ended this render as FAILED. Runway rejected what was sent: "Invalid input" (THIRD_PARTY.INPUT_VALIDATION).',
+      }),
+    });
+
+    await handler(contextFor(jobs, job, AFTERNOON));
+
+    expect(speaker.prompts).toHaveLength(1);
+    const prompt = speaker.prompts[0] ?? "";
+    expect(prompt).not.toMatch(/there is no clip/iu);
+    // What Runway actually said reaches her, not only our word for it.
+    expect(prompt).toContain("Invalid input");
+    // And she is told she can go and look at what survived.
+    expect(prompt).toContain("see_myself");
+  });
+
   it("should wake her when the render has vanished entirely", async () => {
     // A sidecar that is gone, or a name that no longer resolves. Not silence:
     // she asked for something, and the honest answer is that it is not there.
@@ -659,6 +688,7 @@ describe("renderReviewPrompt", () => {
       because: "…",
       outcome: "ready",
       reason: null,
+      salvaged: 0,
       scene: "…",
       holdsLikeness: true,
       spentToday: 0,
@@ -682,6 +712,7 @@ describe("renderReviewPrompt", () => {
       because: "…",
       outcome: "ready",
       reason: null,
+      salvaged: 0,
       scene: "…",
       holdsLikeness: true,
       spentToday: 0,
@@ -689,6 +720,33 @@ describe("renderReviewPrompt", () => {
     });
 
     expect(prompt).toMatch(/nothing (has )?(reached|gone to) him/i);
+  });
+
+  it("should say what survived a half-made render, and that it cannot be sent as it stands", () => {
+    // Two things at once, and both are needed: the footage exists and can be
+    // looked at, and `show_him` still refuses it because half a render is not
+    // the clip she asked for. Saying only the first invites a sending that
+    // cannot happen; saying only the second is the old lie.
+    const prompt = renderReviewPrompt({
+      now: AFTERNOON,
+      tz: TZ,
+      quiet: QUIET,
+      inQuietHours: false,
+      renderName: RENDER,
+      because: "…",
+      outcome: "partial",
+      reason: 'Runway ended this render as FAILED. Runway rejected what was sent: "Invalid input" (THIRD_PARTY.INPUT_VALIDATION).',
+      scene: "…",
+      holdsLikeness: true,
+      salvaged: 1,
+      spentToday: 0,
+      allowance: 4,
+    });
+
+    expect(prompt).toMatch(/half|part/iu);
+    expect(prompt).toContain("Invalid input");
+    expect(prompt).toContain("see_myself");
+    expect(prompt).not.toMatch(/there is no clip/iu);
   });
 
   it("should warn her when the framing was never one her reference could hold", () => {
@@ -704,6 +762,7 @@ describe("renderReviewPrompt", () => {
       because: "…",
       outcome: "ready",
       reason: null,
+      salvaged: 0,
       scene: "…",
       holdsLikeness: false,
       spentToday: 0,

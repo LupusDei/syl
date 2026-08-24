@@ -72,7 +72,7 @@ function fakeBackend(): RenderBackend & { readonly specs: SubmitSpec[] } {
     task: async () =>
       ({
         ok: true,
-        data: { id: "t", status: "PENDING", output: [] } satisfies RunwayTask,
+        data: { id: "t", status: "PENDING", output: [], failureCode: null, failure: null } satisfies RunwayTask,
       }) as const,
     download: async () => ({ ok: true, data: 0 }),
   };

@@ -10,6 +10,7 @@ import { mayReach, notOnTheRoster } from "../agents/roster.js";
 import { verifyUrgency } from "../harness/urgency.js";
 import { canAnchorLikeness, HOUSE_MODEL, MODELS, type ModelNote } from "../render/models.js";
 import { sightingOf } from "../render/pictures.js";
+import { failureKindOf, type FailureKind } from "../render/runway.js";
 
 import { SylApiClient, type ToolFailure, type ToolResult } from "./client.js";
 import { TOOLS, type ToolSchema } from "./schemas.js";
@@ -1507,6 +1508,13 @@ const seeMyself: ToolHandler = async (input, context) => {
   const looked = await context.client.get<{
     render: RenderRow;
     frames: readonly FrameRow[];
+    /** Which footage the stills came out of. Absent or `null` means the clip. */
+    looked?: {
+      readonly part: number;
+      readonly parts: number;
+      readonly seconds: number;
+      readonly video: string;
+    } | null;
     verdicts?: readonly {
       id: string;
       verdict: string;
@@ -1521,6 +1529,7 @@ const seeMyself: ToolHandler = async (input, context) => {
   if (!looked.ok) return refused("see_myself", looked.failure);
 
   const { render, frames, verdicts } = looked.data;
+  const showing = looked.data.looked ?? null;
 
   // WHAT SHE ALREADY CONCLUDED, arriving with the pictures rather than from a
   // second call. This is the half that makes `judge_render` a loop rather than
@@ -1562,6 +1571,19 @@ const seeMyself: ToolHandler = async (input, context) => {
       // somebody else, and she should know that before she judges it.
       holdsLikeness: render.holdsLikeness,
       duration: render.duration,
+      /**
+       * Whether these stills are the render, or one part of one that was never
+       * finished.
+       *
+       * `null` for the ordinary case. A jpeg does not say which it came out of,
+       * so without this she would judge four seconds of an unfinished
+       * eight-second render as though it were the shot she asked for — and the
+       * `duration` above would say eight while the pictures span four.
+       */
+      showing:
+        showing === null
+          ? null
+          : { part: showing.part, of: showing.parts, seconds: showing.seconds },
       // Where in the clip each picture came from, in the order they arrive.
       // Without it she has four images and no idea which one is the end.
       at: frames.map((frame) => frame.atSeconds),
@@ -1665,6 +1687,14 @@ async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
       readonly model: string;
       /** `null` on every sidecar written before models could be chosen. */
       readonly keyframes: number | null;
+      /** Why it did not finish, when it did not. Carries Runway's words as well as ours. */
+      readonly reason: string | null;
+      readonly parts?: readonly {
+        readonly status?: string;
+        readonly video?: string | null;
+        readonly failureCode?: string | null;
+        readonly failure?: string | null;
+      }[];
     })[];
     unreadable?: readonly { name: string; why: string }[];
     verdicts?: readonly { render: string; verdict: string; at: string }[];
@@ -1700,6 +1730,21 @@ async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
         face: record.anchor,
         holdsLikeness: record.holdsLikeness,
         credits: record.credits,
+        // WHY IT DID NOT FINISH, in the words of whoever refused it. The log
+        // used to carry `status` alone, so five failures with at least two
+        // distinct causes were one indistinguishable row repeated five times —
+        // and the only way to tell them apart was to query Runway by hand.
+        reason: record.reason,
+        // The KIND and the CODE beside the sentence, because they are different
+        // problems with different owners. A moderation block is somebody's
+        // decision about the prompt and is not a bug; reading it as one sends
+        // her looking for a defect that is not there.
+        ...refusalOf(record.parts),
+        // How much of it exists. A half-made render is not a lost one, and this
+        // is what makes the footage she paid for findable from her own log.
+        salvaged: (record.parts ?? []).filter(
+          (part) => part.status === "ready" && (part.video ?? null) !== null,
+        ).length,
       })),
       unreadable: looked.data.unreadable ?? [],
       verdicts: looked.data.verdicts ?? [],
@@ -1707,6 +1752,26 @@ async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
     at: null,
     spent: looked.data.spend,
   };
+}
+
+/**
+ * The refusal a render carries, if one of its generations was refused.
+ *
+ * Classified through `failureKindOf` rather than by matching on the string
+ * here: the vocabulary is Runway's, `render/runway.ts` is where it is read, and
+ * a second reader of the same codes is a second thing to keep in step. The
+ * first refused generation is the one reported — a render stops at the first
+ * one, so there is never a second.
+ */
+function refusalOf(
+  parts: readonly { readonly failureCode?: string | null; readonly failure?: string | null }[] = [],
+): { readonly failureKind: FailureKind; readonly failureCode: string | null; readonly said: string | null } | Record<string, never> {
+  const refused = parts.find((part) => (part.failureCode ?? part.failure ?? null) !== null);
+  // Nothing at all rather than three nulls, so a render that finished does not
+  // carry the vocabulary of failure through her whole log.
+  if (refused === undefined) return {};
+  const code = refused.failureCode ?? null;
+  return { failureKind: failureKindOf(code), failureCode: code, said: refused.failure ?? null };
 }
 
 /**

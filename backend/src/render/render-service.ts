@@ -22,7 +22,13 @@ import {
   type KeyframePosition,
   type ModelNote,
 } from "./models.js";
-import { isTerminal, type RenderBackend, type PositionedImage } from "./runway.js";
+import {
+  failureKindOf,
+  isTerminal,
+  type RenderBackend,
+  type PositionedImage,
+  type RunwayTask,
+} from "./runway.js";
 import { isRenderName, RENDER_PREFIX, type Studio } from "./studio.js";
 import { Wardrobe } from "./wardrobe.js";
 
@@ -64,8 +70,26 @@ import { Wardrobe } from "./wardrobe.js";
  * Adding a gate here later is his call, not a refactor.
  */
 
-/** How a render is going. */
-export type RenderStatus = "rendering" | "ready" | "failed";
+/** How one generation went. */
+export type PartStatus = "rendering" | "ready" | "failed";
+
+/**
+ * How a render is going.
+ *
+ * `partial` is the fourth and it was bought at 240 credits. A render made in
+ * two generations whose first SUCCEEDED and whose second FAILED used to be
+ * written down as `failed` with `video: null`, which is every view she has — so
+ * the finished, downloaded, paid-for half sat on disk reachable only by opening
+ * the sidecar by hand. **The asymmetry is what makes it expensive: a failed
+ * generation costs nothing and a successful one costs 120 credits, so what a
+ * flat failure discards is always the part that was paid for.**
+ *
+ * It is deliberately neither of the two states it used to be collapsed into.
+ * Not `ready` — the clip she asked for does not exist, and nothing may send it
+ * or treat it as finished. Not `failed` — that is the claim that nothing came
+ * of it, and something did.
+ */
+export type RenderStatus = PartStatus | "partial";
 
 /**
  * One Runway generation inside a render.
@@ -98,6 +122,26 @@ export interface RenderPart {
   readonly video: string | null;
   /** What this half cost, or `null` where there is no published rate. */
   readonly credits: number | null;
+  /**
+   * How this one generation went, which is not how the render went.
+   *
+   * The distinction the record could not previously make. A render is `partial`
+   * exactly when these disagree, and a reader that cannot see them separately
+   * has to infer the whole story from one word about the whole render — which
+   * is how a paid half came to be recorded as nothing.
+   */
+  readonly status: PartStatus;
+  /**
+   * Runway's own code for refusing this generation, verbatim. `null` otherwise.
+   *
+   * See {@link RunwayTask.failureCode}. It is kept **beside** our own sentence
+   * in {@link RenderRecord.reason} rather than instead of it: ours says what
+   * happened to the render, this says why, and a reader handed only one of them
+   * is the reader this went wrong for.
+   */
+  readonly failureCode: string | null;
+  /** What Runway said about this generation, in its own words. */
+  readonly failure: string | null;
 }
 
 /**
@@ -240,6 +284,24 @@ export interface RenderRecord {
 }
 
 /**
+ * Which footage a look actually went through.
+ *
+ * Carried so that being shown half a render is never indistinguishable from
+ * being shown the render. A `null` in place of one of these says "the clip
+ * itself", and claiming "part 1 of 2" about a finished, joined video would be
+ * the same lie facing the other way.
+ */
+export interface LookedAt {
+  readonly video: string;
+  /** That footage's own length, which is not the render's. */
+  readonly seconds: number;
+  /** Which generation it is, counting from one, as the filenames count. */
+  readonly part: number;
+  /** How many the render was made of, so "1 of 2" reads as the shortfall it is. */
+  readonly parts: number;
+}
+
+/**
  * A sidecar the service cannot read as a record.
  *
  * **Its own state, and neither of the two it used to be mistaken for.** It is
@@ -261,6 +323,15 @@ export interface Spend {
   readonly renders: number;
   readonly ready: number;
   readonly failed: number;
+  /**
+   * Renders that bought something and did not finish.
+   *
+   * Counted separately rather than folded into `failed`, because they are the
+   * ones where money bought footage that exists — and a total that files them
+   * under failures says the money bought nothing. Two of them on 23 August cost
+   * 240 credits between them and produced eight seconds of finished video.
+   */
+  readonly partial: number;
   readonly rendering: number;
   readonly seconds: number;
   readonly credits: number;
@@ -566,6 +637,77 @@ function billed(parts: readonly RenderPart[]): {
   }
   const credits = bought.reduce((total, part) => total + (part.credits ?? 0), 0);
   return { credits, usd: usdOf(credits) };
+}
+
+/**
+ * The generations that were made and are on disk.
+ *
+ * **The answer to "what did the money buy".** Derived from the parts rather
+ * than stored beside them, so it cannot claim footage the record does not name;
+ * a video is written into a part only after a download has succeeded, so the
+ * field is evidence rather than an intention.
+ */
+export function salvagedParts(record: RenderRecord): readonly RenderPart[] {
+  return record.parts.filter((part) => part.status === "ready" && part.video !== null);
+}
+
+/**
+ * Our sentence about a refusal, with Runway's own inside it.
+ *
+ * **Beside, never instead of.** Ours says what happened to the render; theirs
+ * says why, and the reason five failures across two durations were
+ * indistinguishable — and a wrong cause reported for them with confidence — is
+ * that only ours was ever written down.
+ *
+ * The kinds are worded apart on purpose. A moderation block is a decision
+ * somebody else made about the prompt and there is nothing here to fix; reading
+ * it as a fault sends her hunting for a defect in a system that is working.
+ */
+function whyItStopped(status: string, task: RunwayTask): string {
+  const ours = `Runway ended this render as ${status}.`;
+  if (task.failure === null && task.failureCode === null) return ours;
+
+  // Their words in quotes and their code in brackets, so both survive whole and
+  // a reader can tell which part of the sentence is ours.
+  const quoted = task.failure === null ? "" : ` "${task.failure}"`;
+  const coded = task.failureCode === null ? "" : ` (${task.failureCode})`;
+
+  switch (failureKindOf(task.failureCode)) {
+    case "moderation":
+      return (
+        `${ours} The model provider declined the prompt:${quoted}${coded}. That is a decision ` +
+        "about what was asked for, not a fault in the render — there is nothing here to fix, " +
+        "only something to ask for differently."
+      );
+    case "rejected_input":
+      return `${ours} Runway rejected what was sent:${quoted}${coded}.`;
+    case "upstream":
+      return `${ours} Runway's own side broke:${quoted}${coded}.`;
+    default:
+      // A code nobody has classified is quoted and left alone. Filing it under
+      // one of the three above would be a guess she would repeat as fact.
+      return `${ours} Runway said:${quoted}${coded}.`;
+  }
+}
+
+/**
+ * How waiting for one generation ended.
+ *
+ * A value rather than a side effect, so what Runway said can reach the half it
+ * was said about — see `#await`.
+ */
+type Arrival =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason: string;
+      readonly failureCode: string | null;
+      readonly failure: string | null;
+    };
+
+/** An end with no upstream words behind it: ours, and only ours. */
+function stopped(reason: string): Arrival {
+  return { ok: false, reason, failureCode: null, failure: null };
 }
 
 /** One generation, planned but not yet sent. Paths are absolute. */
@@ -955,6 +1097,9 @@ export class RenderService {
       // price that silently belonged to the old model is this project's
       // signature defect.
       credits: creditsFor({ model: model.id, seconds: part.duration, ...geometry }),
+      status: "rendering",
+      failureCode: null,
+      failure: null,
     }));
 
     const record: RenderRecord = {
@@ -1062,6 +1207,10 @@ export class RenderService {
       renders: records.length,
       ready: records.filter((record) => record.status === "ready").length,
       failed: records.filter((record) => record.status === "failed").length,
+      // Counted apart from the failures, because these bought footage that
+      // exists. Filing them under `failed` is the ledger saying the money
+      // bought nothing.
+      partial: records.filter((record) => record.status === "partial").length,
       rendering: records.filter((record) => record.status === "rendering").length,
       seconds,
       credits,
@@ -1080,9 +1229,23 @@ export class RenderService {
    * Refuses an unfinished one rather than answering with no frames: "there is
    * nothing to see yet" and "I looked and there is nothing there" are different
    * facts about her own face, and only one of them means wait.
+   *
+   * **A `partial` render is looked at, not refused.** This verb is what "the
+   * footage is still reachable" has to mean: she cannot watch an mp4 — she
+   * looks at stills pulled out of one — so a half she cannot pull a still from
+   * is a half she cannot see, whatever the sidecar says is on disk. What comes
+   * back then is the surviving generation, with {@link LookedAt} saying which
+   * one it was, so she is never shown half a render believing it is the clip.
    */
   async frames(name: string, at?: number): Promise<
-    { readonly ok: true; readonly record: RenderRecord; readonly frames: ExtractResult } | { readonly ok: false; readonly reason: string; readonly status: "missing" | "unfinished" | "unreadable" }
+    | {
+        readonly ok: true;
+        readonly record: RenderRecord;
+        readonly frames: ExtractResult;
+        /** Which footage the stills came out of. `null` means the whole clip. */
+        readonly looked: LookedAt | null;
+      }
+    | { readonly ok: false; readonly reason: string; readonly status: "missing" | "unfinished" | "unreadable" }
   > {
     const loaded = name === "latest" ? this.#loadLatest() : this.#load(name);
     if (loaded === null) {
@@ -1104,7 +1267,19 @@ export class RenderService {
     }
 
     const record = loaded.record;
-    if (record.status !== "ready" || record.video === null) {
+    // The half that was made and paid for, when the clip itself was not.
+    const salvaged = record.status === "partial" ? (salvagedParts(record)[0] ?? null) : null;
+    const looked: LookedAt | null =
+      salvaged === null || salvaged.video === null
+        ? null
+        : {
+            video: salvaged.video,
+            seconds: salvaged.duration,
+            part: record.parts.indexOf(salvaged) + 1,
+            parts: record.parts.length,
+          };
+
+    if (looked === null && (record.status !== "ready" || record.video === null)) {
       return {
         ok: false,
         status: "unfinished",
@@ -1118,9 +1293,14 @@ export class RenderService {
     return {
       ok: true,
       record,
+      looked,
       frames: await extractFrames({
-        video: record.video,
-        seconds: record.duration,
+        // The clip when there is one, and the surviving half when there is not.
+        // The half's OWN length, never the render's: spreading four stills
+        // across eight seconds of a four-second file asks ffmpeg for frames
+        // past the end of it.
+        video: looked?.video ?? record.video ?? "",
+        seconds: looked?.seconds ?? record.duration,
         ...(at === undefined ? {} : { at }),
         outDir: this.#studio.frames(record.name),
         run: this.#ffmpeg,
@@ -1270,7 +1450,7 @@ export class RenderService {
       .catch((error: unknown) => {
         this.#onError(error, record.name);
         try {
-          this.#fail(record, `Following this render threw: ${String(error)}`);
+          this.#stop(record, null, `Following this render threw: ${String(error)}`);
         } catch {
           // The record could not be updated either — the studio directory is
           // gone, or the disk is full. There is nowhere left to write the
@@ -1310,14 +1490,14 @@ export class RenderService {
         // land on one frame rather than on two renderings of a similar one.
         const previous = current.parts[index - 1];
         if (previous === undefined || previous.video === null) {
-          this.#fail(current, "The half this one continues from is not on disk, so I stopped here.");
+          this.#stop(current, index, "The half this one continues from is not on disk, so I stopped here.");
           return;
         }
 
         const frame = this.#studio.partFrame(current.name, index);
         const taken = await lastFrame({ video: previous.video, to: frame, run: this.#ffmpeg });
         if (!taken.ok) {
-          this.#fail(current, taken.reason);
+          this.#stop(current, index, taken.reason);
           return;
         }
 
@@ -1327,8 +1507,9 @@ export class RenderService {
         // which one made the first half.
         const model = modelNote(current.model);
         if (model === null) {
-          this.#fail(
+          this.#stop(
             current,
+            index,
             `The first half of this render was made on ${current.model}, which is no longer a ` +
               "model I have, so I cannot make the second half to match it.",
           );
@@ -1336,7 +1517,7 @@ export class RenderService {
         }
         const geometry = this.#geometryFor(model, current.ratio);
         if (geometry === null) {
-          this.#fail(current, `I do not know what size to ask ${model.id} for.`);
+          this.#stop(current, index, `I do not know what size to ask ${model.id} for.`);
           return;
         }
 
@@ -1348,12 +1529,13 @@ export class RenderService {
           ...geometry,
         });
         if (!submitted.ok) {
-          // The first half is already paid for. It stays on disk and it stays
-          // in the ledger — `billed` counts the halves that reached Runway, so
-          // this record reports what was actually spent rather than what the
-          // whole render would have cost.
-          this.#fail(
+          // The first half is already paid for. It stays on disk, it stays in
+          // the ledger — `billed` counts the halves that reached Runway — and
+          // the record settles at `partial` rather than `failed`, so the half
+          // that exists is still something she can find and look at.
+          this.#stop(
             current,
+            index,
             `The first half of this render is made and the second would not start: ${submitted.failure.message}`,
           );
           return;
@@ -1369,8 +1551,17 @@ export class RenderService {
         current.parts.length === 1
           ? this.#studio.video(current.name)
           : this.#studio.part(current.name, index + 1);
-      if (!(await this.#await(current, taskId, to))) return;
-      current = this.#patch(current, index, { video: to });
+      const arrived = await this.#await(taskId, to);
+      if (!arrived.ok) {
+        // Runway's own words travel with the half they were said about, so a
+        // record with two generations can say which one was refused and why.
+        this.#stop(current, index, arrived.reason, {
+          failureCode: arrived.failureCode,
+          failure: arrived.failure,
+        });
+        return;
+      }
+      current = this.#patch(current, index, { video: to, status: "ready" });
     }
 
     if (current.parts.length > 1) {
@@ -1381,7 +1572,10 @@ export class RenderService {
         run: this.#ffmpeg,
       });
       if (!joined.ok) {
-        this.#fail(current, joined.reason);
+        // BOTH halves arrived and both were paid for; the cut is what could not
+        // be made, and it can be made again from what is on disk. `#stop` names
+        // no part, because no generation failed.
+        this.#stop(current, null, joined.reason);
         return;
       }
     }
@@ -1397,46 +1591,48 @@ export class RenderService {
     });
   }
 
-  /** Wait for one generation and put it on disk. `false` means it is over. */
-  async #await(record: RenderRecord, taskId: string, to: string): Promise<boolean> {
+  /**
+   * Wait for one generation and put it on disk.
+   *
+   * **Answers rather than settling the record itself.** It used to call `#fail`
+   * from in here, which is why nothing it learned about *which* generation went
+   * wrong — or what Runway said about it — could reach the part it happened to.
+   * The caller knows the index; this knows the words; neither knew both.
+   */
+  async #await(taskId: string, to: string): Promise<Arrival> {
     const backend = this.#backend;
-    if (backend === null) return false;
+    if (backend === null) return stopped("There is no way to reach Runway from this machine.");
 
     for (let attempt = 1; ; attempt += 1) {
       const task = await backend.task(taskId);
       if (!task.ok) {
-        if (!task.failure.retryable) {
-          this.#fail(record, task.failure.message);
-          return false;
-        }
+        if (!task.failure.retryable) return stopped(task.failure.message);
       } else if (isTerminal(task.data.status)) {
         if (task.data.status !== "SUCCEEDED") {
-          this.#fail(record, `Runway ended this render as ${task.data.status}.`);
-          return false;
+          return {
+            ok: false,
+            reason: whyItStopped(task.data.status, task.data),
+            failureCode: task.data.failureCode,
+            failure: task.data.failure,
+          };
         }
         const url = task.data.output[0];
         if (url === undefined) {
-          this.#fail(record, "Runway said the render succeeded and gave nothing back to download.");
-          return false;
+          return stopped("Runway said the render succeeded and gave nothing back to download.");
         }
 
         mkdirSync(dirname(to), { recursive: true });
         const downloaded = await backend.download(url, to);
-        if (!downloaded.ok) {
-          this.#fail(record, downloaded.failure.message);
-          return false;
-        }
-        return true;
+        if (!downloaded.ok) return stopped(downloaded.failure.message);
+        return { ok: true };
       }
 
       if (attempt >= this.#giveUpAfterPolls) {
-        this.#fail(
-          record,
+        return stopped(
           `Runway had not finished this render after ${String(
             Math.round((this.#giveUpAfterPolls * this.#pollMs) / 60_000),
           )} minutes, so I stopped waiting. The task id is ${taskId} if it turns up later.`,
         );
-        return false;
       }
 
       await this.#sleep(this.#pollMs);
@@ -1459,13 +1655,70 @@ export class RenderService {
     return next;
   }
 
-  #fail(record: RenderRecord, reason: string): void {
+  /**
+   * Stop a render, keeping everything it already bought.
+   *
+   * **`partial` is decided here and it is the whole fix.** A render whose first
+   * generation SUCCEEDED, downloaded and cost 120 credits, and whose second
+   * FAILED for nothing, used to be written down as `failed` with `video: null`
+   * — which is every view she has. The mp4 stayed on disk and became reachable
+   * only by opening the sidecar by hand. Twice on 23 August, 240 credits.
+   *
+   * So the status is derived from what is on disk rather than from the fact
+   * that something went wrong: anything salvaged makes this `partial`, and only
+   * a render that bought nothing is `failed`. The line between them is whether
+   * the money bought something that exists — call an empty one `partial` and
+   * she goes looking for footage there is none of.
+   *
+   * `video` stays `null` either way. That field is the clip she asked for, and
+   * there isn't one; the halves are in `parts`, which is where a reader that
+   * cares about halves already looks.
+   *
+   * @param at Which generation refused, or `null` when none did — a failed join
+   *   is nobody's generation, and marking one of them failed would blame a half
+   *   that arrived.
+   */
+  #stop(
+    record: RenderRecord,
+    at: number | null,
+    reason: string,
+    said: { readonly failureCode: string | null; readonly failure: string | null } = {
+      failureCode: null,
+      failure: null,
+    },
+  ): void {
     // Read from disk rather than from the caller's copy: `#patch` writes each
     // half's progress as it happens, so the file knows about halves that were
-    // bought after the record in hand was made. A failed render is a record
+    // bought after the record in hand was made. A stopped render is a record
     // with a reason added, never a record with something taken out of it.
     const base = this.#read(record.name) ?? record;
-    this.#write({ ...base, status: "failed", reason, video: null });
+    // Every generation that is not on disk is over, not still going. A record
+    // that stopped while one of its halves still said `rendering` reads as a
+    // render in flight, which is the state `resume` chases and she waits for —
+    // and it is the same word the reader derives for these when it loads a
+    // sidecar, so writing anything else here would make a record change its
+    // mind about itself between being written and being read.
+    const parts = base.parts.map((part, index) =>
+      part.status === "ready"
+        ? part
+        : {
+            ...part,
+            status: "failed" as const,
+            // The upstream words go on the generation they were said about, and
+            // nowhere else: a half that was never submitted has no refusal of
+            // its own, and copying one onto it would invent evidence.
+            ...(index === at ? { failureCode: said.failureCode, failure: said.failure } : {}),
+          },
+    );
+    const settled: RenderRecord = {
+      ...base,
+      parts,
+      ...billed(parts),
+      status: salvagedParts({ ...base, parts }).length > 0 ? "partial" : "failed",
+      reason,
+      video: null,
+    };
+    this.#write(settled);
   }
 
   /**
@@ -1668,7 +1921,9 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
 
   const declared = sidecar["status"];
   const status =
-    declared === "rendering" || declared === "ready" || declared === "failed" ? declared : null;
+    declared === "rendering" || declared === "ready" || declared === "failed" || declared === "partial"
+      ? declared
+      : null;
   if (status === null) missing.push("status");
 
   const declaredDuration = sidecar["duration"];
@@ -1709,6 +1964,19 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
   const credits = nullableNumber("credits");
   const usd = nullableNumber("usd");
 
+  const parts = partsFrom(sidecar, status, {
+    taskId,
+    prompt,
+    duration: duration ?? 0,
+    first: reference,
+    last: anchor,
+    video,
+    credits,
+    status: status === "ready" ? "ready" : status === "rendering" ? "rendering" : "failed",
+    failureCode: null,
+    failure: null,
+  });
+
   if (missing.length > 0 || framing === null || status === null || duration === null) {
     return unreadable(
       name,
@@ -1721,7 +1989,11 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
     ok: true,
     record: {
       name,
-      status,
+      // NOT always the word the file wrote down. See {@link settledStatus}: a
+      // sidecar written before `partial` existed says `failed` over halves that
+      // are on disk, and reading it back as `failed` is what made 240 credits
+      // of finished video unreachable in the first place.
+      status: settledStatus(status, parts),
       renderedAt,
       taskId,
       model,
@@ -1746,17 +2018,34 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
       credits,
       usd,
       video,
-      parts: partsFrom(sidecar, {
-        taskId,
-        prompt,
-        duration,
-        first: reference,
-        last: anchor,
-        video,
-        credits,
-      }),
+      parts,
     },
   };
+}
+
+/**
+ * The status a record's own halves support, which is not always the one it
+ * wrote down.
+ *
+ * **This is what heals the back catalogue, and it is why there is no migration
+ * and no rewriting of files on disk.** Two sidecars from 23 August say `failed`
+ * over a first half that SUCCEEDED, downloaded, cost 120 credits and is sitting
+ * in `parts/`. Deriving the status here makes both of them reachable the moment
+ * the service reads them again — the same principle `holdsLikeness` already
+ * follows: what the record can be *shown* to be beats what somebody wrote
+ * beside it.
+ *
+ * Only ever upgrades `failed` to `partial`, and only on evidence that is
+ * checkable: a half whose file is on this disk right now. A `ready` record is
+ * left exactly as it is — this function exists to stop the service understating
+ * what it has, not to start it doubting what it finished.
+ */
+function settledStatus(declared: RenderStatus, parts: readonly RenderPart[]): RenderStatus {
+  if (declared !== "failed") return declared;
+  const salvaged = parts.some(
+    (part) => part.status === "ready" && part.video !== null && existsSync(part.video),
+  );
+  return salvaged ? "partial" : "failed";
 }
 
 /**
@@ -1775,7 +2064,11 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
  * above; this one decides how a render in flight is chased, and a render in the
  * back catalogue is not in flight.
  */
-function partsFrom(sidecar: Record<string, unknown>, fallback: RenderPart): readonly RenderPart[] {
+function partsFrom(
+  sidecar: Record<string, unknown>,
+  status: RenderStatus | null,
+  fallback: RenderPart,
+): readonly RenderPart[] {
   const declared = sidecar["parts"];
   if (!Array.isArray(declared) || declared.length === 0) return [fallback];
 
@@ -1793,6 +2086,8 @@ function partsFrom(sidecar: Record<string, unknown>, fallback: RenderPart): read
     const last = part["last"];
     const video = part["video"];
     const credits = part["credits"];
+    const failureCode = part["failureCode"];
+    const failure = part["failure"];
     parts.push({
       taskId: typeof taskId === "string" ? taskId : null,
       prompt,
@@ -1801,7 +2096,29 @@ function partsFrom(sidecar: Record<string, unknown>, fallback: RenderPart): read
       last: typeof last === "string" ? last : null,
       video: typeof video === "string" ? video : null,
       credits: typeof credits === "number" && Number.isFinite(credits) ? credits : null,
+      status: partStatusFrom(part["status"], typeof video === "string", status),
+      // `null` for every sidecar written before we kept these, which is the
+      // truth about them: what Runway said was never recorded, and inventing a
+      // code now would be worse than the silence that made this necessary.
+      failureCode: typeof failureCode === "string" ? failureCode : null,
+      failure: typeof failure === "string" ? failure : null,
     });
   }
   return parts;
+}
+
+/**
+ * How one generation went, for a sidecar that never said.
+ *
+ * Every record written before halves had a status of their own — including the
+ * two that lost 240 credits — is read through here, and the derivation is the
+ * only honest one available: **a video on disk is proof it arrived**, and after
+ * that the render's own outcome is all there is to go on. A half with no video
+ * inside a render that stopped did not arrive; one inside a render still in
+ * flight has not arrived yet.
+ */
+function partStatusFrom(declared: unknown, hasVideo: boolean, status: RenderStatus | null): PartStatus {
+  if (declared === "ready" || declared === "failed" || declared === "rendering") return declared;
+  if (hasVideo) return "ready";
+  return status === "rendering" || status === null ? "rendering" : "failed";
 }

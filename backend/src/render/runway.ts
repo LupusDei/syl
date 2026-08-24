@@ -125,6 +125,63 @@ export interface RunwayTask {
   readonly status: string;
   /** Where the finished video is. Empty until it succeeds. */
   readonly output: readonly string[];
+  /**
+   * Runway's own code for why it refused, exactly as Runway spelled it.
+   *
+   * `null` on a task that did not fail, and `null` rather than `""` so that
+   * "this did not fail" and "this failed and said nothing" stay different
+   * facts.
+   *
+   * **Kept because not keeping it cost a day.** Five renders failed across two
+   * durations on 23-24 August and every one was recorded as our own sentence,
+   * *"Runway ended this render as FAILED."* — which contains none of theirs. So
+   * five failures with at least two distinct causes were indistinguishable, and
+   * a wrong cause was reported for them with confidence. What was being read
+   * was our summary of an error nobody had kept.
+   */
+  readonly failureCode: string | null;
+  /** What Runway said, in its own words. Trimmed if it is long; never rewritten. */
+  readonly failure: string | null;
+}
+
+/**
+ * What kind of problem a refusal is, which decides whose problem it is.
+ *
+ * - `moderation` — a model provider declined the prompt. **Not a bug**, and it
+ *   must not read as one: there is nothing here to fix, only something to say
+ *   differently. Sending someone to hunt for a defect in a working system is
+ *   the specific harm of conflating this with the one below.
+ * - `rejected_input` — the request was refused as invalid. Ours, and a real
+ *   defect somewhere in what we sent.
+ * - `upstream` — Runway's own machinery broke. Nobody's fault here, and the one
+ *   kind where trying again is a reasonable answer.
+ * - `unknown` — a code nobody has classified. Deliberately its own answer
+ *   rather than a default into any of the three: a guess here becomes a
+ *   sentence she says to him as fact.
+ */
+export type FailureKind = "moderation" | "rejected_input" | "upstream" | "unknown";
+
+/**
+ * Which of the four a code is.
+ *
+ * **Order is load-bearing.** `INPUT_PREPROCESSING.SAFETY.THIRD_PARTY` — a real
+ * captured code, from the render that was moderated — matches both the safety
+ * rule and the input rule, and reading it as an input fault turns a decision
+ * somebody else made into a bug hunt for something that is not broken. Safety
+ * is therefore asked first.
+ *
+ * Matched on segments rather than on whole strings, because Runway composes
+ * these from parts and the same fact appears in more than one arrangement.
+ */
+export function failureKindOf(code: string | null): FailureKind {
+  if (code === null || code.trim() === "") return "unknown";
+  const segments = code.toUpperCase().split(/[.\-_\s]+/u);
+  const has = (word: string): boolean => segments.includes(word);
+
+  if (has("SAFETY") || has("MODERATION") || has("MODERATED")) return "moderation";
+  if (has("VALIDATION") || has("PREPROCESSING") || has("INVALID")) return "rejected_input";
+  if (has("INTERNAL")) return "upstream";
+  return "unknown";
 }
 
 /**
@@ -153,6 +210,19 @@ export interface RunwayClientOptions {
 function excerpt(text: string): string {
   const flat = text.replace(/\s+/gu, " ").trim();
   return flat.length > 300 ? `${flat.slice(0, 300)}…` : flat;
+}
+
+/**
+ * Something Runway said, or `null` because it said nothing.
+ *
+ * A non-string is `null` rather than `String(value)`: an object stringified
+ * into a failure message reads as `[object Object]` in the one field whose
+ * whole job is to be quotable.
+ */
+function said(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const kept = excerpt(value);
+  return kept === "" ? null : kept;
 }
 
 export class RunwayClient implements RenderBackend {
@@ -196,7 +266,14 @@ export class RunwayClient implements RenderBackend {
     const answered = await this.#json("GET", `/tasks/${encodeURIComponent(id)}`);
     if (!answered.ok) return answered;
 
-    const body = answered.data as { id?: unknown; status?: unknown; output?: unknown; artifacts?: unknown };
+    const body = answered.data as {
+      id?: unknown;
+      status?: unknown;
+      output?: unknown;
+      artifacts?: unknown;
+      failure?: unknown;
+      failureCode?: unknown;
+    };
     // Both spellings, because the API has used both and `generate.mjs` reads
     // both. A finished render whose URL is under the field we did not check
     // looks exactly like a render that produced nothing.
@@ -208,6 +285,11 @@ export class RunwayClient implements RenderBackend {
         id: typeof body.id === "string" ? body.id : id,
         status: typeof body.status === "string" ? body.status : "UNKNOWN",
         output: urls.filter((url): url is string => typeof url === "string"),
+        // Both trimmed by `excerpt` rather than dropped when they run long.
+        // Truncating loses the tail of an explanation; replacing it with our
+        // own words loses the explanation.
+        failureCode: said(body.failureCode),
+        failure: said(body.failure),
       },
     };
   }

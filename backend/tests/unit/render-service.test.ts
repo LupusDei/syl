@@ -87,6 +87,16 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+/**
+ * A task as the fake hands one back.
+ *
+ * `failureCode` and `failure` default to `null` here for the same reason the
+ * real client defaults them to `null`: Runway sends them only on a task that
+ * went wrong, so a fixture for a healthy one that had to spell them out would
+ * be a shape the API never produces.
+ */
+type FakeTask = Partial<RunwayTask> & { readonly id: string; readonly status: string };
+
 interface FakeOptions {
   readonly submit?: RunwayResult<{ readonly id: string }>;
   /**
@@ -98,7 +108,7 @@ interface FakeOptions {
    */
   readonly failSubmit?: { readonly nth: number; readonly message: string };
   /** Statuses handed back in order; the last one repeats. */
-  readonly statuses?: readonly RunwayTask[];
+  readonly statuses?: readonly FakeTask[];
   readonly download?: RunwayResult<number>;
 }
 
@@ -124,7 +134,10 @@ function fakeBackend(options: FakeOptions = {}): RenderBackend & { readonly spec
     task: async () => {
       const status = statuses[Math.min(polls, statuses.length - 1)];
       polls += 1;
-      return { ok: true, data: status as RunwayTask };
+      return {
+        ok: true,
+        data: { output: [], failureCode: null, failure: null, ...status } as RunwayTask,
+      };
     },
     download: async (_url, to) => {
       if (options.download !== undefined && !options.download.ok) return options.download;
@@ -558,7 +571,9 @@ describe("asking for a render", () => {
     await service.drain();
 
     const record = service.get(started.record.name);
-    expect(record?.status).toBe("failed");
+    // `partial`, not `failed`: the first half exists and was charged for, and a
+    // record that says the render failed is the claim that it did not.
+    expect(record?.status).toBe("partial");
     expect(record?.reason).toContain("402");
     // The eight seconds of the first half only, at the house model's rate.
     expect(record?.credits).toBe(RATE * 8);
@@ -938,6 +953,384 @@ describe("a render that does not succeed", () => {
     expect(record?.status).toBe("failed");
     expect(record?.video).toBeNull();
     expect(existsSync(studio.video(started.record.name))).toBe(false);
+  });
+
+  /**
+   * What Runway said, kept as Runway said it.
+   *
+   * Every failed task carries a `failureCode` and a `failure` sentence, and
+   * until now the record kept neither: five failures across two durations all
+   * read *"Runway ended this render as FAILED."* — our own summary of an error
+   * we never held on to. They were therefore indistinguishable, and a wrong
+   * cause was reported for them with confidence.
+   *
+   * Ours is kept too. The requirement is *beside*, never *instead of*: our
+   * sentence says what happened to the render, theirs says why, and a reader
+   * who is handed only one of them is the reader this went wrong for.
+   */
+  it("should keep the words Runway refused in, beside our own sentence about it", async () => {
+    const service = serviceWith(
+      fakeBackend({
+        statuses: [
+          {
+            id: "c7c678c8",
+            status: "FAILED",
+            failureCode: "THIRD_PARTY.INPUT_VALIDATION",
+            failure: "Invalid input",
+          },
+        ],
+      }),
+    );
+
+    const started = await service.start({ ...ASK, framing: "face_turned_away" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    const record = service.get(started.record.name);
+    // Ours, unchanged.
+    expect(record?.reason).toContain("FAILED");
+    // Theirs, verbatim, in the sentence and on the half it happened to.
+    expect(record?.reason).toContain("Invalid input");
+    expect(record?.reason).toContain("THIRD_PARTY.INPUT_VALIDATION");
+    expect(record?.parts[0]?.failure).toBe("Invalid input");
+    expect(record?.parts[0]?.failureCode).toBe("THIRD_PARTY.INPUT_VALIDATION");
+    expect(record?.parts[0]?.status).toBe("failed");
+  });
+
+  it("should say a moderation block was somebody's decision, not report it as a fault", async () => {
+    // `THIRD_PARTY.INPUT_VALIDATION` and a content-moderation refusal are
+    // different problems with different owners and different fixes. One is a
+    // bug on our side of the wire; the other is a model provider declining a
+    // prompt, which is not broken and must not read as broken — least of all to
+    // her, who would go looking for the defect.
+    const service = serviceWith(
+      fakeBackend({
+        statuses: [
+          {
+            id: "b38a00cb",
+            status: "FAILED",
+            failureCode: "INPUT_PREPROCESSING.SAFETY.THIRD_PARTY",
+            failure: "blocked by this model provider's content moderation system",
+          },
+        ],
+      }),
+    );
+
+    const started = await service.start({ ...ASK, framing: "face_turned_away" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    const record = service.get(started.record.name);
+    expect(record?.parts[0]?.failureCode).toBe("INPUT_PREPROCESSING.SAFETY.THIRD_PARTY");
+    expect(record?.reason).toContain("content moderation");
+    // The two must not arrive as the same sentence.
+    expect(record?.reason).toMatch(/moderation|declined|refused/iu);
+    expect(record?.reason).not.toMatch(/invalid input/iu);
+  });
+});
+
+/**
+ * A render whose halves did not all arrive.
+ *
+ * **The expensive defect, and the asymmetry is what makes it expensive: a
+ * failed generation costs nothing and a successful one costs 120 credits, so
+ * everything thrown away here is the part that was paid for.** Two renders on
+ * 23 August had part 0 SUCCEEDED and downloaded, part 1 FAILED, and both were
+ * recorded `status: "failed"` with `video: null` — which is every view she has.
+ * The mp4s were on disk the whole time, reachable only by opening the sidecar
+ * by hand and reading `parts[0].video`. 240 credits of finished video, present
+ * and unfindable.
+ */
+describe("a render that was half made", () => {
+  /**
+   * The 23 August shape: the first half lands, the second is refused.
+   *
+   * Two polls, because the walk over `parts` follows one generation at a time.
+   */
+  function halfMade(failure: Partial<RunwayTask> = {}): ReturnType<typeof fakeBackend> {
+    return fakeBackend({
+      statuses: [
+        { id: "task-1", status: "SUCCEEDED", output: ["https://example.invalid/half.mp4"] },
+        { id: "task-2", status: "FAILED", failureCode: "THIRD_PARTY.INPUT_VALIDATION", failure: "Invalid input", ...failure },
+      ],
+    });
+  }
+
+  it("should not record a flat failure over a half that was made and charged for", async () => {
+    const service = serviceWith(halfMade());
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    const record = service.get(started.record.name);
+    // Neither `ready` — the clip she asked for does not exist — nor `failed`,
+    // which is the claim that nothing came of it.
+    expect(record?.status).toBe("partial");
+    expect(record?.parts[0]?.status).toBe("ready");
+    expect(record?.parts[1]?.status).toBe("failed");
+    // And the refusal is recorded against the half it happened to, never
+    // against the one that arrived.
+    expect(record?.parts[0]?.failureCode).toBeNull();
+    expect(record?.parts[1]?.failureCode).toBe("THIRD_PARTY.INPUT_VALIDATION");
+  });
+
+  it("should never leave a half saying `rendering` in a render that has stopped", async () => {
+    // A record that stopped with a half still `rendering` reads as a render in
+    // flight: `resume` chases it, the review job defers instead of waking her,
+    // and she waits for something that is not coming. The second half here was
+    // never submitted, because the first one's frame could not be pulled.
+    const ffmpeg: FrameRunner = async (_file, args) => {
+      // The join frame between the halves is the one extraction that fails.
+      if (args.some((arg) => arg.includes("-last.png"))) return { ok: false, message: "no such stream" };
+      const out = args[args.length - 1] ?? "";
+      mkdirSync(dirname(out), { recursive: true });
+      writeFileSync(out, Buffer.from([0x00, 0x00, 0x00, 0x18]));
+      return { ok: true, message: "" };
+    };
+    const service = serviceWith(fakeBackend(), ffmpeg);
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    const record = service.get(started.record.name);
+    expect(record?.status).toBe("partial");
+    expect(record?.parts.some((part) => part.status === "rendering")).toBe(false);
+    // A half nobody ever submitted has no refusal of its own, and one must not
+    // be invented for it.
+    expect(record?.parts[1]?.taskId).toBeNull();
+    expect(record?.parts[1]?.failure).toBeNull();
+  });
+
+  it("should leave the paid half where the record points at it, still on disk", async () => {
+    const service = serviceWith(halfMade());
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    const record = service.get(started.record.name);
+    const kept = record?.parts[0]?.video ?? "";
+    expect(kept).toBe(studio.part(started.record.name, 1));
+    expect(existsSync(kept)).toBe(true);
+  });
+
+  it("should let her look at the half that survived, rather than say there is nothing to see", async () => {
+    // What "reachable" has to mean for a video. She cannot watch an mp4 — she
+    // looks at stills pulled out of it — so a render she cannot pull a still
+    // from is a render she cannot see, whatever the sidecar says is on disk.
+    const service = serviceWith(halfMade());
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    const looked = await service.frames(started.record.name);
+
+    expect(looked.ok).toBe(true);
+    if (!looked.ok) return;
+    expect(looked.frames.ok).toBe(true);
+    // And she is told what she is looking at: half of a render, not the clip.
+    expect(looked.looked?.part).toBe(1);
+    expect(looked.looked?.parts).toBe(2);
+    expect(looked.looked?.video).toBe(studio.part(started.record.name, 1));
+  });
+
+  it("should say the stills came from the whole clip when they did", async () => {
+    const service = serviceWith(fakeBackend());
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    const looked = await service.frames(started.record.name);
+
+    expect(looked.ok).toBe(true);
+    if (!looked.ok) return;
+    // `null` rather than part 1 of 2: a joined render IS the clip, and saying
+    // "half of it" about the finished thing would be the same lie facing the
+    // other way.
+    expect(looked.looked).toBeNull();
+  });
+
+  it("should stay a flat failure when nothing was made, since there is nothing to keep", async () => {
+    // The line between the two states is whether credits bought something that
+    // exists. A render whose only generation failed bought nothing, and calling
+    // that `partial` would invite her to go looking for footage there is none of.
+    const service = serviceWith(
+      fakeBackend({ statuses: [{ id: "t", status: "FAILED", failure: "Invalid input" }] }),
+    );
+
+    const started = await service.start({ ...ASK, framing: "face_turned_away" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    expect(service.get(started.record.name)?.status).toBe("failed");
+  });
+
+  it("should keep both halves reachable when it is the join that failed", async () => {
+    // Both generations arrived and were paid for; ffmpeg is what could not
+    // finish. Recording that as a flat failure discards two paid halves rather
+    // than one, and the thing that went wrong is on this machine and fixable.
+    const ffmpeg: FrameRunner = async (_file, args) => {
+      if (args.includes("concat")) return { ok: false, message: "concat: no such filter" };
+      const out = args[args.length - 1] ?? "";
+      mkdirSync(dirname(out), { recursive: true });
+      writeFileSync(out, Buffer.from([0x00, 0x00, 0x00, 0x18]));
+      return { ok: true, message: "" };
+    };
+    const service = serviceWith(fakeBackend(), ffmpeg);
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    const record = service.get(started.record.name);
+    expect(record?.status).toBe("partial");
+    expect(record?.parts.every((part) => part.status === "ready")).toBe(true);
+    expect(record?.reason).toContain("concat");
+  });
+
+  it("should count what was half made in the ledger, rather than hiding it among the failures", async () => {
+    // A number he is shown has to be able to say which renders it is made of.
+    // Two of these cost 120 credits each and produced four seconds of finished
+    // video; counting them as failures says the money bought nothing.
+    const service = serviceWith(halfMade());
+
+    await service.start({ ...ASK, framing: "close_portrait" });
+    await service.drain();
+
+    const spend = service.spend();
+    expect(spend.partial).toBe(1);
+    expect(spend.failed).toBe(0);
+    expect(spend.renders).toBe(1);
+  });
+
+  it("should find the paid half in a sidecar written before any of this existed", async () => {
+    // THE TWO RECORDS THAT COST 240 CREDITS, in the shape they are on his disk:
+    // `status: "failed"`, `video: null`, and a first half that succeeded,
+    // downloaded and is sitting in `parts/`. No migration and no rewriting of
+    // files — the status is derived from the halves on read, so both of them
+    // become reachable again the moment the service reads them.
+    const name = "syl-20260823t181004073z-close-portrait";
+    const half = studio.part(name, 1);
+    mkdirSync(dirname(half), { recursive: true });
+    writeFileSync(half, Buffer.alloc(64, 3));
+    mkdirSync(studio.videoDir, { recursive: true });
+    writeFileSync(
+      studio.sidecar(name),
+      JSON.stringify({
+        name,
+        status: "failed",
+        renderedAt: null,
+        taskId: "4b3c1a1f-6c60-49c8-917f-4ecb0031824d",
+        model: "seedance2_5",
+        ratio: "834:1112",
+        resolution: null,
+        keyframes: 2,
+        duration: 8,
+        reference: "renders/opening-ribbon.png",
+        anchor: "renders/faces/unflinching.jpg",
+        framing: "close_portrait",
+        prompt: "…",
+        scene: "…",
+        holdsLikeness: true,
+        because: "…",
+        startedAt: "2026-08-23T18:10:04.073Z",
+        reason: "Runway ended this render as FAILED.",
+        credits: 240,
+        usd: 2.4,
+        video: null,
+        // No `status` on either half: the field did not exist when this was
+        // written, which is exactly the case that has to be got right.
+        parts: [
+          { taskId: "4b3c1a1f", prompt: "…", duration: 4, first: "renders/opening-ribbon.png", last: "renders/faces/unflinching.jpg", video: half, credits: 120 },
+          { taskId: "c7c678c8", prompt: "…", duration: 4, first: "renders/parts/x-last.png", last: "renders/opening-ribbon.png", video: null, credits: 120 },
+        ],
+      }),
+    );
+
+    const service = serviceWith(fakeBackend());
+    const record = service.get(name);
+
+    expect(record?.status).toBe("partial");
+    expect(record?.parts[0]?.status).toBe("ready");
+    expect(record?.parts[1]?.status).toBe("failed");
+    // And it is the thing that was actually paid for that she can now look at.
+    const looked = await service.frames(name);
+    expect(looked.ok).toBe(true);
+    if (!looked.ok) return;
+    expect(looked.looked?.video).toBe(half);
+  });
+
+  it("should leave a record alone when the half it names is no longer on disk", async () => {
+    // The heal is only ever made on evidence that is checkable. A record whose
+    // footage has gone is a failure again — claiming a `partial` would send her
+    // looking for a file that is not there, which is the same class of lie in
+    // the opposite direction.
+    const name = "syl-20260823t182336857z-face-turned-away";
+    mkdirSync(studio.videoDir, { recursive: true });
+    writeFileSync(
+      studio.sidecar(name),
+      JSON.stringify({
+        name,
+        status: "failed",
+        renderedAt: null,
+        taskId: "ba127d05",
+        model: "seedance2_5",
+        ratio: "834:1112",
+        resolution: null,
+        keyframes: 2,
+        duration: 8,
+        reference: "renders/opening-ribbon.png",
+        anchor: null,
+        framing: "face_turned_away",
+        prompt: "…",
+        scene: "…",
+        holdsLikeness: false,
+        because: "…",
+        startedAt: "2026-08-23T18:23:36.857Z",
+        reason: "Runway ended this render as FAILED.",
+        credits: 240,
+        usd: 2.4,
+        video: null,
+        parts: [
+          { taskId: "ba127d05", prompt: "…", duration: 8, first: "renders/opening-ribbon.png", last: "renders/opening-ribbon.png", video: "/gone/nowhere-1.mp4", credits: 240 },
+        ],
+      }),
+    );
+
+    expect(serviceWith(fakeBackend()).get(name)?.status).toBe("failed");
+  });
+
+  it("should still be picked up by a restart, since the second half was never made", async () => {
+    // `resume` chases anything at `rendering`. A partial is NOT that: it is
+    // over, it has a reason, and re-following it would poll a task Runway has
+    // already refused. What must not happen is the record being dropped from
+    // her list.
+    const service = serviceWith(halfMade());
+
+    const started = await service.start({ ...ASK, framing: "close_portrait" });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await service.drain();
+
+    const second = serviceWith(halfMade());
+    second.resume();
+    await second.drain();
+
+    expect(second.get(started.record.name)?.status).toBe("partial");
+    expect(second.list()).toHaveLength(1);
   });
 });
 

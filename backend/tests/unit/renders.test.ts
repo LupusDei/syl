@@ -92,7 +92,7 @@ function fakeBackend(): RenderBackend {
     submit: async () => ({ ok: true, data: { id: "task-1" } }),
     task: async () => ({
       ok: true,
-      data: { id: "task-1", status: "SUCCEEDED", output: ["https://cdn.invalid/x.mp4"] },
+      data: { id: "task-1", status: "SUCCEEDED", output: ["https://cdn.invalid/x.mp4"], failureCode: null, failure: null },
     }),
     download: async (_url, to) => {
       mkdirSync(dirname(to), { recursive: true });
@@ -405,7 +405,7 @@ describe("GET /renders/{name}/frames", () => {
       studio: studioAt(root),
       backend: {
         ...fakeBackend(),
-        task: async () => ({ ok: true, data: { id: "task-1", status: "PENDING", output: [] } }),
+        task: async () => ({ ok: true, data: { id: "task-1", status: "PENDING", output: [], failureCode: null, failure: null } }),
       },
       clock: fixedClock(NOW),
       sleep: () => new Promise<void>(() => undefined),

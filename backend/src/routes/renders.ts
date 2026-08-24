@@ -417,6 +417,12 @@ export function createRenderRouter(options: RenderRouterOptions): Router {
 
         sendOk(response, {
           render: looked.record,
+          // WHICH FOOTAGE THE STILLS CAME OUT OF. `null` for the ordinary case,
+          // and a part for a render that was only half made — she is holding
+          // pictures either way, and the difference between "this is the clip"
+          // and "this is four seconds of an eight-second render that was never
+          // finished" is not visible in a jpeg.
+          looked: looked.looked,
           // Each still carries the token that names it, exactly as a wardrobe
           // row does. The rule is about being shown a picture rather than about
           // which table it came out of, and until 2026-08-12 only half of it was

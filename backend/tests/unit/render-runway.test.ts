@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   RunwayClient,
   RUNWAY_API_VERSION,
+  failureKindOf,
   isTerminal,
   type SubmitSpec,
 } from "../../src/render/runway.js";
@@ -137,6 +138,87 @@ describe("following a task", () => {
     expect(isTerminal("CANCELLED")).toBe(true);
     expect(isTerminal("PENDING")).toBe(false);
     expect(isTerminal("RUNNING")).toBe(false);
+  });
+
+  /**
+   * What Runway said, kept as Runway said it.
+   *
+   * Five renders failed across two durations on 23-24 August and every one of
+   * them was recorded as *"Runway ended this render as FAILED."* — our own
+   * sentence, containing none of theirs. They were indistinguishable and
+   * therefore unexplainable, and a wrong cause was reported with confidence,
+   * because what was being read was our summary of an error nobody kept.
+   *
+   * The task response carries `failureCode` and `failure` on every one of them.
+   * The codes and sentences below are the real captured ones.
+   */
+  describe("what it said when it refused", () => {
+    async function taskSaying(body: Record<string, unknown>) {
+      const client = new RunwayClient({ secret: "sk-test", fetch: async () => jsonResponse(200, body) });
+      return client.task("t");
+    }
+
+    it("should keep the code and the sentence verbatim, beside our own words rather than instead of them", async () => {
+      const task = await taskSaying({
+        id: "c7c678c8",
+        status: "FAILED",
+        failure: "Invalid input",
+        failureCode: "THIRD_PARTY.INPUT_VALIDATION",
+      });
+
+      expect(task.ok).toBe(true);
+      if (!task.ok) return;
+      expect(task.data.failureCode).toBe("THIRD_PARTY.INPUT_VALIDATION");
+      expect(task.data.failure).toBe("Invalid input");
+    });
+
+    it("should keep a refusal that runs long rather than dropping it, marking where it was cut", async () => {
+      // Truncate if you must; never replace. A sentence too long to keep whole
+      // is still evidence, and the half we can hold is worth more than a
+      // paraphrase of the whole.
+      const said = `The model refused. ${"detail ".repeat(200)}`;
+      const task = await taskSaying({ id: "t", status: "FAILED", failure: said, failureCode: "X.Y" });
+
+      expect(task.ok).toBe(true);
+      if (!task.ok) return;
+      expect(task.data.failure?.startsWith("The model refused. detail detail")).toBe(true);
+      expect(task.data.failure?.length ?? 0).toBeLessThan(said.length);
+      expect(task.data.failure).toContain("…");
+    });
+
+    it("should say nothing rather than invent something when a task carries no failure at all", async () => {
+      const task = await taskSaying({ id: "t", status: "SUCCEEDED", output: ["https://x.invalid/a.mp4"] });
+
+      expect(task.ok).toBe(true);
+      if (!task.ok) return;
+      expect(task.data.failureCode).toBeNull();
+      expect(task.data.failure).toBeNull();
+    });
+
+    it("should tell a content-moderation refusal apart from an input the model would not take", () => {
+      // Different problems, different owners, different fixes. A moderation
+      // block is a decision somebody else made about the prompt and is not a
+      // bug; `Invalid input` is ours to find. Conflating them is what made five
+      // failures look like one.
+      expect(failureKindOf("INPUT_PREPROCESSING.SAFETY.THIRD_PARTY")).toBe("moderation");
+      expect(failureKindOf("THIRD_PARTY.INPUT_VALIDATION")).toBe("rejected_input");
+    });
+
+    it("should read a moderation code as moderation even when it also names preprocessing", () => {
+      // `INPUT_PREPROCESSING.SAFETY.THIRD_PARTY` matches both rules, and the
+      // order they are tried in is the whole answer: read as a preprocessing
+      // fault it becomes a bug hunt for something that is not broken.
+      expect(failureKindOf("INPUT_PREPROCESSING.SAFETY.THIRD_PARTY")).not.toBe("rejected_input");
+    });
+
+    it("should refuse to classify a code it has never seen rather than guessing at it", () => {
+      expect(failureKindOf("SOMETHING.NOBODY.HAS.SEEN")).toBe("unknown");
+      expect(failureKindOf(null)).toBe("unknown");
+    });
+
+    it("should call an upstream fault what it is, since it is the one kind worth retrying", () => {
+      expect(failureKindOf("INTERNAL.BAD_OUTPUT.CODE01")).toBe("upstream");
+    });
   });
 
   it("should read the output url from either field Runway uses for it", async () => {
