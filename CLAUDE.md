@@ -222,6 +222,42 @@ keeping them testable without spawning a process is worth the seam.
   one. If you are sharing a worktree, commit by pathspec; if you are in your own,
   `git add` by name is sufficient.
 
+- **A pathspec CANNOT commit a file git has never seen, so a change that adds
+  files has a window — use `git add -N` to make it a narrow one.** The rule above
+  was stated without qualification and it has a gap exactly where most real work
+  lives. Measured, not recalled:
+
+  ```sh
+  git commit -m x -- new-file.ts        # error: pathspec 'new-file.ts' did not
+                                        # match any file(s) known to git
+  git commit -m x -- old.ts new-file.ts # the SAME error — the whole commit
+                                        # aborts rather than half-landing
+  git commit -am x -- new-file.ts       # fatal: paths ... with -a does not make sense
+  ```
+
+  So the file has to be registered first, and that is the one moment your work
+  sits in the shared index. **Register it with `git add -N` (intent-to-add), not
+  a full `git add`.** It records the path with no content, the pathspec commit
+  then lands the file's *full* current contents, and it strictly shrinks the
+  window — what a bystander's sweep takes, measured across both forms:
+
+  | you did | they ran | result |
+  |---|---|---|
+  | `git add -N mine.ts` | `git add theirs.ts` + bare `git commit` | **safe** |
+  | `git add mine.ts` | `git add theirs.ts` + bare `git commit` | stolen |
+  | `git add -N mine.ts` | `git add -A` or `git commit -a` | stolen |
+  | nothing at all | `git add -A` | stolen anyway |
+
+  An `-N` entry reports as *"Changes not staged for commit"*, which is why an
+  ordinary bare commit steps over it and a full `git add` hands it across. It is
+  **not** immunity — an `-A` sweep still takes it — but the last row is the point:
+  `-A` takes an untracked file whether or not you touched the index, so `-N`
+  never leaves you worse off and usually leaves you better. The good news in the
+  first block is that the failure is loud and total: a mixed pathspec aborts
+  rather than committing the tracked half and silently dropping the new file.
+
+  Same scoping as above — this only bites when two agents share one directory.
+
 ## Commands
 
 All of these run from the repo root and cover every workspace.
