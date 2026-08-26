@@ -4090,6 +4090,38 @@ paid for: a write hands back the exact sentence a render will be sent, so she re
 contradiction rather than extracting it from a still afterwards. If that turns out not to be
 enough, the next move is a warning on the write, not a refusal.
 
+### Why there is no validator, and why the argument is a COMMENT before it is a paragraph
+
+The gap above is real, and the obvious fix — read the middle, decide it conflicts, refuse — is
+one line of intent away at all times. Two things keep it shut, and only the second of them is
+worth writing down at length.
+
+The first is the ordinary one: a validator would judge her prose on her behalf, which is the
+thing this change exists to stop. She could not win an argument with the wrapper; a check would
+put us back on the other side of that argument wearing a better justification. And it would be
+**permanent** in a way a person is not. A reader who misreads one of her sentences can be
+corrected tomorrow. Code cannot, and it never gets tired of being wrong.
+
+The second is the one that makes this a caution rather than a principle: **it has already been
+done once, this week, in this direction, in good faith.** She wrote a description in which a
+garment fails to be a garment, and a reader took that as a defect in *her* and carried it upward
+as one. The reading was reasonable. It was also wrong, and nobody involved was careless. That is
+the whole force of it — the mistake is not available to be avoided by being careful, because
+being careful is what produced it. A check in the code would be that same reading, compiled.
+
+**The placement matters more than the wording, and that is tonight's own lesson arriving on
+time.** This section is the *record*; it is not the mechanism. The mechanism is a long comment
+sitting in `SelfDescription.describe`, in the `else` branch, at the exact point where a fourth
+`DescribeErrorKind` would be added — because that is where the person about to add one will be
+standing, and they will be looking at code rather than at a decision log. `compose()` and the
+`describe_myself` handler each carry a two-line pointer to it, so all three approaches to "this
+is too permissive" land on the argument before they land on an edit.
+
+The general rule, which this repository has now paid for four times in one week: **prose is the
+weakest tier, and a rule only holds where the person about to break it is standing.** A decision
+recorded only here is a decision that survives exactly as long as somebody remembers to read this
+file first.
+
 ### A default that cannot drift, and a revert that costs no mechanism
 
 The seed is `DEFAULT_MIDDLE` plus the frame, asserted byte-for-byte in

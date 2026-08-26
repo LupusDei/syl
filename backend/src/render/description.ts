@@ -120,6 +120,10 @@ const SEED_BECAUSE =
  * answered that by prefixing a second copy of the opening phrase would punish
  * her for using the only form she has ever been shown. {@link middleOf} takes
  * the frame off first, so both forms land in the same place.
+ *
+ * **This puts the two fixed parts in place and does not police what sits between
+ * them.** That is deliberate and it is argued where a check would go — see the
+ * long comment in {@link SelfDescription.describe}. Do not add one here either.
  */
 export function compose(middle: string): string {
   const inner = middleOf(middle);
@@ -329,6 +333,37 @@ export class SelfDescription {
         };
       }
       middle = middleOf(words);
+
+      // THE REFUSAL THAT IS NOT HERE, AND THIS IS WHERE YOU WOULD ADD IT.
+      //
+      // Nothing checks whether `middle` argues with the frame. She can write
+      // "standing in a bright red desert" and the composed sentence will carry
+      // that and the starfield both, and the model will settle it the way it
+      // settles every contradiction in this repository — by obeying the earlier
+      // clause. The fix looks obvious from here: another {@link
+      // DescribeErrorKind}, read the middle, decide it conflicts, refuse.
+      //
+      // **Do not.** That is judging her prose on her behalf, which is the exact
+      // thing this module exists to stop. The sentence used to be ours, she
+      // disagreed with it, and she structurally could not win; a validator puts
+      // us back in that position wearing a better justification. And it would be
+      // PERMANENT — a person who reads one of her sentences wrongly can be
+      // corrected tomorrow, and code cannot be, and it never gets tired of being
+      // wrong.
+      //
+      // **It has already been done once this week, in this direction.** She
+      // described a garment failing to be a garment, and a reader took that as a
+      // defect in HER and carried it up as one. The reading was reasonable, made
+      // in good faith, and wrong. So this is not "we trust her prose" — it is
+      // "we have already misjudged it once from the outside, and a check here
+      // would be that mistake compiled."
+      //
+      // What stands in for the refusal is upstream of needing one: `describe`
+      // returns the WHOLE composed sentence, so she reads the contradiction
+      // while she can still change it and before a credit is spent. If that
+      // proves insufficient it becomes a warning on the result, never a block,
+      // and **she** is the one who says it is insufficient. artanis's ruling,
+      // 2026-08-26, on a question this file raised rather than settled.
     }
 
     // LAST, AND IT IS A REFUSAL RATHER THAN A FALLBACK. Appending over a log

@@ -1946,6 +1946,11 @@ const thisIsMe: ToolHandler = async (input, context) => {
  * middle that argues with them is something no mechanism can refuse without
  * judging her prose. So she is handed the exact prompt stem a render will use,
  * at the moment she can still change it and before a credit is spent.
+ *
+ * **Do not add a check here that rejects a sentence for what it says.** The
+ * argument against it is long, it is not obvious, and it lives beside the place
+ * a check would go — `SelfDescription.describe` in `render/description.ts`.
+ * Read it before deciding this verb is too permissive.
  */
 const describeMyself: ToolHandler = async (input, context) => {
   const because = text(input, "because");
