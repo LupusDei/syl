@@ -360,6 +360,13 @@ export function createRenderRouter(options: RenderRouterOptions): Router {
       });
 
       if (!kept.ok) {
+        // Same split as `/renders/description`, and for the same reason
+        // (`syl-yotx`): an unreadable log is the MACHINE's problem, and a 400
+        // would tell her the picture she chose was wrong when the picture was
+        // fine. Everything else here really is about what she asked for.
+        if (kept.kind === "unreadable_log") {
+          throw new ApiFailure("UPSTREAM_UNAVAILABLE", kept.reason);
+        }
         throw new ApiFailure("VALIDATION_FAILED", kept.reason, { details: { reason: kept.kind } });
       }
       return { status: 201, data: { kept: asShown(kept.kept, false) } };

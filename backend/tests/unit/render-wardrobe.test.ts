@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -304,5 +312,59 @@ describe("a log it cannot read", () => {
     writeFileSync(studio.wardrobeLog, "{ this is not json");
 
     expect(wardrobe().opening()?.id).toBe("ribbon");
+  });
+
+  it("should refuse to adopt over it, rather than replacing every face she has had", () => {
+    // `syl-yotx`. `#append` used to write `[...(this.#log() ?? []), entry]`, and
+    // `#log()` is `null` exactly when the file is there and cannot be parsed —
+    // so one adoption REPLACED the whole log with a single fresh entry. Every
+    // face she had ever adopted and every reason she gave, gone, silently, on a
+    // call that answered 201.
+    //
+    // Constraint 6: the system does not get to discard her things. The one
+    // exception is the Commander's explicit order, and an adoption over a
+    // corrupt file has no order behind it — it is a routine write that happened
+    // to land on a bad byte. This file's own header already says "Nothing is
+    // ever replaced", so the behaviour contradicted the promise directly above
+    // it.
+    const sighting = showHerAStill("syl-a", 7.6, A_STILL);
+    const corrupt = '{ "kept": [ truncated';
+    writeFileSync(studio.wardrobeLog, corrupt);
+
+    const kept = wardrobe().keep({ sighting, role: "face", because: "the mouth is finally mine" });
+
+    expect(kept.ok).toBe(false);
+    if (kept.ok) return;
+    expect(kept.kind).toBe("unreadable_log");
+    // Byte-identical. A refusal that rewrote the file "safely" would be the same
+    // loss with a better name on it.
+    expect(readFileSync(studio.wardrobeLog, "utf8")).toBe(corrupt);
+  });
+
+  it("should name the file a person has to go and look at", () => {
+    // The refusal is the machine's problem, not hers, so it has to say which
+    // machine and which file. "I could not do that" sends her to apologise; the
+    // path sends somebody to fix it.
+    const sighting = showHerAStill("syl-a", 7.6, A_STILL);
+    writeFileSync(studio.wardrobeLog, '{ "kept": [ truncated');
+
+    const kept = wardrobe().keep({ sighting, role: "face", because: "the mouth is finally mine" });
+
+    expect(kept.ok).toBe(false);
+    if (kept.ok) return;
+    expect(kept.reason).toContain(studio.wardrobeLog);
+  });
+
+  it("should not copy the picture either, so a refused adoption leaves nothing behind", () => {
+    // The copy happens BEFORE the append, so a naive fix that only guarded the
+    // write would leave an orphaned face file in her wardrobe that no log entry
+    // names — a picture that is hers according to the disk and not according to
+    // her history. The guard has to run before anything is written at all.
+    const sighting = showHerAStill("syl-a", 7.6, A_STILL);
+    writeFileSync(studio.wardrobeLog, '{ "kept": [ truncated');
+
+    wardrobe().keep({ sighting, role: "face", because: "the mouth is finally mine" });
+
+    expect(existsSync(studio.faceDir) ? readdirSync(studio.faceDir) : []).toEqual([]);
   });
 });

@@ -4140,5 +4140,21 @@ One place this deliberately departs from `wardrobe.ts`: `Wardrobe.keep` appends 
 `this.#log() ?? []`, which **replaces a log it could not parse with a fresh one-entry file** —
 every earlier adoption gone, silently, at the moment the operator was least able to notice.
 `SelfDescription.describe` refuses instead, with `unreadable_log`. Constraint 6 is that the system
-does not get to discard things; a description she set last week is a thing. The wardrobe has the
-same hole and it is worth closing there too.
+does not get to discard things; a description she set last week is a thing.
+
+**The wardrobe had the same hole and it is now closed** (`syl-yotx`). Two details of the fix are
+worth keeping, because neither was the obvious part. It is checked **before the copy** rather than
+before the append — the copy runs first, so guarding only the write leaves a face file in her
+wardrobe that no entry names, which is a picture that is hers according to the disk and not
+according to her history. And `#append` and `#freeId` now **take** the parsed log rather than
+re-reading it, so the `?? []` is gone from the write path entirely instead of being guarded from
+a distance: the only list they can write is one `keep` has already proved it could parse, and
+there is no `??` left for a later reader to reintroduce.
+
+The `?? []` that remains in `openings()` is a **read** and stays. That one is documented and
+correct — the ribbon is a file at a known path, not a claim about which face is current.
+
+The general shape: `x ?? []` collapses *"there is nothing here yet"* and *"there is something
+here and I could not read it"* into one value, and those two differ exactly on the write path,
+exactly when it matters, and in the direction that destroys. It is worth grepping for on any
+append.

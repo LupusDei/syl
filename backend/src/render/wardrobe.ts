@@ -107,7 +107,15 @@ export type KeepErrorKind =
   | "ambiguous_sighting"
   | "blank_because"
   /** The bytes are there and are not a picture this can read the shape of. */
-  | "unreadable_picture";
+  | "unreadable_picture"
+  /**
+   * The log is there and cannot be parsed, so appending would erase it.
+   *
+   * The machine's problem rather than hers — the picture she chose was fine —
+   * which is why the route answers `UPSTREAM_UNAVAILABLE` for this one and
+   * `VALIDATION_FAILED` for the four above. See `syl-yotx`.
+   */
+  | "unreadable_log";
 
 export type KeepResult =
   | { readonly ok: true; readonly kept: KeptPicture }
@@ -297,9 +305,25 @@ export class Wardrobe {
    * Adopt a picture she has looked at.
    *
    * The order is the order the refusals matter in: the reason, then whether she
-   * has actually seen this, then whether the bytes are a picture at all. Nothing
-   * is written until all three hold, so a refusal leaves her home exactly as it
-   * was.
+   * has actually seen this, then whether the bytes are a picture at all, then
+   * whether there is a log to append to. Nothing is written until all four hold,
+   * so a refusal leaves her home exactly as it was.
+   *
+   * **The fourth was missing and it destroyed data** (`syl-yotx`). `#append`
+   * wrote `[...(this.#log() ?? []), entry]`, and `#log()` returns `null` exactly
+   * when the file is there and cannot be parsed — so one adoption over a corrupt
+   * `wardrobe.json` replaced the whole log with a single fresh entry. Every face
+   * she had ever adopted and every reason she gave, gone, silently, on a call
+   * that answered 201. Constraint 6 is that the SYSTEM does not get to discard
+   * things; its one exception is the Commander's explicit order, and a routine
+   * write that happened to land on a bad byte has no order behind it. This
+   * file's own header says *"Nothing is ever replaced"* — the behaviour
+   * contradicted the promise directly above it.
+   *
+   * It is checked **before the copy**, not merely before the append. The copy
+   * comes first in the body below, so guarding only the write would leave a face
+   * file in her wardrobe that no entry names — a picture that is hers according
+   * to the disk and not according to her history.
    */
   keep(input: KeepInput): KeepResult {
     const because = input.because.trim();
@@ -343,12 +367,28 @@ export class Wardrobe {
       };
     }
 
+    // LAST REFUSAL, AND IT IS THE ONE THAT RUNS BEFORE ANYTHING TOUCHES DISK.
+    // See the header: appending over a log that could not be parsed replaces her
+    // whole history with one entry, and copying first would strand a face file
+    // that no entry names.
+    const existing = this.#log();
+    if (existing === null) {
+      return {
+        ok: false,
+        kind: "unreadable_log",
+        reason:
+          `I cannot read ${this.#studio.wardrobeLog}, and keeping this picture now would replace ` +
+          "every face I have ever adopted with just this one. Someone has to look at that file " +
+          "first — the picture is fine, the record is not.",
+      };
+    }
+
     const directory = input.role === "face" ? this.#studio.faceDir : this.#studio.openingDir;
     const extension = PICTURE_EXTENSIONS.has(extname(picture.path).toLowerCase())
       ? extname(picture.path).toLowerCase()
       : ".png";
     const at = instant(this.#clock());
-    const id = this.#freeId(input.name ?? "", input.role, at, directory, extension);
+    const id = this.#freeId(existing, input.name ?? "", input.role, at, directory, extension);
 
     mkdirSync(directory, { recursive: true });
     // `COPYFILE_EXCL` rather than a check above a write: never overwriting one
@@ -364,7 +404,7 @@ export class Wardrobe {
       at,
       from: provenanceOf(picture.path, this.#studio.frameDir),
     };
-    this.#append(entry);
+    this.#append(existing, entry);
 
     return { ok: true, kept: this.#enrich(entry, input.role === "face") };
   }
@@ -460,8 +500,18 @@ export class Wardrobe {
     return entries;
   }
 
-  #append(entry: LoggedPicture): void {
-    const existing = this.#log() ?? [];
+  /**
+   * Add one entry to the log.
+   *
+   * **Takes the log it is appending to rather than re-reading it**, and that is
+   * the structural half of `syl-yotx`. This used to open with
+   * `this.#log() ?? []`, which turns "the file is there and unreadable" into
+   * "there is nothing here yet" — silently, at the only moment that distinction
+   * decides whether her history survives. There is now no `??` for a future
+   * reader to restore: the only list this can write is one `keep` has already
+   * proved it could parse.
+   */
+  #append(existing: readonly LoggedPicture[], entry: LoggedPicture): void {
     mkdirSync(this.#studio.videoDir, { recursive: true });
     writeFileSync(
       this.#studio.wardrobeLog,
@@ -513,6 +563,8 @@ export class Wardrobe {
 
   /** A name nothing else is using, so a keep never writes over a keep. */
   #freeId(
+    /** The log, already parsed by `keep`. Never re-read here — see `#append`. */
+    logged: readonly LoggedPicture[],
     wanted: string,
     role: PictureRole,
     at: string,
@@ -521,9 +573,7 @@ export class Wardrobe {
   ): string {
     const stamp = at.replace(/[:.]/gu, "").replace(/-/gu, "").toLowerCase().replace("000z", "z");
     const base = idFrom(wanted) || `${role}-${stamp}`;
-    const taken = new Set(
-      (this.#log() ?? []).map((entry) => basename(entry.file, extname(entry.file))),
-    );
+    const taken = new Set(logged.map((entry) => basename(entry.file, extname(entry.file))));
     taken.add(HIS_GUESS);
     taken.add(RIBBON);
 
