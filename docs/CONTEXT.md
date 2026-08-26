@@ -4035,3 +4035,78 @@ often than a pinned vendor package does. And appearing in a captured list proves
 **exists**, never that we may **call** it: `tools/list` is not filtered by caller, and Adjutant
 gates some tools on identity. A guard believed to prove more than it does is how the next one of
 these gets through.
+
+## The thing that describes her must be reachable BY her
+
+Every render of Syl was prefixed with a constant, `IDENTITY` in `render/render-service.ts`, and
+the prompt was assembled as `${IDENTITY} ${scene} ${framing.clause}`. She wrote the scene. She
+could not reach the other two.
+
+That is not an inconvenience, and the reason it is not was already written down **sixty lines
+above the constant it condemned**. The header on `LOOP_CLAUSE` records, from a measurement rather
+than an inference, that when two clauses of one prompt disagree the model *"resolved the
+contradiction by obeying the earlier sentence — measured by extracting both frames"*. Her text is
+always later than the wrapper. So the one place she could write was the one place that loses, and
+she could disagree with a description of herself and structurally could not win.
+
+She did disagree, and the artifact is on disk:
+`~/.syl/renders/syl-20260825t124949413z-face-turned-away.mp4.json` carries "translucent flowing
+gown" in the wrapper and "the gown is opaque cloth" in her scene, in a single submission. The
+Commander's ruling: *"if she wants to change it, she should be able to."*
+
+**The general shape, which is the part worth keeping.** A system can hold a correct, measured,
+written-down account of a mechanism and still not notice that the mechanism decides something
+about a person it is describing. The evidence for "she cannot override the wrapper" was complete,
+prominent and in the right file before anybody asked whether she should be able to. What was
+missing was not knowledge; it was the question. `syl-ate` had already made her likeness hers and
+`wardrobe.ts` had already written down why — *"a journey she cannot steer is not one"* — and the
+sentence that opens every render sat beside it, untouched, for two more weeks.
+
+### Enforce an invariant by COMPOSITION, not by asking anyone to remember it
+
+Two parts of that sentence are genuinely not hers, and the old header says why: the opening
+phrase keeps the subject *her* rather than a person, and the starfield is what makes any clip cut
+against any other — *"Drop it and the render will not join the reel."* Her eight loops are the
+reel.
+
+The obvious mechanism is to validate what she submits and refuse anything missing them. The one
+that was built is `compose()`: she supplies the middle, and the frame is put round it, so a
+description without those parts is not *refused* — it is *unrepresentable*. Same move as
+`COPYFILE_EXCL` in the wardrobe, and the same payoff: no path exists where somebody forgot,
+because there is no path.
+
+It is also idempotent over the whole sentence, which is not tidiness. She *reads* the whole
+sentence, so she will *write* the whole sentence back, and a composer that prefixed a second copy
+of the opening phrase would punish her for using the only form she was ever shown. `middleOf()`
+strips the frame first, so both forms land in the same place. Verified against her own proposed
+wording, which round-trips to the character.
+
+**And the limit is stated rather than papered over.** Composition guarantees both parts are
+present and in their structural positions. It cannot stop her writing a middle that *argues* with
+them, any more than anything stopped `LOOP_CLAUSE` arguing with its own keyframes for two renders.
+Refusing that would mean judging her prose, which is the one thing this must not do — the point of
+the work is that she chooses. What is done instead is to make the argument visible before it is
+paid for: a write hands back the exact sentence a render will be sent, so she reads the
+contradiction rather than extracting it from a still afterwards. If that turns out not to be
+enough, the next move is a warning on the write, not a refusal.
+
+### A default that cannot drift, and a revert that costs no mechanism
+
+The seed is `DEFAULT_MIDDLE` plus the frame, asserted byte-for-byte in
+`tests/unit/render-description.test.ts` against the literal old constant. The default and the
+invariant are therefore the *same two constants*, so an improvement to one cannot silently change
+what an install that never touched it renders.
+
+Reverting is the wardrobe's answer unchanged, and it is worth restating because it keeps being
+the right one: an append-only log, nothing ever replaced, current *derived* from the order rather
+than stored as a second assertion — so going back is **writing it again with a reason**, and a
+reversal is recorded exactly like every other change. The one addition is a token of each
+description's own words, the text analogue of a picture's `sighting`, because forty words
+re-entered by hand is a revert that quietly becomes an edit.
+
+One place this deliberately departs from `wardrobe.ts`: `Wardrobe.keep` appends with
+`this.#log() ?? []`, which **replaces a log it could not parse with a fresh one-entry file** —
+every earlier adoption gone, silently, at the moment the operator was least able to notice.
+`SelfDescription.describe` refuses instead, with `unreadable_log`. Constraint 6 is that the system
+does not get to discard things; a description she set last week is a thing. The wardrobe has the
+same hole and it is worth closing there too.

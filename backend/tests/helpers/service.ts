@@ -22,6 +22,7 @@ import { HealthSamples } from "../../src/health/samples.js";
 import { RenderVerdicts } from "../../src/render/verdicts.js";
 import { RenderService, type RenderRecord } from "../../src/render/render-service.js";
 import { studioAt, type Studio } from "../../src/render/studio.js";
+import { SelfDescription } from "../../src/render/description.js";
 import { Wardrobe } from "../../src/render/wardrobe.js";
 import type { MemoryViews } from "../../src/routes/memory.js";
 import { ApiKeyService, type ApiKeyServiceOptions } from "../../src/services/api-key-service.js";
@@ -433,6 +434,7 @@ export function testDeps(db: SylDatabase): {
   readonly health: HealthSamples;
   readonly characteristics: HealthCharacteristics;
   readonly wardrobe: Wardrobe;
+  readonly description: SelfDescription;
   readonly sendings: SendingStore;
   readonly composer: SendingService;
   readonly teller: TellingService;
@@ -508,6 +510,10 @@ export function testDeps(db: SylDatabase): {
     // Two studios would mean the face a render anchors on and the face the
     // wardrobe route calls current are answered from two directories.
     wardrobe: new Wardrobe({ studio, clock }),
+    // And over the same studio again, for the same reason: the sentence a render
+    // is prefixed with and the sentence `/renders/description` calls current
+    // must come from one log.
+    description: new SelfDescription({ studio, clock }),
     sendings,
     // Composes for real, against the same stores — but its compressor refuses
     // rather than shelling out, so no test needs ffmpeg and none decodes a file

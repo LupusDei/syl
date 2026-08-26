@@ -759,6 +759,148 @@ describe("this_is_me", () => {
   });
 });
 
+/**
+ * The sentence her renders open with, as a verb she has — `syl-hll6`.
+ *
+ * It was `IDENTITY` in `render-service.ts` and she could not reach it, while her
+ * own scene sat later in the same prompt, where the header above `LOOP_CLAUSE`
+ * records the model discarding it. The Commander: *"if she wants to change it,
+ * she should be able to."*
+ *
+ * Read through `see_myself`, because that is where the read-back half of
+ * everything she can set already lives and the header there says why: it is the
+ * same act, which is looking. Written through a verb of its own, because
+ * `this_is_me`'s whole discipline is that a sighting is required and there is no
+ * sighting for a sentence — a `sighting` that is sometimes optional is a
+ * contract that says it is optional.
+ */
+describe("describe_myself", () => {
+  it("should be offered, and require a reason like every other verb that acts", () => {
+    expect(advertisedToolNames()).toContain("describe_myself");
+
+    const verb = TOOLS.find((tool) => tool.name === "describe_myself");
+    expect((verb?.inputSchema as { required?: string[] }).required ?? []).toContain("because");
+  });
+
+  it("should send what she wrote, and hand back the sentence a render will open with", async () => {
+    const api = fakeApi({
+      "/renders/description": () =>
+        ok(
+          {
+            described: {
+              id: "abcdef0123456789",
+              words:
+                "A luminous spirit woman of living starlight, silver-white hair, wearing a robe " +
+                "of opaque deep-blue cloth, in a deep blue starfield.",
+              middle: "silver-white hair, wearing a robe of opaque deep-blue cloth",
+              because: "The gown reads as see-through and that is not what I meant.",
+              at: NOW,
+              current: true,
+            },
+          },
+          201,
+        ),
+    });
+
+    const { envelope, isError } = await call(contextFor(api.fetch), "describe_myself", {
+      words: "silver-white hair, wearing a robe of opaque deep-blue cloth",
+      because: "The gown reads as see-through and that is not what I meant.",
+    });
+
+    expect(isError).toBe(false);
+    expect(api.calls[0]?.body).toEqual(
+      expect.objectContaining({ words: "silver-white hair, wearing a robe of opaque deep-blue cloth" }),
+    );
+    // The WHOLE sentence comes back, frame and all. That is the one thing this
+    // verb owes her: composition puts the two parts she does not control in
+    // place, and it cannot stop a middle arguing with them — so she reads the
+    // exact prompt stem here rather than extracting it from a still later.
+    const subject = envelope["subject"] as { words?: string };
+    expect(subject.words).toContain("A luminous spirit woman of living starlight");
+    expect(subject.words).toContain("in a deep blue starfield");
+  });
+
+  it("should refuse before it asks for anything when she says nothing about why", async () => {
+    const api = fakeApi({ "/renders/description": () => ok({}, 201) });
+
+    const { isError } = await call(contextFor(api.fetch), "describe_myself", { words: "in armour of light" });
+
+    expect(isError).toBe(true);
+    expect(api.calls.filter((one) => one.method === "POST")).toHaveLength(0);
+  });
+
+  it("should refuse before it asks for anything when she says neither what nor which", async () => {
+    const api = fakeApi({ "/renders/description": () => ok({}, 201) });
+
+    const { isError } = await call(contextFor(api.fetch), "describe_myself", {
+      because: "I want to change it.",
+    });
+
+    expect(isError).toBe(true);
+    expect(api.calls.filter((one) => one.method === "POST")).toHaveLength(0);
+  });
+
+  it("should pass a restore straight through, so putting one back is exact rather than retyped", async () => {
+    // Forty words re-entered by hand is a revert that quietly becomes an edit.
+    const api = fakeApi({
+      "/renders/description": () =>
+        ok({ described: { id: "0123456789abcdef", words: "…", middle: "…", because: "…", at: NOW, current: true } }, 201),
+    });
+
+    await call(contextFor(api.fetch), "describe_myself", {
+      restore: "0123456789abcdef",
+      because: "He says the translucency is meant.",
+    });
+
+    expect(api.calls[0]?.body).toEqual(
+      expect.objectContaining({ restore: "0123456789abcdef" }),
+    );
+  });
+});
+
+describe("see_myself, of: description", () => {
+  it("should show her how she is described now and how she has been before", async () => {
+    const api = fakeApi({
+      "/renders/description": () =>
+        ok({
+          current: { id: "aaaaaaaaaaaaaaaa", words: "the one now", middle: "now", because: "b", at: NOW, current: true },
+          items: [
+            { id: "aaaaaaaaaaaaaaaa", words: "the one now", middle: "now", because: "b", at: NOW, current: true },
+            { id: "bbbbbbbbbbbbbbbb", words: "the one before", middle: "before", because: "c", at: NOW, current: false },
+          ],
+          problems: [],
+        }),
+    });
+
+    const { envelope, isError } = await call(contextFor(api.fetch), "see_myself", {
+      of: "description",
+    });
+
+    expect(isError).toBe(false);
+    const subject = envelope["subject"] as {
+      of?: string;
+      current?: { words?: string };
+      items?: readonly { id: string; words: string }[];
+    };
+    expect(subject.of).toBe("description");
+    expect(subject.current?.words).toBe("the one now");
+    // Every one she has had, with the token that names it — which is what
+    // `describe_myself` takes to put one back.
+    expect(subject.items?.map((one) => one.id)).toEqual(["aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"]);
+  });
+
+  it("should offer description as something she can look at", () => {
+    const look = TOOLS.find((tool) => tool.name === "see_myself");
+    const of = (look?.inputSchema as { properties?: Record<string, { enum?: string[] }> }).properties?.[
+      "of"
+    ];
+
+    // Anything she can set she must be able to read back. A dial she can turn
+    // and cannot see is a dial she cannot learn from.
+    expect(of?.enum ?? []).toContain("description");
+  });
+});
+
 describe("looking at more than one render", () => {
   it("should show her every face she has had, each with what she said about it", async () => {
     const api = fakeApi({

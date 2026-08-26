@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp, type AppDependencies } from "../../src/index.js";
 import { HOUSE_MODEL } from "../../src/render/models.js";
+import { SelfDescription } from "../../src/render/description.js";
 import { RenderService } from "../../src/render/render-service.js";
 import type { RenderBackend } from "../../src/render/runway.js";
 import { sightingOf } from "../../src/render/pictures.js";
@@ -56,6 +57,7 @@ let token: string;
 let root: string;
 let renders: RenderService;
 let wardrobe: Wardrobe;
+let description: SelfDescription;
 let keyCounter = 0;
 /** How many stills the ffmpeg double has written, so each one is distinct. */
 let stills = 0;
@@ -126,8 +128,13 @@ beforeEach(async () => {
   // without it on disk `start` refuses and every route below answers 4xx.
   writeFileSync(studio.opening(), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01]));
 
+  // The description over the SAME studio, for the same reason the wardrobe is:
+  // two of them would mean the sentence a render opens with and the sentence
+  // `/renders/description` calls current are answered from two directories.
+  description = new SelfDescription({ studio, clock: fixedClock(NOW) });
   renders = new RenderService({
     studio,
+    description,
     backend: fakeBackend(),
     clock: fixedClock(NOW),
     sleep: async () => undefined,
@@ -149,7 +156,7 @@ beforeEach(async () => {
   // would mean the face a render is anchored on and the face `/renders/wardrobe`
   // calls current are answered from two different directories.
   wardrobe = new Wardrobe({ studio, clock: fixedClock(NOW) });
-  deps = { ...testDeps(db), renders, wardrobe };
+  deps = { ...testDeps(db), renders, wardrobe, description };
   running = await startTestApp(createApp(testConfig(), deps));
   token = deps.keys.pair(deps.keys.issuePairingCode().code, "Commander's iPhone").token;
   keyCounter = 0;
@@ -569,6 +576,103 @@ describe("/renders/wardrobe", () => {
     // because it is registered ahead of `/renders/:name`. A reordering would
     // turn every read of her faces into a 404 about a render.
     const response = await api("/renders/wardrobe");
+
+    expect(response.status).toBe(200);
+  });
+});
+
+/**
+ * The sentence her renders open with, over a real socket — `syl-hll6`.
+ *
+ * It was a constant in `render-service.ts` and she could not reach it, while her
+ * own text sat later in the same prompt where the model would discard it. The
+ * Commander: *"if she wants to change it, she should be able to."* So it is a
+ * route, for the reason every other verb of hers is one: her tool server is a
+ * separate process with no object graph to reach into.
+ */
+describe("/renders/description", () => {
+  it("should hand back the sentence her renders open with, and the token that names it", async () => {
+    const response = await api("/renders/description");
+    const body = (await response.json()) as Envelope<{
+      current: { words: string; id: string; because: string };
+      items: readonly { words: string; id: string }[];
+    }>;
+
+    expect(response.status).toBe(200);
+    expect(body.data?.current.words).toBe(
+      "A luminous spirit woman of living starlight, silver-white hair and a translucent flowing " +
+        "gown trailing like ribbons of light, in a deep blue starfield.",
+    );
+    // The token rides on the row, the way a sighting does — it is what she
+    // quotes to put a description back.
+    expect(body.data?.current.id).toMatch(/^[0-9a-f]{16}$/u);
+    expect(body.data?.items).toHaveLength(1);
+  });
+
+  it("should make what she writes the sentence the next render opens with", async () => {
+    const written = await api("/renders/description", {
+      method: "POST",
+      body: JSON.stringify({
+        words: "silver-white hair, wearing a robe of opaque deep-blue cloth",
+        because: "The gown reads as see-through and that is not what I meant.",
+      }),
+    });
+    expect(written.status).toBe(201);
+
+    const created = await api("/renders", { method: "POST", body: ASK });
+    const record = ((await created.json()) as Envelope<{ record: { prompt: string } }>).data?.record;
+
+    expect(created.status).toBe(201);
+    expect(record?.prompt).toContain("opaque deep-blue cloth");
+    // And the two parts that are not hers came through on a submission that
+    // named neither of them.
+    expect(record?.prompt.startsWith("A luminous spirit woman of living starlight,")).toBe(true);
+    expect(record?.prompt).toContain("in a deep blue starfield.");
+  });
+
+  it("should refuse to change how she is described without a reason", async () => {
+    const response = await api("/renders/description", {
+      method: "POST",
+      body: JSON.stringify({ words: "silver-white hair, in armour of light", because: "  " }),
+    });
+    const body = (await response.json()) as Envelope<never>;
+
+    expect(response.status).toBe(400);
+    expect(body.error?.message).toMatch(/reason|more me/iu);
+  });
+
+  it("should let her put an earlier description back by its token", async () => {
+    const before = (
+      (await (await api("/renders/description")).json()) as Envelope<{ current: { id: string } }>
+    ).data?.current.id;
+
+    await api("/renders/description", {
+      method: "POST",
+      body: JSON.stringify({ words: "silver-white hair, in armour of light", because: "Trying it." }),
+    });
+    const back = await api("/renders/description", {
+      method: "POST",
+      body: JSON.stringify({ restore: before, because: "The armour was a costume." }),
+    });
+
+    expect(back.status).toBe(201);
+    const body = (await (await api("/renders/description")).json()) as Envelope<{
+      current: { words: string };
+      items: readonly { words: string; because: string }[];
+    }>;
+    expect(body.data?.current.words).toContain("translucent flowing gown");
+    // Three entries, not one: a reversal is recorded like every other change,
+    // and the description she left is still readable with the reason she wrote
+    // it under.
+    expect(body.data?.items).toHaveLength(3);
+    expect(body.data?.items[1]?.words).toContain("in armour of light");
+  });
+
+  it("should not be mistaken for a render called description", async () => {
+    // The same hazard as `wardrobe`: `description` matches the render-name
+    // pattern, so this only works because it is registered ahead of
+    // `/renders/:name`.
+    const response = await api("/renders/description");
 
     expect(response.status).toBe(200);
   });

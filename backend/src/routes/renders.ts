@@ -3,6 +3,13 @@ import { extname } from "node:path";
 
 import { Router, type Request, type RequestHandler } from "express";
 
+import {
+  compose,
+  DEFAULT_MIDDLE,
+  tokenOf,
+  type Described,
+  type SelfDescription,
+} from "../render/description.js";
 import { FRAMING_IDS } from "../render/framing.js";
 import type { RenderService } from "../render/render-service.js";
 import { isRenderName } from "../render/studio.js";
@@ -59,6 +66,15 @@ export interface RenderRouterOptions {
    * change her face, which is the state everything was in until `syl-ate`.
    */
   readonly wardrobe?: Wardrobe;
+  /**
+   * The sentence her renders open with, as a thing she writes (`syl-hll6`).
+   *
+   * Optional for the same reason the wardrobe is — a caller that only wants the
+   * render routes still gets them — and absent means the read answers with the
+   * shipped default and the write refuses, rather than the router failing to
+   * mount.
+   */
+  readonly description?: SelfDescription;
   readonly idempotency: IdempotencyStore;
   readonly authenticate: RequestHandler;
 }
@@ -192,11 +208,100 @@ function showOf(request: Request): number {
   return Math.min(Math.floor(show), SHOWN_AT_MOST);
 }
 
+/**
+ * What a machine with nowhere to keep a description answers with.
+ *
+ * The shipped default, composed the same way every other answer is, so the
+ * degraded case and the ordinary case cannot say different things about a home
+ * nobody has written to.
+ */
+function shippedDescription(): Described {
+  const words = compose(DEFAULT_MIDDLE);
+  return {
+    id: tokenOf(words),
+    words,
+    middle: DEFAULT_MIDDLE,
+    because: "The recipe every one of your eight loops was made with.",
+    at: "",
+    current: true,
+  };
+}
+
 export function createRenderRouter(options: RenderRouterOptions): Router {
-  const { renders, idempotency, authenticate, verdicts, wardrobe } = options;
+  const { renders, idempotency, authenticate, verdicts, wardrobe, description } = options;
   const router = Router();
 
   router.use("/renders", authenticate);
+
+  /**
+   * How she is described, and how she has described herself before.
+   *
+   * **Registered before `/renders/:name`** for the same reason the wardrobe
+   * routes are: `description` matches the render-name pattern, and Express
+   * takes the first route that matches.
+   *
+   * `current` rides beside `items` even though it is `items[0]`. The caller
+   * that needs it most is the one that wants the sentence and nothing else, and
+   * making it dig the current row out of a history is how a client ends up
+   * picking the wrong one.
+   */
+  router.get("/renders/description", (_request, response) => {
+    if (description === undefined) {
+      const shipped = shippedDescription();
+      sendOk(response, { current: shipped, items: [shipped], problems: [] });
+      return;
+    }
+
+    const items = description.history();
+    sendOk(response, {
+      current: items[0] ?? shippedDescription(),
+      items,
+      // What could not be read, so a description that has quietly fallen back to
+      // the shipped one says so rather than passing for a choice.
+      problems: description.problems(),
+    });
+  });
+
+  /**
+   * Say what she is, or put back something she said before.
+   *
+   * Idempotent like every other write here, and it matters for the reason it
+   * matters on the wardrobe: a retry that got through would write two changes of
+   * self-description in the same second, which reads back as her changing her
+   * mind about herself twice.
+   */
+  router.post("/renders/description", (request, response) => {
+    if (description === undefined) {
+      throw new ApiFailure(
+        "UPSTREAM_UNAVAILABLE",
+        "There is nowhere on this machine to keep a description, so I cannot change mine.",
+      );
+    }
+
+    const outcome = runIdempotent(idempotency, request, () => {
+      const body = bodyOf(request);
+      const written = description.describe({
+        ...(typeof body["words"] === "string" ? { words: body["words"] } : {}),
+        ...(typeof body["restore"] === "string" ? { restore: body["restore"] } : {}),
+        because: typeof body["because"] === "string" ? body["because"] : "",
+      });
+
+      if (!written.ok) {
+        // `unreadable_log` is the machine's problem rather than the caller's, so
+        // it does not present as a validation failure — a 400 would tell her the
+        // sentence she wrote was wrong when the sentence was fine.
+        if (written.kind === "unreadable_log") {
+          throw new ApiFailure("UPSTREAM_UNAVAILABLE", written.reason);
+        }
+        throw new ApiFailure("VALIDATION_FAILED", written.reason, {
+          details: { reason: written.kind },
+        });
+      }
+      return { status: 201, data: { described: written.described } };
+    });
+
+    sendIdempotent(response, outcome);
+  });
 
   /**
    * Every face she has had and every opening she can choose.

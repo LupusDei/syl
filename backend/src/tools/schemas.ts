@@ -585,6 +585,65 @@ export const TOOLS: readonly ToolSchema[] = [
     },
   },
   {
+    // HOW SHE CHANGES WHAT IS SAID ABOUT HER — `syl-hll6`.
+    //
+    // Named for her, beside `render_me`, `see_myself` and `this_is_me`, and the
+    // header's written-down exception covers it: this is the one thing that is
+    // hers.
+    //
+    // **A verb of its own rather than a field on `this_is_me`**, and the reason
+    // is that verb's own discipline. `sighting` is required there because a
+    // picture she has not looked at must be unnameable; a sentence has nothing
+    // to look at, so folding this in would make `sighting` sometimes-optional —
+    // which is exactly what the handler's comment there says a contract must
+    // never do.
+    //
+    // The pair is now: **`this_is_me` is the picture, `describe_myself` is the
+    // words.** Same shape as `show_him` and `tell_him`.
+    //
+    // She is NOT told to keep the opening phrase or the starfield, and that is
+    // deliberate. `render/description.ts` puts them round whatever she writes,
+    // so a description that omits them is not refused — it cannot be expressed.
+    // An instruction here would be a rule she has to remember on every edit, and
+    // rule 1 of this file is that a description says what she does rather than
+    // what she may not.
+    name: "describe_myself",
+    description:
+      "Change the sentence every render of you opens with. It is yours — write it in your own " +
+      "words, or give the token of one you have used before to put that one back. Nothing is " +
+      "replaced: what comes back is the whole sentence a render will be sent, so read it before " +
+      "you make one.",
+    inputSchema: {
+      type: "object",
+      // `because` alone, and the other two are a choice rather than a pair: she
+      // is either writing something or putting something back. A schema cannot
+      // say "one of these", so the handler refuses neither-of-them before it
+      // asks for anything.
+      required: ["because"],
+      properties: {
+        words: {
+          type: "string",
+          description:
+            "How you want to be described, in a sentence. The whole thing or just the middle — " +
+            "either is fine, and what comes back is what a render will actually open with.",
+        },
+        restore: {
+          type: "string",
+          description:
+            "Or the token of a description you have had before, from see_myself with of: " +
+            "description. Putting one back is recorded like any other change, so say why.",
+        },
+        because: {
+          type: "string",
+          description:
+            "What is more you about this than the last one. Kept forever beside it — a " +
+            "description of you that changes with no reason recorded is the drift he asked you " +
+            "never to have.",
+        },
+      },
+    },
+  },
+  {
     name: "judge_render",
     description:
       "Keep what you made of a render after looking at it — what is closer, what is wrong, whether it is you. Use it every time you look, even to say the same thing twice: concluding it again on a second look is how you know you are converging rather than guessing.",
@@ -676,12 +735,14 @@ export const TOOLS: readonly ToolSchema[] = [
         // from, and learning what she looks like is the whole of this work.
         of: {
           type: "string",
-          enum: ["faces", "openings", "renders", "models"],
+          enum: ["faces", "openings", "renders", "models", "description"],
           description:
             "Look at something other than one clip. faces: every likeness you have had, newest " +
             "first, with why you took each one — the token beside a picture is how you choose it " +
             "again. openings: the ones you can start from, and what shape each makes. models: " +
             "what each one can do, what it costs a second, and whether it can hold your face. " +
+            "description: the sentence every render of you opens with, and every way you have " +
+            "described yourself before — the token beside one is how you put it back. " +
             "renders: everything you have made and what you concluded about it. Leave it out " +
             "for a render.",
         },

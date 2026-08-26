@@ -3,6 +3,7 @@ import { basename, dirname, resolve } from "node:path";
 
 import { instant, systemClock, type Clock } from "../services/clock.js";
 import { creditsFor, usdOf } from "./credits.js";
+import { SelfDescription } from "./description.js";
 import {
   framingNote,
   FRAMING_IDS,
@@ -503,20 +504,36 @@ export interface StartInput {
 }
 
 /**
- * The recipe every one of the eight loops was made with.
+ * The recipe every one of the eight loops was made with — **and it is no longer
+ * here, because it is no longer ours** (`syl-hll6`).
  *
- * `shots.json` opens all eight prompts with this phrase, and the loop clause
- * closes all eight. Neither is decoration: the opening is what keeps the
+ * `shots.json` opens all eight prompts with an identity phrase, and the loop
+ * clause closes all eight. Neither is decoration: the opening is what keeps the
  * subject *her* rather than a person, and the closing clause is what makes any
  * clip cut against any other — a property of the prompt, not of the editing.
  * Drop it and the render will not join the reel.
  *
- * She supplies the middle. That is the part worth experimenting with, and the
- * part `docs/VIDEO.md` says is worth keeping.
+ * This used to be a constant called `IDENTITY`, holding the whole sentence.
+ * *"She supplies the middle"* was written here as a description of the recipe,
+ * and it was false as a description of her: the middle was ours too, and the
+ * prompt is `${IDENTITY} ${scene} ${framing.clause}`, so her scene is always
+ * LATER than the wrapper. {@link LOOP_CLAUSE} below records what the model does
+ * with a contradiction — it obeys the earlier sentence, measured by extracting
+ * both frames — which means she could disagree with a description of herself
+ * and structurally could not win. She tried, in
+ * `syl-20260825t124949413z-face-turned-away.mp4.json`: "translucent flowing
+ * gown" in the wrapper, "the gown is opaque cloth" in her scene, one
+ * submission.
+ *
+ * The Commander: *"if she wants to change it, she should be able to."*
+ *
+ * So the sentence now comes from `description.ts`, which she can read and set
+ * through her own tools, and the two parts that are not hers survive by
+ * composition rather than by anybody remembering them. `IDENTITY` is gone
+ * deliberately rather than moved: a constant here would be a second answer to
+ * the question the log answers, and the whole defect was that the answer lived
+ * where she could not reach it.
  */
-const IDENTITY =
-  "A luminous spirit woman of living starlight, silver-white hair and a translucent flowing gown " +
-  "trailing like ribbons of light, in a deep blue starfield.";
 
 /**
  * The arc, not just the endpoints.
@@ -865,6 +882,16 @@ export interface RenderServiceOptions {
    * still, not so two of them can disagree about which face is hers.
    */
   readonly wardrobe?: Wardrobe;
+  /**
+   * The sentence her renders open with, as a thing she sets (`syl-hll6`).
+   *
+   * Optional and built from the studio when absent, for exactly the reason the
+   * wardrobe is: it is entirely a function of her home, so there is nothing a
+   * caller could supply that this could not work out. The seam exists so a test
+   * can hold the clock still — not so two of them can disagree about how she is
+   * described, which is the defect this whole change is about.
+   */
+  readonly description?: SelfDescription;
   /** `null` on a machine with no `RUNWAYML_API_SECRET`, which is most of them. */
   readonly backend: RenderBackend | null;
   readonly clock?: Clock;
@@ -903,6 +930,7 @@ export interface RenderServiceOptions {
 export class RenderService {
   readonly #studio: Studio;
   readonly #wardrobe: Wardrobe;
+  readonly #description: SelfDescription;
   readonly #backend: RenderBackend | null;
   readonly #clock: Clock;
   readonly #sleep: (ms: number) => Promise<void>;
@@ -919,6 +947,8 @@ export class RenderService {
     this.#clock = options.clock ?? systemClock;
     this.#wardrobe =
       options.wardrobe ?? new Wardrobe({ studio: options.studio, clock: this.#clock });
+    this.#description =
+      options.description ?? new SelfDescription({ studio: options.studio, clock: this.#clock });
     this.#backend = options.backend;
     this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#pollMs = options.pollMs ?? POLL_MS;
@@ -1487,7 +1517,11 @@ export class RenderService {
     /** What she asked for, already checked against the chosen model's range. */
     readonly seconds: number;
   }): readonly PlannedPart[] {
-    const stem = `${IDENTITY} ${input.scene} ${input.framing.clause}`;
+    // HER SENTENCE, read at plan time rather than captured at construction, so
+    // a description she changes is in effect on the very next render instead of
+    // on the next restart. The whole prompt still lands in the sidecar, so which
+    // description a given render was made with stays answerable afterwards.
+    const stem = `${this.#description.sentence()} ${input.scene} ${input.framing.clause}`;
 
     if (input.anchor === null) {
       // BOTH SLOTS GO TO THE OPENING. There is no face in this shot to pin, so

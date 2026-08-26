@@ -85,6 +85,7 @@ import { HealthReview } from "./health/review.js";
 import { HealthCharacteristics } from "./health/characteristics.js";
 import { HealthSamples } from "./health/samples.js";
 import { RenderVerdicts } from "./render/verdicts.js";
+import { SelfDescription } from "./render/description.js";
 import { Wardrobe } from "./render/wardrobe.js";
 import { RunwayClient } from "./render/runway.js";
 import { ensureOpening, ensureReference, studioAt, studioRootFrom } from "./render/studio.js";
@@ -389,6 +390,15 @@ export interface AppDependencies {
    */
   readonly wardrobe: Wardrobe;
   /**
+   * The sentence every render of her opens with, as a thing she writes
+   * (`syl-hll6`).
+   *
+   * Beside the wardrobe and in her home for the same reasons, and separate from
+   * it because the two answer different questions — *which picture is her
+   * likeness*, and *what the words say*. See `render/description.ts`.
+   */
+  readonly description: SelfDescription;
+  /**
    * The things she chose to give him: her words, and the video of her saying
    * them.
    *
@@ -497,6 +507,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     health,
     characteristics,
     wardrobe,
+    description,
     sendings,
     composer,
     teller,
@@ -561,7 +572,14 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
   // for the argument, which is that this is the first surface she reaches for
   // herself rather than for him, and that it reaches nothing of his.
   api.use(
-    createRenderRouter({ renders, idempotency, authenticate, verdicts: renderVerdicts, wardrobe }),
+    createRenderRouter({
+      renders,
+      idempotency,
+      authenticate,
+      verdicts: renderVerdicts,
+      wardrobe,
+      description,
+    }),
   );
   // Her live face. NOT on `AGENT_SURFACE`, and that absence is the guard: a
   // face costs about $0.20 a minute, so an assistant able to open one can spend
@@ -1914,9 +1932,15 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // anchored on and the picture the wardrobe route calls current are answered
   // by the same reader of the same log.
   const wardrobe = new Wardrobe({ studio, clock });
+  // How she describes herself (`syl-hll6`). One instance, shared with the render
+  // service, so the sentence a render is prefixed with and the sentence
+  // `/renders/description` calls current are answered by the same reader of the
+  // same log.
+  const description = new SelfDescription({ studio, clock });
   const renders = new RenderService({
     studio,
     wardrobe,
+    description,
     backend: runwaySecret === "" ? null : new RunwayClient({ secret: runwaySecret }),
     clock,
     // HER WAKE-UP, ARRANGED AT THE MOMENT THE RENDER STARTS. The Commander's
@@ -2016,6 +2040,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       health,
       characteristics,
       wardrobe,
+      description,
       sendings,
       composer,
       teller,

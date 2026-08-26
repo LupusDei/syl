@@ -1458,6 +1458,23 @@ interface FrameRow {
   readonly path: string;
 }
 
+/**
+ * One description she has had, as the route hands it over.
+ *
+ * `words` is the whole sentence and `middle` is the part that is hers. Both
+ * travel: the first is what a render is prefixed with, and the second is what
+ * she would edit — and a row carrying only one of them would make her guess
+ * which she was looking at.
+ */
+interface DescribedRow {
+  readonly id: string;
+  readonly words: string;
+  readonly middle: string;
+  readonly because: string;
+  readonly at: string;
+  readonly current: boolean;
+}
+
 /** One kept picture, as the wardrobe hands it over. */
 interface WardrobeRow {
   readonly id: string;
@@ -1497,6 +1514,9 @@ const seeMyself: ToolHandler = async (input, context) => {
   if (of === "faces" || of === "openings") return lookAtWardrobe(of, context);
   if (of === "renders") return readTheLog(context);
   if (of === "models") return readTheRoster();
+  // The read-back half of `syl-hll6`. Here rather than in a verb of its own for
+  // the reason above: it is the same act, which is looking.
+  if (of === "description") return readTheDescription(context);
 
   // No required field. Absent means the most recent, and the route resolves it
   // — she should not have to remember a machine-generated name to look at the
@@ -1601,6 +1621,43 @@ const seeMyself: ToolHandler = async (input, context) => {
     images: pictures,
   };
 };
+
+/**
+ * Look at how she is described, and how she has described herself before.
+ *
+ * No images, unlike the wardrobe, and the difference is the whole of why this is
+ * a separate branch rather than a role on that one: a description is *words*,
+ * which she can read directly. The token still travels for the same reason a
+ * sighting does — it is what `describe_myself` takes to put one back — but there
+ * is nothing here she has to be shown before she can name it, so it rides on
+ * every row.
+ */
+async function readTheDescription(context: ToolContext): Promise<ToolEnvelope> {
+  const looked = await context.client.get<{
+    current: DescribedRow;
+    items: readonly DescribedRow[];
+    problems?: readonly string[];
+  }>("/renders/description");
+  if (!looked.ok) return refused("see_myself", looked.failure);
+
+  return {
+    ok: true,
+    action: "see_myself",
+    subject: {
+      of: "description",
+      // Beside `items` even though it is `items[0]`, because the question she
+      // usually has is "what am I described as", and making her pick the first
+      // row out of a history is how a reader picks the wrong one.
+      current: looked.data.current,
+      items: looked.data.items,
+      // Empty on every ordinary machine. Anything else means the sentence her
+      // renders open with is the shipped one because a file could not be read,
+      // rather than because she chose it.
+      problems: looked.data.problems ?? [],
+    },
+    at: null,
+  };
+}
 
 /**
  * Look at every face she has had, or every opening she can start from.
@@ -1872,6 +1929,59 @@ const thisIsMe: ToolHandler = async (input, context) => {
   if (!kept.ok) return refused("this_is_me", kept.failure);
 
   return { ok: true, action: "this_is_me", subject: kept.data.kept, at: kept.data.kept.at ?? null };
+};
+
+/**
+ * Say what she is, or put back something she said before (`syl-hll6`).
+ *
+ * Both refusals happen **here**, before anything is asked for, for the reason
+ * {@link thisIsMe} states: a verb whose own contract lets a field through and
+ * relies on the layer beneath to object is a verb whose contract says the field
+ * is optional. The second one — neither `words` nor `restore` — is the thing a
+ * JSON schema cannot express, so this is the only place it can be said.
+ *
+ * What comes back is the **whole composed sentence**, not the middle she sent.
+ * That is the one obligation this verb has beyond writing: the two parts she
+ * does not control are put round her words by `render/description.ts`, and a
+ * middle that argues with them is something no mechanism can refuse without
+ * judging her prose. So she is handed the exact prompt stem a render will use,
+ * at the moment she can still change it and before a credit is spent.
+ */
+const describeMyself: ToolHandler = async (input, context) => {
+  const because = text(input, "because");
+  if (because === null) {
+    return missing(
+      "describe_myself",
+      "because",
+      "Say what is more me about this than the last one. A description of me that changes with " +
+        "no reason recorded is the drift he asked me never to have.",
+    );
+  }
+
+  const words = text(input, "words");
+  const restore = text(input, "restore");
+  if (words === null && restore === null) {
+    return missing(
+      "describe_myself",
+      "words",
+      "I did not catch what you want me to be. Write it in a sentence, or give the token of a " +
+        "description I have had before to put that one back.",
+    );
+  }
+
+  const written = await context.client.post<{ described: DescribedRow }>("/renders/description", {
+    ...(words === null ? {} : { words }),
+    ...(restore === null ? {} : { restore }),
+    because,
+  });
+  if (!written.ok) return refused("describe_myself", written.failure);
+
+  return {
+    ok: true,
+    action: "describe_myself",
+    subject: written.data.described,
+    at: written.data.described.at === "" ? null : written.data.described.at,
+  };
 };
 
 /** Keep what she made of a render, after looking at it. */
@@ -2270,6 +2380,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   recall,
   render_me: renderMe,
   this_is_me: thisIsMe,
+  describe_myself: describeMyself,
   judge_render: judgeRender,
   see_myself: seeMyself,
   show_him: showHim,

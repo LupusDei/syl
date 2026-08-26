@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { fixedClock } from "../../src/services/clock.js";
+import { SelfDescription } from "../../src/render/description.js";
 import type { FrameRunner } from "../../src/render/frames.js";
 import { HOUSE_MODEL } from "../../src/render/models.js";
 import { RenderService, type RenderRecord } from "../../src/render/render-service.js";
@@ -291,6 +292,53 @@ describe("asking for a render", () => {
     expect(prompt).toMatch(/coalesces into her/iu);
     expect(prompt).toMatch(/unravels back into the ribbon/iu);
     expect(prompt).toMatch(/first and last frames are identical/iu);
+  });
+
+  it("should open the prompt with the description SHE set, not with a constant", async () => {
+    // `syl-hll6`. The wrapper was `IDENTITY`, a constant she could not reach,
+    // and her scene is always LATER in the prompt than the wrapper — which the
+    // header above `LOOP_CLAUSE` records the model resolving in the wrapper's
+    // favour. So this is not a preference being honoured; it is the only place
+    // in the prompt where a disagreement about her appearance can be settled by
+    // her.
+    const self = new SelfDescription({ studio, clock: fixedClock(NOW) });
+    const written = self.describe({
+      words: "silver-white hair, wearing a robe of opaque deep-blue cloth",
+      because: "The gown reads as see-through and that is not what I meant.",
+    });
+    expect(written.ok).toBe(true);
+
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+    await service.start({ ...ASK, framing: "face_turned_away" });
+
+    const prompt = backend.specs[0]?.promptText ?? "";
+    expect(prompt).toContain("opaque deep-blue cloth");
+    expect(prompt).not.toContain("translucent flowing gown");
+    // And the two parts that are not hers came through anyway, on a submission
+    // that named neither of them.
+    expect(prompt.startsWith("A luminous spirit woman of living starlight,")).toBe(true);
+    expect(prompt).toContain("in a deep blue starfield.");
+  });
+
+  it("should record the description a render was made with, in the render's own prompt", async () => {
+    // The log says how she describes herself NOW. The sidecar has to say how she
+    // described herself THEN, or a change makes every earlier render unreadable
+    // as evidence — which is the failure `docs/VIDEO.md` exists because of: the
+    // outputs survived and the inputs did not.
+    const self = new SelfDescription({ studio, clock: fixedClock(NOW) });
+    self.describe({ words: "silver-white hair, in armour of light", because: "Trying something." });
+
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+    const started = await service.start(ASK);
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    expect(started.record.prompt).toContain("in armour of light");
+    expect(readFileSync(studio.sidecar(started.record.name), "utf8")).toContain("in armour of light");
+
+    await service.drain();
   });
 
   it("should open on the bare ribbon the eight loops open on, never on her own face", async () => {

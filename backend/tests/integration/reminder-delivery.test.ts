@@ -29,6 +29,7 @@ import { SendingStore } from "../../src/services/sending-store.js";
 import { HealthCharacteristics } from "../../src/health/characteristics.js";
 import { HealthSamples } from "../../src/health/samples.js";
 import { RenderVerdicts } from "../../src/render/verdicts.js";
+import { SelfDescription } from "../../src/render/description.js";
 import { Wardrobe } from "../../src/render/wardrobe.js";
 import { RenderWatchStore } from "../../src/services/render-watch-store.js";
 import { SyncService } from "../../src/services/sync-service.js";
@@ -188,6 +189,7 @@ describe("syl-002.5.1 — a reminder reaches the Commander", () => {
         renders,
         // Over the same studio, exactly as `bootstrap` builds them.
         wardrobe: new Wardrobe({ studio, clock }),
+        description: new SelfDescription({ studio, clock }),
         sendings,
         composer: new SendingService({
           sendings,

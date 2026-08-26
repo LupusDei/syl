@@ -163,6 +163,21 @@ const UNDECLARED: readonly string[] = [
   // second client guessing at that body would be guessing at her likeness.
   "GET /renders/wardrobe",
   "POST /renders/wardrobe",
+  // `syl-hll6` — the sentence every render of her opens with, which used to be
+  // a constant in `render-service.ts` that she could not reach. Joins the render
+  // debt above for the same reason its neighbours do, and goes with them in the
+  // same pass.
+  //
+  // Two things a second client would have to be told rather than guess. The
+  // body is `{ words | restore, because }` and it is a CHOICE, not a pair — a
+  // schema cannot say "one of these", so the handler refuses neither-of-them and
+  // a generated client would need that stated. And `words` is not stored as
+  // sent: the identity phrase and the starfield are composed round it, so what
+  // comes back is the whole sentence and it is longer than what went in. A
+  // client that echoed its own request as the new value would be displaying
+  // something no render will ever use.
+  "GET /renders/description",
+  "POST /renders/description",
   // `syl-0x1h` — her unprompted voice, with nothing attached to it. Joins the
   // debt above with the same argument and one difference worth stating: this
   // one REACHES HIM, so it is the undeclared route whose behaviour a second

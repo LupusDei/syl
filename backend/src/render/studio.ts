@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
  *     ~/.syl/renders/faces/              every likeness she has adopted since
  *     ~/.syl/renders/openings/           every opening she has kept beyond the ribbon
  *     ~/.syl/renders/wardrobe.json       what she adopted, when, and why
+ *     ~/.syl/renders/description.json    how she has described herself, and why
  *
  * Flat and obvious on purpose. `characters/syl/video` was the *toolkit's*
  * nesting — it disambiguated her from other characters in a repository that
@@ -183,6 +184,19 @@ export interface Studio {
    * it rather than stored as a second assertion that could disagree.
    */
   readonly wardrobeLog: string;
+  /**
+   * The record of how she has described herself, and why.
+   *
+   * Beside the wardrobe and under the same rules: append-only, nothing ever
+   * edited or removed, and which description is current *derived* from the
+   * order rather than stored as a second assertion. See `render/description.ts`.
+   *
+   * A separate file rather than a role inside `wardrobe.json`, because the two
+   * answer different questions — *which picture is her likeness* and *what the
+   * sentence a render opens with says* — and a wardrobe entry has a `file` that
+   * a description has nothing to put in.
+   */
+  readonly descriptionLog: string;
   /** Her likeness, absolute. What a shot of her face would anchor on. */
   reference(relative?: string): string;
   /** The ribbon still handed to the model as `promptImage`, absolute. Frame one. */
@@ -240,6 +254,7 @@ export function studioAt(root: string): Studio {
     faceDir,
     openingDir,
     wardrobeLog: resolve(videoDir, "wardrobe.json"),
+    descriptionLog: resolve(videoDir, "description.json"),
     reference: (relative = DEFAULT_REFERENCE) => resolve(root, relative),
     opening: (relative = DEFAULT_OPENING) => resolve(root, relative),
     video: (name) => resolve(videoDir, `${name}.mp4`),
