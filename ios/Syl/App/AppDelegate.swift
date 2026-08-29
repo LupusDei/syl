@@ -246,7 +246,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
         // row and the intent in one transaction and then wants to leave the device now —
         // without this it would sit in the outbox until something else happened to
         // trigger a sync.
-        let home = HomeViewModel(store: store, flush: { await engine.synchronise() })
+        // The SAME outbox object the engine drains, so what the screen reports as stuck
+        // and what the push is failing on are one queue rather than two views of one
+        // table that could disagree.
+        let home = HomeViewModel(store: store, outbox: outbox, flush: { await engine.synchronise() })
         // A capture written on a live network should reach Syl now rather than at the
         // next scheduled sync. It is already durable either way — `createTodo` writes the
         // row and the intent in one transaction — so this only shortens the wait.

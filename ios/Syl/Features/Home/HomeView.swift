@@ -40,6 +40,12 @@ struct HomeView: View {
     /// Defaulted so every existing caller keeps compiling into the succeeded case, which
     /// is what they all meant; only ``HomeScreen`` has a failure to pass.
     var loadFailure: String?
+    /// What he did that Syl has not been told about, if anything.
+    ///
+    /// Defaulted like ``loadFailure``, so every preview and offscreen render draws the
+    /// screen it drew before. See ``StallNotice`` for why the words live outside this
+    /// file and ``queueHasStalled(_:)`` for why the card is drawn where it is.
+    var stall: StallNotice?
     var presence: PresenceState
     var presenceIntensity: Double
     var now: Date
@@ -438,6 +444,14 @@ struct HomeView: View {
                 NoteCard(note: note)
             }
 
+            // ABOVE the spine and outside the three-way choice below, because it is true
+            // of every one of those states. A day that reads as clear while three of his
+            // completions sit undelivered is the most misleading version of this screen
+            // there is, and it is the version he actually had for three days.
+            if let stall {
+                queueHasStalled(stall)
+            }
+
             if let failure = loadFailure {
                 // BEFORE ANY READING OF THE SPINE. An empty spine means "nothing is due"
                 // only when the read that produced it succeeded; if it failed, the spine
@@ -495,6 +509,41 @@ struct HomeView: View {
             Text(failure)
                 .font(SylTheme.Typeface.detail.monospaced())
                 .foregroundStyle(SylTheme.Colour.inkSoft)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+        .accessibilityElement(children: .combine)
+    }
+
+    /// His work is on this device and nowhere else, and this is the screen that says so.
+    ///
+    /// Not a toast and not a badge. He finishes things here, the row leaves the spine
+    /// looking finished, and the queue behind it is the one part of that transaction he
+    /// cannot see — so the notice has to sit in the day itself, above the work, for as
+    /// long as it is true. It disappears on its own the moment the queue drains, because
+    /// it is derived from the queue rather than dismissed.
+    ///
+    /// The date is rendered rather than counted in words: "since Tuesday" is what turns
+    /// this from a network grumble into the fact that Syl has been out of step with him
+    /// for three days.
+    private func queueHasStalled(_ notice: StallNotice) -> some View {
+        VStack(alignment: .leading, spacing: SylTheme.Metric.snug) {
+            Text(notice.title)
+                .font(SylTheme.Typeface.title)
+                .foregroundStyle(SylTheme.Colour.ink)
+
+            Text(notice.detail)
+                .font(SylTheme.Typeface.detail)
+                .foregroundStyle(SylTheme.Colour.inkSoft)
+
+            Text("Since \(notice.since.formatted(.dateTime.weekday(.wide).hour().minute()))")
+                .font(SylTheme.Typeface.detail)
+                .foregroundStyle(SylTheme.Colour.inkSoft)
+
+            Text(notice.reason)
+                .font(SylTheme.Typeface.detail.monospaced())
+                .foregroundStyle(SylTheme.Colour.inkFaint)
                 .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

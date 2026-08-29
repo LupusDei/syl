@@ -61,6 +61,7 @@ import { MemoryGraft } from "./connections/graft.js";
 import { ArticleIntake } from "./connections/intake.js";
 import { IntakeStore } from "./connections/intake-store.js";
 import { anyAuthenticatedDevice, requireBearerToken } from "./middleware/auth.js";
+import { logRequests } from "./middleware/request-log.js";
 import { createAttachmentRouter, UPLOAD_BODY_LIMIT_BYTES } from "./routes/attachments.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createConversationRouter } from "./routes/conversations.js";
@@ -441,6 +442,22 @@ export interface AppDependencies {
    * answer instead of a line on a status page.
    */
   readonly clock?: Clock;
+  /**
+   * Where one line per request goes. Omit and the service serves requests
+   * without writing down that it did.
+   *
+   * **Optional because a unit test must not write into the file the running
+   * service writes into**, not because the live service may go without: `main`
+   * builds the logger, `startSyl` hands it here, and the one line in
+   * `createApp` that mounts `logRequests` is the whole wiring.
+   *
+   * It exists because of the three days in August 2026 when the Commander's
+   * to-do completions stopped arriving and this service could say *nothing* —
+   * not that they had arrived and failed, not that they had never come. The
+   * log's silence meant both. See `middleware/request-log.ts` for what a line
+   * may carry, which is deliberately much less than what one could.
+   */
+  readonly log?: Logger;
 }
 
 /**
@@ -513,11 +530,27 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     teller,
     probes,
     clock,
+    log,
   } = deps;
   const app = express();
 
   // Nothing gains from telling the world which framework to look up CVEs for.
   app.disable("x-powered-by");
+
+  // FIRST, ahead of the body parsers and every route, so that it sees the
+  // requests those refuse: a malformed body is a 400 and an oversized one a
+  // 413, both raised by `express.json()` below, and a log mounted after it
+  // would show a phone sending something this build cannot parse as a phone
+  // that never called. It also sees the terminal 404, which is the line that
+  // answers "his device is calling a path this build does not serve".
+  //
+  // `/health` is named here rather than inside the middleware because it is a
+  // contract path and that module must not know the contract. It drops to
+  // `debug` — the watchdog polls it every thirty seconds forever, and a log
+  // that is 95% liveness is a log nobody reads.
+  if (log !== undefined) {
+    app.use(logRequests({ log, quiet: [`${API_BASE_PATH}/health`] }));
+  }
   // The upload path, and only the upload path, accepts more than text. Mounted
   // FIRST and scoped to its own prefix: body-parser marks a request it has
   // already read, so the general parser below sees this one as done and never
@@ -2051,6 +2084,11 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       // the field on `AppDependencies` for what a second one costs.
       clock,
       probes: [databaseProbe(database.handle)],
+      // The same sink her turns and her tool calls go to, so "what did the
+      // phone ask for" and "what did she then do about it" are two lines of one
+      // file in one order. `undefined` in a test, which is what stops a unit
+      // test writing into the running service's log.
+      ...(log === undefined ? {} : { log }),
     },
   };
 }

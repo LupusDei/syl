@@ -116,6 +116,45 @@ enum OutboxError: Error, Equatable, CustomStringConvertible {
     }
 }
 
+/// The queue has stopped moving, and this is what it is stuck on.
+///
+/// **Derived from the rows on disk, not from a `SyncReport`.** That distinction is the
+/// whole fix. `SyncReport.failures` already recorded every one of these and was read by
+/// nobody — the report exists only for the duration of a `synchronise()` call, so a
+/// screen built on it could answer the question only in the instant it stopped being
+/// urgent. This is answerable at any moment, from disk, with the network down and after
+/// a relaunch, which is how everything else in this app reads.
+///
+/// `nil` — not a zeroed value — is what "nothing is stuck" looks like, so a caller
+/// cannot render an empty stall as a quiet alarm.
+struct OutboxStall: Equatable, Sendable {
+    /// Everything still queued, including the blocked rows the push steps over.
+    ///
+    /// The **whole** queue rather than the number of rows that have themselves failed:
+    /// `SyncEngine.pushOutbox` returns at the first recoverable failure, so every row
+    /// behind the stuck one is equally undelivered and has simply not been tried yet.
+    /// Counting only the failures would report "1 change waiting" while thirty of his
+    /// acts sat behind it.
+    var waiting: Int
+    /// When he did the oldest thing that has not reached Syl.
+    ///
+    /// The oldest *intent*, never the last attempt. The last attempt is thirty seconds
+    /// ago on every reading, and dating the stall from it would make a three-day outage
+    /// read as a momentary one — which is exactly how three days passed.
+    var since: Date
+    /// What kind of act is at the head of the blockage.
+    var kind: OutboxRecord.Kind
+    /// Why, in the error's own words.
+    ///
+    /// Unprettified, for the reason `HomeViewModel.loadFailure` gives: the cause of this
+    /// class of failure is not known, the device is the only place it happens, and a
+    /// tidy stand-in sentence would throw away the only evidence anyone has.
+    var reason: String
+    /// True when that intent will not be retried automatically at all — it is parked,
+    /// waiting for a decision nobody has yet asked him to make.
+    var blocked: Bool
+}
+
 /// The queue of intents waiting to reach the service.
 ///
 /// Enqueueing is idempotent by construction: `idempotencyKey` is `UNIQUE` in the
@@ -184,6 +223,48 @@ struct Outbox: Sendable {
 
     func count() throws -> Int {
         try database.queue.read { db in try OutboxRecord.fetchCount(db) }
+    }
+
+    /// What is not getting through, or `nil` because everything is.
+    ///
+    /// **A queue that has simply not been tried yet is not stuck, it is new.** He tapped
+    /// two seconds ago and the sync has not run; saying so would train him to ignore the
+    /// one notice that matters. So the test is that something has *failed* — an attempt
+    /// that recorded an error, or a row parked as blocked — rather than that something
+    /// is merely queued.
+    ///
+    /// There is no age threshold beside that, deliberately. A threshold is another
+    /// silence: under it, nothing is said, and "under it" is where every stall begins.
+    /// The age is carried out in `since` instead, so a four-second blip and a three-day
+    /// outage produce the same notice wearing very different words.
+    func stall() throws -> OutboxStall? {
+        try database.queue.read { db in
+            // Three narrow reads rather than loading the table and folding it in Swift.
+            // This runs on every home refresh, once a minute, for the whole life of the
+            // app; a queue that has genuinely stalled is exactly the one that grows.
+            guard
+                let oldest = try OutboxRecord.order(Column("createdAt"), Column("id")).fetchOne(db)
+            else { return nil }
+            // Blocked rows are looked at as well as failed ones, and this is not belt
+            // and braces: `pending` excludes a blocked row, so it is invisible to the
+            // push AND — before this — to every surface. Parked forever, with nothing
+            // anywhere saying so, is the same defect this whole file is about.
+            guard
+                let culprit = try OutboxRecord
+                    .filter(Column("blockedReason") != nil || Column("lastError") != nil)
+                    .order(Column("createdAt"), Column("id"))
+                    .fetchOne(db),
+                let reason = culprit.blockedReason ?? culprit.lastError
+            else { return nil }
+
+            return OutboxStall(
+                waiting: try OutboxRecord.fetchCount(db),
+                since: oldest.createdAt,
+                kind: culprit.kind,
+                reason: reason,
+                blocked: culprit.blockedReason != nil
+            )
+        }
     }
 
     /// The intent reached the server. The row goes away — and only here.

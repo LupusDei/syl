@@ -143,6 +143,68 @@ enum DayRefusal {
     }
 }
 
+/// What the screen says when the outbox has stopped moving.
+///
+/// **This exists because silence was the report.** He marked to-dos complete for three
+/// days; every one of them was written to disk and queued, the push stalled at the head
+/// of the queue, and the only record of that was `SyncReport.failures` — a value the app
+/// constructs on every sync and reads nowhere. From where he was standing his taps
+/// landed and Syl simply ignored them.
+///
+/// The words are here rather than in `HomeView` for the reason ``DayRefusal`` is: a
+/// sentence written inside a `body` is a sentence no test can read. The view supplies the
+/// layout and formats ``since``; this supplies what is being claimed.
+struct StallNotice: Equatable, Sendable {
+    /// How much of his has not arrived. The headline, because the count is the part that
+    /// turns "the network is flaky" into "Syl does not know about three things I did".
+    var title: String
+    /// What it is stuck on, and whether it will free itself.
+    var detail: String
+    /// The failure in its own words, shown unprettified — the same rule
+    /// ``HomeView/couldNotRead(_:)`` follows, and for the same reason: the cause of this
+    /// is not known, the device is the only place it happens, and a friendly stand-in
+    /// would destroy the only evidence anyone has.
+    var reason: String
+    /// When he did the oldest thing that has not reached her.
+    var since: Date
+
+    /// `nil` when nothing is stuck, which is the ordinary case and draws nothing.
+    init?(_ stall: OutboxStall?) {
+        guard let stall else { return nil }
+        let things = stall.waiting == 1
+            ? "1 thing you did has not reached me"
+            : "\(stall.waiting) things you did have not reached me"
+        self.title = things
+        self.detail = stall.blocked
+            ? """
+            I could not send \(Self.noun(for: stall.kind)), and I will not try it again on my \
+            own — it may already have taken effect.
+            """
+            : """
+            I could not send \(Self.noun(for: stall.kind)), so everything you did after it is \
+            waiting behind it. I will keep trying.
+            """
+        self.reason = stall.reason
+        self.since = stall.since
+    }
+
+    /// The act, named as he would name it.
+    ///
+    /// Exhaustive with no `default`, so a new kind of intent cannot be added and quietly
+    /// inherit somebody else's noun.
+    private static func noun(for kind: OutboxRecord.Kind) -> String {
+        switch kind {
+        case .completeTodo: return "a to-do you finished"
+        case .completeReminder: return "a reminder you finished"
+        case .createTodo: return "a to-do you wrote down"
+        case .createReminder: return "a reminder you asked for"
+        case .snoozeReminder: return "a reminder you asked me to move"
+        case .sendMessage: return "something you said to me"
+        case .acknowledgeDelivery: return "an answer you gave a notification"
+        }
+    }
+}
+
 /// The one thing worth saying, if there is one.
 ///
 /// Deliberately derived from data we actually hold rather than filled with an

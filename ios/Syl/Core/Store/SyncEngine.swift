@@ -66,6 +66,22 @@ let SYNCED_RESOURCE_TYPES: [SyncResourceType] = [
 
 /// What one synchronisation did. Reported rather than logged, because the app is
 /// required to be honest about what is stuck.
+///
+/// **This is NOT what the screen reads, and it must not become that.** For a long time
+/// it was the only thing that knew a push had stalled, `failures` was appended to in
+/// eleven places across this file and `DeliveryReconciler`, and every call site
+/// discarded the returned value — so the Commander's completions sat undelivered for
+/// three days with the app's own record of it constructed and thrown away on every sync.
+///
+/// The reason it cannot be the fix is structural rather than a matter of somebody
+/// remembering to read it: this value exists only for the duration of a `synchronise()`
+/// call, so a surface built on it can answer "is anything stuck" only during the sync
+/// that discovered it — not on launch, not after a relaunch, not while he is looking at
+/// the screen. What is stuck is a property of the QUEUE ON DISK, so it is read from
+/// there: see `Outbox.stall` and `HomeViewModel.stall`.
+///
+/// It stays because it is the per-run account, which is a different question and the
+/// right shape for a test and for a future log.
 struct SyncReport: Equatable, Sendable {
     var pushed = 0
     /// Intents dropped because they can never succeed. A validation failure fails

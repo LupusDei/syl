@@ -432,7 +432,19 @@ struct LocalStore: Sendable {
     func upsert(_ reminders: [Reminder]) throws {
         guard !reminders.isEmpty else { return }
         try database.queue.write { db in
+            let owed = try Self.owedCompletions(db, kind: .completeReminder)
             for reminder in reminders {
+                // He finished it and the intent has not left the queue. See
+                // `upsert(_ todos:)` for the argument; it is the same one, and a
+                // reminder put back on his spine by the very sweep that is failing to
+                // deliver its completion is the same failure wearing a different noun.
+                if reminder.deliveryState != .completed,
+                    owed.contains(SylIDs.canonical(reminder.id)),
+                    try ReminderRecord.fetchOne(db, key: reminder.id)?.deliveryState
+                        == ReminderDeliveryState.completed.rawValue
+                {
+                    continue
+                }
                 try ReminderRecord(reminder).save(db)
             }
         }
@@ -458,12 +470,81 @@ struct LocalStore: Sendable {
         }
     }
 
+    /// Write the server's copies down — **except where doing so would undo him.**
+    ///
+    /// A plain `save` per row is what this was, and it is half of the three-day defect.
+    /// The Commander finished a to-do, `completeTodo` wrote `done` and queued the
+    /// intent, the push stalled at the head of the queue, and then the pull in the same
+    /// pass brought back the server's copy — still `open`, because the server had not
+    /// been told — and wrote it straight over him. The completion reverted itself with
+    /// nothing said, which is the ending `completeTodo`'s own comment already describes
+    /// for the unsynced-capture case; it was reachable by a second route nobody had
+    /// closed.
+    ///
+    /// **The local row wins, rather than the revert being surfaced**, and the choice is
+    /// not close. A local `done` with a queued `completeTodo` is his authenticated act;
+    /// the server's `open` is only the server not having heard yet, so deferring to it
+    /// discards the newer fact in favour of the older one and makes him do the work
+    /// twice. Telling him instead would be telling him about something that fixes itself
+    /// the moment the queue drains — noise that still loses the act. What he does need
+    /// to be told is that the queue has stopped, and that is `OutboxStall`'s job.
+    ///
+    /// **It is the optimistic-marker rule, not an exception to it.** This file already
+    /// holds that "an optimistic marker is a claim that lives exactly as long as the
+    /// intent behind it"; a local `done` with its completion still queued IS such a
+    /// claim. So the guard is self-limiting by construction — the moment the intent
+    /// leaves the queue, however it left, the server is authoritative again and an
+    /// `open` copy is written normally. Nothing has to remember to switch it off.
+    ///
+    /// Nothing is permanently lost by holding a page's copy back. When the completion
+    /// lands, the server writes the row and logs a change for it, so the next pull
+    /// delivers the row again carrying whatever else the server had changed meanwhile.
     func upsert(_ todos: [Todo]) throws {
         guard !todos.isEmpty else { return }
         try database.queue.write { db in
+            // Read once for the batch rather than once per row: a page is five hundred
+            // to-dos and the queue is usually empty.
+            let owed = try Self.owedCompletions(db, kind: .completeTodo)
             for todo in todos {
+                if todo.status != .done,
+                    owed.contains(SylIDs.canonical(todo.id)),
+                    try TodoRecord.fetchOne(db, key: todo.id)?.status == TodoStatus.done.rawValue
+                {
+                    continue
+                }
                 try TodoRecord(todo).save(db)
             }
+        }
+    }
+
+    /// The ids of rows he has finished and the server has not been told about.
+    ///
+    /// **Every queued row of that kind counts, blocked ones included.** `Outbox.pending`
+    /// filters a blocked row out, so a check written against the pending queue would
+    /// leave exactly the intents that are stuck hardest unprotected — the ones parked
+    /// indefinitely because they may already have taken effect. Unresolved is the
+    /// condition that matters here, not retriable.
+    ///
+    /// Canonical ids, because the contract permits either hex case for one and this is
+    /// a comparison between a row the device wrote and a row the server sent.
+    private static func owedCompletions(
+        _ db: Database,
+        kind: OutboxRecord.Kind
+    ) throws -> Set<SylID> {
+        Set(
+            try String.fetchAll(
+                db,
+                sql: "SELECT targetId FROM outbox WHERE kind = ? AND targetId IS NOT NULL",
+                arguments: [kind.rawValue]
+            )
+            .map(SylIDs.canonical)
+        )
+    }
+
+    /// One to-do, by id. The counterpart of ``reminder(id:)``.
+    func todo(id: SylID) throws -> Todo? {
+        try database.queue.read { db in
+            try TodoRecord.fetchOne(db, key: id)?.model()
         }
     }
 

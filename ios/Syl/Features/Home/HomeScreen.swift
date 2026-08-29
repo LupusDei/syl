@@ -208,6 +208,9 @@ struct HomeScreen: View {
             HomeView(
                 snapshot: model.snapshot,
                 loadFailure: model.loadFailure,
+                // `nil` unless something of his is genuinely stuck, which is the
+                // ordinary case and draws nothing at all.
+                stall: StallNotice(model.stall),
                 presence: model.presence,
                 presenceIntensity: model.intensity,
                 now: model.now,

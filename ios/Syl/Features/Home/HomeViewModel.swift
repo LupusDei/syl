@@ -19,6 +19,21 @@ final class HomeViewModel: ObservableObject {
     /// a claim that the failure modes are already known, and the reason this property
     /// exists is that they are not.
     @Published private(set) var loadFailure: String?
+
+    /// What he did that has not reached Syl, when anything has not.
+    ///
+    /// **The one screen where a stalled outbox is answerable**, because it is the screen
+    /// he finishes things on. `HomeViewModel.complete` writes the row and queues the
+    /// intent in one transaction and the row leaves the spine looking finished; if the
+    /// intent then never lands, this is the only place left that can say so.
+    ///
+    /// Read from the queue on disk on every refresh, not from the `SyncReport` a sync
+    /// returns. That report is the thing that already recorded all of this and was read
+    /// by nobody — and being transient, a screen built on it could only answer the
+    /// question during the sync that discovered it. This answers it at any moment, with
+    /// the network down, after a relaunch, exactly like everything else here.
+    @Published private(set) var stall: OutboxStall?
+
     @Published private(set) var presence: PresenceState = .absent
     @Published private(set) var intensity: Double = 0
     @Published private(set) var now: Date = Date()
@@ -30,6 +45,12 @@ final class HomeViewModel: ObservableObject {
     /// `SylApp` instead would mean a second route to the same object and one more place
     /// for the two to disagree about which database is open.
     let store: LocalStore
+    /// The queue of things he has done that Syl has not been told about yet.
+    ///
+    /// Optional so a preview, a render harness and every existing test keep the model
+    /// they had — with no queue there is nothing to be stuck, which is the honest
+    /// reading. `AppDelegate` passes the same object `SyncEngine` drains.
+    private let outbox: Outbox?
     private let clock: @Sendable () -> Date
     /// Runs the outbox now. Called after every write he made with his own finger, so a
     /// completion leaves the device promptly rather than waiting for the next scheduled
@@ -65,6 +86,7 @@ final class HomeViewModel: ObservableObject {
 
     init(
         store: LocalStore,
+        outbox: Outbox? = nil,
         clock: @escaping @Sendable () -> Date = { Date() },
         /// Drains the outbox. Defaults to doing nothing, which is honest for a model
         /// nobody wired a sync engine to: the intent is still durable on disk.
@@ -75,6 +97,7 @@ final class HomeViewModel: ObservableObject {
         settle: Duration = .milliseconds(1100)
     ) {
         self.store = store
+        self.outbox = outbox
         self.clock = clock
         self.flush = flush
         self.makeIdempotencyKey = makeIdempotencyKey
@@ -117,6 +140,27 @@ final class HomeViewModel: ObservableObject {
     func refresh() async {
         let instant = clock()
         let loader = HomeSnapshotLoader(store: store, now: instant)
+
+        // BEFORE the guard below, and deliberately not inside the same `do` as the
+        // spine. The two failures are independent: a day that will not load must still
+        // be able to say that his last three completions are sitting in a queue, and a
+        // spine that loads perfectly is exactly the case where a stalled queue is
+        // invisible. Reading the outbox is one indexed scan of a table that is normally
+        // empty, so it costs nothing to do on every pass.
+        //
+        // A read that throws leaves the last known answer standing rather than clearing
+        // it. Silently deciding nothing is stuck, because we could not look, is the
+        // whole shape of this defect.
+        if let queue = outbox {
+            let read = await Task.detached(priority: .utility) { () -> (OutboxStall?, Bool) in
+                // The outcome is carried as a flag rather than as an `Error`, exactly as
+                // the spine's read below does it: `try?` would flatten "the read failed"
+                // and "nothing is stuck" into the same `nil`, and those are the two
+                // states this whole change exists to stop conflating.
+                do { return (try queue.stall(), true) } catch { return (nil, false) }
+            }.value
+            if read.1 { stall = read.0 }
+        }
 
         // `try?` used to stand here, and it is the whole of `syl-019`. It discarded the
         // error, the guard below returned, and `snapshot` KEPT ITS DEFAULT — an empty
