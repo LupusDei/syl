@@ -4158,3 +4158,61 @@ The general shape: `x ?? []` collapses *"there is nothing here yet"* and *"there
 here and I could not read it"* into one value, and those two differ exactly on the write path,
 exactly when it matters, and in the direction that destroys. It is worth grepping for on any
 append.
+
+## Three days of silence cost the only evidence of why
+
+`syl-wzan`, 2026-08-25 to 2026-08-29. The Commander marked to-dos complete and Syl saw
+them all still open. Three silences had to line up: `pushOutbox` returns at the first
+recoverable failure and everything behind it waits; the failure goes into
+`SyncReport.failures`, appended to in eleven places and **read in none**; and the service
+logged no requests at all, so "did his phone reach us and fail, or never leave the
+phone?" was unanswerable from either side. `backfillTodos` then runs after the push in
+the same pass, fetches every to-do at every status, and `LocalStore.upsert` wrote the
+server's `open` over his local `done`. His completion reverted itself with nothing said.
+
+**Record this while it is still true: if his intents were abandoned rather than stalled,
+we can never find out why, and that is a bill already paid.** Three things had to be
+checked and all three were empty by the time anyone looked:
+
+- **On the device, nothing survives.** `Outbox.abandon` calls `complete` calls
+  `deleteOne`. The row is destroyed, and `lastError` goes with it. The local to-do has
+  usually been reverted to `open` by the sweep in the same pass, so it does not even look
+  finished any more.
+- **In the ledger, nothing survives.** `idempotency_keys` holds **only successful
+  responses** — measured 2026-08-29, zero non-2xx rows in the entire table, ever. A write
+  the server permanently refused leaves no trace on the server either.
+- **In the log, nothing survives, because there was no log.** Per-request logging
+  (`middleware/request-log.ts`) exists only from `syl-wzan` forward. It cannot answer a
+  question about last week.
+
+That is the strongest available argument for `syl-no43` — abandonment has to leave a
+mark, written **before** the delete, because after it there is nothing anywhere to read.
+It is also why the fix and the instrument had to be the same object: the stall card is
+the only thing that can now say whether his work was stalled or destroyed, and it only
+exists because the bug forced it.
+
+**What the ordering guarantee is good for, once you have a log of successes.** The
+question "were his completions still queued?" looked unanswerable and was not.
+`Outbox.pending()` is ordered oldest-first and `pushOutbox` walks it from the head, so
+anything old in the queue must leave *before* anything new. On the night of the 28th the
+phone delivered six messages and a dozen health uploads between 23:24 and 23:38, and its
+single `completeTodo` at **00:02:36** — after all of them. A completion queued on the
+25th would have been older than every one of those messages and would have gone first.
+It did not, so it was not there. **An invariant you actually enforce is a forensic
+instrument later**, and this is the second time the outbox's ordering has paid for
+itself in a way nobody designed it for.
+
+Two smaller things worth keeping, both found by the same test:
+
+- **A `Codable` enum column is a whole-table hazard.** `OutboxRecord.kind` throws
+  `dataCorrupted` on a string with no case, and it throws for the *fetch*, not the row —
+  so one unnameable row makes `pending()`, `queued()` and `blocked()` all throw,
+  `pushOutbox` returns at "could not read the outbox", and the queue stops for good
+  (`syl-e213`). Same blast radius as one undecodable reminder blanking the whole day, in
+  the table where the consequence is his actions never leaving the device.
+- **An instrument must not be readable only when things are fine.** `Outbox.stall` now
+  reads raw columns and decodes nothing that can fail, because a notice *about* a broken
+  queue that breaks *on* a broken queue is worse than no notice — it draws as a healthy
+  day. For the same reason `waiting` is counted from the table rather than summed from
+  the per-kind breakdown: the breakdown may drop a row it cannot name, and the number he
+  is shown may not.
