@@ -171,6 +171,12 @@ struct StallNotice: Equatable, Sendable {
     /// on a message must not produce a sentence about finished work — a reassurance
     /// invented once is a reassurance worth nothing afterwards.
     var completions: String?
+    /// What to do about a row this build cannot send, when there is one (`syl-e213`).
+    ///
+    /// Separate again, and actionable on purpose: the realistic cause is a build older
+    /// than the row, so *"updating should release it"* is a true thing he can act on. A
+    /// notice he can do nothing with is decoration, and `nil` here is the ordinary case.
+    var unreadable: String?
     /// What it is stuck on, and whether it will free itself.
     var detail: String
     /// The failure in its own words, shown unprettified — the same rule
@@ -189,6 +195,13 @@ struct StallNotice: Equatable, Sendable {
             : "\(stall.waiting) things you did have not reached me"
         self.title = things
         self.completions = Self.finishedWork(in: stall.waitingByKind)
+        self.unreadable = stall.unreadable == 0
+            ? nil
+            : """
+            \(stall.unreadable == 1 ? "1 of them is" : "\(stall.unreadable) of them are") in a form \
+            this version of the app cannot send. Updating Syl should release \
+            \(stall.unreadable == 1 ? "it" : "them").
+            """
         self.detail = stall.blocked
             ? """
             I could not send \(Self.noun(for: stall.kind)), and I will not try it again on my \

@@ -150,6 +150,15 @@ struct OutboxStall: Equatable, Sendable {
     /// total summed from a breakdown would silently shrink on a downgrade — and a number
     /// that under-reports what is stuck is the same lie as showing no notice at all.
     var waitingByKind: [OutboxRecord.Kind: Int]
+    /// How many rows this build cannot name, and therefore cannot send (`syl-e213`).
+    ///
+    /// **A stall condition in its own right, not a footnote.** The push now walks past
+    /// such a row rather than dying on it, which means it is never attempted — so it
+    /// never records a `lastError`, and a card triggered only by "something failed" would
+    /// never mention it. The queue would move again and one of his intents would sit
+    /// there forever with nothing anywhere saying so, which is the silent discard this
+    /// whole area exists to prevent, arriving by a slower road.
+    var unreadable: Int
     /// When he did the oldest thing that has not reached Syl.
     ///
     /// The oldest *intent*, never the last attempt. The last attempt is thirty seconds
@@ -202,14 +211,37 @@ struct Outbox: Sendable {
         }
     }
 
+    /// Every `kind` this build can turn back into a request.
+    ///
+    /// **Derived from the enum rather than written down**, so it cannot drift: adding a
+    /// case makes that kind readable here in the same commit. The same "when two things
+    /// must agree, make one a function of the other" rule the rest of this project runs
+    /// on.
+    private static let readableKinds: [String] = OutboxRecord.Kind.allCases.map(\.rawValue)
+
     /// The queue, oldest first. Order matters: a message sent before a snooze should
     /// reach the server in that order, because the Commander did them in that order.
     ///
     /// Blocked rows are excluded — they are not gone, they are waiting for a decision.
+    ///
+    /// **So are rows whose `kind` this build cannot name, and that filter is a bug fix
+    /// rather than a nicety (`syl-e213`).** `OutboxRecord` is `Codable` and `kind` is an
+    /// enum, so decoding an unknown string throws `dataCorrupted` — **for the fetch, not
+    /// for the row.** One unnameable row therefore made this whole read throw,
+    /// `SyncEngine.pushOutbox` caught it at "could not read the outbox" and returned, and
+    /// every intent behind it was stuck for good. Filtering in SQL means no unknown
+    /// string ever reaches the decoder, so the queue walks past it instead of dying on
+    /// it.
+    ///
+    /// **Skipped is not discarded.** The row stays, with its payload — which for a
+    /// message is the only surviving copy of what he said — and `stall` counts it and
+    /// says so, because a row silently stepped over forever is the discard this project
+    /// forbids arriving by a slower road.
     func pending(limit: Int = 100) throws -> [OutboxRecord] {
         try database.queue.read { db in
             try OutboxRecord
                 .filter(Column("blockedReason") == nil)
+                .filter(Self.readableKinds.contains(Column("kind")))
                 .order(Column("createdAt"), Column("id"))
                 .limit(limit)
                 .fetchAll(db)
@@ -224,7 +256,10 @@ struct Outbox: Sendable {
     /// server would show him the same reminder twice.
     func queued(idempotencyKey: String) throws -> OutboxRecord? {
         try database.queue.read { db in
-            try OutboxRecord.filter(Column("idempotencyKey") == idempotencyKey).fetchOne(db)
+            try OutboxRecord
+                .filter(Column("idempotencyKey") == idempotencyKey)
+                .filter(Self.readableKinds.contains(Column("kind")))
+                .fetchOne(db)
         }
     }
 
@@ -234,6 +269,7 @@ struct Outbox: Sendable {
         try database.queue.read { db in
             try OutboxRecord
                 .filter(Column("blockedReason") != nil)
+                .filter(Self.readableKinds.contains(Column("kind")))
                 .order(Column("createdAt"), Column("id"))
                 .fetchAll(db)
         }
@@ -278,16 +314,36 @@ struct Outbox: Sendable {
             // and braces: `pending` excludes a blocked row, so it is invisible to the
             // push AND — before this — to every surface. Parked forever, with nothing
             // anywhere saying so, is the same defect this whole file is about.
-            guard
-                let culprit = try Row.fetchOne(
-                    db,
-                    sql: """
-                        SELECT kind, lastError, blockedReason FROM outbox
-                         WHERE blockedReason IS NOT NULL OR lastError IS NOT NULL
-                         ORDER BY createdAt, id LIMIT 1
-                        """),
-                let reason = (culprit["blockedReason"] as String?) ?? (culprit["lastError"] as String?)
-            else { return nil }
+            let culprit = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT kind, lastError, blockedReason FROM outbox
+                     WHERE blockedReason IS NOT NULL OR lastError IS NOT NULL
+                     ORDER BY createdAt, id LIMIT 1
+                    """)
+            let failure = culprit.flatMap {
+                ($0["blockedReason"] as String?) ?? ($0["lastError"] as String?)
+            }
+
+            // A row this build cannot name is skipped by the push, so it never fails and
+            // never records an error. It is therefore its own trigger — see
+            // `OutboxStall.unreadable`.
+            //
+            // `NOT IN` is safe here and is not safe in general: over a set containing a
+            // NULL it evaluates to NULL rather than true, which is why
+            // `LocalStore.settleOptimisticMarkers` had to use `NOT EXISTS` instead. The
+            // set here is a literal list of non-null enum raw values and `kind` is
+            // `NOT NULL` in the schema, so neither side can be NULL.
+            let unreadable = try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COUNT(*) FROM outbox
+                     WHERE kind NOT IN (\(Self.readableKinds.map { _ in "?" }.joined(separator: ", ")))
+                    """,
+                arguments: StatementArguments(Self.readableKinds)
+            ) ?? 0
+
+            guard failure != nil || unreadable > 0 else { return nil }
 
             // Grouped in SQL. A `kind` with no case in the enum is dropped here and is
             // still in `waiting` — see the field's own note for why that asymmetry is
@@ -307,10 +363,15 @@ struct Outbox: Sendable {
             return OutboxStall(
                 waiting: try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM outbox") ?? 0,
                 waitingByKind: byKind,
+                unreadable: unreadable,
                 since: since,
-                kind: (culprit["kind"] as String?).flatMap(OutboxRecord.Kind.init(rawValue:)),
-                reason: reason,
-                blocked: culprit["blockedReason"] as String? != nil
+                kind: (culprit?["kind"] as String?).flatMap(OutboxRecord.Kind.init(rawValue:)),
+                // Synthesised only when there is genuinely no error to quote — a row that
+                // was skipped rather than attempted. That is not a friendly stand-in for
+                // a real failure, which this file forbids; it is the actual reason, and
+                // the only one there is.
+                reason: failure ?? "This version of the app does not recognise it.",
+                blocked: culprit?["blockedReason"] as String? != nil
             )
         }
     }

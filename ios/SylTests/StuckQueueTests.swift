@@ -550,6 +550,7 @@ final class StuckQueueTests: XCTestCase {
         OutboxStall(
             waiting: waiting,
             waitingByKind: byKind,
+            unreadable: 0,
             since: now,
             kind: kind,
             reason: reason,

@@ -542,6 +542,14 @@ struct HomeView: View {
                     .foregroundStyle(SylTheme.Colour.ink)
             }
 
+            // The one line on this card he can act on, so it sits with his work rather
+            // than down with the machinery.
+            if let unreadable = notice.unreadable {
+                Text(unreadable)
+                    .font(SylTheme.Typeface.detail)
+                    .foregroundStyle(SylTheme.Colour.ink)
+            }
+
             Text(notice.detail)
                 .font(SylTheme.Typeface.detail)
                 .foregroundStyle(SylTheme.Colour.inkSoft)
