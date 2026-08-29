@@ -158,6 +158,19 @@ struct StallNotice: Equatable, Sendable {
     /// How much of his has not arrived. The headline, because the count is the part that
     /// turns "the network is flaky" into "Syl does not know about three things I did".
     var title: String
+    /// How much of his *finished work* is in that queue, when any of it is.
+    ///
+    /// Separate from ``title`` and ``detail`` because it is the only line that answers
+    /// the question he actually has. `title` counts everything and `detail` names the
+    /// head of the blockage, which is frequently a chat message — so between them they
+    /// can report a stall in perfect detail while saying nothing at all about the three
+    /// to-dos he ticked off. That is the same defect as the bug itself: a thing that
+    /// reports, but not the fact anyone needed.
+    ///
+    /// `nil` when no completion is waiting, and that half is load-bearing. A queue stuck
+    /// on a message must not produce a sentence about finished work — a reassurance
+    /// invented once is a reassurance worth nothing afterwards.
+    var completions: String?
     /// What it is stuck on, and whether it will free itself.
     var detail: String
     /// The failure in its own words, shown unprettified — the same rule
@@ -175,6 +188,7 @@ struct StallNotice: Equatable, Sendable {
             ? "1 thing you did has not reached me"
             : "\(stall.waiting) things you did have not reached me"
         self.title = things
+        self.completions = Self.finishedWork(in: stall.waitingByKind)
         self.detail = stall.blocked
             ? """
             I could not send \(Self.noun(for: stall.kind)), and I will not try it again on my \
@@ -188,11 +202,41 @@ struct StallNotice: Equatable, Sendable {
         self.since = stall.since
     }
 
+    /// "3 to-dos and 1 reminder you finished are still here…", or `nil` for none.
+    ///
+    /// Only the two kinds that carry a *finished act*. A queued capture or a queued
+    /// message is undelivered too and is counted in ``title``, but neither is work he
+    /// has already done and might otherwise do twice — which is the specific harm this
+    /// line exists to prevent.
+    private static func finishedWork(in counts: [OutboxRecord.Kind: Int]) -> String? {
+        let todos = counts[.completeTodo] ?? 0
+        let reminders = counts[.completeReminder] ?? 0
+
+        var parts: [String] = []
+        if todos > 0 { parts.append(todos == 1 ? "1 to-do" : "\(todos) to-dos") }
+        if reminders > 0 { parts.append(reminders == 1 ? "1 reminder" : "\(reminders) reminders") }
+        guard !parts.isEmpty else { return nil }
+
+        // The verb agrees with the total across both kinds, not with either part: "1
+        // to-do and 1 reminder you finished ARE still here". Agreeing with `todos` alone
+        // is the bug that reads fine in every test with one kind in it.
+        return """
+            \(parts.joined(separator: " and ")) you finished \(todos + reminders == 1 ? "is" : "are") \
+            still here. Nothing you did is lost — it goes the moment this clears.
+            """
+    }
+
     /// The act, named as he would name it.
     ///
     /// Exhaustive with no `default`, so a new kind of intent cannot be added and quietly
     /// inherit somebody else's noun.
-    private static func noun(for kind: OutboxRecord.Kind) -> String {
+    ///
+    /// `nil` means the stored kind has no case in this build. It gets a sentence anyway,
+    /// because the alternative is the card vanishing over a row it could not name — and
+    /// a vanished card reads as "all clear" on the one screen where that must never be
+    /// guessed at.
+    private static func noun(for kind: OutboxRecord.Kind?) -> String {
+        guard let kind else { return "something you did" }
         switch kind {
         case .completeTodo: return "a to-do you finished"
         case .completeReminder: return "a reminder you finished"

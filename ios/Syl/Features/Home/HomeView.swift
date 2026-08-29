@@ -533,6 +533,15 @@ struct HomeView: View {
                 .font(SylTheme.Typeface.title)
                 .foregroundStyle(SylTheme.Colour.ink)
 
+            // Directly under the headline, ahead of the mechanics. The count is what
+            // alarms him and this is the line that answers it; putting the machinery
+            // first would make him read past his own work to find out it is safe.
+            if let completions = notice.completions {
+                Text(completions)
+                    .font(SylTheme.Typeface.detail)
+                    .foregroundStyle(SylTheme.Colour.ink)
+            }
+
             Text(notice.detail)
                 .font(SylTheme.Typeface.detail)
                 .foregroundStyle(SylTheme.Colour.inkSoft)

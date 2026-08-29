@@ -136,14 +136,32 @@ struct OutboxStall: Equatable, Sendable {
     /// Counting only the failures would report "1 change waiting" while thirty of his
     /// acts sat behind it.
     var waiting: Int
+    /// The same queue, split by what kind of act each row is.
+    ///
+    /// **`waiting` and `kind` together cannot answer the question this is for.** `kind`
+    /// names the head of the blockage, and the head is very often something else — a
+    /// chat message, a delivery ack — so a card built on those two says *"something is
+    /// stuck"* when the question actually being asked of it is *"are the things he
+    /// finished still in there?"*. Those are different facts, and only one of them tells
+    /// him his work is safe rather than telling him to do it again.
+    ///
+    /// **Best-effort, and never the source of `waiting`.** A row whose stored `kind` this
+    /// build cannot decode is absent here and still counted in the total, because a
+    /// total summed from a breakdown would silently shrink on a downgrade — and a number
+    /// that under-reports what is stuck is the same lie as showing no notice at all.
+    var waitingByKind: [OutboxRecord.Kind: Int]
     /// When he did the oldest thing that has not reached Syl.
     ///
     /// The oldest *intent*, never the last attempt. The last attempt is thirty seconds
     /// ago on every reading, and dating the stall from it would make a three-day outage
     /// read as a momentary one — which is exactly how three days passed.
     var since: Date
-    /// What kind of act is at the head of the blockage.
-    var kind: OutboxRecord.Kind
+    /// What kind of act is at the head of the blockage, when this build can name it.
+    ///
+    /// `nil` for a stored `kind` with no case in the enum — a downgrade, a row written
+    /// by a newer build. The notice still appears and still counts the queue, because
+    /// "I cannot name what I am stuck on" is a far better answer than no card at all.
+    var kind: OutboxRecord.Kind?
     /// Why, in the error's own words.
     ///
     /// Unprettified, for the reason `HomeViewModel.loadFailure` gives: the cause of this
@@ -239,30 +257,60 @@ struct Outbox: Sendable {
     /// outage produce the same notice wearing very different words.
     func stall() throws -> OutboxStall? {
         try database.queue.read { db in
-            // Three narrow reads rather than loading the table and folding it in Swift.
-            // This runs on every home refresh, once a minute, for the whole life of the
-            // app; a queue that has genuinely stalled is exactly the one that grows.
+            // **Raw columns, never a decoded `OutboxRecord`.** `kind` is an enum, and
+            // decoding a row whose stored string has no case THROWS — so a queue holding
+            // one unnameable row would make the notice ABOUT that queue fail to appear
+            // at all. An instrument that breaks on exactly the data indicating trouble
+            // is worse than no instrument, and this file exists because a report nobody
+            // could read is the same as no report. Nothing below decodes anything that
+            // can fail.
+            //
+            // Four narrow reads rather than loading the table and folding it in Swift,
+            // so this stays cheap however long the queue is — and a queue that has
+            // genuinely stalled is precisely the one that grows.
             guard
-                let oldest = try OutboxRecord.order(Column("createdAt"), Column("id")).fetchOne(db)
+                let oldest = try Row.fetchOne(
+                    db, sql: "SELECT createdAt FROM outbox ORDER BY createdAt, id LIMIT 1"),
+                let since = oldest["createdAt"] as Date?
             else { return nil }
+
             // Blocked rows are looked at as well as failed ones, and this is not belt
             // and braces: `pending` excludes a blocked row, so it is invisible to the
             // push AND — before this — to every surface. Parked forever, with nothing
             // anywhere saying so, is the same defect this whole file is about.
             guard
-                let culprit = try OutboxRecord
-                    .filter(Column("blockedReason") != nil || Column("lastError") != nil)
-                    .order(Column("createdAt"), Column("id"))
-                    .fetchOne(db),
-                let reason = culprit.blockedReason ?? culprit.lastError
+                let culprit = try Row.fetchOne(
+                    db,
+                    sql: """
+                        SELECT kind, lastError, blockedReason FROM outbox
+                         WHERE blockedReason IS NOT NULL OR lastError IS NOT NULL
+                         ORDER BY createdAt, id LIMIT 1
+                        """),
+                let reason = (culprit["blockedReason"] as String?) ?? (culprit["lastError"] as String?)
             else { return nil }
 
+            // Grouped in SQL. A `kind` with no case in the enum is dropped here and is
+            // still in `waiting` — see the field's own note for why that asymmetry is
+            // deliberate rather than an oversight.
+            var byKind: [OutboxRecord.Kind: Int] = [:]
+            for row in try Row.fetchAll(
+                db, sql: "SELECT kind, COUNT(*) AS n FROM outbox GROUP BY kind")
+            {
+                guard
+                    let raw = row["kind"] as String?,
+                    let kind = OutboxRecord.Kind(rawValue: raw),
+                    let count = row["n"] as Int?
+                else { continue }
+                byKind[kind] = count
+            }
+
             return OutboxStall(
-                waiting: try OutboxRecord.fetchCount(db),
-                since: oldest.createdAt,
-                kind: culprit.kind,
+                waiting: try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM outbox") ?? 0,
+                waitingByKind: byKind,
+                since: since,
+                kind: (culprit["kind"] as String?).flatMap(OutboxRecord.Kind.init(rawValue:)),
                 reason: reason,
-                blocked: culprit.blockedReason != nil
+                blocked: culprit["blockedReason"] as String? != nil
             )
         }
     }

@@ -250,6 +250,82 @@ final class StuckQueueTests: XCTestCase {
         XCTAssertNil(try outbox.stall(), "the queue drained and the notice must go with it")
     }
 
+    // MARK: - Which of it is his finished work
+
+    func testShouldCountTheCompletionsApartFromEverythingElseInTheQueue() throws {
+        // `kind` names the head of the blockage, and the head is often something else
+        // entirely — a chat message, an ack. So a card driven off `waiting` and `kind`
+        // answers "something is stuck" when the question actually being asked of it is
+        // "are his completions still in there". Those are different facts and only one
+        // of them tells him his work is safe.
+        try store.upsert([todo()])
+        try store.completeTodo(id: todoId, idempotencyKey: "key-todo-1", now: now)
+        try store.upsert([reminder()])
+        try store.completeReminder(id: reminderId, idempotencyKey: "key-rem-1", now: later)
+        try enqueueUnrelatedSend(key: "key-send-1", at: later)
+        let head = try XCTUnwrap(try outbox.pending().first)
+        try outbox.recordFailure(head, error: "The request timed out.")
+
+        let stall = try XCTUnwrap(try outbox.stall())
+        XCTAssertEqual(stall.waiting, 3, "the whole queue is still undelivered")
+        XCTAssertEqual(stall.waitingByKind[.completeTodo], 1)
+        XCTAssertEqual(stall.waitingByKind[.completeReminder], 1)
+        XCTAssertEqual(stall.waitingByKind[.sendMessage], 1)
+    }
+
+    func testShouldNotLetAKindItCannotReadShrinkTheTotal() throws {
+        // `waiting` is counted from the table and never summed from the breakdown. A row
+        // whose `kind` this build cannot decode — a downgrade, a column written by a
+        // newer version — would otherwise vanish from the total, and a total that
+        // under-reports is the same lie as no notice at all. The breakdown may miss it;
+        // the number he is shown may not.
+        try store.upsert([todo()])
+        try store.completeTodo(id: todoId, idempotencyKey: "key-todo-1", now: now)
+        try insertRawOutboxRow(kind: "recalibrateTheFlux", key: "key-unknown-1", at: later)
+        // Failed by SQL rather than through `outbox.recordFailure`, which needs a record
+        // out of `pending()` — and `pending()` cannot read this table at all now. That
+        // is a separate and larger defect than this test; see the note on
+        // `testShouldStillDescribeAStallItCannotName`.
+        try failEverythingQueued(error: "The request timed out.")
+
+        let stall = try XCTUnwrap(try outbox.stall())
+        XCTAssertEqual(stall.waiting, 2, "a row this build cannot name is still his, and still stuck")
+        XCTAssertEqual(stall.waitingByKind[.completeTodo], 1)
+        XCTAssertEqual(
+            stall.waitingByKind.values.reduce(0, +), 1,
+            "the breakdown is best-effort — which is exactly why the total is not built from it"
+        )
+    }
+
+    func testShouldStillDescribeAStallItCannotName() throws {
+        // The instrument must not break on the data that indicates trouble. `kind` is an
+        // enum and decoding a row whose stored string has no case THROWS, so a `stall()`
+        // built on decoded records would return nothing here — and nothing draws as an
+        // ordinary healthy day on the one screen where that must never be guessed at.
+        //
+        // **`Outbox.pending()` DOES still throw on this row, and that is a live defect
+        // beyond this change**: it decodes `OutboxRecord`s, so one unnameable row makes
+        // the whole queue unreadable and `pushOutbox` returns at "could not read the
+        // outbox" — every intent behind it stuck for good. Reported, deliberately not
+        // fixed here.
+        try insertRawOutboxRow(
+            kind: "recalibrateTheFlux", key: "key-unknown-1", at: now,
+            lastError: "The request timed out."
+        )
+
+        let stall = try XCTUnwrap(try outbox.stall())
+        XCTAssertEqual(stall.waiting, 1)
+        XCTAssertNil(stall.kind, "this build has no name for it, and must say so rather than crash")
+        XCTAssertEqual(stall.reason, "The request timed out.")
+
+        let notice = try XCTUnwrap(StallNotice(stall))
+        XCTAssertTrue(
+            notice.detail.contains("something you did"),
+            "an unnameable act still gets a sentence: \(notice.detail)"
+        )
+        XCTAssertNil(notice.completions, "and it must not be counted as finished work")
+    }
+
     // MARK: - What the screen is handed
 
     func testShouldDrawNothingAtAllWhenNothingIsStuck() {
@@ -282,6 +358,42 @@ final class StuckQueueTests: XCTestCase {
             notice.detail.contains("will not try it again"),
             "a parked intent that reads as 'still trying' is a promise nothing will keep"
         )
+    }
+
+    func testShouldSayHowMuchOfHisFinishedWorkIsWaiting() throws {
+        // The sentence that tells him his work is safe. `completeTodo: 3` is a debugging
+        // aid wearing a UI; this is the thing he can act on, which is to say stop
+        // worrying and stop doing it again.
+        let notice = try XCTUnwrap(
+            StallNotice(stall(waiting: 5, byKind: [.completeTodo: 3, .sendMessage: 2]))
+        )
+        let completions = try XCTUnwrap(notice.completions)
+        XCTAssertTrue(completions.contains("3 to-dos you finished"), completions)
+        XCTAssertTrue(completions.contains("still here"), "he needs to hear that it is not lost")
+    }
+
+    func testShouldNameBothKindsOfFinishedWorkWhenBothAreWaiting() throws {
+        let notice = try XCTUnwrap(
+            StallNotice(stall(waiting: 3, byKind: [.completeTodo: 2, .completeReminder: 1]))
+        )
+        let completions = try XCTUnwrap(notice.completions)
+        XCTAssertTrue(completions.contains("2 to-dos"), completions)
+        XCTAssertTrue(completions.contains("1 reminder"), completions)
+    }
+
+    func testShouldCountOneFinishedThingInTheSingular() throws {
+        let notice = try XCTUnwrap(StallNotice(stall(waiting: 1, byKind: [.completeTodo: 1])))
+        let completions = try XCTUnwrap(notice.completions)
+        XCTAssertTrue(completions.contains("1 to-do you finished"), completions)
+        XCTAssertFalse(completions.contains("to-dos"), "one of them is not to-dos")
+    }
+
+    func testShouldSayNothingAboutFinishedWorkWhenNoneOfItIsWaiting() throws {
+        // The half that keeps the line honest. A queue stuck on a chat message must not
+        // produce a sentence about completions — that would be the card inventing the
+        // reassurance it exists to make trustworthy.
+        let notice = try XCTUnwrap(StallNotice(stall(waiting: 2, byKind: [.sendMessage: 2])))
+        XCTAssertNil(notice.completions)
     }
 
     func testShouldCarryTheErrorItselfRatherThanAFriendlyStandIn() throws {
@@ -376,13 +488,73 @@ final class StuckQueueTests: XCTestCase {
         }
     }
 
+    /// Something in the queue that is not a completion, so the breakdown has to separate
+    /// it rather than count everything.
+    private func enqueueUnrelatedSend(key: String, at instant: Date) throws {
+        try outbox.enqueue(
+            OutboxRecord(
+                idempotencyKey: key,
+                kind: .sendMessage,
+                targetId: SylIDs.interactiveConversation,
+                payload: try SylJSON.encoder().encode(
+                    SendMessageRequest(
+                        clientId: key,
+                        text: "Anything at all",
+                        conversationId: SylIDs.interactiveConversation
+                    )
+                ),
+                createdAt: instant
+            )
+        )
+    }
+
+    /// A row whose `kind` this build cannot decode. Written straight to the table,
+    /// because `OutboxRecord.Kind` is exactly what makes it unrepresentable in Swift —
+    /// which is the point.
+    private func insertRawOutboxRow(
+        kind: String,
+        key: String,
+        at instant: Date,
+        lastError: String? = nil
+    ) throws {
+        try database.queue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO outbox (idempotencyKey, kind, createdAt, attempts, lastError)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                arguments: [key, kind, instant, lastError == nil ? 0 : 1, lastError]
+            )
+        }
+    }
+
+    /// Marks every queued row as having been tried and failed, without going through
+    /// `Outbox.recordFailure` — which needs a record out of `pending()`, and `pending()`
+    /// cannot read a table holding a row it cannot decode.
+    private func failEverythingQueued(error: String) throws {
+        try database.queue.write { db in
+            try db.execute(
+                sql: "UPDATE outbox SET attempts = attempts + 1, lastError = ?",
+                arguments: [error]
+            )
+        }
+    }
+
     private func stall(
         waiting: Int = 1,
-        kind: OutboxRecord.Kind = .completeTodo,
+        kind: OutboxRecord.Kind? = .completeTodo,
         reason: String = "The request timed out.",
-        blocked: Bool = false
+        blocked: Bool = false,
+        byKind: [OutboxRecord.Kind: Int] = [:]
     ) -> OutboxStall {
-        OutboxStall(waiting: waiting, since: now, kind: kind, reason: reason, blocked: blocked)
+        OutboxStall(
+            waiting: waiting,
+            waitingByKind: byKind,
+            since: now,
+            kind: kind,
+            reason: reason,
+            blocked: blocked
+        )
     }
 
     private var now: Date { instant("2026-08-25T15:51:44.792Z") }
