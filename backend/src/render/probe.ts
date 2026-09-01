@@ -74,24 +74,35 @@ export const ffprobeRunner: ProbeRunner = async (file, args) => {
  * field a join can be **refused** over, so each one has to be a real reason
  * `-c copy` would produce a broken file rather than a difference somebody
  * noticed.
+ *
+ * **Nothing here is nullable except `audio`, and that is the point rather than
+ * a convenience.** An unknown that reaches this type is an unknown that reaches
+ * the comparison, where two of them meet, compare equal, and pass — a
+ * compatibility check succeeding by agreeing about nothing. The unknown is
+ * therefore made *unrepresentable*: {@link probeClip} refuses before building
+ * one, so `whyTheyDoNotCutTogether` has no case to handle and no "unstated"
+ * to render. That guarantee is the type's, which means the compiler keeps it
+ * rather than a reviewer.
  */
 export interface ClipShape {
   readonly width: number;
   readonly height: number;
   /** `h264`, `hevc`. Copied packets are meaningless to a decoder expecting another codec. */
   readonly codec: string;
+  /** `yuv420p`, `yuv420p10le`. Two clips that differ here do not concatenate. */
+  readonly pixelFormat: string;
+  /** Frames per second, worked out from the file's own rational. */
+  readonly frameRate: number;
   /**
-   * `yuv420p`, `yuv420p10le`. `null` where the file does not declare one.
+   * The sound, described, or `null` for a clip that has **no audio stream**.
    *
-   * `null` rather than a default string, so "these two do not say" and "these
-   * two say the same thing" are the same answer and "one says and one does not"
-   * is a disagreement. A default would make an unknown compare equal to an
-   * unknown, which is a check passing by agreeing about nothing.
+   * The one nullable field, and its `null` is a REAL STATE rather than an
+   * unknown standing in for one: this clip is silent, which is a fact about it
+   * and a genuine disagreement with a part that is not. A stream that exists
+   * and cannot be described in full is refused instead — "aac" standing in for
+   * "aac, and we never learned its channel count" is the same defect one level
+   * down.
    */
-  readonly pixelFormat: string | null;
-  /** Frames per second, worked out from the file's own rational. `null` where it says none. */
-  readonly frameRate: number | null;
-  /** The sound, described, or `null` for a silent clip. */
   readonly audio: string | null;
 }
 
@@ -156,39 +167,82 @@ export async function probeClip(options: ProbeOptions): Promise<ProbeResult> {
     };
   }
 
-  const width = video["width"];
-  const height = video["height"];
-  if (typeof width !== "number" || typeof height !== "number") {
-    return {
-      ok: false,
-      // Not a default of zero. Two zeroes compare equal, so a defaulted
-      // dimension is a compatibility check that passes by agreeing about
-      // nothing — and the shape is the one property most likely to differ.
-      reason: `ffprobe did not say how big ${options.video} is, so I cannot tell whether it matches.`,
-    };
-  }
-
-  const codec = video["codec_name"];
-  if (typeof codec !== "string" || codec === "") {
-    return {
-      ok: false,
-      reason: `ffprobe did not say what codec ${options.video} is in, so I cannot tell whether it matches.`,
-    };
-  }
+  // EVERY FIELD THE COMPARISON READS, OR NOTHING — and this rule reaches all
+  // of them or it is not a rule.
+  //
+  // It was written for the dimensions ("two zeroes compare equal, so a
+  // defaulted dimension is a check that passes by agreeing about nothing") and
+  // then applied to three properties out of five. The other two were allowed
+  // through as `null` and stringified to "unstated" for the comparison, which
+  // reads as caution and is its opposite: two parts ffprobe was silent about
+  // both rendered "unstated", compared EQUAL, and passed. That is the defect
+  // the rule describes, wearing the rule's own clothes. **Absence of a
+  // disagreement is not agreement.**
+  //
+  // It is not cosmetic. A frame-rate mismatch under `-c copy` is not a
+  // worse-looking clip, it is broken timing in the one she sends him.
+  //
+  // The cost is real, and naming it is why this is a choice rather than an
+  // oversight: an "ffprobe did not say" refusal is not actionable by her, and
+  // {@link rateOf}'s own note argues the value of refusing is that the refusal
+  // IS actionable. It wins anyway, because the alternative is not a join she
+  // can fix — it is a broken minute reaching him with nothing having noticed.
+  //
+  // Gathered rather than returned one at a time, so one refusal names
+  // everything it could not read. Same reason
+  // {@link whyTheyDoNotCutTogether} reports every disagreeing part: one round
+  // trip per defect is one turn per defect, at three in the morning.
+  const unreadable: string[] = [];
+  const stated = <T>(field: string, value: T | null): T => {
+    if (value === null) unreadable.push(field);
+    // Cast, because the null is reported above and the caller never sees this
+    // object — the refusal below returns first.
+    return value as T;
+  };
 
   const sound = rows.find((stream) => stream["codec_type"] === "audio");
-
-  return {
-    ok: true,
-    shape: {
-      width,
-      height,
-      codec,
-      pixelFormat: typeof video["pix_fmt"] === "string" ? video["pix_fmt"] : null,
-      frameRate: rateOf(video["r_frame_rate"]),
-      audio: sound === undefined ? null : describeSound(sound),
-    },
+  const shape: ClipShape = {
+    width: stated("width", numberOf(video["width"])),
+    height: stated("height", numberOf(video["height"])),
+    codec: stated("codec", textOf(video["codec_name"])),
+    pixelFormat: stated("pixel format", textOf(video["pix_fmt"])),
+    frameRate: stated("frame rate", rateOf(video["r_frame_rate"])),
+    // `null` only for a clip with no audio stream at all, which is a state
+    // rather than an unknown. A stream that IS there goes through `stated` for
+    // each of the three things the description is made of.
+    audio: sound === undefined ? null : describeSound(sound, stated),
   };
+
+  if (unreadable.length > 0) {
+    return {
+      ok: false,
+      reason:
+        `I cannot tell what ${options.video} is — ffprobe did not say its ` +
+        `${prose(unreadable)}. So I cannot tell whether it matches the other parts, and I am not ` +
+        "going to assume it does.",
+    };
+  }
+
+  return { ok: true, shape };
+}
+
+/** How a field is read: the value, or `null` recorded against its name. */
+type Stated = <T>(field: string, value: T | null) => T;
+
+/** A finite number, or `null` where ffprobe stated none. */
+function numberOf(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** A non-empty string, or `null` where ffprobe stated none. */
+function textOf(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** `a`, `a and b`, `a, b and c` — a list a person reads rather than parses. */
+function prose(items: readonly string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1] ?? ""}`;
 }
 
 /**
@@ -210,15 +264,23 @@ function rateOf(declared: unknown): number | null {
   return Math.round((numerator / denominator) * 1000) / 1000;
 }
 
-/** One audio stream, in the terms a disagreement about it would be reported in. */
-function describeSound(stream: Record<string, unknown>): string {
-  const codec = typeof stream["codec_name"] === "string" ? stream["codec_name"] : "sound";
-  const rate = stream["sample_rate"];
-  const channels = stream["channels"];
-  const parts = [codec];
-  if (typeof rate === "string" || typeof rate === "number") parts.push(`${String(rate)}Hz`);
-  if (typeof channels === "number") parts.push(`${String(channels)}ch`);
-  return parts.join(" ");
+/**
+ * One audio stream, in the terms a disagreement about it would be reported in.
+ *
+ * **Every part of the description is `stated`**, because this string IS the
+ * comparison for sound and a default inside it hides an unknown exactly as
+ * `"unstated"` did one level up. It used to fall back to the word `"sound"` for
+ * a missing codec and to simply omit an unstated sample rate or channel count —
+ * so two streams neither of which named its channels produced identical
+ * descriptions, compared equal, and passed. `sample_rate` arrives as a string
+ * from ffprobe and `channels` as a number, which is why they are read
+ * separately rather than through one helper.
+ */
+function describeSound(stream: Record<string, unknown>, stated: Stated): string {
+  const codec = stated("sound codec", textOf(stream["codec_name"]));
+  const rate = stated("sound sample rate", textOf(String(stream["sample_rate"] ?? "")));
+  const channels = stated("sound channel count", numberOf(stream["channels"]));
+  return `${codec} ${rate}Hz ${String(channels)}ch`;
 }
 
 /** One part of a join, as the comparison talks about it: by the name she used. */
@@ -247,15 +309,14 @@ const PROPERTIES: readonly Property[] = [
       "ratio I ask for — so renders opened on differently shaped stills come out differently " +
       "shaped.",
   },
-  {
-    says: "the same frame rate",
-    of: (shape) => (shape.frameRate === null ? "unstated" : `${String(shape.frameRate)}fps`),
-  },
+  // No "unstated" anywhere below, and that absence is load-bearing. A shape
+  // that reaches here cannot hold an unknown in any of these — `probeClip`
+  // refuses before building one — so there is no case where two silences meet
+  // and agree. `silent` is not that case: it is a clip with no audio stream,
+  // which is a real state and a real disagreement with one that has sound.
+  { says: "the same frame rate", of: (shape) => `${String(shape.frameRate)}fps` },
   { says: "the same codec", of: (shape) => shape.codec },
-  {
-    says: "the same pixel format",
-    of: (shape) => shape.pixelFormat ?? "unstated",
-  },
+  { says: "the same pixel format", of: (shape) => shape.pixelFormat },
   { says: "the same sound", of: (shape) => shape.audio ?? "silent" },
 ];
 

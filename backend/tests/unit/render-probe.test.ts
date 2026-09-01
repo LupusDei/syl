@@ -179,17 +179,81 @@ describe("reading a clip's own shape", () => {
     expect(probed.reason).toMatch(/could not read|not.*json/iu);
   });
 
-  it("should refuse a stream with no dimensions rather than defaulting them to zero", async () => {
-    // A zero that compares equal to another zero is a compatibility check that
-    // passes by agreeing about nothing.
+  // -------------------------------------------------------------------------
+  // THE RULE, APPLIED TO EVERY FIELD THE COMPARISON READS.
+  //
+  // It was applied to three of them and not the other two, which is the defect
+  // the rule describes wearing the rule's own clothes: two parts whose frame
+  // rate ffprobe did not state both rendered as "unstated", compared equal, and
+  // passed. A frame-rate mismatch under `-c copy` is broken timing in the clip
+  // she sends him, so that is not a cosmetic hole.
+  //
+  // Table-driven on purpose. A sixth property added next month is covered
+  // without anyone remembering this file exists — which is the same reason
+  // `tool-server.test.ts` guards `because` by shape rather than by a list.
+  // -------------------------------------------------------------------------
+  const unstated: readonly { readonly field: string; readonly answer: string }[] = [
+    { field: "width", answer: streams(videoStream({ width: undefined })) },
+    { field: "height", answer: streams(videoStream({ height: undefined })) },
+    { field: "codec", answer: streams(videoStream({ codec_name: undefined })) },
+    { field: "pixel format", answer: streams(videoStream({ pix_fmt: undefined })) },
+    { field: "frame rate", answer: streams(videoStream({ r_frame_rate: undefined })) },
+    // `0/0` is a real thing ffprobe emits, and it is ffprobe saying it does not
+    // know rather than saying zero.
+    { field: "frame rate", answer: streams(videoStream({ r_frame_rate: "0/0" })) },
+    {
+      field: "sound",
+      answer: streams(videoStream(), { codec_type: "audio", sample_rate: "44100", channels: 2 }),
+    },
+    {
+      field: "sound",
+      answer: streams(videoStream(), { codec_type: "audio", codec_name: "aac", channels: 2 }),
+    },
+    {
+      field: "sound",
+      answer: streams(videoStream(), { codec_type: "audio", codec_name: "aac", sample_rate: "44100" }),
+    },
+  ];
+
+  for (const { field, answer } of unstated) {
+    it(`should refuse a clip whose ${field} ffprobe did not state, and say which`, async () => {
+      const probed = await probeClip({ video: video("a.mp4"), run: runner(answer) });
+
+      expect(probed.ok, `an unstated ${field} was accepted`).toBe(false);
+      if (probed.ok) return;
+      // Named, because "I cannot read this file" is not something she can act
+      // on and "it does not say its frame rate" is.
+      expect(probed.reason.toLowerCase()).toContain(field);
+    });
+  }
+
+  // A test asserting that `ClipShape` forbids an unknown was written here and
+  // DELETED. It read `typeof shape().frameRate === "number"` against this
+  // file's own fixture, so it was green before the fix, green after it, and
+  // green against any implementation whatsoever — a test about the guarantee
+  // that could not see the guarantee. The unknown is unrepresentable because
+  // the TYPE says so (`pixelFormat: string`, `frameRate: number`), and `tsc`
+  // is what enforces that; there is no runtime observation to make. The
+  // enforceable half is the table above, and it is above.
+
+  it("should name EVERY field it could not read, in one refusal", async () => {
+    // One round trip per unreadable field is one turn per unreadable field.
+    // This is the case the old dimension-only test used to cover; it asserted
+    // the refusal's WORDING (/how big|dimension|size/) rather than which field
+    // was named, so it went red when the five guards were unified into one
+    // sentence even though the behaviour it cared about had strengthened. The
+    // table above now covers width and height individually and by name, which
+    // is the durable form of that assertion.
     const probed = await probeClip({
       video: video("a.mp4"),
-      run: runner(streams(videoStream({ width: undefined, height: undefined }))),
+      run: runner(streams(videoStream({ width: undefined, height: undefined, pix_fmt: undefined }))),
     });
 
     expect(probed.ok).toBe(false);
     if (probed.ok) return;
-    expect(probed.reason).toMatch(/how big|dimension|size/iu);
+    expect(probed.reason).toContain("width");
+    expect(probed.reason).toContain("height");
+    expect(probed.reason).toContain("pixel format");
   });
 });
 
