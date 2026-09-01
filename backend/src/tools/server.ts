@@ -1448,6 +1448,14 @@ interface RenderRow {
   readonly holdsLikeness: boolean;
   readonly scene: string;
   readonly duration: number;
+  /**
+   * The renders this one was cut from, in order, or `null`/absent — `syl-5y4n`.
+   *
+   * Optional because every sidecar written before joins existed has no such
+   * field, and absent reads the same as `null`: it was generated rather than
+   * assembled.
+   */
+  readonly joinedFrom?: readonly string[] | null;
 }
 
 /** A still, as the frames route hands it over. */
@@ -1591,6 +1599,11 @@ const seeMyself: ToolHandler = async (input, context) => {
       // somebody else, and she should know that before she judges it.
       holdsLikeness: render.holdsLikeness,
       duration: render.duration,
+      // WHETHER SHE IS LOOKING AT A CUT, and at what. The stills of a joined
+      // clip cross the seams, so a shot that changes half way through is
+      // expected rather than drift — and judging it as drift is precisely the
+      // wrong conclusion to write down. `null` for a render she generated.
+      joinedFrom: render.joinedFrom ?? null,
       /**
        * Whether these stills are the render, or one part of one that was never
        * finished.
@@ -1788,6 +1801,13 @@ async function readTheLog(context: ToolContext): Promise<ToolEnvelope> {
         opening: record.reference,
         face: record.anchor,
         holdsLikeness: record.holdsLikeness,
+        // WHICH RENDERS IT WAS CUT FROM, in order, or `null` for one she
+        // generated. Same argument as every other field here: a thing she can
+        // make and cannot read back is a thing she cannot learn from — and
+        // without it a joined minute is indistinguishable in her own log from a
+        // render Runway made, which is the one row where `credits: 0` would
+        // look like a bug rather than the point.
+        joinedFrom: record.joinedFrom ?? null,
         // WHAT IT WAS CHARGED, which since `syl-o0vy` is a number Runway
         // reported rather than one we worked out from a rate card. `null` means
         // nobody has said — a render still in flight, or one whose task carried
@@ -2036,6 +2056,78 @@ const judgeRender: ToolHandler = async (input, context) => {
   if (!kept.ok) return refused("judge_render", kept.failure);
 
   return { ok: true, action: "judge_render", subject: kept.data, at: kept.data.at };
+};
+
+/**
+ * Cut finished renders into one clip — `syl-5y4n`.
+ *
+ * The whole verb is a `POST` and a read-back, because the interesting work is
+ * behind the route: `RenderService.join` probes the parts with ffprobe and
+ * refuses a mismatch, since the concat copies streams rather than re-encoding
+ * them and a mismatched copy exits zero over a broken file. Nothing here
+ * rewords that refusal — it is written to be said out loud and it names which
+ * renders disagree and how, which is the only part of it she can act on.
+ *
+ * It mints a RENDER, which is what keeps the change small: `see_myself` and
+ * `show_him` take it by name with no change at all.
+ */
+const joinRenders: ToolHandler = async (input, context) => {
+  const named = input["renders"];
+  const names = (Array.isArray(named) ? named : [])
+    .filter((name): name is string => typeof name === "string")
+    .map((name) => name.trim())
+    .filter((name) => name !== "");
+  if (names.length < 2) {
+    // Not `missing()`: the field is often present and merely short, and "renders
+    // was missing" would be a false sentence about a call that named one.
+    return {
+      ok: false,
+      action: "join_renders",
+      reason:
+        `A join is two or more finished renders cut into one, and I named ${String(names.length)}. ` +
+        "Give them by their own names, in the order they play.",
+      retryable: true,
+    };
+  }
+  const because = text(input, "because");
+  if (because === null) {
+    return missing(
+      "join_renders",
+      "because",
+      "Every render says why it exists, the same as everything else I make.",
+    );
+  }
+
+  const made = await context.client.post<{ record: { name: string } }>("/renders/joins", {
+    renders: names,
+    because,
+  });
+  if (!made.ok) return refused("join_renders", made.failure);
+
+  // Read back, exactly as `render_me` does and for a sharper reason: the clip
+  // exists on disk by the time the write answers, so what she should be told
+  // about is the stored record rather than the write's own account of it.
+  const stored = await context.client.get<{ record: RenderRow; spend: unknown }>(
+    `/renders/${encodeURIComponent(made.data.record.name)}`,
+  );
+  if (!stored.ok) {
+    return {
+      ok: false,
+      action: "join_renders",
+      reason: `${stored.failure.message} The clip may well have been cut — look before cutting it again.`,
+      retryable: stored.failure.retryable,
+    };
+  }
+
+  return {
+    ok: true,
+    action: "join_renders",
+    subject: stored.data.record,
+    at: stored.data.record.startedAt,
+    // The ledger rides along as it does on every render verb. It should not
+    // move: a join buys nothing, and being able to see that is the point.
+    spent: stored.data.spend,
+  };
 };
 
 /**
@@ -2388,6 +2480,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   describe_myself: describeMyself,
   judge_render: judgeRender,
   see_myself: seeMyself,
+  join_renders: joinRenders,
   show_him: showHim,
   tell_him: tellHim,
   read_this: readThis,

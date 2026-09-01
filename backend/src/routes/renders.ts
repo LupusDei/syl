@@ -435,6 +435,51 @@ export function createRenderRouter(options: RenderRouterOptions): Router {
       .catch(next);
   });
 
+  /**
+   * Cut finished renders into one clip — `syl-5y4n`.
+   *
+   * A **literal** segment, beside `/renders/wardrobe` and `/renders/description`
+   * and under the same rule: `joins` matches the render-name pattern, so this
+   * only stays reachable while no `POST /renders/:name` exists to swallow it.
+   *
+   * Idempotent like every other write here, and it earns it more than most: a
+   * retried join would otherwise mint a second identical render — no credits
+   * lost, and her ledger and her `latest` both quietly wrong.
+   *
+   * Nothing about the response is new. It mints a RENDER, so what comes back is
+   * `{ record, spend }`, exactly as `POST /renders` answers.
+   */
+  router.post("/renders/joins", (request, response, next) => {
+    void runIdempotentAsync(idempotency, request, async () => {
+      const body = bodyOf(request);
+      const named = body["renders"];
+      const joined = await renders.join({
+        // Strings only. Anything else is dropped here rather than stringified
+        // into a name that would then be reported as a render she does not
+        // have — the count check and the by-name refusal below say something
+        // she can act on, and `[object Object]` does not.
+        renders: Array.isArray(named) ? named.filter((name): name is string => typeof name === "string") : [],
+        because: requireText(body, "because"),
+      });
+
+      if (!joined.ok) {
+        // The same two-way split `POST /renders` makes, and for the same
+        // reason: a mismatch she can fix by choosing different renders is hers
+        // to retry, and a machine with no ffprobe on it is not.
+        throw new ApiFailure(
+          joined.retryable ? "VALIDATION_FAILED" : "UPSTREAM_UNAVAILABLE",
+          joined.reason,
+        );
+      }
+
+      return { status: 201, data: { record: joined.record, spend: renders.spend() } };
+    })
+      .then((outcome) => {
+        sendIdempotent(response, outcome);
+      })
+      .catch(next);
+  });
+
   router.get("/renders/:name", (request, response) => {
     const name = nameOf(request.params["name"]);
     const record = name === "latest" ? renders.latest() : renders.get(name);

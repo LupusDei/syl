@@ -13,6 +13,7 @@ import {
 } from "./framing.js";
 import { extractFrames, ffmpegRunner, type ExtractResult, type FrameRunner } from "./frames.js";
 import { joinVideos, lastFrame } from "./join.js";
+import { ffprobeRunner, probeClip, whyTheyDoNotCutTogether, type JoinPart, type ProbeRunner } from "./probe.js";
 import {
   canAnchorLikeness,
   defaultResolution,
@@ -365,6 +366,26 @@ export interface RenderRecord {
    * synthesised for them from the fields they do have — see {@link recordFrom}.
    */
   readonly parts: readonly RenderPart[];
+  /**
+   * The renders this one was CUT FROM, by name, in the order they play.
+   *
+   * `null` for every render that was generated rather than assembled, which is
+   * all of them until `syl-5y4n` and most of them after it. Not an empty array
+   * for that case: absent and "cut from nothing" are different claims, and only
+   * one of them is true of a render Runway made.
+   *
+   * **It is provenance, and it is also the flag the ledger reads.** A join buys
+   * nothing — every second in it was paid for under the records it names — so
+   * {@link RenderService.spend} counts its seconds there and not here. Without
+   * this field the only way to know would be to compare file paths, which is
+   * how a total comes to be twice what he actually spent.
+   *
+   * Deliberately NOT reconstructed from {@link RenderRecord.parts}. A part of a
+   * join is a piece of *footage*; these are RENDERS, with their own records,
+   * their own verdicts and their own charges, and flattening the two would lose
+   * exactly the handle that lets her go back and look at one of them.
+   */
+  readonly joinedFrom: readonly string[] | null;
 }
 
 /**
@@ -502,6 +523,31 @@ export interface StartInput {
    */
   readonly opening?: string;
 }
+
+/**
+ * Cutting finished renders into one clip — `syl-5y4n`.
+ *
+ * She could chain segments that cut together seamlessly and had no way to
+ * concatenate them: `show_him` takes ONE render name, so four fifteen-second
+ * clips stayed four clips and never became the one minute the Commander asked
+ * for.
+ */
+export interface JoinInput {
+  /**
+   * The renders, by name, **in the order they play**. Two or more.
+   *
+   * Names rather than paths, because a name is what she has: it is what
+   * `see_myself` shows her, what `show_him` takes, and the only handle that
+   * survives into the joined record's provenance. `latest` is refused — see
+   * {@link RenderService.join}.
+   */
+  readonly renders: readonly string[];
+  readonly because: string;
+}
+
+export type JoinRendersResult =
+  | { readonly ok: true; readonly record: RenderRecord }
+  | { readonly ok: false; readonly reason: string; readonly retryable: boolean };
 
 /**
  * The recipe every one of the eight loops was made with — **and it is no longer
@@ -773,6 +819,120 @@ export function salvagedParts(record: RenderRecord): readonly RenderPart[] {
 }
 
 /**
+ * What a joined render's name ends with, where a generated one names its framing.
+ *
+ * A word rather than a framing, because a join does not have one of its own —
+ * see {@link joinedRecord} on why the framing it records is one of its parts'.
+ */
+export const JOIN_KIND = "joined" as const;
+
+/**
+ * The record for a clip that was CUT rather than generated — `syl-5y4n`.
+ *
+ * Every field here is either observed or quoted from the parts, and the two
+ * that are neither are the interesting ones.
+ *
+ * **`framing` and `anchor` are chosen so that `holdsLikeness` is honest.** A
+ * record cannot carry that flag directly — {@link recordFrom} derives it from
+ * these two, which is the whole of `syl-63v`'s fix — and a joined clip is as
+ * much her as its least-anchored second. So if any part drifts, the framing
+ * recorded is *that part's* and no anchor is named, which derives to `false`;
+ * if none does, the first part's are, which derives to `true`. Either way the
+ * framing named is one the clip genuinely contains rather than an invented
+ * "mixed", which would have had to go into `FRAMING_IDS` and become something
+ * `render_me` offers her.
+ *
+ * **The bill is a genuine zero, not an unknown.** `null` on a render means
+ * nobody reported a charge, which is the honest answer for one in flight and a
+ * lie about a join: nothing was submitted, so nothing was charged, and that is
+ * an observation rather than an assumption. `RenderService.spend` counts the
+ * *seconds* under the parts instead — see there.
+ *
+ * `parts` is ONE part, and it is the joined clip itself. A part is a piece of
+ * footage inside a record; the renders this was cut from are records of their
+ * own, with their own verdicts and their own charges, and they are in
+ * {@link RenderRecord.joinedFrom}. Putting them here would have made every
+ * total that walks `parts` count them twice.
+ */
+function joinedRecord(input: {
+  readonly name: string;
+  readonly sources: readonly RenderRecord[];
+  /** What the files actually are, from the probe. Never what they asked for. */
+  readonly shape: { readonly width: number; readonly height: number } | null;
+  readonly video: string;
+  readonly because: string;
+  readonly at: string;
+  readonly joinedFrom: readonly string[];
+}): RenderRecord {
+  const first = input.sources[0];
+  // The parts are checked before this is reached; the fallbacks exist only
+  // because the compiler cannot see that.
+  const drifting = input.sources.find((record) => !record.holdsLikeness);
+  const speaking = drifting ?? first;
+  const duration = input.sources.reduce((total, record) => total + record.duration, 0);
+  const prompt = input.sources.map((record) => record.prompt).join("\n\n");
+  const models = [...new Set(input.sources.map((record) => record.model))];
+  const resolutions = [...new Set(input.sources.map((record) => record.resolution))];
+  const reference = first?.reference ?? "";
+
+  return {
+    name: input.name,
+    status: "ready",
+    renderedAt: input.at,
+    // No generation was submitted for this, so there is no handle Runway would
+    // answer to. The parts' handles live on the parts' own records.
+    taskId: null,
+    // Every model that made it, not the first one. A joined clip made on two is
+    // reproducible only from both, and picking one would be the record naming a
+    // model that made half of it.
+    model: models.join(", "),
+    // MEASURED, not asked for. `ratio` on a generated record is the request,
+    // and the request is silently overruled by the opening picture — so the ask
+    // is the one number that can disagree with the file.
+    ratio: input.shape === null ? (first?.ratio ?? "") : `${String(input.shape.width)}:${String(input.shape.height)}`,
+    resolution: resolutions.length === 1 ? (resolutions[0] ?? null) : null,
+    // Not a property a join has: nothing here was given keyframe slots. `null`
+    // reads the same as it does on every sidecar that predates the field.
+    keyframes: null,
+    duration,
+    reference,
+    anchor: drifting === undefined ? (first?.anchor ?? null) : null,
+    framing: speaking?.framing ?? TEMPLATE_FRAMING,
+    prompt,
+    // The parts' own words, in order and quoted. Writing a sentence about the
+    // join would be putting words in her mouth about a shot she did not
+    // describe.
+    scene: input.sources.map((record) => record.scene).filter((scene) => scene !== "").join("\n\n"),
+    holdsLikeness: drifting === undefined,
+    because: input.because,
+    startedAt: input.at,
+    reason: null,
+    credits: 0,
+    usd: 0,
+    estimated: 0,
+    video: input.video,
+    parts: [
+      {
+        taskId: null,
+        prompt,
+        duration,
+        // The clip's actual frame one is the first part's frame one, and this
+        // is the picture that pinned it.
+        first: reference,
+        last: null,
+        video: input.video,
+        credits: 0,
+        charged: 0,
+        status: "ready",
+        failureCode: null,
+        failure: null,
+      },
+    ],
+    joinedFrom: input.joinedFrom,
+  };
+}
+
+/**
  * Our sentence about a refusal, with Runway's own inside it.
  *
  * **Beside, never instead of.** Ours says what happened to the render; theirs
@@ -910,6 +1070,13 @@ export interface RenderServiceOptions {
    */
   readonly ffmpeg?: FrameRunner;
   /**
+   * How this service runs ffprobe. Injected for the same reasons ffmpeg is.
+   *
+   * A **second** seam rather than a widening of the one above, because a probe's
+   * answer is its stdout and `FrameRunner` throws stdout away. See `probe.ts`.
+   */
+  readonly ffprobe?: ProbeRunner;
+  /**
    * Arrange to come back and look at this render.
    *
    * Called once per render, immediately after the record is written and before
@@ -937,6 +1104,7 @@ export class RenderService {
   readonly #pollMs: number;
   readonly #giveUpAfterPolls: number;
   readonly #ffmpeg: FrameRunner;
+  readonly #ffprobe: ProbeRunner;
   readonly #watch: ((record: RenderRecord) => void) | undefined;
   readonly #onError: (error: unknown, name: string) => void;
   /** Renders being followed right now, so `drain` can wait for them. */
@@ -954,6 +1122,7 @@ export class RenderService {
     this.#pollMs = options.pollMs ?? POLL_MS;
     this.#giveUpAfterPolls = options.giveUpAfterPolls ?? GIVE_UP_AFTER_POLLS;
     this.#ffmpeg = options.ffmpeg ?? ffmpegRunner;
+    this.#ffprobe = options.ffprobe ?? ffprobeRunner;
     this.#watch = options.watch;
     this.#onError =
       options.onError ??
@@ -1271,6 +1440,8 @@ export class RenderService {
       ...billed(parts),
       video: null,
       parts,
+      // Generated, not assembled. `null` rather than `[]`: see the field.
+      joinedFrom: null,
     };
 
     this.#write(record);
@@ -1284,6 +1455,170 @@ export class RenderService {
       this.#onError(error, record.name);
     }
     this.#follow(record);
+    return { ok: true, record };
+  }
+
+  /**
+   * Cut finished renders into one clip — `syl-5y4n`.
+   *
+   * ## Why this mints a RENDER rather than a new kind of thing
+   *
+   * Because `video` on a record is already documented as *"the joined clip, if
+   * it was joined"*, so a join that writes a record is something every reader
+   * downstream already understands: `see_myself` pulls stills out of it,
+   * `show_him` takes it by name, `GET /renders/{name}` answers for it, and none
+   * of them changes by a line. A join that produced anything else would have
+   * needed all four taught about a second sort of clip.
+   *
+   * ## The engineering is the REFUSAL, not the concatenation
+   *
+   * `joinVideos` has always taken an array. What is new is that the parts are
+   * separately made renders, and `-c copy` is only safe while they agree — see
+   * `probe.ts`, which has the measurement and the trap behind it. A mismatched
+   * concat exits zero and writes a broken file, so nothing downstream would
+   * catch it and she would send him a corrupt minute. **Refusing, with a
+   * sentence naming which renders disagree and how, is the deliverable.**
+   *
+   * ## Nothing is written until the mp4 exists
+   *
+   * The opposite of {@link RenderService.start}, deliberately, and the reason
+   * is the same rule reaching a different answer. A render's sidecar is written
+   * at submission because credits are already spent and a process that dies in
+   * the next second must leave behind the prompt that bought them. A join
+   * spends nothing, so there is nothing to preserve early — and a record
+   * pointing at a video that was never written is exactly the "record asserting
+   * what the system did not observe" defect this file's header is about.
+   *
+   * @param input The renders by name in playing order, and why she made it.
+   */
+  async join(input: JoinInput): Promise<JoinRendersResult> {
+    const because = input.because.trim();
+    if (because === "") {
+      return {
+        ok: false,
+        reason: "Every render says why it exists, the same as everything else you make.",
+        retryable: true,
+      };
+    }
+
+    const names = input.renders.map((name) => name.trim()).filter((name) => name !== "");
+    if (names.length < 2) {
+      return {
+        ok: false,
+        reason:
+          `A join is two or more finished renders cut into one, and I was given ${String(names.length)}. ` +
+          "Name them by their own names, in the order they play.",
+        retryable: true,
+      };
+    }
+
+    const sources: RenderRecord[] = [];
+    for (const name of names) {
+      // `latest` IS RESOLVED EVERYWHERE ELSE AND REFUSED HERE, for the reason
+      // `show_him` refuses it: the joined record keeps the names it was made
+      // with forever, and "whatever was made most recently" stops being the
+      // render she meant the moment anything else writes a record — including,
+      // one second later, this very join.
+      if (name === "latest") {
+        return {
+          ok: false,
+          reason:
+            "I cannot cut in `latest` — a join keeps the names it was made from forever, and " +
+            "`latest` means whatever record was written most recently, which will be this join " +
+            "itself. Name each render by its own name.",
+          retryable: true,
+        };
+      }
+
+      const record = this.get(name);
+      if (record === null) {
+        return {
+          ok: false,
+          reason: `There is no render called "${name}" that I can read, so there is nothing of it to cut in.`,
+          retryable: true,
+        };
+      }
+      if (record.status !== "ready" || record.video === null) {
+        return {
+          ok: false,
+          reason:
+            `"${name}" ${
+              record.status === "rendering"
+                ? "is still rendering"
+                : `did not finish: ${record.reason ?? "no reason was recorded"}`
+            }, so there is nothing of it to cut in.`,
+          retryable: true,
+        };
+      }
+      // Asked of the DISK rather than of the record, for the reason
+      // `settledStatus` exists: what a render can be shown to be beats what is
+      // written beside it, and `joinVideos` would find this out later with the
+      // name already minted.
+      if (!existsSync(record.video)) {
+        return {
+          ok: false,
+          reason:
+            `"${name}" is recorded as finished and its file is not on this disk ` +
+            `(${record.video}), so I cannot cut it in.`,
+          retryable: false,
+        };
+      }
+      sources.push(record);
+    }
+
+    const first = sources[0];
+    if (first === undefined || first.video === null) {
+      return { ok: false, reason: "There is nothing to join.", retryable: true };
+    }
+
+    // WHAT THE FILES ACTUALLY ARE. Never what the records asked for: `ratio` is
+    // the ask, and the ask is silently overruled by the opening picture, so a
+    // check against the record would pass on precisely the renders it exists to
+    // catch. See `probe.ts`.
+    const probed: JoinPart[] = [];
+    for (const record of sources) {
+      const shape = await probeClip({ video: record.video ?? "", run: this.#ffprobe });
+      if (!shape.ok) {
+        return {
+          ok: false,
+          // An unreadable part is refused rather than assumed to match. The
+          // safe direction: absence of a disagreement is not agreement.
+          reason: `${shape.reason} So I have not cut anything, and nothing has been spent.`,
+          retryable: false,
+        };
+      }
+      probed.push({ name: record.name, shape: shape.shape });
+    }
+
+    const disagreement = whyTheyDoNotCutTogether(probed);
+    if (disagreement !== null) return { ok: false, reason: disagreement, retryable: true };
+
+    const now = this.#clock();
+    const name = this.#nameFor(now, JOIN_KIND);
+    const to = this.#studio.video(name);
+    const joined = await joinVideos({
+      parts: sources.map((record) => record.video ?? ""),
+      to,
+      listFile: this.#studio.partList(name),
+      run: this.#ffmpeg,
+    });
+    if (!joined.ok) {
+      // No record is written. There is no footage to lose — every part is still
+      // on disk under its own record — so a sidecar here would be a render that
+      // claims to exist, reachable from `latest`, with nothing behind it.
+      return { ok: false, reason: joined.reason, retryable: false };
+    }
+
+    const record = joinedRecord({
+      name,
+      sources,
+      shape: probed[0]?.shape ?? null,
+      video: to,
+      because,
+      at: instant(now),
+      joinedFrom: names,
+    });
+    this.#write(record);
     return { ok: true, record };
   }
 
@@ -1360,7 +1695,16 @@ export class RenderService {
       // be. They are the same number for every render that finished; they
       // differ for one whose second half never reached Runway, and the ledger
       // is the place where that difference has to be the truth.
-      seconds += record.parts.filter(wasBought).reduce((total, part) => total + part.duration, 0);
+      //
+      // **A JOIN BUYS NOTHING** (`syl-5y4n`), so its seconds are counted under
+      // the renders it was cut from and not again here. Its footage is real and
+      // it is not new footage: cutting a minute out of four fifteen-second
+      // clips she already has would otherwise report two minutes bought. The
+      // credits look after themselves — a joined record's total is a genuine
+      // zero — but the seconds would double, and this is the ledger.
+      if (record.joinedFrom === null) {
+        seconds += record.parts.filter(wasBought).reduce((total, part) => total + part.duration, 0);
+      }
       if (record.credits === null) unpriced += 1;
       else credits += record.credits;
     }
@@ -1911,10 +2255,15 @@ export class RenderService {
    * renders in the same second would overwrite each other's video *and* each
    * other's record. Her own words are deliberately not part of it — a name
    * derived from model output is a filename derived from model output.
+   *
+   * @param kind What sort of render it is: a framing for one that was generated,
+   *   {@link JOIN_KIND} for one that was cut together. It is the tail of the
+   *   filename, so a person opening `renders/` can tell them apart — which is
+   *   the same argument {@link RENDER_PREFIX} makes one level up.
    */
-  #nameFor(now: number, framing: Framing): string {
+  #nameFor(now: number, kind: Framing | typeof JOIN_KIND): string {
     const stamp = instant(now).replace(/[:.]/gu, "").replace(/-/gu, "").toLowerCase().replace("000z", "z");
-    const base = `${RENDER_PREFIX}${stamp}-${framing.replace(/_/gu, "-")}`;
+    const base = `${RENDER_PREFIX}${stamp}-${kind.replace(/_/gu, "-")}`;
     if (!existsSync(this.#studio.sidecar(base))) return base;
 
     for (let counter = 2; counter < 1000; counter += 1) {
@@ -2214,8 +2563,31 @@ function recordFrom(name: string, file: string, sidecar: Record<string, unknown>
         : parts.reduce((total, part) => total + (part.credits ?? 0), 0),
       video,
       parts,
+      // `null` for every sidecar ever written before `syl-5y4n`, which is the
+      // truth about them: they were generated, not assembled. Read rather than
+      // derived, because there is nothing on a record to derive it from — and a
+      // join whose provenance did not survive a reload would be a join the
+      // ledger counts twice the moment the process restarts.
+      joinedFrom: joinedFromOf(sidecar["joinedFrom"]),
     },
   };
+}
+
+/**
+ * The renders a sidecar says it was cut from, or `null`.
+ *
+ * Malformed is read as absent rather than making the record unreadable, the
+ * same call {@link partsFrom} makes and for the same reason: the fields that
+ * decide whether the service tells the truth about a render are checked above,
+ * and this one says where its footage came from. A join with a broken
+ * `joinedFrom` is still a finished clip on disk she can look at and send.
+ */
+function joinedFromOf(declared: unknown): readonly string[] | null {
+  if (!Array.isArray(declared)) return null;
+  const names = declared.filter((name): name is string => typeof name === "string" && name !== "");
+  // Fewer than two is not a join. Reading one back would make the ledger skip a
+  // render's seconds on the strength of a field that cannot be describing a cut.
+  return names.length >= 2 && names.length === declared.length ? names : null;
 }
 
 /**

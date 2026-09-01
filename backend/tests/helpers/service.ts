@@ -408,6 +408,7 @@ export function testReadyRenders(): RenderSource {
     estimated: 120,
     usd: 1.2,
     video: "/studio/videos/syl-20260811t090000z-close.mp4",
+    joinedFrom: null,
   });
   return { get: (name) => record(name), latest: () => record("latest") };
 }

@@ -164,6 +164,80 @@ describe("joining the halves", () => {
     expect(joined.ok).toBe(false);
   });
 
+  // -------------------------------------------------------------------------
+  // FOUR PARTS, NOT TWO HALVES — `syl-5y4n`.
+  //
+  // This function has always taken an array and its only arity limit is two.
+  // Its SENTENCES did not: they said "half", because the one caller joined the
+  // two halves of one anchored render. Join four finished renders and it
+  // reported about halves — and these are the sentences she reads when
+  // something has failed at three in the morning.
+  // -------------------------------------------------------------------------
+
+  it("should join four parts, in the order they were given", async () => {
+    const parts = [video("a.mp4"), video("b.mp4"), video("c.mp4"), video("d.mp4")];
+    const listFile = join(root, "parts", "joined.txt");
+
+    const joined = await joinVideos({
+      parts,
+      to: join(root, "joined.mp4"),
+      listFile,
+      run: runner(),
+    });
+
+    expect(joined.ok).toBe(true);
+    expect(readFileSync(listFile, "utf8")).toBe(`${parts.map((p) => `file '${p}'`).join("\n")}\n`);
+  });
+
+  it("should report a missing part as a PART, and say which position it is in", async () => {
+    const missing = join(root, "c.mp4");
+
+    const joined = await joinVideos({
+      parts: [video("a.mp4"), video("b.mp4"), missing, video("d.mp4")],
+      to: join(root, "joined.mp4"),
+      listFile: join(root, "parts", "joined.txt"),
+      run: runner(),
+    });
+
+    expect(joined.ok).toBe(false);
+    if (joined.ok) return;
+    // The path, so she can go and look — and its POSITION, because with four
+    // parts "which one" is a question a path alone answers slowly.
+    expect(joined.reason).toContain(missing);
+    expect(joined.reason).toContain("3");
+    // And never "half". A four-part join reporting about halves is the
+    // two-part assumption leaking into the one sentence that has to be true.
+    expect(joined.reason).not.toMatch(/half/iu);
+  });
+
+  it("should refuse fewer than two parts in words that are not about halves", async () => {
+    const joined = await joinVideos({
+      parts: [video("a.mp4")],
+      to: join(root, "joined.mp4"),
+      listFile: join(root, "parts", "joined.txt"),
+      run: runner(),
+    });
+
+    expect(joined.ok).toBe(false);
+    if (joined.ok) return;
+    expect(joined.reason).not.toMatch(/half/iu);
+    expect(joined.reason).toMatch(/two/iu);
+  });
+
+  it("should say a join failed without claiming it was a join of two", async () => {
+    const joined = await joinVideos({
+      parts: [video("a.mp4"), video("b.mp4"), video("c.mp4")],
+      to: join(root, "joined.mp4"),
+      listFile: join(root, "parts", "joined.txt"),
+      run: runner({ ok: false }),
+    });
+
+    expect(joined.ok).toBe(false);
+    if (joined.ok) return;
+    expect(joined.reason).toContain("exited 1");
+    expect(joined.reason).not.toMatch(/half/iu);
+  });
+
   it("should refuse to report success when ffmpeg wrote no joined clip", async () => {
     mkdirSync(join(root, "parts"), { recursive: true });
     const joined = await joinVideos({

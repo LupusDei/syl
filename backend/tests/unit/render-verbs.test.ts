@@ -1263,3 +1263,156 @@ describe("every picture she is shown is one she can name", () => {
     expect(subject.sightings).toEqual([sightingOf(Buffer.from(still(3), "base64"))]);
   });
 });
+
+/**
+ * `join_renders` — `syl-5y4n`.
+ *
+ * She could chain segments that cut together and had no way to concatenate
+ * them, so four fifteen-second clips stayed four clips and never became the one
+ * minute the Commander asked for.
+ *
+ * The verb is a verb over renders, like `judge_render`, rather than one named
+ * for him or for her — and that is deliberate. `cut_together` was considered and
+ * would have said what she does without saying what it does it TO; the thing
+ * that has to be unmistakable here is that the inputs are finished renders and
+ * not segments inside one, because the two are one word apart and only one of
+ * them is possible.
+ */
+describe("join_renders", () => {
+  const JOINED = {
+    ...RECORD,
+    name: "syl-20260901t153000z-joined",
+    joinedFrom: ["syl-a", "syl-b"],
+    credits: 0,
+    usd: 0,
+  };
+
+  it("should be offered", () => {
+    expect(advertisedToolNames()).toContain("join_renders");
+  });
+
+  it("should require a reason and at least two renders, in that order in the schema", () => {
+    const tool = TOOLS.find((t) => t.name === "join_renders");
+    const schema = tool?.inputSchema as {
+      required?: string[];
+      properties?: Record<string, { type?: string; minItems?: number }>;
+    };
+
+    expect(schema.required).toContain("because");
+    expect(schema.required).toContain("renders");
+    expect(schema.properties?.["renders"]?.type).toBe("array");
+    // Two is the arity below which there is nothing to join, and the schema
+    // says so rather than leaving it to a refusal she has to spend a turn on.
+    expect(schema.properties?.["renders"]?.minItems).toBe(2);
+  });
+
+  it("should ask for the cut and read the new render back, as every other write does", async () => {
+    const api = fakeApi({
+      "/renders/joins": () => ok({ record: JOINED, spend: SPEND }, 201),
+      "/renders": () => ok({ record: JOINED, spend: SPEND }),
+    });
+
+    const { envelope, isError } = await call(contextFor(api.fetch), "join_renders", {
+      renders: ["syl-a", "syl-b"],
+      because: "he asked for the whole minute",
+    });
+
+    expect(isError).toBe(false);
+    expect(envelope["ok"]).toBe(true);
+    expect((envelope["subject"] as Record<string, unknown>)["name"]).toBe(JOINED.name);
+    expect(api.calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      "POST /renders/joins",
+      `GET /renders/${JOINED.name}`,
+    ]);
+    // IN THE ORDER SHE NAMED THEM. A join whose order is not carried verbatim
+    // is a minute assembled in whatever order a set happened to iterate.
+    expect(api.calls[0]?.body?.["renders"]).toEqual(["syl-a", "syl-b"]);
+    expect(envelope["spent"]).toEqual(SPEND);
+  });
+
+  it("should refuse one render, and say what a join is", async () => {
+    const api = fakeApi({ "/renders/joins": () => ok({ record: JOINED, spend: SPEND }, 201) });
+
+    const { envelope, isError } = await call(contextFor(api.fetch), "join_renders", {
+      renders: ["syl-a"],
+      because: "b",
+    });
+
+    expect(isError).toBe(true);
+    expect(String(envelope["reason"])).toMatch(/two/iu);
+    // Nothing was asked of the service: a refusal she can fix from the sentence
+    // costs a round trip it does not need.
+    expect(api.calls.filter((c) => c.method === "POST")).toEqual([]);
+  });
+
+  it("should refuse without a reason, exactly as every other write does", async () => {
+    const api = fakeApi({ "/renders/joins": () => ok({ record: JOINED, spend: SPEND }, 201) });
+
+    const { envelope, isError } = await call(contextFor(api.fetch), "join_renders", {
+      renders: ["syl-a", "syl-b"],
+    });
+
+    expect(isError).toBe(true);
+    expect(String(envelope["reason"])).toContain("because");
+  });
+
+  it("should show her which of her renders is a cut, and of what, when she reads her log", async () => {
+    // Every other dial she can set is read back here for the same reason: a
+    // thing she can make and cannot see is a thing she cannot learn from. And
+    // this row is the one where `credits: 0` would otherwise look like a defect
+    // rather than the point.
+    const api = fakeApi({
+      "/renders": () =>
+        ok({
+          items: [{ ...JOINED, holdsLikeness: true, reference: "renders/opening-ribbon.png", anchor: null, keyframes: null, estimated: 0 }],
+          unreadable: [],
+          verdicts: [],
+          spend: SPEND,
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", { of: "renders" });
+    const items = (envelope["subject"] as { items: Record<string, unknown>[] }).items;
+
+    expect(items[0]?.["joinedFrom"]).toEqual(["syl-a", "syl-b"]);
+  });
+
+  it("should tell her she is looking at a cut when she looks at one", async () => {
+    // The stills of a joined clip cross the seams, so a shot that changes half
+    // way through is expected rather than drift — and writing that down as
+    // drift is the wrong conclusion kept forever.
+    const api = fakeApi({
+      "/renders": () =>
+        ok({
+          render: JOINED,
+          frames: [{ atSeconds: 1, mimeType: "image/jpeg", base64: FRAME_B64, path: "/f/1.jpg" }],
+          spend: SPEND,
+        }),
+    });
+
+    const { envelope } = await call(contextFor(api.fetch), "see_myself", { render: JOINED.name });
+
+    expect((envelope["subject"] as Record<string, unknown>)["joinedFrom"]).toEqual([
+      "syl-a",
+      "syl-b",
+    ]);
+  });
+
+  it("should hand back the service's own refusal rather than a sentence of its own", async () => {
+    // The compatibility refusal names which parts disagree and how. Rewording
+    // it here would lose the one thing she can act on.
+    const says =
+      "I cannot cut these together: syl-a is 834x1112 and syl-b is 1112x834. Nothing has been spent.";
+    const api = fakeApi({
+      "/renders/joins": () => failure(400, "VALIDATION_FAILED", says),
+    });
+
+    const { envelope, isError } = await call(contextFor(api.fetch), "join_renders", {
+      renders: ["syl-a", "syl-b"],
+      because: "b",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope["reason"]).toBe(says);
+  });
+});

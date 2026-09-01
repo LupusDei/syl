@@ -104,7 +104,15 @@ export async function lastFrame(options: LastFrameOptions): Promise<JoinResult> 
 }
 
 export interface JoinOptions {
-  /** The halves, in the order they play. Absolute paths. */
+  /**
+   * The parts, in the order they play. Absolute paths. Two or more.
+   *
+   * **Always an array, and the arity limit has always been two** — the concat
+   * demuxer's list file is the mechanism built for arbitrary counts. This looked
+   * like a two-part function only because its sole caller joined the two halves
+   * of one anchored render; `syl-5y4n` gave it a second caller that joins four
+   * finished ones, and the only thing that had to change was the sentences.
+   */
   readonly parts: readonly string[];
   readonly to: string;
   /** Where the concat list is written. Kept, like everything else about a render. */
@@ -113,26 +121,49 @@ export interface JoinOptions {
 }
 
 /**
- * Join finished halves into the one clip that is the render.
+ * Join finished parts into one clip.
  *
- * The concat **demuxer** with `-c copy`, not the concat filter: both halves come
- * from the same model at the same ratio, so their streams are already
- * compatible and there is no reason to re-encode her twice. `-safe 0` is
- * required because the list holds absolute paths, which is what her home gives
- * us.
+ * The concat **demuxer** with `-c copy`, not the concat filter: re-encoding
+ * would cost a generation of quality on footage that is her face, and buy
+ * nothing where the streams already agree. `-safe 0` is required because the
+ * list holds absolute paths, which is what her home gives us.
+ *
+ * **`-c copy` is safe only while the parts DO agree, and that is a property of
+ * the caller rather than of this function.** Inside one render it is free: both
+ * halves come from the same model at the same ratio. Across separately made
+ * renders it is not, and a mismatch here does not fail — it writes a file that
+ * plays as rubbish, at exit code zero. `probe.ts` is where that is checked, and
+ * `RenderService.join` is what refuses before reaching this.
+ *
+ * ## The sentences are n-ary too
+ *
+ * They used to say "half". Join four and it reported about halves — the
+ * two-part assumption leaking into the one thing that has to be true at three
+ * in the morning, which is what a failure says.
  */
 export async function joinVideos(options: JoinOptions): Promise<JoinResult> {
   const run = options.run ?? ffmpegRunner;
 
-  const missing = options.parts.filter((part) => !existsSync(part));
+  // The POSITION as well as the path. With two parts a path answers "which
+  // one"; with four it answers it slowly, and this is read by somebody who is
+  // already having a bad time.
+  const missing = options.parts
+    .map((part, index) => ({ part, at: index + 1 }))
+    .filter(({ part }) => !existsSync(part));
   if (missing.length > 0) {
+    const named = missing.map(({ part, at }) => `part ${String(at)} (${part})`).join(", ");
     return {
       ok: false,
-      reason: `Half of this render is not on disk (${missing.join(", ")}), so there is nothing to join.`,
+      reason: `${missing.length === 1 ? "One part" : `${String(missing.length)} parts`} of this join ${
+        missing.length === 1 ? "is" : "are"
+      } not on disk — ${named} — so there is nothing to join.`,
     };
   }
   if (options.parts.length < 2) {
-    return { ok: false, reason: "A join needs two halves and was given fewer." };
+    return {
+      ok: false,
+      reason: `A join needs two or more parts and was given ${String(options.parts.length)}.`,
+    };
   }
 
   mkdirSync(dirname(options.listFile), { recursive: true });
@@ -162,7 +193,10 @@ export async function joinVideos(options: JoinOptions): Promise<JoinResult> {
   ]);
 
   if (!outcome.ok) {
-    return { ok: false, reason: `I could not join the halves: ffmpeg ${outcome.message}.` };
+    return {
+      ok: false,
+      reason: `I could not cut the ${String(options.parts.length)} parts together: ffmpeg ${outcome.message}.`,
+    };
   }
   if (!existsSync(options.to)) {
     return {

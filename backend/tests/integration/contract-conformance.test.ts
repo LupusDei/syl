@@ -102,6 +102,17 @@ const UNDECLARED: readonly string[] = [
   "POST /renders",
   "GET /renders/{name}",
   "GET /renders/{name}/frames",
+  // `syl-5y4n` — cutting finished renders into one clip. Joins the render debt
+  // above and adds nothing to its argument: her tool server is the only client,
+  // it lives in this repository, and the shapes are pinned by
+  // `tests/unit/renders.test.ts` and `tests/unit/render-verbs.test.ts`.
+  //
+  // It is a WRITE, so it goes in the same pass as `POST /renders` — and what a
+  // second client would have to be told rather than guess is that the body's
+  // `renders` array is ORDERED (it is the order the parts play) and that the
+  // reply is an ordinary render record, which is the whole reason nothing
+  // downstream needed changing.
+  "POST /renders/joins",
   // `syl-b0i` — what she made of a render after looking at it. Joins the render
   // debt above and inherits its argument: her tool server is the only client,
   // it lives in this repository, and both shapes are pinned by

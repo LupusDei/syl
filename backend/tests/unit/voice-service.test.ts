@@ -84,6 +84,7 @@ const sourceRecord = (over: Partial<RenderRecord> = {}): RenderRecord => ({
   estimated: 600,
   usd: 6,
   video: "",
+  joinedFrom: null,
   ...over,
 });
 

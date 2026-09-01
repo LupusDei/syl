@@ -388,6 +388,11 @@ describe("the tool surface she is offered", () => {
       // tokens without him having asked for anything, and the reason is what
       // separates "you sent me this" from a program following links on its own.
       url: "https://example.com/tidy-desks",
+      // `join_renders` — the verb that cuts what she has made into one clip.
+      // The cheapest write on the surface and held to the same rule: it still
+      // mints a render, and a record with no reason beside it is the one thing
+      // every other write here is refused for.
+      renders: [THE_RENDER, `${THE_RENDER}-2`],
     };
 
     for (const tool of advertisedTools()) {

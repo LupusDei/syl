@@ -112,6 +112,7 @@ function render(overrides: Partial<RenderRecord> = {}): RenderRecord {
     estimated: 120,
     usd: 1.2,
     video: "/studio/syl-2026-08-11-135500-medium.mp4",
+    joinedFrom: null,
     ...overrides,
   };
 }

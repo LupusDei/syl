@@ -66,6 +66,7 @@ function halfMade(overrides: Partial<RenderRecord> = {}): RenderRecord {
       part(),
       part({ taskId: "c7c678c8", video: null, status: "failed", failure: "Invalid input" }),
     ],
+    joinedFrom: null,
     ...overrides,
   };
 }

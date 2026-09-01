@@ -325,6 +325,11 @@ export class VoiceService {
       usd: null,
       estimated: submitted.data.estimatedCredits,
       video: null,
+      // Carried over, for the same reason `parts` is: a voiced copy of a clip
+      // she CUT was still cut from those renders, and dropping the field would
+      // make the copy claim to be footage of its own — which is also the claim
+      // the ledger reads when it decides whose seconds these are.
+      joinedFrom: source.joinedFrom,
       voicedFrom: source.name,
       voice: {
         id: this.#voice.id,

@@ -750,6 +750,53 @@ export const TOOLS: readonly ToolSchema[] = [
     },
   },
   {
+    // CUTTING WHAT SHE HAS MADE INTO ONE CLIP — `syl-5y4n`.
+    //
+    // She could chain segments that cut together seamlessly and had no way to
+    // concatenate them: `show_him` takes ONE render name, so four
+    // fifteen-second clips stayed four clips and never became the one minute
+    // the Commander asked for.
+    //
+    // **Named as a verb over renders, like `judge_render`.** The header's rule
+    // is that a name says what she does for him, with a written-down exception
+    // for the ones that are hers; this is neither, and `judge_render` is the
+    // precedent rather than a hole in the rule. `cut_together` was the
+    // alternative and it is better prose — it is the phrase this codebase
+    // already uses — but it says what she does without saying what to, and the
+    // one thing that has to be unmistakable here is that the inputs are
+    // FINISHED RENDERS and not segments inside one. Those are a word apart and
+    // only one of them is a thing she can do.
+    //
+    // It costs nothing and the description says so, for the reason the enum
+    // carries its evidence: a verb she believes is expensive is a verb she
+    // reaches for last, and this one is the cheapest thing on the surface.
+    name: "join_renders",
+    description:
+      "Cut finished renders into one clip, in the order you name them — four fifteen-second " +
+      "pieces become the minute you meant. What comes back is a render like any other: look at " +
+      "it with see_myself, send it with show_him. It costs nothing, because the pieces are " +
+      "already made. Clips that were not made the same shape cannot be cut together, and I will " +
+      "tell you which ones disagree rather than hand him a broken file.",
+    inputSchema: {
+      type: "object",
+      required: ["renders", "because"],
+      properties: {
+        renders: {
+          type: "array",
+          // Two is the arity below which there is nothing to join, and it is in
+          // the schema rather than only in a refusal: a constraint she is told
+          // costs nothing, and one she discovers costs a turn.
+          minItems: 2,
+          items: { type: "string" },
+          description:
+            "The renders, by their own names, IN THE ORDER THEY PLAY. Two or more. Name each one " +
+            "rather than taking the latest — the join keeps the names it was made from forever.",
+        },
+        because: BECAUSE,
+      },
+    },
+  },
+  {
     name: "show_him",
     // Named for him, and it is the one verb on this surface she STARTS. The
     // header's rule holds exactly here: this is what she does for him.

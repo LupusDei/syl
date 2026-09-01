@@ -149,6 +149,24 @@ beforeEach(async () => {
       writeFileSync(out, jpeg(512, 682, stills));
       return { ok: true, message: "" };
     },
+    // A stand-in for ffprobe, so a join over this socket does not need the
+    // program installed and does not try to read a shape out of 2,048 bytes of
+    // threes. Every clip probes the same, which is the case a join accepts.
+    ffprobe: async () => ({
+      ok: true,
+      stdout: JSON.stringify({
+        streams: [
+          {
+            codec_type: "video",
+            codec_name: "h264",
+            width: 834,
+            height: 1112,
+            pix_fmt: "yuv420p",
+            r_frame_rate: "30/1",
+          },
+        ],
+      }),
+    }),
   });
 
   db = testDatabase();
@@ -259,6 +277,107 @@ describe("POST /renders", () => {
   it("should refuse an anonymous caller", async () => {
     const response = await api("/renders", { method: "POST", body: ASK, anonymous: true });
     expect(response.status).toBe(401);
+  });
+});
+
+/**
+ * Cutting finished renders into one clip — `syl-5y4n`.
+ *
+ * A literal segment, like `/renders/wardrobe` and `/renders/description`, and
+ * it works for the same reason they do: `renders.join` mints a RENDER, so
+ * everything downstream of it — `GET /renders/{name}`, the frames route, a
+ * sending — needs no change at all.
+ */
+describe("POST /renders/joins", () => {
+  /** Two finished renders, made through the route so the records are real ones. */
+  async function twoFinished(): Promise<readonly string[]> {
+    const names: string[] = [];
+    for (let n = 0; n < 2; n += 1) {
+      const created = await api("/renders", { method: "POST", body: ASK });
+      const body = (await created.json()) as Envelope<{ record: { name: string } }>;
+      names.push(body.data?.record.name ?? "");
+    }
+    await renders.drain();
+    return names;
+  }
+
+  it("should answer 201 with a finished render carrying what it was cut from", async () => {
+    const names = await twoFinished();
+
+    const response = await api("/renders/joins", {
+      method: "POST",
+      body: JSON.stringify({ renders: names, because: "he asked for the whole minute" }),
+    });
+    const body = (await response.json()) as Envelope<{
+      record: { name: string; status: string; video: string | null; joinedFrom: string[] | null };
+      spend: { renders: number };
+    }>;
+
+    expect(response.status).toBe(201);
+    expect(body.data?.record.status).toBe("ready");
+    expect(body.data?.record.video).not.toBeNull();
+    expect(body.data?.record.joinedFrom).toEqual(names);
+  });
+
+  it("should mint a render that GET /renders/{name} then answers for, with no other change", async () => {
+    const names = await twoFinished();
+    const created = await api("/renders/joins", {
+      method: "POST",
+      body: JSON.stringify({ renders: names, because: "b" }),
+    });
+    const made = (await created.json()) as Envelope<{ record: { name: string } }>;
+
+    const read = await api(`/renders/${made.data?.record.name ?? ""}`);
+    const body = (await read.json()) as Envelope<{ record: { joinedFrom: string[] | null } }>;
+
+    expect(read.status).toBe(200);
+    expect(body.data?.record.joinedFrom).toEqual(names);
+  });
+
+  it("should refuse one render in the contract's failure envelope", async () => {
+    const names = await twoFinished();
+
+    const response = await api("/renders/joins", {
+      method: "POST",
+      body: JSON.stringify({ renders: [names[0]], because: "b" }),
+    });
+    const body = (await response.json()) as Envelope<never>;
+
+    expect(response.status).toBe(400);
+    expect(body.error?.code).toBe("VALIDATION_FAILED");
+    expect(body.error?.message ?? "").toMatch(/two/iu);
+  });
+
+  it("should refuse without a reason", async () => {
+    const names = await twoFinished();
+    const response = await api("/renders/joins", {
+      method: "POST",
+      body: JSON.stringify({ renders: names }),
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it("should refuse an anonymous caller", async () => {
+    const response = await api("/renders/joins", {
+      method: "POST",
+      body: JSON.stringify({ renders: ["a", "b"], because: "b" }),
+      anonymous: true,
+    });
+
+    expect(response.status).toBe(401);
+  });
+
+  it("should not be mistaken for a render called joins", async () => {
+    // `joins` matches the render-name pattern. This works only because the
+    // literal segment is registered where a `:name` POST cannot swallow it.
+    const names = await twoFinished();
+    const response = await api("/renders/joins", {
+      method: "POST",
+      body: JSON.stringify({ renders: names, because: "b" }),
+    });
+
+    expect(response.status).toBe(201);
   });
 });
 
