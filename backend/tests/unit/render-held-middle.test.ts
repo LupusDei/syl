@@ -250,6 +250,44 @@ function bytesOf(dataUri: string): Buffer {
   return dataUri === "" ? Buffer.alloc(0) : Buffer.from(dataUri.slice(dataUri.indexOf(",") + 1), "base64");
 }
 
+/**
+ * The part counts every whole-render property is checked at.
+ *
+ * Derived from {@link MAX_PARTS} rather than typed, so raising the cap widens
+ * the evidence instead of leaving the top of the range untested — the same rule
+ * the model enum and the framing guidance follow.
+ */
+const PART_COUNTS: readonly number[] = [2, 3, 5, MAX_PARTS];
+
+/**
+ * The STRUCTURAL clause of each part: what is left when the stem is taken off.
+ *
+ * Every part of one render carries the same stem — her description, her scene,
+ * the framing's clause — and the stem is where "trailing like ribbons of light"
+ * lives. So a whole-prompt search for the ribbon is answered by her gown in
+ * every part and can never fail, which is exactly the house-style exposure
+ * `CLAUDE.md` records: our text names real things on purpose, so the naive
+ * assertion is satisfied by the wrong sentence.
+ *
+ * It **throws** rather than returning a short list or an empty string. A
+ * narrowing that silently finds nothing is a test that asserts nothing while
+ * reporting green, and this one is the only guard on the property the whole
+ * feature exists to provide.
+ */
+function structuralClausesOf(specs: readonly SubmitSpec[]): readonly string[] {
+  const stem = `${SENTENCE} ${ASK.scene} ${CLOSE_PORTRAIT_CLAUSE} `;
+  return specs.map((spec, index) => {
+    const prompt = spec.promptText;
+    if (!prompt.startsWith(stem)) {
+      throw new Error(
+        `part ${String(index + 1)} does not open with the stem every part shares, so there is ` +
+          `nothing to slice a structural clause off: ${prompt}`,
+      );
+    }
+    return prompt.slice(stem.length);
+  });
+}
+
 /** Every picture pinned anywhere across a whole render, in submission order. */
 function everyPin(specs: readonly SubmitSpec[]): readonly Buffer[] {
   return specs.flatMap((spec) => [
@@ -329,7 +367,7 @@ describe("the sentence a held middle is sent", () => {
 });
 
 describe("two passes through the starfield, whatever the length", () => {
-  it.each([2, 3, 5])(
+  it.each(PART_COUNTS)(
     "should pin the ribbon exactly twice in a render of %i parts",
     async (parts) => {
       // THE PROPERTY THAT JUSTIFIES THE WHOLE CHANGE. Chaining whole renders
@@ -351,6 +389,55 @@ describe("two passes through the starfield, whatever the length", () => {
       // And they are at the two ends of the finished clip, not anywhere else.
       expect(bytesOf(firstFrameOf(backend.specs[0]?.promptImage))).toEqual(OPENING_BYTES);
       expect(bytesOf(lastFrameOf(backend.specs[parts - 1]?.promptImage))).toEqual(OPENING_BYTES);
+    },
+  );
+
+  it.each(PART_COUNTS)(
+    "should let exactly two of the %i parts SPEAK of the ribbon, and they are the ends",
+    async (parts) => {
+      // THE SAME PROPERTY ON THE OTHER AXIS, and the frames do not cover it.
+      // The test above counts which PICTURE is pinned where; this counts which
+      // parts SAY the ribbon. They fail independently: put the ribbon back into
+      // `MIDDLE_CLAUSE` six months from now and every pin assertion in this file
+      // still passes, because no frame moved — and the clip is back to a pass
+      // through empty starfield per part, which is what he called disjointed.
+      //
+      // The count must not depend on the part count. That independence IS the
+      // feature: the ribbon stops scaling with duration.
+      const backend = fakeBackend();
+      const service = serviceWith(backend);
+
+      const started = await service.start({ ...ASK, parts });
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
+      await service.drain();
+
+      const clauses = structuralClausesOf(backend.specs);
+
+      // THE NARROWING, ASSERTED BEFORE IT IS COUNTED. `CLAUDE.md` has this
+      // written down at the cost of two assertions in one evening: an extractor
+      // that quietly returns nothing turns a test about six things into a test
+      // about none, and reports green either way. `structuralClausesOf` throws
+      // rather than returning a short list, and this is the second line of
+      // defence.
+      expect(clauses).toHaveLength(parts);
+      expect(clauses.every((clause) => clause !== "")).toBe(true);
+
+      // And the narrowing is what makes the match honest at all: her own
+      // description carries "trailing like ribbons of light", so a `toContain`
+      // over the whole prompt would find a ribbon in every part and never fail.
+      const speaks = clauses.map((clause) => /ribbon/iu.test(clause));
+      expect(speaks.filter(Boolean)).toHaveLength(2);
+      expect(speaks[0]).toBe(true);
+      expect(speaks[parts - 1]).toBe(true);
+
+      // The starfield itself, counted the same way — it is the thing he watches
+      // her vanish into, and "ribbon" and "empty starfield" are separate words a
+      // future edit could reintroduce one without the other.
+      const empties = clauses.map((clause) => /empty starfield/iu.test(clause));
+      expect(empties.filter(Boolean)).toHaveLength(2);
+      expect(empties[0]).toBe(true);
+      expect(empties[parts - 1]).toBe(true);
     },
   );
 
