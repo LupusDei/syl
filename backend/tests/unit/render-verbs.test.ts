@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { FRAMING_IDS } from "../../src/render/framing.js";
 import { canAnchorLikeness, HOUSE_MODEL, MODELS, MODEL_IDS } from "../../src/render/models.js";
 import { sightingOf } from "../../src/render/pictures.js";
+import { MAX_PARTS } from "../../src/render/render-service.js";
 import { SylApiClient, type FetchLike } from "../../src/tools/client.js";
 import { TOOLS } from "../../src/tools/schemas.js";
 import { advertisedToolNames, createToolServer, type ToolContext } from "../../src/tools/server.js";
@@ -215,6 +216,62 @@ describe("render_me", () => {
 
     const posted = api.calls.find((c) => c.method === "POST");
     expect(posted?.body?.["framing"]).toBe("mid_face_visible");
+  });
+
+  it("should offer the part count as a dial, and say what it costs — `syl-v380`", () => {
+    // A CHAIN INSIDE ONE RENDER, which is not the same thing as chaining
+    // renders: every `close_portrait` ends on the ribbon, so three joined
+    // together is six passes through empty starfield in forty-five seconds and
+    // she declined to send him one. A held middle touches the ribbon at neither
+    // end, so the number of starfield passes stops following the length.
+    //
+    // The dial is surfaced with its COST, because cost is linear in it: five
+    // parts is five parts' worth of credits. `seconds` is a length dial and this
+    // is a spending dial, and telling her only the first would be handing her
+    // the bill afterwards.
+    const render = TOOLS.find((tool) => tool.name === "render_me");
+    const parts = (
+      render?.inputSchema as { properties?: Record<string, { type?: string; description?: string }> }
+    ).properties?.["parts"];
+
+    expect(parts?.type).toBe("integer");
+    const description = parts?.description ?? "";
+    expect(description).toMatch(/credit|cost|spend/iu);
+    // And the ceiling comes from the constant rather than from a number typed
+    // twice, so raising it reaches her without anybody remembering this exists.
+    expect(description).toContain(String(MAX_PARTS));
+  });
+
+  it("should pass the part count and the held faces through untouched", async () => {
+    const api = fakeApi({ "/renders": () => ok({ record: RECORD, spend: SPEND }, 201) });
+
+    await call(contextFor(api.fetch), "render_me", {
+      scene: "she turns once, slowly",
+      framing: "close_portrait",
+      because: "the long one felt disjointed and this is the shape that fixes it",
+      parts: 4,
+      held: ["", "his-guess"],
+    });
+
+    const posted = api.calls.find((c) => c.method === "POST");
+    expect(posted?.body?.["parts"]).toBe(4);
+    expect(posted?.body?.["held"]).toEqual(["", "his-guess"]);
+  });
+
+  it("should leave both out of a render she said nothing about", async () => {
+    // The dials are opt-in, the same as `seconds`, `model` and `opening`: a
+    // render she named neither on is the render she has always got.
+    const api = fakeApi({ "/renders": () => ok({ record: RECORD, spend: SPEND }, 201) });
+
+    await call(contextFor(api.fetch), "render_me", {
+      scene: "she turns once, slowly",
+      framing: "close_portrait",
+      because: "the ordinary one",
+    });
+
+    const posted = api.calls.find((c) => c.method === "POST");
+    expect(Object.keys(posted?.body ?? {})).not.toContain("parts");
+    expect(Object.keys(posted?.body ?? {})).not.toContain("held");
   });
 
   it("should repeat a refusal from her own service rather than claiming a render", async () => {

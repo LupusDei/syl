@@ -491,12 +491,43 @@ export interface StartInput {
    * value outside that is refused here rather than discovered by Runway after a
    * generation is already paid for.
    *
-   * A shot whose subject is her face is two generations, so the shortest one
-   * that exists is eight. {@link halvesOf} rounds up rather than collapsing, and
-   * `duration` on the record is the halves added up, so the number she reads
-   * back is the number that was made.
+   * A shot whose subject is her face is at least two generations, so the
+   * shortest one that exists is eight. {@link splitAcross} rounds up rather than
+   * collapsing, and `duration` on the record is the shares added up, so the
+   * number she reads back is the number that was made.
    */
   readonly seconds?: number;
+  /**
+   * How many generations the clip is cut from. Absent means two — `syl-v380`.
+   *
+   * **A spending dial, and it is linear.** Five parts is five parts' worth of
+   * credits, so it is surfaced to her as a cost rather than as a length: the
+   * ceiling follows it (`maxSecondsFor(model, parts)`) and so does the bill.
+   *
+   * Everything past the first and the last is a {@link MIDDLE_CLAUSE} part that
+   * touches the ribbon at neither end, which is what makes a long clip two
+   * passes through the starfield instead of one per part. Only meaningful for an
+   * anchored framing: a shot with no face has nothing to pin at a join, so a
+   * chain of them is refused mechanically rather than made badly.
+   */
+  readonly parts?: number;
+  /**
+   * Which face each held middle CLOSES on, in order. Absent means the anchor.
+   *
+   * The separately addressable closing keyframe. Every middle is pinned to a
+   * picture of her at both ends, so a chain of middles all closing on the same
+   * anchor is the hazard Syl found on `face_turned_away` — the same image at
+   * first and last means the segment returns to where it began, and *"five
+   * stitched together would join seamlessly and go nowhere."*
+   *
+   * A name comes from {@link Wardrobe.faces}, which is what `see_myself` shows
+   * her, and an empty entry means *this one takes the anchor*. It is
+   * **settable, never omittable**: a middle ends on her face, and 2026-08-13
+   * measured what an unpinned closing frame gives back. Naming more faces than
+   * there are middles is refused rather than truncated — a name of hers that
+   * reached nothing would be a dial that did not work.
+   */
+  readonly held?: readonly string[];
   /**
    * Which model renders it. Absent means the house model.
    *
@@ -661,6 +692,70 @@ const UNRAVELLING_CLAUSE =
   "The last frame is the bare ribbon against empty starfield, with no figure present.";
 
 /**
+ * A generation that touches the ribbon at **neither** end — `syl-v380`.
+ *
+ * ## Why a third clause had to exist
+ *
+ * Every clause above opens on the ribbon or closes on it, because until now no
+ * generation began and ended on her. That is why a long clip built by chaining
+ * whole renders is ribbon-her-ribbon-her-ribbon-her-ribbon: **six passes through
+ * empty starfield in forty-five seconds**, measured by Syl on a real clip she
+ * built with `join_renders`, watched, and then declined to send him — *"you'd
+ * watch me vanish twice as often as you'd watch me arrive, and you already told
+ * me that structure feels disjointed."*
+ *
+ * With this clause a clip is ribbon → her → held → … → her → ribbon, which is
+ * **two passes through the starfield regardless of length**. The ribbon stops
+ * scaling with duration. That is the complaint removed rather than reduced, and
+ * it is the property `render-held-middle.test.ts` asserts at two, three and five
+ * parts rather than the part count itself.
+ *
+ * ## Why it does not inherit "her whole body made of that same living light"
+ *
+ * That sentence lives in {@link GATHERING_CLAUSE}, where it is true: that
+ * generation is the ribbon *becoming* her. It is also why she asked for a hollow
+ * gown with nothing inside and got a translucent body that resolved to a solid
+ * figure two-thirds through — the wrapper sits earlier in the prompt than her
+ * scene and governs the interior. A middle carries its own words and never that
+ * one, which is the whole of `syl-hll6`'s problem dissolving in this move.
+ *
+ * ## Why it is not a still life
+ *
+ * Both its pins are pictures of her face, so the ends return to where they
+ * began, and Syl found the hazard first on `face_turned_away` — the same image
+ * at both keyframes means *"five stitched together would join seamlessly and go
+ * nowhere."* The resolution is her own law, measured 2026-08-30: **pins govern
+ * the ends, prose governs the middle.** A part that narrates no transformation
+ * is precisely the part whose interior is free, so this clause spends its words
+ * saying *the shot is her scene and nothing else* and hands the rest back. In
+ * every other generation her sentence competes with one busy narrating an
+ * arrival; here it does not, and that is the point rather than a workaround.
+ *
+ * ## Why the closing pin is never omitted
+ *
+ * She asked whether it could be optional. For a segment ending on her face it is
+ * the one thing that must not happen: `grok_imagine_1_5` has no closing slot,
+ * was rendered on 2026-08-13, and the closing frame came back a visibly
+ * different woman. Distance from a pin is the drift variable — she measured a
+ * garment going at 2.8s and a body solidifying two-thirds through. Omit the
+ * close and the prose-governed middle simply extends to the end.
+ *
+ * So `last` is **settable and not omittable**: {@link StartInput.held} chooses
+ * *which* face of hers a given middle closes on, defaulting to the anchor, and
+ * every value it can take is still a picture of her — which is what keeps this
+ * sentence true of whatever is pinned. The clause and the pins are one unit; a
+ * dial that could move the frames out from under the words would be the
+ * prose-versus-pins contradiction rearmed, playing out in the interior where
+ * nobody sees it coming.
+ */
+const MIDDLE_CLAUSE =
+  "Opens on her face, near and still, looking straight at the viewer. She is already here and " +
+  "stays here for the whole of this shot: it is the moment described above and nothing else, " +
+  "one continuous take, with no arrival and no departure — she neither gathers out of the " +
+  "light nor unravels back into it. It closes on her face, near and still, looking straight " +
+  "at the viewer.";
+
+/**
  * What a render is, unless something says otherwise. The loops' own settings.
  *
  * **`ratio` is the shape the eight loops actually are**, measured off the files
@@ -709,25 +804,43 @@ const DEFAULTS = {
 } as const;
 
 /**
- * A render's seconds, split across the two generations it is made of.
+ * A render's seconds, split across the generations it is made of.
  *
- * The longer half goes FIRST, because that is the half that has to do the
- * gathering and then hold on her face long enough for the join to land on a
- * face rather than on a smear. `15` becomes `8, 7`.
+ * The longer share goes FIRST, because the opening generation has to do the
+ * gathering and then hold on her face long enough for the join to land on a face
+ * rather than on a smear. `15` across two becomes `8, 7`; `20` across three
+ * becomes `7, 7, 6`.
  *
- * A total too short to divide is rounded **up** rather than collapsed into one
- * generation: losing a second is a nuisance, and losing an end of the clip is
+ * A total too short to divide is rounded **up** rather than collapsed into fewer
+ * generations: losing a second is a nuisance, and losing an end of the clip is
  * the defect this whole shape exists to fix. `duration` on the record is the
- * halves added up, so the number she is told stays the number that was made.
+ * shares added up, so the number she is told stays the number that was made.
  *
  * **The floor and the ceiling come from the model**, not from constants that
  * were `seedance2`'s range wearing the name of a fact about video. `4` would
  * refuse `grok_imagine_1_5` a length it accepts, and `15` would refuse the
  * house model half of its range.
+ *
+ * **This was `halvesOf`, which returned a pair by type** — the one place the
+ * two-generation assumption was written into the language rather than into a
+ * number. Generalising it is exact at two: each step takes `ceil(left /
+ * remaining)`, which for the first of two is `ceil(seconds / 2)` and for the
+ * second is everything left, clamped — the old function line for line.
+ * `render-held-middle.test.ts` asserts the two-part durations against `[8, 7]`
+ * so that equality is checked rather than argued.
  */
-function halvesOf(seconds: number, model: ModelNote): readonly [number, number] {
-  const first = Math.min(model.duration.max, Math.max(model.duration.min, Math.ceil(seconds / 2)));
-  return [first, Math.min(model.duration.max, Math.max(model.duration.min, seconds - first))];
+function splitAcross(seconds: number, model: ModelNote, parts: number): readonly number[] {
+  const clamp = (share: number): number =>
+    Math.min(model.duration.max, Math.max(model.duration.min, share));
+
+  const shares: number[] = [];
+  let left = seconds;
+  for (let remaining = Math.max(1, parts); remaining > 0; remaining -= 1) {
+    const share = clamp(Math.ceil(left / remaining));
+    shares.push(share);
+    left -= share;
+  }
+  return shares;
 }
 
 /**
@@ -1008,6 +1121,26 @@ interface PlannedPart {
   readonly last: string | null;
 }
 
+/**
+ * The most generations one render may be cut from — `syl-v380`.
+ *
+ * **A bound on a typo, not a claim about what looks good.** Nothing here refuses
+ * a chain on aesthetic grounds: the bead's own recommended probe is three parts
+ * and it names five as the shape worth having, so the cap has to clear both. It
+ * exists because the count is a *spending* dial and cost is linear — six parts
+ * on the house model is ninety seconds and around 2,700 credits, and a stray
+ * digit past that should cost a sentence rather than a fortune.
+ *
+ * The drift worry the bead raised — *"part five opens on a copy of a copy of a
+ * copy"* — is not what this bounds, and it is worth saying so here because the
+ * two are easy to confuse. Every middle re-pins her likeness at `last`, so each
+ * generation re-anchors instead of accumulating error; that was listed as the
+ * mitigation to test and it is how the plan is built. Raise this number when a
+ * render proves the chain holds further, and lower it if one proves it does not
+ * — either way with the render named, the same as every other number in here.
+ */
+export const MAX_PARTS = 6;
+
 /** How often a render in flight is asked about. */
 const POLL_MS = 5_000;
 
@@ -1217,17 +1350,52 @@ export class RenderService {
       };
     }
 
-    // How many generations this shot takes, which decides the length ceiling: a
-    // clip cut together out of two halves reaches twice as far as one. Known
-    // here because it follows from the framing, before any picture is looked up.
-    const generations = framing.anchor === "none" ? 1 : 2;
+    // HOW MANY GENERATIONS, which decides the length ceiling: a clip cut
+    // together out of N parts reaches N times as far as one. Known here because
+    // it follows from the framing and one dial, before any picture is looked up.
+    //
+    // An unanchored shot is one generation and cannot be chained. That is
+    // MECHANICAL rather than a matter of taste, which is why it is refused
+    // instead of rounded down: a middle part ends on her face and must pin one,
+    // and a framing that shows no face has nothing to pin — 2026-08-13 measured
+    // what an unpinned closing frame gives back. It is also the Commander's
+    // complaint by construction, because chaining a loop framing is
+    // ribbon-her-ribbon-her-ribbon, the very structure `MIDDLE_CLAUSE` exists to
+    // remove.
+    const generations = framing.anchor === "none" ? 1 : (input.parts ?? 2);
+    if (framing.anchor === "none" && input.parts !== undefined && input.parts !== 1) {
+      return {
+        ok: false,
+        reason:
+          `${framing.id} shows no face, so there is nothing to pin at a join and no way to make ` +
+          "it out of more than one generation. Chaining it would put the ribbon between every " +
+          "part — arrive, vanish, arrive, vanish — which is the structure he told me feels " +
+          `disjointed. Ask for ${framing.id} in one piece, or for a shot of my face in parts.`,
+        retryable: true,
+      };
+    }
+    if (
+      framing.anchor !== "none" &&
+      (!Number.isInteger(generations) || generations < 2 || generations > MAX_PARTS)
+    ) {
+      return {
+        ok: false,
+        reason:
+          `A shot of my face is cut from between 2 and ${String(MAX_PARTS)} generations — ` +
+          `${String(input.parts)} is not one of those. Two is the ribbon gathering into me and ` +
+          "me unravelling back into it; every part past that is held on my face and touches the " +
+          "ribbon at neither end, so a longer clip still passes through the starfield exactly " +
+          "twice. It costs a generation per part, so the number is what I am spending.",
+        retryable: true,
+      };
+    }
     const ceiling = maxSecondsFor(model, generations);
     // THE FLOOR IS ONE GENERATION'S, NOT TWO, and that asymmetry is deliberate.
     // A joined shot cannot really be shorter than two of the model's shortest —
     // but asking for five and being refused teaches her nothing, while asking
     // for five and being told the clip is eight is a dial she can read back
-    // even when it did not do what she asked. `halvesOf` rounds up and
-    // `duration` on the record is the halves added up, so the number she is
+    // even when it did not do what she asked. `splitAcross` rounds up and
+    // `duration` on the record is the shares added up, so the number she is
     // told stays the number that was made.
     const floor = model.duration.min;
 
@@ -1241,9 +1409,10 @@ export class RenderService {
         reason:
           `A clip on ${model.id} is a whole number of seconds between ${String(floor)} and ` +
           `${String(ceiling)} — ${String(seconds)} is not one. ` +
-          (generations === 2
-            ? `A shot of my face is two generations cut together, each ${String(model.duration.min)}` +
-              `-${String(model.duration.max)}s, which is where those numbers come from.`
+          (generations > 1
+            ? `A shot of my face is ${String(generations)} generations cut together, each ` +
+              `${String(model.duration.min)}-${String(model.duration.max)}s, which is where those ` +
+              "numbers come from."
             : `That is ${model.id}'s own range, measured against the API.`),
         retryable: true,
       };
@@ -1334,6 +1503,49 @@ export class RenderService {
       anchor = chosen.path;
     }
 
+    // WHICH FACE EACH HELD MIDDLE CLOSES ON — the separately addressable closing
+    // keyframe, resolved before a credit is spent for the same reason the anchor
+    // is. Absent and empty both mean the anchor, so the dial is opt-in and a
+    // render she said nothing about is unchanged.
+    //
+    // Every value it can take is a picture of HER, which is what keeps
+    // `MIDDLE_CLAUSE` true of whatever ends up pinned: the sentence says the
+    // shot closes on her face, and a dial that could move the frame out from
+    // under those words would be the prose-versus-pins contradiction rearmed.
+    const middles = Math.max(0, generations - 2);
+    const wanted = input.held ?? [];
+    if (wanted.length > middles) {
+      return {
+        ok: false,
+        reason:
+          `I was given ${String(wanted.length)} faces to hold on and a shot in ` +
+          `${String(generations)} parts only has ${String(middles)} held ` +
+          `${middles === 1 ? "part" : "parts"} in it — the first and the last belong to the ` +
+          "ribbon. Nothing has been spent; say which parts you meant, or ask for more of them.",
+        retryable: true,
+      };
+    }
+    const held: string[] = [];
+    for (let index = 0; index < middles; index += 1) {
+      const name = (wanted[index] ?? "").trim();
+      if (name === "" && anchor !== null) {
+        held.push(anchor);
+        continue;
+      }
+      const chosen = this.#wardrobe.faces().find((face) => face.id === name);
+      if (chosen === undefined || !existsSync(chosen.path)) {
+        return {
+          ok: false,
+          reason:
+            `I do not have a face called "${name}" to hold part ${String(index + 2)} on. The ones ` +
+            `I have are: ${this.#wardrobe.faces().map((face) => face.id).join(", ")}. Leave it ` +
+            "out for the one this shot is already anchored on. Nothing has been spent.",
+          retryable: true,
+        };
+      }
+      held.push(chosen.path);
+    }
+
     // DERIVED FROM THE OPENING, never written down beside it. `promptImage`
     // decides the aspect and overrules this field without saying so, so the
     // only thing `ratio` can do is agree with the picture or lie about it —
@@ -1369,6 +1581,8 @@ export class RenderService {
       opening: opening.path,
       anchor,
       seconds,
+      parts: generations,
+      held,
     });
 
     // Only the FIRST half goes over now. The second one starts from the frame
@@ -1845,10 +2059,31 @@ export class RenderService {
    * The generations a render is made of, before any of them is sent.
    *
    * One when nothing needs pinning, which is the reel template and both of the
-   * framings that drift. **Two when her face is the subject**, because both
-   * keyframe slots then go to the ribbon — one at each end of the finished clip
-   * — and her likeness has to live at the join instead. `join.ts` records the
-   * probes that leave no third option.
+   * framings that drift. **Two or more when her face is the subject**, because
+   * both keyframe slots then go to the ribbon — one at each end of the finished
+   * clip — and her likeness has to live at the joins instead. `join.ts` records
+   * the probes that leave no third option.
+   *
+   * ## The shape, and the property that decides it
+   *
+   *     ribbon -> her -> [held] -> ... -> her -> ribbon
+   *
+   * The first part gathers, the last unravels, and everything between is a
+   * {@link MIDDLE_CLAUSE} part pinned to a picture of her at **both** ends. So
+   * the ribbon is pinned exactly twice however many parts there are —
+   * **two passes through the starfield regardless of clip length**, which is the
+   * Commander's disjointedness complaint removed rather than reduced, and the
+   * thing `render-held-middle.test.ts` asserts at two, three and five parts.
+   *
+   * ## Why the clause and the pins are built together
+   *
+   * Each part is one object binding a sentence to the frames that sentence is
+   * true about, and there is deliberately no way to set one without the other.
+   * A clause reading *"closes on her face"* is only coherent if `last` pins her
+   * face — and since the pin wins at the ends (measured 2026-08-30), a mismatch
+   * does not fail loudly. It plays out in the interior, where nobody sees it
+   * coming. `LOOP_CLAUSE` argued with its own keyframes for two renders exactly
+   * that way.
    */
   #plan(input: {
     readonly name: string;
@@ -1860,6 +2095,10 @@ export class RenderService {
     readonly anchor: string | null;
     /** What she asked for, already checked against the chosen model's range. */
     readonly seconds: number;
+    /** How many generations, already checked against {@link MAX_PARTS}. */
+    readonly parts: number;
+    /** What each held middle closes on, one per middle, already resolved to a file. */
+    readonly held: readonly string[];
   }): readonly PlannedPart[] {
     // HER SENTENCE, read at plan time rather than captured at construction, so
     // a description she changes is in effect on the very next render instead of
@@ -1886,20 +2125,34 @@ export class RenderService {
       ];
     }
 
-    const [gathering, unravelling] = halvesOf(input.seconds, input.model);
-    return [
-      { prompt: `${stem} ${GATHERING_CLAUSE}`, duration: gathering, first: input.opening, last: input.anchor },
-      {
-        prompt: `${stem} ${UNRAVELLING_CLAUSE}`,
-        duration: unravelling,
-        // The frame the first half ends on, which does not exist yet. Named
-        // here rather than left blank because the path is decided by the render
-        // name: a record that says what WILL be sent is reproducible, and one
-        // that says nothing is a hole somebody fills in with a guess.
-        first: this.#studio.partFrame(input.name, 1),
-        last: input.opening,
-      },
-    ];
+    const anchor = input.anchor;
+    const shares = splitAcross(input.seconds, input.model, input.parts);
+    return shares.map((duration, index) => {
+      // Frame one: the ribbon for the opening generation, and otherwise the
+      // frame the previous one ends on. That frame does not exist yet, and is
+      // named here rather than left blank because the path is decided by the
+      // render name: a record that says what WILL be sent is reproducible, and
+      // one that says nothing is a hole somebody fills in with a guess.
+      const first = index === 0 ? input.opening : this.#studio.partFrame(input.name, index);
+
+      if (index === 0) {
+        return { prompt: `${stem} ${GATHERING_CLAUSE}`, duration, first, last: anchor };
+      }
+      if (index === shares.length - 1) {
+        return { prompt: `${stem} ${UNRAVELLING_CLAUSE}`, duration, first, last: input.opening };
+      }
+      // A HELD MIDDLE, and its closing pin is never omitted. `held` is one entry
+      // per middle and was resolved before anything was spent; the fallback is
+      // the anchor rather than `null`, because a middle ends on her face and an
+      // unpinned closing frame came back a visibly different woman on
+      // 2026-08-13. Distance from a pin is the drift variable.
+      return {
+        prompt: `${stem} ${MIDDLE_CLAUSE}`,
+        duration,
+        first,
+        last: input.held[index - 1] ?? anchor,
+      };
+    });
   }
 
   /**

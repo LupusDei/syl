@@ -413,6 +413,14 @@ export function createRenderRouter(options: RenderRouterOptions): Router {
         ...(body["seconds"] === undefined ? {} : { seconds: Number(body["seconds"]) }),
         ...(typeof body["opening"] === "string" ? { opening: body["opening"] } : {}),
         ...(typeof body["model"] === "string" ? { model: body["model"] } : {}),
+        // The two `syl-v380` added. `parts` is a SPENDING dial — a generation
+        // per part — and `held` names the face each middle closes on. Both
+        // follow the rule above: present and wrong goes through, so the sentence
+        // she reads is the service's own.
+        ...(body["parts"] === undefined ? {} : { parts: Number(body["parts"]) }),
+        ...(Array.isArray(body["held"])
+          ? { held: body["held"].map((one) => (typeof one === "string" ? one : "")) }
+          : {}),
       });
 
       if (!started.ok) {

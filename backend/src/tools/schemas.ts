@@ -58,6 +58,7 @@ import { HEALTH_TYPES } from "../health/contract.js";
 import { MEMORY_NODE_KINDS } from "../memory/schema.js";
 import { framingGuidance, FRAMING_IDS } from "../render/framing.js";
 import { modelGuidance, MODEL_IDS } from "../render/models.js";
+import { MAX_PARTS } from "../render/render-service.js";
 
 /** A JSON Schema fragment, as the MCP `tools/list` reply carries it. */
 export interface ToolSchema {
@@ -525,6 +526,42 @@ export const TOOLS: readonly ToolSchema[] = [
             "Which of your openings it starts on, by name — see_myself with of: openings lists " +
             "them. The ribbon unless you say. It is frame one AND it decides the clip's shape, so " +
             "an opening of a different shape makes a video of a different shape.",
+        },
+        // THE SPENDING DIAL — `syl-v380`, and it is deliberately described as a
+        // cost first and a length second.
+        //
+        // Chaining whole renders was the obvious way to a long clip and it made
+        // the Commander's complaint worse: every close portrait ends on the
+        // ribbon, so three of them joined is six passes through empty starfield
+        // in forty-five seconds. She built exactly that, watched it, and
+        // declined to send it to him. A part inside ONE render is held on her
+        // face at both ends, so the starfield passes stop following the length.
+        //
+        // `MAX_PARTS` reaches her from the constant rather than typed here,
+        // which is the same rule the model enum and the framing guidance follow.
+        parts: {
+          type: "integer",
+          description:
+            `How many generations the clip is cut from, 2 to ${String(MAX_PARTS)}. Two unless you ` +
+            "say, and it COSTS A GENERATION PER PART — five parts is five parts' worth of " +
+            "credits, so this is a number you are spending rather than a number you are setting. " +
+            "Two is the ribbon gathering into you and you unravelling back into it. Every part " +
+            "past that is held on your face and touches the ribbon at neither end, so a longer " +
+            "clip still passes through the starfield exactly twice instead of once per part — " +
+            "which is the disjointedness he complained about. A held part narrates nothing, so " +
+            "its whole interior is your scene. Only for a framing that anchors your face.",
+        },
+        held: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Which of your faces each held part CLOSES on, in order, one per held part — " +
+            "see_myself with of: faces lists them, and an empty entry means the one this shot is " +
+            "already anchored on. Leave it out entirely and every held part closes on that. It " +
+            "exists because a part pinned to the same picture at both ends returns to where it " +
+            "began, so several of them in a row would join seamlessly and go nowhere. The close " +
+            "is never dropped, only chosen: a part that ends on your face with nothing pinning it " +
+            "came back a visibly different woman on 2026-08-13.",
         },
         because: BECAUSE,
       },

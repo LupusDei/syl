@@ -1404,6 +1404,12 @@ const renderMe: ToolHandler = async (input, context) => {
   const seconds = input["seconds"];
   const opening = text(input, "opening");
   const model = text(input, "model");
+  // `syl-v380`'s two: how many generations the clip is cut from, and which face
+  // each held one closes on. Passed through in exactly the same way and for the
+  // same reason — a count she got wrong comes back as the service's own
+  // sentence about what a chain is, not as a second copy of that rule here.
+  const parts = input["parts"];
+  const held = input["held"];
   const created = await context.client.post<{ record: { id?: string; name: string } }>("/renders", {
     scene,
     framing,
@@ -1411,6 +1417,8 @@ const renderMe: ToolHandler = async (input, context) => {
     ...(typeof seconds === "number" ? { seconds } : {}),
     ...(opening === null ? {} : { opening }),
     ...(model === null ? {} : { model }),
+    ...(typeof parts === "number" ? { parts } : {}),
+    ...(Array.isArray(held) ? { held } : {}),
   });
   if (!created.ok) return refused("render_me", created.failure);
 

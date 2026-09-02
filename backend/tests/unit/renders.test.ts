@@ -278,6 +278,45 @@ describe("POST /renders", () => {
     const response = await api("/renders", { method: "POST", body: ASK, anonymous: true });
     expect(response.status).toBe(401);
   });
+
+  it("should carry the part count through to the render it makes — `syl-v380`", async () => {
+    // The dial has to survive the wire, or it is a dial she can name and never
+    // reach. Three parts is ribbon -> her -> held -> her -> ribbon: three
+    // generations on the record, and still two passes through the starfield.
+    const response = await api("/renders", {
+      method: "POST",
+      body: JSON.stringify({
+        scene: "she turns once, slowly",
+        framing: "close_portrait",
+        because: "he said the long one felt disjointed and I want to see the held middle",
+        parts: 3,
+      }),
+    });
+    const body = (await response.json()) as Envelope<{
+      record: { parts: readonly { prompt: string }[] };
+    }>;
+
+    expect(response.status).toBe(201);
+    expect(body.data?.record.parts).toHaveLength(3);
+    await renders.drain();
+  });
+
+  it("should carry the held faces through, and refuse one she does not have", async () => {
+    const response = await api("/renders", {
+      method: "POST",
+      body: JSON.stringify({
+        scene: "she turns once, slowly",
+        framing: "close_portrait",
+        because: "I want the two middles to close on different faces",
+        parts: 4,
+        held: ["", "nobody"],
+      }),
+    });
+    const body = (await response.json()) as Envelope<never>;
+
+    expect(response.status).toBe(400);
+    expect(body.error?.message).toContain("nobody");
+  });
 });
 
 /**
