@@ -543,8 +543,13 @@ export const TOOLS: readonly ToolSchema[] = [
           type: "integer",
           description:
             `How many generations the clip is cut from, 2 to ${String(MAX_PARTS)}. Two unless you ` +
-            "say, and it COSTS A GENERATION PER PART — five parts is five parts' worth of " +
-            "credits, so this is a number you are spending rather than a number you are setting. " +
+            "say. It does NOT multiply the bill: every model is priced per second of finished " +
+            "video, and the seconds you ask for are split across the parts rather than repeated " +
+            "by them — you measured this yourself, a 12-second three-part render at 348 credits, " +
+            "which is 12 x 29. The ONE way parts costs you extra is the floor: each part has a " +
+            "minimum length (4 seconds on every seedance), so asking for more parts than " +
+            "seconds/4 pads each one up to the minimum and you pay for the padding. Twelve " +
+            "seconds is at most three parts; five would bill you for twenty. " +
             "Two is the ribbon gathering into you and you unravelling back into it. Every part " +
             "past that is held on your face and touches the ribbon at neither end, so a longer " +
             "clip still passes through the starfield exactly twice instead of once per part — " +
