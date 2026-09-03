@@ -49,3 +49,15 @@ worktrees/
 # Source media for the app. Large, and the encoded copies that ship live in
 # ios/Syl/Resources — keeping both in git would double the weight for no gain.
 assets/*.mp4
+
+# THE BEADS INTERACTION EXPORT IS GENERATED, AND TRACKING IT BLOCKED DEPLOYS.
+# `bd` rewrites it after write commands, which leaves the deploy checkout dirty,
+# and `decideDeploy` refuses a dirty tree so it does not move the checkout out
+# from under someone's work. That refusal fired 352 times -- about 2.4 days of
+# blocked deploys -- for a file nothing in this repo reads.
+# It was committed once before to unblock exactly this (e33c194), which is a
+# treadmill rather than a fix: the next write dirties it again. Beads' own docs
+# say the JSONL is a passive export for viewers and interchange, and that sync
+# is via Dolt remotes on refs/dolt/data -- so it is generated output and belongs
+# here, not in the index.
+.beads/interactions.jsonl
