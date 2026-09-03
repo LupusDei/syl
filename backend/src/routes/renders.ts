@@ -401,7 +401,12 @@ export function createRenderRouter(options: RenderRouterOptions): Router {
     void runIdempotentAsync(idempotency, request, async () => {
       const body = bodyOf(request);
       const started = await renders.start({
-        scene: requireText(body, "scene"),
+        // One sentence, or one per part (`syl-m7lj`). An array is passed
+        // straight through so the refusal for a count mismatch is the service's
+        // own sentence rather than a second validation here that could drift.
+        scene: Array.isArray(body["scene"])
+          ? (body["scene"] as unknown[]).map((line) => (typeof line === "string" ? line : ""))
+          : requireText(body, "scene"),
         framing: requireText(body, "framing"),
         because: requireText(body, "because"),
         // The dials. Absent means the house render: fifteen seconds, opening on

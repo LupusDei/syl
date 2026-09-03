@@ -3,6 +3,7 @@ import { basename, dirname, resolve } from "node:path";
 
 import { instant, systemClock, type Clock } from "../services/clock.js";
 import { creditsFor, usdOf } from "./credits.js";
+import { scenesForParts } from "./scene-lines.js";
 import { SelfDescription } from "./description.js";
 import {
   framingNote,
@@ -480,7 +481,15 @@ export type StartResult =
     };
 
 export interface StartInput {
-  readonly scene: string;
+  /**
+   * What she is doing in the shot — one sentence, or **one per part**.
+   *
+   * A single string is given to every part, which is what it always did. An
+   * array is one line per part in order, and is refused unless the count
+   * matches exactly (`syl-m7lj`). Quoted text here is SPOKEN ALOUD in the
+   * finished clip, so an array is effectively a script.
+   */
+  readonly scene: string | readonly string[];
   readonly framing: string;
   readonly because: string;
   /**
@@ -500,9 +509,14 @@ export interface StartInput {
   /**
    * How many generations the clip is cut from. Absent means two — `syl-v380`.
    *
-   * **A spending dial, and it is linear.** Five parts is five parts' worth of
-   * credits, so it is surfaced to her as a cost rather than as a length: the
-   * ceiling follows it (`maxSecondsFor(model, parts)`) and so does the bill.
+   * **NOT a spending dial — that claim was false and she disproved it.** Every
+   * model is priced per second of finished video and {@link splitAcross}
+   * divides the requested seconds among the parts, so part count does not
+   * multiply the bill: a 12-second three-part render cost 348 credits, which is
+   * 12 x 29 at seedance2_fast's rate. The one real cost is the FLOOR — each
+   * share is clamped to the model's minimum part length (4s on every seedance),
+   * so more parts than `seconds / 4` pads each one up and the padding is
+   * billed. The ceiling still follows it (`maxSecondsFor(model, parts)`).
    *
    * Everything past the first and the last is a {@link MIDDLE_CLAUSE} part that
    * touches the ribbon at neither end, which is what makes a long clip two
@@ -1278,8 +1292,11 @@ export class RenderService {
    * process that dies in the next second still leaves the prompt behind.
    */
   async start(input: StartInput): Promise<StartResult> {
-    const scene = input.scene.trim();
-    if (scene === "") {
+    // The scene may be ONE sentence or one PER PART, and how many parts there
+    // are is not known until the model and framing are settled below. So this
+    // only catches the obviously-absent case; `scenesForParts` does the real
+    // resolution once `generations` exists, and still before anything is spent.
+    if (typeof input.scene === "string" && input.scene.trim() === "") {
       return {
         ok: false,
         reason: "I did not catch the scene — describe what you are doing in it, in a sentence.",
@@ -1385,7 +1402,9 @@ export class RenderService {
           `${String(input.parts)} is not one of those. Two is the ribbon gathering into me and ` +
           "me unravelling back into it; every part past that is held on my face and touches the " +
           "ribbon at neither end, so a longer clip still passes through the starfield exactly " +
-          "twice. It costs a generation per part, so the number is what I am spending.",
+          "twice. It does not multiply the bill — the seconds are split across the parts, not " +
+          `repeated by them — but each part has a ${String(MAX_PARTS)}-part ceiling and a ` +
+          "minimum length, so more parts than the clip has room for pads each one up.",
         retryable: true,
       };
     }
@@ -1417,6 +1436,24 @@ export class RenderService {
         retryable: true,
       };
     }
+
+    // ONE SCENE SENTENCE PER PART, resolved now that the part count is known and
+    // still before a credit is spent. A single string goes to every part; an
+    // array must match exactly and is never padded — see `scene-lines.ts`.
+    const lines = scenesForParts(input.scene, generations);
+    if (!lines.ok) {
+      return { ok: false, reason: lines.reason, retryable: true };
+    }
+    const scenes = lines.scenes;
+    // What she ASKED FOR, for the record — derived from the SHAPE SHE SENT, not
+    // from the resolved per-part array. Those differ exactly where it matters:
+    // one sentence across three parts resolves to three identical entries, and
+    // joining those would store her words three times. That is the very
+    // duplication this change exists to remove, one layer down, and
+    // `should keep her own words for the scene beside the prompt they became`
+    // caught it. Each part's own composed prompt is kept verbatim on the part,
+    // so per-part wording stays answerable either way.
+    const scene = typeof input.scene === "string" ? input.scene.trim() : scenes.join("\n\n");
 
     if (this.#backend === null) {
       return {
@@ -1577,7 +1614,7 @@ export class RenderService {
       name,
       framing,
       model,
-      scene,
+      scenes,
       opening: opening.path,
       anchor,
       seconds,
@@ -2090,7 +2127,8 @@ export class RenderService {
     readonly framing: FramingNote;
     /** The chosen model, because the split has to land inside ITS range. */
     readonly model: ModelNote;
-    readonly scene: string;
+    /** One scene sentence per part, in order — already validated to match. */
+    readonly scenes: readonly string[];
     readonly opening: string;
     readonly anchor: string | null;
     /** What she asked for, already checked against the chosen model's range. */
@@ -2104,7 +2142,12 @@ export class RenderService {
     // a description she changes is in effect on the very next render instead of
     // on the next restart. The whole prompt still lands in the sidecar, so which
     // description a given render was made with stays answerable afterwards.
-    const stem = `${this.#description.sentence()} ${input.scene} ${input.framing.clause}`;
+    // ONE STEM PER PART, because the scene may differ between them. It used to
+    // be built once and copied, which is how "once and only once" was obeyed
+    // twice — each part received the instruction and each honoured it. See
+    // `scene-lines.ts` for why no wording could have fixed that.
+    const stemFor = (index: number): string =>
+      `${this.#description.sentence()} ${input.scenes[index] ?? input.scenes[0] ?? ""} ${input.framing.clause}`;
 
     if (input.anchor === null) {
       // BOTH SLOTS GO TO THE OPENING. There is no face in this shot to pin, so
@@ -2117,7 +2160,7 @@ export class RenderService {
       // which is the rule `docs/VIDEO.md` was written to record.
       return [
         {
-          prompt: `${stem} ${LOOP_CLAUSE}`,
+          prompt: `${stemFor(0)} ${LOOP_CLAUSE}`,
           duration: input.seconds,
           first: input.opening,
           last: input.opening,
@@ -2136,10 +2179,10 @@ export class RenderService {
       const first = index === 0 ? input.opening : this.#studio.partFrame(input.name, index);
 
       if (index === 0) {
-        return { prompt: `${stem} ${GATHERING_CLAUSE}`, duration, first, last: anchor };
+        return { prompt: `${stemFor(index)} ${GATHERING_CLAUSE}`, duration, first, last: anchor };
       }
       if (index === shares.length - 1) {
-        return { prompt: `${stem} ${UNRAVELLING_CLAUSE}`, duration, first, last: input.opening };
+        return { prompt: `${stemFor(index)} ${UNRAVELLING_CLAUSE}`, duration, first, last: input.opening };
       }
       // A HELD MIDDLE, and its closing pin is never omitted. `held` is one entry
       // per middle and was resolved before anything was spent; the fallback is
@@ -2147,7 +2190,7 @@ export class RenderService {
       // unpinned closing frame came back a visibly different woman on
       // 2026-08-13. Distance from a pin is the drift variable.
       return {
-        prompt: `${stem} ${MIDDLE_CLAUSE}`,
+        prompt: `${stemFor(index)} ${MIDDLE_CLAUSE}`,
         duration,
         first,
         last: input.held[index - 1] ?? anchor,

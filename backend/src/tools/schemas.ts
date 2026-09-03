@@ -470,11 +470,24 @@ export const TOOLS: readonly ToolSchema[] = [
       type: "object",
       required: ["scene", "framing", "because"],
       properties: {
+        // ONE SENTENCE, OR ONE PER PART -- `syl-m7lj`. It used to be a lone
+        // string copied into every part, which is how her "once and only once"
+        // instruction was obeyed TWICE: each part received it and each honoured
+        // it. Quoted text here is spoken aloud, so an array is a script.
         scene: {
-          type: "string",
+          oneOf: [
+            { type: "string" },
+            { type: "array", items: { type: "string" }, minItems: 1 },
+          ],
           description:
             "What you are doing, in a sentence. Yours to write — who you are and how the clip " +
-            "opens and closes are added for you, so this is just the moment.",
+            "opens and closes are added for you, so this is just the moment. " +
+            "GIVE A LIST INSTEAD and it is one sentence PER PART, in order, so a long clip can " +
+            "progress instead of repeating: part one, then each held middle, then the last. " +
+            "It must be exactly one per part — I will refuse a mismatch rather than repeat the " +
+            "last line to fill the gap, because that is how the same words got said twice. " +
+            "Anything you put in QUOTES is spoken aloud in the finished clip, so a list is a " +
+            "script: one line per segment.",
         },
         framing: {
           type: "string",

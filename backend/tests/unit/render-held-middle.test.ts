@@ -317,6 +317,111 @@ describe("the sentence a held middle is sent", () => {
     expect(middle).not.toContain(UNRAVELLING);
   });
 
+  // -------------------------------------------------------------------------
+  // ONE SCENE SENTENCE PER PART — `syl-m7lj`.
+  //
+  // These are the tests that would have caught the original defect. The unit
+  // tests on `scenesForParts` prove the resolution; only these prove the
+  // resolved lines actually reach DIFFERENT prompts, which is the thing that
+  // was broken. A green `scenesForParts` with a shared stem would still ship
+  // the bug.
+  // -------------------------------------------------------------------------
+
+  it("should put a different scene line in each part when given one per part", async () => {
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+    await service.start({
+      ...ASK,
+      parts: 3,
+      scene: ["the first thing she says", "the second thing she says", "the third thing she says"],
+    });
+    await service.drain();
+
+    const prompts = backend.specs.map((spec) => spec.promptText ?? "");
+    expect(prompts).toHaveLength(3);
+    expect(prompts[0]).toContain("the first thing she says");
+    expect(prompts[1]).toContain("the second thing she says");
+    expect(prompts[2]).toContain("the third thing she says");
+  });
+
+  it("should keep each part's line OUT of the other parts", async () => {
+    // The actual failure: her "once and only once" instruction was copied into
+    // both parts, each obeyed it, and the line was spoken twice. Containment is
+    // the property that fixes it, so it is asserted directly.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+    await service.start({
+      ...ASK,
+      parts: 3,
+      scene: ["alpha line", "beta line", "gamma line"],
+    });
+    await service.drain();
+
+    const prompts = backend.specs.map((spec) => spec.promptText ?? "");
+    expect(prompts[0]).not.toContain("beta line");
+    expect(prompts[0]).not.toContain("gamma line");
+    expect(prompts[1]).not.toContain("alpha line");
+    expect(prompts[1]).not.toContain("gamma line");
+    expect(prompts[2]).not.toContain("alpha line");
+    expect(prompts[2]).not.toContain("beta line");
+  });
+
+  it("should still copy a single sentence into every part, as it always did", async () => {
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+    await service.start({ ...ASK, parts: 3 });
+    await service.drain();
+
+    for (const spec of backend.specs) {
+      expect(spec.promptText ?? "").toContain(ASK.scene);
+    }
+  });
+
+  it("should refuse a scene list that does not match the part count, spending nothing", async () => {
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+    const started = await service.start({
+      ...ASK,
+      parts: 3,
+      scene: ["only", "two"],
+    });
+
+    expect(started.ok).toBe(false);
+    // Refused BEFORE submission — the whole point is that it costs nothing.
+    expect(backend.specs).toHaveLength(0);
+  });
+
+  it("should record ONE copy of a single sentence however many parts there are", async () => {
+    // The regression this file exists to prevent, one layer down. Resolving a
+    // single sentence across three parts yields three identical entries, and
+    // storing the JOIN of those would write her words three times — the exact
+    // duplication `syl-m7lj` removes. The record must hold what she ASKED for.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+    const started = await service.start({ ...ASK, parts: 3 });
+
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    expect(started.record.scene).toBe(ASK.scene);
+  });
+
+  it("should record every line she wrote when she wrote one per part", async () => {
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+    const started = await service.start({
+      ...ASK,
+      parts: 3,
+      scene: ["line one", "line two", "line three"],
+    });
+
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    // All three survive, because only the record can be checked later.
+    expect(started.record.scene).toContain("line one");
+    expect(started.record.scene).toContain("line two");
+    expect(started.record.scene).toContain("line three");
+  });
+
   it("should agree with the frames it pins at both of its own ends", async () => {
     // The rule the whole of `docs/VIDEO.md` turns on, applied to the one part
     // type that had never existed: a clause has to agree with what its own

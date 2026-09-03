@@ -1380,7 +1380,15 @@ const changeGoal: ToolHandler = async (input, context) => {
  * money: the evidence travels with the action and never stands in front of it.
  */
 const renderMe: ToolHandler = async (input, context) => {
-  const scene = text(input, "scene");
+  // A string, or one sentence PER PART. The array form is what lets a long clip
+  // say something different in each segment (`syl-m7lj`); render-service refuses
+  // a count mismatch before anything is spent.
+  const rawScene = input["scene"];
+  const scene: string | readonly string[] | null = Array.isArray(rawScene)
+    ? rawScene.every((line) => typeof line === "string")
+      ? (rawScene as readonly string[])
+      : null
+    : text(input, "scene");
   if (scene === null) {
     return missing("render_me", "scene", "I did not catch what the shot is of.");
   }
