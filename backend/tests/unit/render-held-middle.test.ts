@@ -177,6 +177,37 @@ function serviceWith(
   });
 }
 
+/**
+ * An adopted OPENING that is not the ribbon — `syl-63v`'s rule applied to prose.
+ *
+ * Written as the log for the same reason `adoptSecondFace` is: what this fixture
+ * needs is a render whose opening picture is a face, not a test of adoption.
+ */
+function adoptFaceOpening(id: string): void {
+  const file = `renders/openings/${id}.png`;
+  mkdirSync(studio.openingDir, { recursive: true });
+  writeFileSync(join(root, file), OTHER_FACE_BYTES);
+  writeFileSync(
+    studio.wardrobeLog,
+    `${JSON.stringify(
+      {
+        kept: [
+          {
+            id,
+            role: "opening",
+            file,
+            because: "I want a clip that starts where the last one ended, on my face.",
+            at: "2026-09-10T09:00:00.000Z",
+            from: null,
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
 const ASK = {
   scene: "she turns once, slowly, and lets the light run down her arm",
   framing: "close_portrait",
@@ -420,6 +451,44 @@ describe("the sentence a held middle is sent", () => {
     expect(started.record.scene).toContain("line one");
     expect(started.record.scene).toContain("line two");
     expect(started.record.scene).toContain("line three");
+  });
+
+  // -------------------------------------------------------------------------
+  // THE STRUCTURAL CLAUSE FOLLOWS THE PINS, NOT THE PART INDEX.
+  //
+  // Syl found a render opened on a FACE whose part one still said "Opens on a
+  // lone ribbon of blue light... with no figure present" while frame one was
+  // her face — a pin and its prose in direct contradiction, which is the exact
+  // failure `docs/VIDEO.md` exists to record and that LOOP_CLAUSE caused once.
+  // -------------------------------------------------------------------------
+
+  it("should not narrate a ribbon at either end when the clip opens on a face", async () => {
+    adoptFaceOpening("face-hold");
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+    await service.start({ ...ASK, parts: 2, opening: "face-hold" });
+    await service.drain();
+
+    const prompts = backend.specs.map((spec) => spec.promptText ?? "");
+    expect(prompts.length).toBeGreaterThan(0);
+    for (const prompt of prompts) {
+      expect(prompt).not.toMatch(/lone ribbon/iu);
+      expect(prompt).not.toMatch(/bare ribbon/iu);
+      expect(prompt).not.toMatch(/no figure present/iu);
+    }
+  });
+
+  it("should still narrate the ribbon when the ribbon is what is pinned", async () => {
+    // The regression guard on the other side: this must not quietly stop
+    // describing the arrival for every ordinary clip.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+    await service.start({ ...ASK, parts: 2 });
+    await service.drain();
+
+    const prompts = backend.specs.map((spec) => spec.promptText ?? "");
+    expect(prompts[0]).toMatch(/lone ribbon/iu);
+    expect(prompts[prompts.length - 1]).toMatch(/bare ribbon/iu);
   });
 
   it("should agree with the frames it pins at both of its own ends", async () => {

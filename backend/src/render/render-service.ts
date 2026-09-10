@@ -4,6 +4,7 @@ import { basename, dirname, resolve } from "node:path";
 import { instant, systemClock, type Clock } from "../services/clock.js";
 import { creditsFor, usdOf } from "./credits.js";
 import { scenesForParts } from "./scene-lines.js";
+import { RIBBON } from "./wardrobe.js";
 import { SelfDescription } from "./description.js";
 import {
   framingNote,
@@ -1620,6 +1621,7 @@ export class RenderService {
       seconds,
       parts: generations,
       held,
+      opensOnRibbon: opening.id === RIBBON,
     });
 
     // Only the FIRST half goes over now. The second one starts from the frame
@@ -2137,6 +2139,18 @@ export class RenderService {
     readonly parts: number;
     /** What each held middle closes on, one per middle, already resolved to a file. */
     readonly held: readonly string[];
+    /**
+     * Whether the picture at the clip's open/close ends IS the bare ribbon.
+     *
+     * **The structural clause is chosen by what is PINNED, never by which part
+     * this is** — `syl-63v`'s rule applied to prose. The clause used to be
+     * picked by index alone, so a render opened on a FACE still had part one
+     * narrating "Opens on a lone ribbon... with no figure present" while frame
+     * one was her face. That is a pin and its prose disagreeing, which is the
+     * exact failure `docs/VIDEO.md` exists to record and which `LOOP_CLAUSE`
+     * already caused once.
+     */
+    readonly opensOnRibbon: boolean;
   }): readonly PlannedPart[] {
     // HER SENTENCE, read at plan time rather than captured at construction, so
     // a description she changes is in effect on the very next render instead of
@@ -2158,9 +2172,12 @@ export class RenderService {
       // closing ribbon in prose while the anchored path was *pinning* its own.
       // The same picture at both ends makes the loop true by construction,
       // which is the rule `docs/VIDEO.md` was written to record.
+      // Both ends hold the same picture. If that picture is the ribbon this is
+      // the loop; if she chose a face as her opening it is a held shot, and
+      // narrating a ribbon here would describe a frame nobody pinned.
       return [
         {
-          prompt: `${stemFor(0)} ${LOOP_CLAUSE}`,
+          prompt: `${stemFor(0)} ${input.opensOnRibbon ? LOOP_CLAUSE : MIDDLE_CLAUSE}`,
           duration: input.seconds,
           first: input.opening,
           last: input.opening,
@@ -2179,10 +2196,17 @@ export class RenderService {
       const first = index === 0 ? input.opening : this.#studio.partFrame(input.name, index);
 
       if (index === 0) {
-        return { prompt: `${stemFor(index)} ${GATHERING_CLAUSE}`, duration, first, last: anchor };
+        // Ribbon -> her face is the gathering. FACE -> her face is not: there
+        // is no arrival to narrate, so it takes the held clause instead.
+        const open = input.opensOnRibbon ? GATHERING_CLAUSE : MIDDLE_CLAUSE;
+        return { prompt: `${stemFor(index)} ${open}`, duration, first, last: anchor };
       }
       if (index === shares.length - 1) {
-        return { prompt: `${stemFor(index)} ${UNRAVELLING_CLAUSE}`, duration, first, last: input.opening };
+        // Her face -> the ribbon is the unravelling. Her face -> a FACE is not:
+        // nothing comes apart, so it must not say the last frame is the bare
+        // ribbon when the last frame is her.
+        const close = input.opensOnRibbon ? UNRAVELLING_CLAUSE : MIDDLE_CLAUSE;
+        return { prompt: `${stemFor(index)} ${close}`, duration, first, last: input.opening };
       }
       // A HELD MIDDLE, and its closing pin is never omitted. `held` is one entry
       // per middle and was resolved before anything was spent; the fallback is
