@@ -491,6 +491,52 @@ describe("the sentence a held middle is sent", () => {
     expect(prompts[prompts.length - 1]).toMatch(/bare ribbon/iu);
   });
 
+  // -------------------------------------------------------------------------
+  // `join: "cut"` — re-pin later parts to the ADOPTED ANCHOR, not a derived frame.
+  //
+  // A derived frame is the one picture in the pipeline nobody looks at, and it
+  // is where every moderation refusal has landed. An adopted file at the opening
+  // slot is 18/18 across the archive; a derived frame is intermittent.
+  // -------------------------------------------------------------------------
+
+  it("should pin every later part to the adopted ANCHOR BYTES when the join is a cut", async () => {
+    // Compared as BYTES, not filenames: every picture reaches Runway as a data
+    // URI, so a filename assertion would match nothing and pass vacuously.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+    await service.start({ ...ASK, parts: 3, join: "cut" });
+    await service.drain();
+
+    // Asserted against part one's own CLOSING pin, which is the anchor by
+    // construction — so the test does not depend on which face is adopted.
+    const anchorBytes = bytesOf(lastFrameOf(backend.specs[0]?.promptImage));
+    expect(anchorBytes.length).toBeGreaterThan(0);
+    const laterFirsts = backend.specs.slice(1).map((spec) => bytesOf(firstFrameOf(spec.promptImage)));
+    expect(laterFirsts).toHaveLength(2);
+    for (const bytes of laterFirsts) {
+      expect(bytes.length).toBeGreaterThan(0);
+      expect(bytes.equals(anchorBytes)).toBe(true);
+    }
+  });
+
+  it("should still pin later parts to the derived frame by default", async () => {
+    // Continuous must stay the default — every render before 2026-09-16 was
+    // made that way, and this is the guard on the other side of the fix.
+    const backend = fakeBackend();
+    const service = serviceWith(backend);
+    await service.start({ ...ASK, parts: 3 });
+    await service.drain();
+
+    const anchorBytes = bytesOf(lastFrameOf(backend.specs[0]?.promptImage));
+    expect(anchorBytes.length).toBeGreaterThan(0);
+    const laterFirsts = backend.specs.slice(1).map((spec) => bytesOf(firstFrameOf(spec.promptImage)));
+    expect(laterFirsts).toHaveLength(2);
+    for (const bytes of laterFirsts) {
+      expect(bytes.length).toBeGreaterThan(0);
+      expect(bytes.equals(anchorBytes)).toBe(false);
+    }
+  });
+
   it("should agree with the frames it pins at both of its own ends", async () => {
     // The rule the whole of `docs/VIDEO.md` turns on, applied to the one part
     // type that had never existed: a clause has to agree with what its own

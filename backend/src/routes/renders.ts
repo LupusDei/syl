@@ -423,6 +423,9 @@ export function createRenderRouter(options: RenderRouterOptions): Router {
         // follow the rule above: present and wrong goes through, so the sentence
         // she reads is the service's own.
         ...(body["parts"] === undefined ? {} : { parts: Number(body["parts"]) }),
+        ...(body["join"] === "continuous" || body["join"] === "cut"
+          ? { join: body["join"] }
+          : {}),
         ...(Array.isArray(body["held"])
           ? { held: body["held"].map((one) => (typeof one === "string" ? one : "")) }
           : {}),

@@ -491,6 +491,27 @@ export interface StartInput {
    * finished clip, so an array is effectively a script.
    */
   readonly scene: string | readonly string[];
+  /**
+   * How the parts of a chained render are joined — `syl-vtld` follow-up.
+   *
+   * `"continuous"` (the default, and what every render before 2026-09-16 did)
+   * pins each later part's opening frame to the frame the previous part ENDED
+   * on, so the join is invisible.
+   *
+   * `"cut"` pins it to her ADOPTED ANCHOR FILE instead. The join becomes a
+   * visible cut, and two things improve. A derived frame is the one picture in
+   * the whole pipeline **nobody ever looks at** — it is whatever the previous
+   * part drifted into — and it is where every moderation refusal has landed: an
+   * adopted file at the opening slot is **18 for 18**, a derived frame is
+   * intermittent. It also stops likeness decaying along a chain, because every
+   * part is re-grounded on the same vetted picture rather than on a copy of a
+   * copy.
+   *
+   * The Commander's own verdict is what settled the trade: he watched a two-part
+   * clip and reported "a huge voice change and character change" at the middle,
+   * so the seam the derived frame exists to hide was never hidden from him.
+   */
+  readonly join?: "continuous" | "cut";
   readonly framing: string;
   readonly because: string;
   /**
@@ -1622,6 +1643,7 @@ export class RenderService {
       parts: generations,
       held,
       opensOnRibbon: opening.id === RIBBON,
+      cutParts: input.join === "cut",
     });
 
     // Only the FIRST half goes over now. The second one starts from the frame
@@ -2151,6 +2173,8 @@ export class RenderService {
      * already caused once.
      */
     readonly opensOnRibbon: boolean;
+    /** True when later parts re-pin to the adopted anchor instead of a derived frame. */
+    readonly cutParts: boolean;
   }): readonly PlannedPart[] {
     // HER SENTENCE, read at plan time rather than captured at construction, so
     // a description she changes is in effect on the very next render instead of
@@ -2193,7 +2217,17 @@ export class RenderService {
       // named here rather than left blank because the path is decided by the
       // render name: a record that says what WILL be sent is reproducible, and
       // one that says nothing is a hole somebody fills in with a guess.
-      const first = index === 0 ? input.opening : this.#studio.partFrame(input.name, index);
+      // A LATER PART'S OPENING FRAME. Continuous pins it to the frame the
+      // previous part ended on, which makes the join invisible and hands the
+      // model a picture nobody vetted. `cut` re-grounds on the adopted anchor
+      // instead: a visible cut, but every part is pinned to the same examined
+      // face rather than to a copy of a copy.
+      const first =
+        index === 0
+          ? input.opening
+          : input.cutParts
+            ? anchor
+            : this.#studio.partFrame(input.name, index);
 
       if (index === 0) {
         // Ribbon -> her face is the gathering. FACE -> her face is not: there
@@ -2324,11 +2358,19 @@ export class RenderService {
           return;
         }
 
+        // ONLY A CONTINUOUS JOIN NEEDS A FRAME LIFTED OUT. The plan already
+        // decided what this part opens on and wrote it into the record: the
+        // previous part's closing frame for a continuous join, or her adopted
+        // anchor for a `cut`. Re-deriving it here unconditionally is what made
+        // the first version of `join: "cut"` do nothing at all — the plan was
+        // correct and this line quietly overrode it.
         const frame = this.#studio.partFrame(current.name, index);
-        const taken = await lastFrame({ video: previous.video, to: frame, run: this.#ffmpeg });
-        if (!taken.ok) {
-          this.#stop(current, index, taken.reason);
-          return;
+        if (part.first === this.#relativeTo(frame)) {
+          const taken = await lastFrame({ video: previous.video, to: frame, run: this.#ffmpeg });
+          if (!taken.ok) {
+            this.#stop(current, index, taken.reason);
+            return;
+          }
         }
 
         // THE MODEL THE RECORD NAMES, not the house model. A second half
@@ -2353,7 +2395,15 @@ export class RenderService {
 
         const submitted = await backend.submit({
           model: model.id,
-          promptImage: this.#promptImage({ first: frame, last: this.#absolute(part.last) }, model),
+          // The RECORD's own opening picture, not a freshly derived one — so a
+          // `cut` render sends the anchor it was planned with, and a continuous
+          // one sends the frame just extracted above.
+          promptImage: this.#promptImage(
+            // `part.first` is never null — every part has an opening picture —
+            // so this resolves to the studio root the same way `#absolute` does.
+            { first: resolve(this.#studio.root, part.first), last: this.#absolute(part.last) },
+            model,
+          ),
           promptText: part.prompt,
           duration: part.duration,
           ...geometry,

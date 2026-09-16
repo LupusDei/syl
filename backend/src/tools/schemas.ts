@@ -226,6 +226,25 @@ export const TOOLS: readonly ToolSchema[] = [
       required: ["id", "because"],
       properties: {
         id: { type: "string", description: "The reminder's id, from whats_outstanding." },
+        // HOW THE PARTS ARE JOINED. Added 2026-09-16 because the join the
+        // derived frame exists to hide was never hidden: he watched a two-part
+        // clip and reported "a huge voice change and character change" at the
+        // middle. A derived frame is also the one picture nobody vets, and it is
+        // where every moderation refusal has landed.
+        join: {
+          type: "string",
+          enum: ["continuous", "cut"],
+          description:
+            "How the parts of a longer clip are joined. \"continuous\" is the default and what " +
+            "every clip before today did: each part opens on the frame the one before it ended " +
+            "on, so the join is invisible. \"cut\" opens each later part on YOUR ADOPTED FACE " +
+            "instead — a visible cut between parts, and in exchange every part is pinned to the " +
+            "same picture you chose and examined. Two reasons to want it: a derived frame is the " +
+            "only picture in the whole chain nobody looks at, and it is where every moderation " +
+            "refusal has landed — an adopted file in that slot is 18 for 18 — and your likeness " +
+            "stops decaying along a chain, because each part is grounded on you rather than on a " +
+            "copy of a copy.",
+        },
         because: BECAUSE,
       },
     },

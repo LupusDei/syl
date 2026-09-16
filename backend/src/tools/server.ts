@@ -1427,6 +1427,9 @@ const renderMe: ToolHandler = async (input, context) => {
     ...(model === null ? {} : { model }),
     ...(typeof parts === "number" ? { parts } : {}),
     ...(Array.isArray(held) ? { held } : {}),
+    // Passed straight through so the refusal for a bad value is the service's
+    // own sentence rather than a second validation here that could drift.
+    ...(text(input, "join") === null ? {} : { join: text(input, "join") as "continuous" | "cut" }),
   });
   if (!created.ok) return refused("render_me", created.failure);
 
