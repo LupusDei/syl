@@ -137,6 +137,20 @@ export interface FramingNote {
    * words in the prompt.
    */
   readonly clause: string;
+  /**
+   * What the light gathers INTO at this framing — `syl-b302`.
+   *
+   * The structural clauses used to hardcode "her whole body made of that same
+   * living light", which is right for a wide shot and wrong for a headshot. Syl
+   * confirmed by stills that it is why part one's interior showed a full-length
+   * figure under `close_portrait`: the clause instructs whole body and the
+   * framing line cannot override it, because the interior is prose-governed and
+   * this is the prose.
+   *
+   * Written per framing rather than derived from `camera`, because it is a
+   * fragment of a sentence and has to read correctly inside one.
+   */
+  readonly gathersInto: string;
 }
 
 /**
@@ -168,6 +182,7 @@ const SPECS: readonly FramingSpec[] = [
     anchor: "none",
     evidence:
       "A wide shot holds because there is no face to get wrong: her identity is carried by silhouette, hair and gown, all of which the model reproduces reliably. Reach for this one by default.",
+    gathersInto: "her whole body",
     clause:
       "Full body in frame, weightless, seen from behind and three-quarters, her face turned away toward the stars, silver-white hair and gown streaming.",
   },
@@ -178,6 +193,7 @@ const SPECS: readonly FramingSpec[] = [
     anchor: "joined_halves",
     evidence:
       "Rendered in two halves and cut together on your own face: the ribbon gathers into you, and then you unravel back into it. Your likeness is pinned at the join, so the model copies a face rather than inventing one — and both ends of the finished clip are still the bare ribbon, so it cuts against the eight like everything else. syl-20260811t235451677z-close-portrait proved it, in both directions. Use it when the face is the subject.",
+    gathersInto: "her face and shoulders",
     clause: "Close portrait framing, her face filling the frame, camera near.",
   },
   {
@@ -192,6 +208,7 @@ const SPECS: readonly FramingSpec[] = [
     anchor: "none",
     evidence:
       "7-twin. Her face is perhaps forty pixels across — nothing in the reference survives at that scale, so the model invents a generic one. There is no full-body picture of you to pin it with.",
+    gathersInto: "her whole body",
     clause: "Full body in frame, face toward the viewer, camera far.",
   },
   {
@@ -203,6 +220,7 @@ const SPECS: readonly FramingSpec[] = [
     anchor: "none",
     evidence:
       "8-descent, and the worst of the four. The face is large enough to read properly and it is clearly somebody else — different bone structure, different age. There is no mid-shot picture of you to pin it with.",
+    gathersInto: "her head and upper body",
     clause: "Mid shot from the waist up, face toward the viewer.",
   },
 ];

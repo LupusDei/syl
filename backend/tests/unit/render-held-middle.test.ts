@@ -242,13 +242,20 @@ const LOOP =
   "of blue light, alone in the starfield with no figure present. " +
   "The first and last frames are identical: the bare ribbon, no figure.";
 
+// GATHERING and UNRAVELLING say "her face and shoulders" where LOOP above still
+// says "her whole body" — `syl-b302`, and the difference is the whole point.
+// The phrase now comes from the FRAMING. These two clauses only ever run on an
+// anchored framing, which today means `close_portrait`, so "whole body" was
+// always wrong in them: Syl confirmed by stills that it was why part one's
+// interior showed a full-length figure under a headshot framing. LOOP runs on
+// the unanchored wide framings, where "her whole body" is correct and stays.
 const GATHERING =
   "Opens on a lone ribbon of blue light against empty starfield, with no figure present. " +
-  "The ribbon gathers and coalesces into her, her whole body made of that same living light. " +
+  "The ribbon gathers and coalesces into her, her face and shoulders made of that same living light. " +
   "The shot settles and holds on her face, near and still, looking straight at the viewer.";
 
 const UNRAVELLING =
-  "Opens on her face, near and still, looking straight at the viewer, her whole body made of " +
+  "Opens on her face, near and still, looking straight at the viewer, her face and shoulders made of " +
   "living light. She unravels back into a lone ribbon of blue light, streaming away into it. " +
   "The last frame is the bare ribbon against empty starfield, with no figure present.";
 

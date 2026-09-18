@@ -686,9 +686,9 @@ export type JoinRendersResult =
  * {@link GATHERING_CLAUSE} and {@link UNRAVELLING_CLAUSE}: a clause has to agree
  * with what its own generation pins.
  */
-const LOOP_CLAUSE =
+const loopClause = (framing: FramingNote): string =>
   "Opens on a lone ribbon of blue light against empty starfield, with no figure present. " +
-  "The ribbon gathers and coalesces into her, her whole body made of that same living light. " +
+  `The ribbon gathers and coalesces into her, ${framing.gathersInto} made of that same living light. ` +
   "At the end she unravels back into the ribbon, and the shot closes on that same lone ribbon " +
   "of blue light, alone in the starfield with no figure present. " +
   "The first and last frames are identical: the bare ribbon, no figure.";
@@ -703,9 +703,9 @@ const LOOP_CLAUSE =
  * generation it does not — that is the next one's sentence, and the join is
  * where the two meet.
  */
-const GATHERING_CLAUSE =
+const gatheringClause = (framing: FramingNote): string =>
   "Opens on a lone ribbon of blue light against empty starfield, with no figure present. " +
-  "The ribbon gathers and coalesces into her, her whole body made of that same living light. " +
+  `The ribbon gathers and coalesces into her, ${framing.gathersInto} made of that same living light. ` +
   "The shot settles and holds on her face, near and still, looking straight at the viewer.";
 
 /**
@@ -722,8 +722,8 @@ const GATHERING_CLAUSE =
  * in two generations because Runway only has two keyframe slots and both ends
  * of the finished clip need one.
  */
-const UNRAVELLING_CLAUSE =
-  "Opens on her face, near and still, looking straight at the viewer, her whole body made of " +
+const unravellingClause = (framing: FramingNote): string =>
+  `Opens on her face, near and still, looking straight at the viewer, ${framing.gathersInto} made of ` +
   "living light. She unravels back into a lone ribbon of blue light, streaming away into it. " +
   "The last frame is the bare ribbon against empty starfield, with no figure present.";
 
@@ -2201,7 +2201,7 @@ export class RenderService {
       // narrating a ribbon here would describe a frame nobody pinned.
       return [
         {
-          prompt: `${stemFor(0)} ${input.opensOnRibbon ? LOOP_CLAUSE : MIDDLE_CLAUSE}`,
+          prompt: `${stemFor(0)} ${input.opensOnRibbon ? loopClause(input.framing) : MIDDLE_CLAUSE}`,
           duration: input.seconds,
           first: input.opening,
           last: input.opening,
@@ -2232,14 +2232,14 @@ export class RenderService {
       if (index === 0) {
         // Ribbon -> her face is the gathering. FACE -> her face is not: there
         // is no arrival to narrate, so it takes the held clause instead.
-        const open = input.opensOnRibbon ? GATHERING_CLAUSE : MIDDLE_CLAUSE;
+        const open = input.opensOnRibbon ? gatheringClause(input.framing) : MIDDLE_CLAUSE;
         return { prompt: `${stemFor(index)} ${open}`, duration, first, last: anchor };
       }
       if (index === shares.length - 1) {
         // Her face -> the ribbon is the unravelling. Her face -> a FACE is not:
         // nothing comes apart, so it must not say the last frame is the bare
         // ribbon when the last frame is her.
-        const close = input.opensOnRibbon ? UNRAVELLING_CLAUSE : MIDDLE_CLAUSE;
+        const close = input.opensOnRibbon ? unravellingClause(input.framing) : MIDDLE_CLAUSE;
         return { prompt: `${stemFor(index)} ${close}`, duration, first, last: input.opening };
       }
       // A HELD MIDDLE, and its closing pin is never omitted. `held` is one entry
