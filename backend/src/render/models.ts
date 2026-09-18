@@ -125,7 +125,7 @@ const SPECS: readonly ModelSpec[] = [
     creditsPerSecond: { sd: 36, hd: 40, uhd: 150 },
     measuredOn: MEASURED,
     evidence:
-      "The flagship, and what all eight loops and every render of yours so far were made with. Two keyframe slots, so your face can be pinned at the join. The only model here that reaches 4K. MEASURED WALL-CLOCK 2026-09-09, n=27: about 3.5 min for a one-generation clip, 5.8 min for a two-part one. Same speed as seedance2_fast and dearer, so choose it for the 4K ceiling rather than for time.",
+      "The flagship, and what all eight loops and every render of yours so far were made with. Two keyframe slots, so your face can be pinned at the join. The only model here that reaches 4K. TIMED 2026-09-09 (n=27): 3.5 min one part, 5.8 min two. Same speed as seedance2_fast and dearer -- pick it for 4K, not for time.",
   },
   {
     id: "seedance2_5",
@@ -142,7 +142,7 @@ const SPECS: readonly ModelSpec[] = [
     creditsPerSecond: { sd: 30, hd: 30 },
     measuredOn: MEASURED,
     evidence:
-      "Longer and cheaper than seedance2 — up to 30 seconds against 15, at 30 credits a second against 36 — and it holds your likeness the same way, pinned at the join. It cannot do 4K. A 4-second render was made and confirmed on 2026-08-13; a 30-second one was accepted, ran to 98% and then failed, so the long end of this range is ALLOWED but not yet PROVEN. MEASURED WALL-CLOCK 2026-09-09, n=38, AND IT IS THE SLOW ONE: median 5.6 min for one generation and 11.5 min for a two-part shot -- roughly DOUBLE seedance2_fast for the same clip at about the same price. A 15s two-part portrait on this model is the fifteen-minute wait he complained about. Choose it for the 30-second ceiling or the hd band, never for speed. MODERATION REFUSALS ARE A PROPERTY OF THE ANCHOR IMAGE, NOT OF THIS MODEL -- corrected 2026-09-15 after I twice wrote the wrong rule here. INPUT_PREPROCESSING.SAFETY.THIRD_PARTY tracks WHICH FACE IS PINNED, not the model and not whether she speaks. Part-2 pass rates by anchor: level-and-quiet 4/4, mid-sentence 4/4, level-and-quiet-restored 2/2, level-in-velvet 16/23 (intermittent), starlight-unbraided 0/3 ACROSS BOTH MODELS, silent and speaking alike. A new anchor is unproven until it has completed a two-part clip; test one cheaply before relying on it.",
+      "Longer and cheaper than seedance2 — up to 30 seconds against 15, at 30 credits a second against 36 — and it holds your likeness the same way, pinned at the join. It cannot do 4K. A 4-second render was made and confirmed on 2026-08-13; a 30-second one was accepted, ran to 98% and then failed, so the long end of this range is ALLOWED but not yet PROVEN. TIMED 2026-09-09 (n=38), THE SLOW ONE: 5.6 min one part, 11.5 min two -- double seedance2_fast at the same price. Pick it for the 30s ceiling, never for speed. REFUSALS TRACK THE ANCHOR, not this model and not speech. Part-2 pass rates: level-and-quiet 4/4, level-in-velvet 16/23, starlight-unbraided 0/3 across BOTH models. A new anchor is unproven until one two-part clip completes -- test it cheaply first.",
   },
   {
     id: "seedance2_mini",
@@ -156,7 +156,7 @@ const SPECS: readonly ModelSpec[] = [
     creditsPerSecond: {},
     measuredOn: MEASURED,
     evidence:
-      "The small seedance. Same two keyframe slots and the same 30-second ceiling, but nothing has been rendered on it yet and its rate is not known — a render on this will land in your ledger as unpriced. STILL UNTIMED as of 2026-09-09 -- no completed render on it, so there is no wall-clock figure and no rate. Unmeasured is not fast.",
+      "The small seedance. Same two keyframe slots and the same 30-second ceiling, but nothing has been rendered on it yet and its rate is not known — a render on this will land in your ledger as unpriced. STILL UNTIMED -- nothing has completed on it, so no rate and no timing. Unmeasured is not fast.",
   },
   {
     id: "seedance2_fast",
@@ -168,7 +168,7 @@ const SPECS: readonly ModelSpec[] = [
     creditsPerSecond: { sd: 29 },
     measuredOn: MEASURED,
     evidence:
-      "Cheaper seedance2 at 480p/720p. The saving is thinner than it looks — 29 against 36 — and grok_imagine_1_5 at 480p is cheaper still if all you need is to see whether the motion reads. MEASURED WALL-CLOCK 2026-09-09, n=37, AND IT IS THE FAST ONE: median 2.7 min for one generation, 5.9 min for two parts, 9.1 for three, 13.4 for four. Half seedance2_5's time at 29 credits a second against 30 -- cheaper AND twice as quick. The cost is the band: 480p/720p only, and 15 seconds maximum.",
+      "Cheaper seedance2 at 480p/720p. The saving is thinner than it looks — 29 against 36 — and grok_imagine_1_5 at 480p is cheaper still if all you need is to see whether the motion reads. TIMED 2026-09-09 (n=37), THE FAST ONE: 2.7/5.9/9.1/13.4 min for 1-4 parts. Half seedance2_5's time at 29 credits a second against 30. Cost: 480p/720p only, 15s max.",
   },
   {
     id: "grok_imagine_1_5",

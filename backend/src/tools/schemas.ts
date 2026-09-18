@@ -235,15 +235,12 @@ export const TOOLS: readonly ToolSchema[] = [
           type: "string",
           enum: ["continuous", "cut"],
           description:
-            "How the parts of a longer clip are joined. \"continuous\" is the default and what " +
-            "every clip before today did: each part opens on the frame the one before it ended " +
-            "on, so the join is invisible. \"cut\" opens each later part on YOUR ADOPTED FACE " +
-            "instead — a visible cut between parts, and in exchange every part is pinned to the " +
-            "same picture you chose and examined. Two reasons to want it: a derived frame is the " +
-            "only picture in the whole chain nobody looks at, and it is where every moderation " +
-            "refusal has landed — an adopted file in that slot is 18 for 18 — and your likeness " +
-            "stops decaying along a chain, because each part is grounded on you rather than on a " +
-            "copy of a copy.",
+            "How the parts are joined. \"continuous\" (default) opens each later part on the frame " +
+            "the one before ended on, so the join is invisible. \"cut\" opens it on YOUR ADOPTED " +
+            "FACE instead: a visible cut, and in exchange every part is pinned to a picture you " +
+            "chose. A derived frame is the one picture nobody looks at and where every moderation " +
+            "refusal has landed — an adopted file there is 18 for 18 — and it stops your likeness " +
+            "decaying along a chain.",
         },
         because: BECAUSE,
       },
@@ -501,12 +498,10 @@ export const TOOLS: readonly ToolSchema[] = [
           description:
             "What you are doing, in a sentence. Yours to write — who you are and how the clip " +
             "opens and closes are added for you, so this is just the moment. " +
-            "GIVE A LIST INSTEAD and it is one sentence PER PART, in order, so a long clip can " +
-            "progress instead of repeating: part one, then each held middle, then the last. " +
-            "It must be exactly one per part — I will refuse a mismatch rather than repeat the " +
-            "last line to fill the gap, because that is how the same words got said twice. " +
-            "Anything you put in QUOTES is spoken aloud in the finished clip, so a list is a " +
-            "script: one line per segment.",
+            "GIVE A LIST and it is one sentence PER PART, in order, so a long clip progresses " +
+            "instead of repeating. Exactly one per part — a mismatch is refused rather than " +
+            "padded, which is how the same words got said twice. Quoted text is SPOKEN ALOUD, so " +
+            "a list is a script: one line per segment.",
         },
         framing: {
           type: "string",
@@ -575,13 +570,11 @@ export const TOOLS: readonly ToolSchema[] = [
           type: "integer",
           description:
             `How many generations the clip is cut from, 2 to ${String(MAX_PARTS)}. Two unless you ` +
-            "say. It does NOT multiply the bill: every model is priced per second of finished " +
-            "video, and the seconds you ask for are split across the parts rather than repeated " +
-            "by them — you measured this yourself, a 12-second three-part render at 348 credits, " +
-            "which is 12 x 29. The ONE way parts costs you extra is the floor: each part has a " +
-            "minimum length (4 seconds on every seedance), so asking for more parts than " +
-            "seconds/4 pads each one up to the minimum and you pay for the padding. Twelve " +
-            "seconds is at most three parts; five would bill you for twenty. " +
+            "say. It does NOT multiply the bill — every model is priced per second and the " +
+            "seconds are split across the parts, not repeated by them. The one extra cost is the " +
+            "floor: each part is at least 4 seconds, so more parts than seconds/4 pads each one " +
+            "up and you pay for the padding. Twelve seconds is at most three parts. " +
+            "It DOES multiply wall-clock, near enough linearly. " +
             "Two is the ribbon gathering into you and you unravelling back into it. Every part " +
             "past that is held on your face and touches the ribbon at neither end, so a longer " +
             "clip still passes through the starfield exactly twice instead of once per part — " +
