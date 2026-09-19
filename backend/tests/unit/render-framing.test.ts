@@ -143,9 +143,32 @@ describe("the framings she can ask for", () => {
 
     // Every framing named, so the enum is never wider than its description.
     for (const id of FRAMING_IDS) expect(guidance).toContain(id);
-    // And the two halves distinguishable without reading `docs/VIDEO.md`.
-    expect(guidance).toMatch(/holds your likeness/iu);
-    expect(guidance).toMatch(/drift|somebody else|different woman/iu);
+    // AND EACH FRAMING DESCRIBED BY ITS OWN ACTUAL STATE — three of them, not
+    // two. The phrase check this replaces (`/holds your likeness/`) could never
+    // have caught the defect it was meant to guard: it was satisfied by ANY
+    // occurrence anywhere in the paragraph, including the very sentence that
+    // told her `face_turned_away` "holds your likeness" while `anchor` was
+    // `none` and both keyframes were the bare ribbon. She trusted it and the
+    // figure came back a different woman.
+    //
+    // Sliced to each framing's own segment and asserted non-empty first, so a
+    // narrowing that matches nothing fails loudly instead of passing vacuously.
+    for (const framing of FRAMINGS) {
+      const segment = guidance.split(framing.id)[1]?.split(";")[0] ?? "";
+      expect(segment.length).toBeGreaterThan(0);
+
+      if (framing.anchor !== "none") {
+        expect(segment).toMatch(/pinned/iu);
+      } else if (framing.facesCamera) {
+        expect(segment).toMatch(/drift|somebody else/iu);
+      } else {
+        // THE CASE THAT WENT WRONG: no face to get wrong is NOT the same claim
+        // as her likeness being held, and the text must not let her read it as
+        // one. It has to say plainly that nothing of her is pinned.
+        expect(segment).toMatch(/nothing of you is pinned/iu);
+        expect(segment).not.toMatch(/holds your likeness/iu);
+      }
+    }
   });
 
   it("should not tell her the picture she is sent is a close portrait, because it is the ribbon", () => {

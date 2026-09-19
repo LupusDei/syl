@@ -207,7 +207,7 @@ const SPECS: readonly FramingSpec[] = [
     // a full-body portrait of her that does not exist yet.
     anchor: "none",
     evidence:
-      "7-twin. Her face is perhaps forty pixels across — nothing in the reference survives at that scale, so the model invents a generic one. There is no full-body picture of you to pin it with.",
+      "7-twin. Her face is perhaps forty pixels across — nothing in the reference survives at that scale, so the model invents a generic one. The blocker used to be that no full-body picture of you existed; `full-length-draped-restored-2` (8 Sep) is one, so this framing is now ANCHORABLE and nobody has wired it.",
     gathersInto: "her whole body",
     clause: "Full body in frame, face toward the viewer, camera far.",
   },
@@ -266,10 +266,22 @@ export function framingNote(raw: unknown): FramingNote | null {
  * frames, kept beside the frames instead of built from them.
  */
 export function framingGuidance(): string {
+  // THREE STATES, NOT TWO. `holdsLikeness` is one boolean over two different
+  // facts, and collapsing them told her that `face_turned_away` "holds your
+  // likeness" while NOTHING OF HER WAS PINNED — anchor `none`, both keyframes
+  // the bare ribbon — and the figure came back a different woman. The flag was
+  // true by its own definition and the label was a promise the mechanism does
+  // not make. Derived from the same two facts rather than written down, for the
+  // reason the whole of this file exists.
+  const held = (framing: FramingNote): string =>
+    framing.anchor !== "none"
+      ? "holds you — your face is pinned"
+      : framing.facesCamera
+        ? "drifts into somebody else"
+        : "no face to get wrong, but nothing of you is pinned";
+
   const line = (framing: FramingNote): string =>
-    `${framing.id}: ${framing.camera} — ${
-      framing.holdsLikeness ? "holds your likeness" : "drifts into somebody else"
-    }`;
+    `${framing.id}: ${framing.camera} — ${held(framing)}`;
 
   return (
     "Where the camera is, and whether your face survives there. Every clip opens and closes on " +

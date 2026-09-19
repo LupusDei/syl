@@ -150,7 +150,13 @@ describe("the two verbs she has for herself", () => {
     // An enum, not free text: `docs/VIDEO.md` establishes which framings a
     // close-portrait reference can anchor, and free text cannot carry that.
     expect(framing?.enum).toEqual([...FRAMING_IDS]);
-    expect(framing?.description ?? "").toMatch(/holds your likeness/iu);
+    // The schema must carry each framing's REAL state. `/holds your likeness/`
+    // used to satisfy this and was true of the sentence that misled her about
+    // `face_turned_away`, which pins nothing.
+    const described = framing?.description ?? "";
+    expect(described).toMatch(/pinned/iu);
+    expect(described).toMatch(/drift|somebody else/iu);
+    expect(described).toMatch(/nothing of you is pinned/iu);
   });
 
   it("should require a reason, exactly as every other write does", () => {
