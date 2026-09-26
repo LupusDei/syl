@@ -1,0 +1,4 @@
+
+[00:00:00.000 --> 00:00:04.000]   Mars is the red planet, covered in rusty red dust.
+[00:00:08.000 --> 00:00:10.000]   And Jupiter is the biggest of all.
+[00:00:10.000 --> 00:00:14.000]   With a storm so huge, it could swallow our whole Earth.
