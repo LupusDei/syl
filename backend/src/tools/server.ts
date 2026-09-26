@@ -2150,6 +2150,53 @@ const joinRenders: ToolHandler = async (input, context) => {
 };
 
 /**
+ * `make_episode` — `syl-8tts`.
+ *
+ * With no scenes it reads the formula and spends nothing: that is how a
+ * two-kilobyte formula reaches her without living in a description paid for on
+ * every turn. With scenes it starts one and reads the stored record back, as
+ * `render_me` does. The scenes take minutes, and the watch on that record wakes
+ * her when they are done.
+ */
+const makeEpisode: ToolHandler = async (input, context) => {
+  // First, before either branch: the surface's rule is that a write refuses
+  // without its reason whatever else it was given, and one verb that answered
+  // some calls without one would be the exception the next reader copies.
+  const because = text(input, "because");
+  if (because === null) {
+    return missing("make_episode", "because", "Every episode says why it exists, the same as everything else I make.");
+  }
+  const given = input["scenes"];
+  if (!Array.isArray(given) || given.length === 0) {
+    const read = await context.client.get<{ guide: string }>("/renders/episodes");
+    if (!read.ok) return refused("make_episode", read.failure);
+    return { ok: true, action: "make_episode", subject: read.data.guide, at: new Date().toISOString() };
+  }
+
+  const made = await context.client.post<{ record: { name: string } }>("/renders/episodes", { scenes: given, because });
+  if (!made.ok) return refused("make_episode", made.failure);
+
+  const stored = await context.client.get<{ record: RenderRow; spend: unknown }>(
+    `/renders/${encodeURIComponent(made.data.record.name)}`,
+  );
+  if (!stored.ok) {
+    return {
+      ok: false,
+      action: "make_episode",
+      reason: `${stored.failure.message} The episode may well have started — look before starting it again.`,
+      retryable: stored.failure.retryable,
+    };
+  }
+  return {
+    ok: true,
+    action: "make_episode",
+    subject: stored.data.record,
+    at: stored.data.record.startedAt,
+    spent: stored.data.spend,
+  };
+};
+
+/**
  * The refusal for a sending with no render chosen, in the right words.
  *
  * Two situations wearing one shape, and they need different sentences because
@@ -2500,6 +2547,7 @@ export const HANDLERS: Readonly<Record<string, ToolHandler>> = {
   judge_render: judgeRender,
   see_myself: seeMyself,
   join_renders: joinRenders,
+  make_episode: makeEpisode,
   show_him: showHim,
   tell_him: tellHim,
   read_this: readThis,

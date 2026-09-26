@@ -1479,3 +1479,72 @@ describe("join_renders", () => {
     expect(envelope["reason"]).toBe(says);
   });
 });
+
+/**
+ * `make_episode` — `syl-8tts`. An episode: many scenes in her own voice, every
+ * take heard, assembled into one render she then looks at and shows him.
+ *
+ * Two calls, on purpose. Without scenes it hands her the formula (spending
+ * nothing), which is how a two-kilobyte formula reaches her without living in
+ * a description paid for on every turn. With scenes it starts one.
+ */
+describe("make_episode", () => {
+  const SCENE = { line: "Hello!", action: "She waves.", sfx: "a whoosh", factCheck: "no factual claims" };
+  const EPISODE = { ...RECORD, name: "syl-20260926t233000z-episode", status: "rendering", video: null };
+
+  it("should be offered, and require a reason like every other write", () => {
+    expect(advertisedToolNames()).toContain("make_episode");
+    const tool = TOOLS.find((t) => t.name === "make_episode");
+    expect(tool?.inputSchema.required).toContain("because");
+  });
+
+  it("should hand her the formula when she gives no scenes, and spend nothing", async () => {
+    const api = fakeApi({ "/renders/episodes": () => ok({ guide: "THE FORMULA: six scenes." }) });
+
+    const { envelope, isError } = await call(contextFor(api.fetch), "make_episode", { because: "he asked" });
+
+    expect(isError).toBe(false);
+    expect(envelope["subject"]).toBe("THE FORMULA: six scenes.");
+    expect(api.calls.map((c) => c.method)).toEqual(["GET"]);
+  });
+
+  it("should start the episode with her scenes exactly, and tell her about the stored record", async () => {
+    const api = fakeApi({
+      "/renders/episodes": () => ok({ record: EPISODE, spend: SPEND }, 201),
+      [`/renders/${EPISODE.name}`]: () => ok({ record: EPISODE, spend: SPEND }),
+    });
+
+    const { envelope, isError } = await call(contextFor(api.fetch), "make_episode", {
+      scenes: [SCENE, SCENE, SCENE, SCENE],
+      because: "he asked for one about light",
+    });
+
+    expect(isError).toBe(false);
+    const post = api.calls.find((c) => c.method === "POST");
+    expect(post?.path).toBe("/renders/episodes");
+    expect(post?.body).toEqual({ scenes: [SCENE, SCENE, SCENE, SCENE], because: "he asked for one about light" });
+    expect((envelope["subject"] as { name: string }).name).toBe(EPISODE.name);
+    expect(envelope["spent"]).toEqual(SPEND);
+  });
+
+  it("should repeat her service's refusal rather than claim an episode", async () => {
+    const api = fakeApi({
+      "/renders/episodes": () => failure(400, "VALIDATION_FAILED", "Nothing was spent. Scene 2 is 40 words."),
+    });
+
+    const { envelope, isError } = await call(contextFor(api.fetch), "make_episode", {
+      scenes: [SCENE, SCENE, SCENE, SCENE],
+      because: "b",
+    });
+
+    expect(isError).toBe(true);
+    expect(envelope["reason"]).toBe("Nothing was spent. Scene 2 is 40 words.");
+  });
+
+  it("should refuse to start one without a reason", async () => {
+    const api = fakeApi({});
+    const { isError } = await call(contextFor(api.fetch), "make_episode", { scenes: [SCENE, SCENE, SCENE, SCENE] });
+    expect(isError).toBe(true);
+    expect(api.calls).toEqual([]);
+  });
+});

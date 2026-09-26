@@ -842,8 +842,11 @@ export const TOOLS: readonly ToolSchema[] = [
       "Cut finished renders into one clip, in the order you name them — four fifteen-second " +
       "pieces become the minute you meant. What comes back is a render like any other: look at " +
       "it with see_myself, send it with show_him. It costs nothing, because the pieces are " +
-      "already made. Clips that were not made the same shape cannot be cut together, and I will " +
-      "tell you which ones disagree rather than hand him a broken file.",
+      // `syl-8tts` cut the sentence that followed: that clips of different
+      // shapes cannot be cut together. It is still true and she still learns it,
+      // from the refusal at the moment it applies, which names the clips that
+      // disagree. That costs nothing on the turns where it does not apply.
+      "already made.",
     inputSchema: {
       type: "object",
       required: ["renders", "because"],
@@ -861,6 +864,23 @@ export const TOOLS: readonly ToolSchema[] = [
         },
         because: BECAUSE,
       },
+    },
+  },
+  {
+    // `syl-8tts`. Named for what she makes, and short on purpose: the formula
+    // is two kilobytes and reaches her as the ANSWER to a call with no scenes,
+    // so it costs a turn only when she is writing one. Nothing here restates it.
+    name: "make_episode",
+    description:
+      "A cartoon lesson for the children in your voice. No scenes: read the formula, free. " +
+      "With scenes it starts; you are woken to look before you show him.",
+    inputSchema: {
+      type: "object",
+      required: ["because"],
+      // The four fields of a scene are named in the formula, which she reads
+      // first; spelling them out here would put them on every turn, and the
+      // route refuses a scene that lacks one, naming it.
+      properties: { scenes: { type: "array", items: { type: "object" } }, because: BECAUSE },
     },
   },
   {
