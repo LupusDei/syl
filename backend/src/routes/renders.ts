@@ -11,6 +11,8 @@ import {
   type SelfDescription,
 } from "../render/description.js";
 import { FRAMING_IDS } from "../render/framing.js";
+import type { StartEpisodeInput, StartEpisodeResult } from "../episodes/episode-service.js";
+import type { EpisodeScene } from "../episodes/rules.js";
 import type { RenderService } from "../render/render-service.js";
 import { isRenderName } from "../render/studio.js";
 import { RenderVerdicts, VerdictError } from "../render/verdicts.js";
@@ -75,6 +77,15 @@ export interface RenderRouterOptions {
    * mount.
    */
   readonly description?: SelfDescription;
+  /**
+   * The episode engine (`syl-8tts`). Optional for the reason the wardrobe is:
+   * a caller that only wants the render routes still gets them. Absent means
+   * `POST /renders/episodes` refuses, saying episodes are not set up here.
+   */
+  readonly episodes?: {
+    start: (input: StartEpisodeInput) => StartEpisodeResult;
+    guide: () => string;
+  };
   readonly idempotency: IdempotencyStore;
   readonly authenticate: RequestHandler;
 }
@@ -105,6 +116,31 @@ const VERDICTS_IN_THE_LOG = 30;
 function bodyOf(request: Request): Record<string, unknown> {
   const body: unknown = request.body;
   return typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+}
+
+/**
+ * An episode's scenes, or a refusal naming the first scene that is not four
+ * texts. Anything else in a scene is dropped rather than carried into a prompt.
+ */
+function scenesOf(raw: unknown): EpisodeScene[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new ApiFailure("VALIDATION_FAILED", "scenes must be a list, one per fifteen-second beat.", {
+      details: { field: "scenes" },
+    });
+  }
+  return raw.map((entry: unknown, index) => {
+    const scene = typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>) : {};
+    const text = (field: string): string => {
+      const value = scene[field];
+      if (typeof value !== "string") {
+        throw new ApiFailure("VALIDATION_FAILED", `Scene ${String(index + 1)} needs ${field} as text.`, {
+          details: { field: `scenes[${String(index)}].${field}` },
+        });
+      }
+      return value;
+    };
+    return { line: text("line"), action: text("action"), sfx: text("sfx"), factCheck: text("factCheck") };
+  });
 }
 
 function requireText(body: Record<string, unknown>, field: string): string {
@@ -228,7 +264,7 @@ function shippedDescription(): Described {
 }
 
 export function createRenderRouter(options: RenderRouterOptions): Router {
-  const { renders, idempotency, authenticate, verdicts, wardrobe, description } = options;
+  const { renders, idempotency, authenticate, verdicts, wardrobe, description, episodes } = options;
   const router = Router();
 
   router.use("/renders", authenticate);
@@ -489,6 +525,54 @@ export function createRenderRouter(options: RenderRouterOptions): Router {
       }
 
       return { status: 201, data: { record: joined.record, spend: renders.spend() } };
+    })
+      .then((outcome) => {
+        sendIdempotent(response, outcome);
+      })
+      .catch(next);
+  });
+
+  /**
+   * Make an episode — `syl-8tts`.
+   *
+   * A **literal** segment under the same rule as `joins`: it matches the
+   * render-name pattern, so it stays reachable only while no
+   * `POST /renders/:name` exists.
+   *
+   * This checks the SHAPE and nothing else: a list of scenes, each four texts.
+   * The formula (how many scenes, how many words, the names, the fact checks)
+   * belongs to the engine, which refuses in sentences she can act on, and this
+   * repeats them rather than restating them. It answers as soon as the record
+   * is written. The scenes take minutes, and the watch that record arms wakes
+   * her when they are done.
+   */
+  /**
+   * The formula she reads before writing an episode, with whose names to say
+   * and whether one can run here. Registered before `/renders/:name`, which
+   * would otherwise take `episodes` as a render's name.
+   */
+  router.get("/renders/episodes", (_request, response) => {
+    sendOk(response, {
+      guide:
+        episodes === undefined
+          ? "Episodes are not set up on this machine, so there is no formula to read here."
+          : episodes.guide(),
+    });
+  });
+
+  router.post("/renders/episodes", (request, response, next) => {
+    void runIdempotentAsync(idempotency, request, async () => {
+      const body = bodyOf(request);
+      const because = requireText(body, "because");
+      const scenes = scenesOf(body["scenes"]);
+      if (episodes === undefined) {
+        throw new ApiFailure("UPSTREAM_UNAVAILABLE", "Episodes are not set up on this machine, so nothing was made.");
+      }
+      const started = episodes.start({ scenes, because });
+      if (!started.ok) {
+        throw new ApiFailure(started.retryable ? "VALIDATION_FAILED" : "UPSTREAM_UNAVAILABLE", started.reason);
+      }
+      return { status: 201, data: { record: started.record, spend: renders.spend() } };
     })
       .then((outcome) => {
         sendIdempotent(response, outcome);

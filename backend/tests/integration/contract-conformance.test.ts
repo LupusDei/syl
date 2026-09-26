@@ -113,6 +113,17 @@ const UNDECLARED: readonly string[] = [
   // reply is an ordinary render record, which is the whole reason nothing
   // downstream needed changing.
   "POST /renders/joins",
+  // `syl-8tts` — an episode: many scenes in her voice, heard and assembled into
+  // one render. Joins the render debt above for the same reasons: her tool
+  // server is the only client, it lives in this repository, and the shape is
+  // pinned by `tests/unit/renders.test.ts`. What a second client would need to
+  // be told: `scenes` is ORDERED (the order they play), each scene is four
+  // texts (line, action, sfx, factCheck), and the reply is an ordinary render
+  // record, still `rendering`, which the render watch later wakes her about.
+  "POST /renders/episodes",
+  // Its read: the formula she reads before writing one. It is a document for
+  // her, not data a screen would show.
+  "GET /renders/episodes",
   // `syl-b0i` — what she made of a render after looking at it. Joins the render
   // debt above and inherits its argument: her tool server is the only client,
   // it lives in this repository, and both shapes are pinned by

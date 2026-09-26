@@ -322,3 +322,20 @@ describe("after a restart", () => {
     expect(backend.specs).toHaveLength(0);
   });
 });
+
+describe("the formula she reads first", () => {
+  it("should carry the rules and the children's names spelled the way they are said", () => {
+    const { episodes } = build(runway(), media(faithful));
+    const guide = episodes.guide();
+    expect(guide).toContain("At most 34 words");
+    expect(guide).toContain("factCheck");
+    expect(guide).toContain("Mee-ra, Thee-oh");
+    expect(guide).not.toContain("cannot run");
+  });
+
+  it("should say why one cannot run here, rather than hand her a formula she cannot use", () => {
+    rmSync(join(episodeHome(home), "bed.mp3"));
+    const { episodes } = build(runway(), media(faithful));
+    expect(episodes.guide()).toContain("Right now it cannot run: Episodes are not set up on this machine: bed.mp3 missing");
+  });
+});

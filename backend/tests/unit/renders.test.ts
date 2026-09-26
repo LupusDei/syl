@@ -13,6 +13,7 @@ import type { RenderBackend } from "../../src/render/runway.js";
 import { sightingOf } from "../../src/render/pictures.js";
 import { studioAt } from "../../src/render/studio.js";
 import { Wardrobe } from "../../src/render/wardrobe.js";
+import type { StartEpisodeInput } from "../../src/episodes/episode-service.js";
 import { fixedClock } from "../../src/services/clock.js";
 import type { SylDatabase } from "../../src/services/database.js";
 import { startTestApp, type RunningApp } from "../helpers/http.js";
@@ -61,6 +62,9 @@ let description: SelfDescription;
 let keyCounter = 0;
 /** How many stills the ffmpeg double has written, so each one is distinct. */
 let stills = 0;
+/** What `POST /renders/episodes` handed the episode engine, and what the engine will say back. */
+let episodeAsked: StartEpisodeInput | null = null;
+let episodeRefusal: string | null = null;
 
 /**
  * A minimal JPEG whose shape can be read off its own header.
@@ -174,7 +178,33 @@ beforeEach(async () => {
   // would mean the face a render is anchored on and the face `/renders/wardrobe`
   // calls current are answered from two different directories.
   wardrobe = new Wardrobe({ studio, clock: fixedClock(NOW) });
-  deps = { ...testDeps(db), renders, wardrobe, description };
+  episodeAsked = null;
+  episodeRefusal = null;
+  // The engine is a double here: this file is about the ROUTE. The engine's own
+  // behaviour is `episode-service.test.ts`. The record is a real one, opened by
+  // the real RenderService, because "an episode is an ordinary render" is what
+  // the response has to show.
+  const episodes = {
+    guide: () => "THE FORMULA. The children's names, spelled the way they are said: Mee-ra.",
+    start: (input: StartEpisodeInput) => {
+      episodeAsked = input;
+      if (episodeRefusal !== null) return { ok: false as const, reason: episodeRefusal, retryable: true };
+      return {
+        ok: true as const,
+        record: renders.openEpisode({
+          because: input.because,
+          script: input.scenes.map((scene) => scene.line).join("\n\n"),
+          prompts: input.scenes.map((scene) => scene.line),
+          model: "seedance2_5",
+          ratio: "834:1112",
+          reference: studio.reference(),
+          sceneSeconds: 15,
+          creditsPerScene: 450,
+        }),
+      };
+    },
+  };
+  deps = { ...testDeps(db), renders, wardrobe, description, episodes };
   running = await startTestApp(createApp(testConfig(), deps));
   token = deps.keys.pair(deps.keys.issuePairingCode().code, "Commander's iPhone").token;
   keyCounter = 0;
@@ -973,5 +1003,73 @@ describe("the log, read back", () => {
     expect(body.data?.verdicts[0]).toEqual(
       expect.objectContaining({ render: name, verdict: "The light is right and the mouth is not" }),
     );
+  });
+});
+
+/**
+ * `syl-8tts` — an episode: many scenes, her voice, one video.
+ *
+ * The route only checks the SHAPE of what she sent and hands it on. The formula
+ * belongs to the engine, which refuses in sentences she can act on, and this
+ * repeats them rather than restating them.
+ */
+describe("POST /renders/episodes", () => {
+  const SCENE = { line: "Hello!", action: "She waves.", sfx: "a whoosh", factCheck: "no factual claims" };
+
+  it("should hand her the formula to read, and not mistake episodes for a render's name", async () => {
+    const response = await api("/renders/episodes");
+    const body = (await response.json()) as Envelope<{ guide: string }>;
+
+    expect(response.status).toBe(200);
+    expect(body.data?.guide).toContain("THE FORMULA");
+  });
+
+  it("should answer 201 with an ordinary render record, still rendering, and the spend", async () => {
+    const response = await api("/renders/episodes", {
+      method: "POST",
+      body: JSON.stringify({ scenes: [SCENE, SCENE, SCENE, SCENE], because: "he asked for one about light" }),
+    });
+    const body = (await response.json()) as Envelope<{ record: { name: string; status: string }; spend: { renders: number } }>;
+
+    expect(response.status).toBe(201);
+    expect(body.data?.record.name).toMatch(/-episode$/u);
+    expect(body.data?.record.status).toBe("rendering");
+    expect(body.data?.spend.renders).toBe(1);
+    expect(episodeAsked).toEqual({ scenes: [SCENE, SCENE, SCENE, SCENE], because: "he asked for one about light" });
+  });
+
+  it("should repeat the engine's refusal in the contract's failure envelope", async () => {
+    episodeRefusal = "Nothing was spent. Scene 2 is 40 words.";
+
+    const response = await api("/renders/episodes", {
+      method: "POST",
+      body: JSON.stringify({ scenes: [SCENE], because: "b" }),
+    });
+    const body = (await response.json()) as Envelope<never>;
+
+    expect(response.status).toBe(400);
+    expect(body.error?.code).toBe("VALIDATION_FAILED");
+    expect(body.error?.message).toBe("Nothing was spent. Scene 2 is 40 words.");
+  });
+
+  it("should refuse a scene that is not four texts, before the engine is asked", async () => {
+    const response = await api("/renders/episodes", {
+      method: "POST",
+      body: JSON.stringify({ scenes: [{ line: "Hi", action: 3 }], because: "b" }),
+    });
+    const body = (await response.json()) as Envelope<never>;
+
+    expect(response.status).toBe(400);
+    expect(body.error?.message ?? "").toMatch(/scene 1/iu);
+    expect(episodeAsked).toBeNull();
+  });
+
+  it("should refuse without a reason", async () => {
+    const response = await api("/renders/episodes", {
+      method: "POST",
+      body: JSON.stringify({ scenes: [SCENE, SCENE, SCENE, SCENE] }),
+    });
+    expect(response.status).toBe(400);
+    expect(episodeAsked).toBeNull();
   });
 });

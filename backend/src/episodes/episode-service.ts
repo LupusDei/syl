@@ -36,6 +36,7 @@ import { isEpisodeName, type RenderPart, type RenderRecord } from "../render/ren
 import { isTerminal, type RenderBackend, type SubmitVoiced } from "../render/runway.js";
 import type { Studio } from "../render/studio.js";
 import type { AssetsResult, EpisodeAssets } from "./assets.js";
+import { guide } from "./formula.js";
 import { assemble, durationOf, loudnessOf, transcribe, type MediaTools } from "./media.js";
 import {
   SCENE_SECONDS,
@@ -130,6 +131,14 @@ export class EpisodeService {
     return assets.ok ? { ok: true } : { ok: false, reason: assets.reason };
   }
 
+  /** What she reads before writing one: the formula, whose names to say, and whether it can run. */
+  guide(): string {
+    const loaded = this.#options.assets();
+    const names = loaded.ok ? loaded.assets.names.map((name) => name.spoken) : [];
+    const available = this.availability();
+    return guide(names, available.ok ? null : available.reason);
+  }
+
   /**
    * Check the script, write the record, and come straight back. The scenes are
    * made in the background. Everything that can refuse refuses before a credit
@@ -141,11 +150,13 @@ export class EpisodeService {
     const loaded = this.#options.assets();
     if (!loaded.ok) return { ok: false, reason: loaded.reason, retryable: false };
     const assets = loaded.assets;
-    if (input.because.trim() === "") return { ok: false, reason: "Say why you are making it.", retryable: false };
+    // `retryable` means SHE can fix it by writing it differently. A missing
+    // file or key is not hers to fix, so those are `false`.
+    if (input.because.trim() === "") return { ok: false, reason: "Say why you are making it.", retryable: true };
 
     const problems = validate(input.scenes, assets.cast, assets.names);
     if (problems.length > 0) {
-      return { ok: false, reason: `Nothing was spent. The script breaks the formula: ${problems.join(" ")}`, retryable: false };
+      return { ok: false, reason: `Nothing was spent. The script breaks the formula: ${problems.join(" ")}`, retryable: true };
     }
 
     const prompts = input.scenes.map((scene) => buildPrompt(scene, assets.cast));

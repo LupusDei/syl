@@ -104,6 +104,7 @@ import { createFaceRuntime, type FaceRuntime } from "./face/face-runtime.js";
 import { createRunwayFaceTransport } from "./face/rpc-transport.js";
 import { createFaceRouter } from "./routes/face.js";
 import { createRenderRouter } from "./routes/renders.js";
+import type { StartEpisodeInput, StartEpisodeResult } from "./episodes/episode-service.js";
 import { createSendingRouter } from "./routes/sendings.js";
 import { createSyncRouter } from "./routes/sync.js";
 import { createTellingRouter } from "./routes/tellings.js";
@@ -365,6 +366,15 @@ export interface AppDependencies {
    * One field rather than five because the parts are deliberately unaware of
    * each other and this is the only place that has to know all of them.
    */
+  /**
+   * The episode engine (`syl-8tts`): many scenes in her voice, heard and
+   * assembled into one render. Optional, so every caller that builds an app
+   * without it (most tests) still mounts; absent means the route refuses.
+   */
+  readonly episodes?: {
+    start: (input: StartEpisodeInput) => StartEpisodeResult;
+    guide: () => string;
+  };
   readonly face: FaceRuntime;
   /**
    * His health observations. Deliberately NOT reachable from the memory graph —
@@ -520,6 +530,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
     attachments,
     renders,
     renderVerdicts,
+    episodes,
     face,
     health,
     characteristics,
@@ -612,6 +623,7 @@ export function createApp(config: SylConfig, deps: AppDependencies): Express {
       verdicts: renderVerdicts,
       wardrobe,
       description,
+      ...(episodes === undefined ? {} : { episodes }),
     }),
   );
   // Her live face. NOT on `AGENT_SURFACE`, and that absence is the guard: a
