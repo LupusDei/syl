@@ -976,6 +976,52 @@ export function salvagedParts(record: RenderRecord): readonly RenderPart[] {
 export const JOIN_KIND = "joined" as const;
 
 /**
+ * The tail of an episode's name (`syl-8tts`), and how one is recognised.
+ *
+ * **Load-bearing for money, not just for tidiness.** An episode in flight is a
+ * record with status `rendering` and task ids on its parts, which is exactly the
+ * shape {@link RenderService.resume} picks up after a restart and FOLLOWS. That
+ * means polling, and then submitting the next part from the last frame. Done to
+ * an episode, that buys footage nobody asked for. The episode engine owns its
+ * own takes, so the render follower must be able to tell an episode apart, and
+ * the name is the one field every reader already has.
+ */
+export const EPISODE_KIND = "episode" as const;
+
+export function isEpisodeName(name: string): boolean {
+  return /-episode(?:-\d+)?$/u.test(name);
+}
+
+/**
+ * The framing an episode's record carries. `recordFrom` requires one of the
+ * four, and this is the one the footage genuinely is: she is on screen, waist
+ * up, face to camera. Nothing is inventing a fifth framing that `render_me`
+ * would then have to offer her.
+ */
+const EPISODE_FRAMING: Framing = "mid_face_visible";
+
+/** What an episode is, known before a single scene is sent. */
+export interface OpenEpisodeInput {
+  readonly because: string;
+  /** Her script, every line in order. Kept as the record's `scene`: her own words. */
+  readonly script: string;
+  /** One composed prompt per scene, in order. */
+  readonly prompts: readonly string[];
+  readonly model: string;
+  readonly ratio: string;
+  /** Absolute path to the picture every scene is given as a reference. */
+  readonly reference: string;
+  readonly sceneSeconds: number;
+  /** The rate card's figure for one scene, or `null` where there is none. */
+  readonly creditsPerScene: number | null;
+}
+
+/** How an episode ended. Its parts carry what each scene was charged, takes included. */
+export type EpisodeOutcome =
+  | { readonly status: "ready"; readonly video: string; readonly parts: readonly RenderPart[] }
+  | { readonly status: "failed"; readonly reason: string; readonly parts: readonly RenderPart[] };
+
+/**
  * The record for a clip that was CUT rather than generated — `syl-5y4n`.
  *
  * Every field here is either observed or quoted from the parts, and the two
@@ -1897,6 +1943,108 @@ export class RenderService {
     return { ok: true, record };
   }
 
+  /**
+   * Write the record for an episode about to be made (`syl-8tts`).
+   *
+   * One part per scene, none submitted yet, because the episode engine submits
+   * them. This service stays the ONLY writer of sidecars, and an episode is
+   * therefore a render to everything downstream: `see_myself`, `show_him`,
+   * `GET /renders/{name}`, the review job and the ledger. The watch is armed now,
+   * as `start` arms it, so a process that dies mid-episode still wakes her to
+   * find out what happened.
+   */
+  openEpisode(input: OpenEpisodeInput): RenderRecord {
+    const now = this.#clock();
+    const name = this.#nameFor(now, EPISODE_KIND);
+    const reference = this.#relativeTo(input.reference);
+    const framing = framingNote(EPISODE_FRAMING);
+    const parts: RenderPart[] = input.prompts.map((prompt) => ({
+      taskId: null,
+      prompt,
+      duration: input.sceneSeconds,
+      first: reference,
+      last: null,
+      video: null,
+      credits: input.creditsPerScene,
+      charged: null,
+      status: "rendering",
+      failureCode: null,
+      failure: null,
+    }));
+    const record: RenderRecord = {
+      name,
+      status: "rendering",
+      renderedAt: null,
+      taskId: null,
+      model: input.model,
+      ratio: input.ratio,
+      resolution: null,
+      // Every scene is given the SAME picture as an unpositioned reference. That
+      // is no keyframe slot, and saying 0 is the truth rather than a guess.
+      keyframes: 0,
+      duration: parts.reduce((total, part) => total + part.duration, 0),
+      reference,
+      // The reference is what holds her likeness in every scene, so it is the anchor.
+      anchor: reference,
+      framing: EPISODE_FRAMING,
+      prompt: input.prompts.join("\n\n"),
+      scene: input.script,
+      holdsLikeness: framing === null ? false : holdsLikeness(framing, reference),
+      because: input.because,
+      startedAt: instant(now),
+      reason: null,
+      ...billed(parts),
+      video: null,
+      parts,
+      joinedFrom: null,
+    };
+    this.#write(record);
+    try {
+      this.#watch?.(record);
+    } catch (error) {
+      this.#onError(error, record.name);
+    }
+    return record;
+  }
+
+  /**
+   * Record progress: a scene's take arrived, or a charge was reported.
+   *
+   * Written as it happens rather than at the end, so the ledger is true even for
+   * an episode that never finishes. Anything Runway charged is in `spend()` from
+   * the moment it is known. `null` for a name that is not an open episode.
+   */
+  updateEpisode(name: string, parts: readonly RenderPart[]): RenderRecord | null {
+    const record = this.#openEpisode(name);
+    if (record === null) return null;
+    const next: RenderRecord = { ...record, ...billed(parts), parts: [...parts] };
+    this.#write(next);
+    return next;
+  }
+
+  /** Finish an episode: ready with its video, or failed with the reason. `null` if it is not one. */
+  settleEpisode(name: string, outcome: EpisodeOutcome): RenderRecord | null {
+    const record = this.#openEpisode(name);
+    if (record === null) return null;
+    const settled: RenderRecord = {
+      ...record,
+      ...billed(outcome.parts),
+      parts: [...outcome.parts],
+      status: outcome.status,
+      renderedAt: outcome.status === "ready" ? instant(this.#clock()) : null,
+      taskId: outcome.parts.find((part) => part.taskId !== null)?.taskId ?? null,
+      video: outcome.status === "ready" ? outcome.video : null,
+      reason: outcome.status === "failed" ? outcome.reason : null,
+    };
+    this.#write(settled);
+    return settled;
+  }
+
+  #openEpisode(name: string): RenderRecord | null {
+    if (!isEpisodeName(name)) return null;
+    return this.#read(name);
+  }
+
   /** One render, or `null` for a name that is not one, or a record she cannot read. */
   get(name: string): RenderRecord | null {
     if (!isRenderName(name)) return null;
@@ -2103,6 +2251,9 @@ export class RenderService {
       // Any half with a handle is worth picking up — including a render whose
       // FIRST half is already on disk and whose second was never submitted,
       // which is the state a restart between two generations leaves behind.
+      // Never an episode: see `EPISODE_KIND`. Its engine follows its own takes,
+      // and following one here would buy new generations from its last frame.
+      if (isEpisodeName(record.name)) continue;
       if (record.status === "rendering" && record.parts.some((part) => part.taskId !== null)) {
         this.#follow(record);
       }
@@ -2631,7 +2782,7 @@ export class RenderService {
    *   filename, so a person opening `renders/` can tell them apart — which is
    *   the same argument {@link RENDER_PREFIX} makes one level up.
    */
-  #nameFor(now: number, kind: Framing | typeof JOIN_KIND): string {
+  #nameFor(now: number, kind: Framing | typeof JOIN_KIND | typeof EPISODE_KIND): string {
     const stamp = instant(now).replace(/[:.]/gu, "").replace(/-/gu, "").toLowerCase().replace("000z", "z");
     const base = `${RENDER_PREFIX}${stamp}-${kind.replace(/_/gu, "-")}`;
     if (!existsSync(this.#studio.sidecar(base))) return base;
