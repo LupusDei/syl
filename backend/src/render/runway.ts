@@ -94,6 +94,14 @@ interface SubmitCommon {
   readonly promptImage: PromptImage;
   readonly promptText: string;
   readonly duration: number;
+  /**
+   * Never on a keyframed render. These three belong to {@link SubmitVoiced}, and
+   * `never` here is what stops a union match from quietly accepting a voice beside
+   * a pinned frame, which Runway refuses.
+   */
+  readonly audio?: never;
+  readonly referenceAudio?: never;
+  readonly seed?: never;
 }
 
 /** A model whose geometry is a ratio. Every seedance. */
@@ -109,6 +117,51 @@ export interface SubmitByResolution extends SubmitCommon {
 }
 
 /**
+ * A picture Runway is given as a REFERENCE rather than as a frame (`syl-8tts`).
+ *
+ * No `position`: the model draws from it without being made to open or close
+ * on it. This is the only form Runway accepts beside `referenceAudio`. A
+ * positioned keyframe next to a voice reference is a 400, measured by the
+ * explainer kit on 2026-09-26.
+ */
+export interface ReferenceImage {
+  readonly uri: string;
+  readonly position?: never;
+}
+
+/** A voice to speak in: a clean sample, as a data URI. */
+export interface ReferenceAudio {
+  readonly type: "audio";
+  readonly uri: string;
+}
+
+/**
+ * One scene of an episode: picture, voice and sound made by ONE generation.
+ *
+ * **Its own arm of the union, not three optional fields on the others**,
+ * because the combination is what Runway validates. Reference pictures, the
+ * native audio switch and a voice reference go together, and the voice cannot
+ * ride beside a pinned keyframe. As its own arm, sending that combination is
+ * a compile error rather than a 400 found by spending a render.
+ *
+ * Why an episode wants it at all: lips match the voice only when the same
+ * generation makes both. The first explainer laid TTS over silent video, and
+ * the Commander called the result disjointing. See `episodes/`.
+ */
+export interface SubmitVoiced {
+  readonly model: string;
+  readonly promptImage: readonly ReferenceImage[];
+  readonly promptText: string;
+  readonly duration: number;
+  readonly ratio: string;
+  readonly resolution?: never;
+  readonly audio?: boolean;
+  readonly referenceAudio?: readonly ReferenceAudio[];
+  /** A fresh seed per take, so a re-roll is a different take and not the same one again. */
+  readonly seed?: number;
+}
+
+/**
  * What Runway is asked for, shaped the way the chosen model is shaped.
  *
  * **A union rather than two optional fields, because the two keys are mutually
@@ -117,7 +170,7 @@ export interface SubmitByResolution extends SubmitCommon {
  * is the same. `ModelNote.shape` says which arm a model takes, so sending the
  * wrong key is now a compile error rather than a 400 discovered by a render.
  */
-export type SubmitSpec = SubmitByRatio | SubmitByResolution;
+export type SubmitSpec = SubmitByRatio | SubmitByResolution | SubmitVoiced;
 
 /** A task, as far as this module reads one. */
 export interface RunwayTask {

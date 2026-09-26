@@ -74,6 +74,54 @@ describe("submitting a render", () => {
     expect(headers["X-Runway-Version"]).toBe(RUNWAY_API_VERSION);
   });
 
+  describe("a voiced scene (syl-8tts)", () => {
+    // Captured from the explainer kit's real requests (runwayml/explainers,
+    // 2026-09-26), which rendered 42 scenes this way without a single 400:
+    // reference pictures WITHOUT a position, native audio on, and her own voice
+    // as `referenceAudio`. Runway refuses `referenceAudio` beside positioned
+    // keyframes, which is why this is its own arm of the union and not two
+    // optional fields on the existing ones.
+    const VOICED: SubmitSpec = {
+      model: "seedance2_5",
+      promptImage: [{ uri: "data:image/png;base64,AAAA" }, { uri: "data:image/png;base64,BBBB" }],
+      promptText: 'She waves. She speaks to the viewer: "Hello!"',
+      ratio: "834:1112",
+      duration: 15,
+      audio: true,
+      referenceAudio: [{ type: "audio", uri: "data:audio/mpeg;base64,CCCC" }],
+      seed: 12345,
+    };
+
+    it("should send the voice, the audio switch and the seed exactly as given", async () => {
+      let body: unknown = null;
+      const client = new RunwayClient({
+        secret: "sk-test",
+        fetch: async (_url, init) => {
+          body = JSON.parse(String(init?.body));
+          return jsonResponse(200, { id: "task-v" });
+        },
+      });
+
+      const submitted = await client.submit(VOICED);
+
+      expect(submitted.ok).toBe(true);
+      expect(body).toEqual(VOICED);
+    });
+
+    it("should not let a voice ride beside a pinned keyframe, which Runway refuses", () => {
+      // @ts-expect-error — a positioned picture cannot carry a voice reference.
+      const pinned: SubmitSpec = {
+        model: "seedance2_5",
+        promptImage: [{ uri: "data:image/png;base64,AAAA", position: "first" }],
+        promptText: "x",
+        ratio: "834:1112",
+        duration: 15,
+        referenceAudio: [{ type: "audio", uri: "data:audio/mpeg;base64,CCCC" }],
+      };
+      expect(pinned.model).toBe("seedance2_5");
+    });
+  });
+
   it("should never put the secret in a message it hands back", async () => {
     // The message goes up the MCP pipe and is written into a sidecar on disk.
     const client = new RunwayClient({
