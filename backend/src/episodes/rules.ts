@@ -228,6 +228,36 @@ export function namesMissing(transcript: string, names: readonly EpisodeName[]):
     .map((name) => name.spoken);
 }
 
+/**
+ * The line as whisper will write it: each phonetic spelling ("Mee-ra") swapped
+ * for the first way whisper writes that name ("mira").
+ *
+ * The script spells names by sound so the model SAYS them right, and whisper
+ * spells them conventionally. Without this, a short bookend line is marked
+ * down for the spelling alone. Five words out of eight on a greeting is enough
+ * to re-roll a perfect take, which the kit only survived because its lines ran long.
+ */
+export function asHeard(line: string, names: readonly EpisodeName[]): string {
+  let heard = words(line);
+  for (const name of names) {
+    const spoken = words(name.spoken);
+    const written = name.heard[0];
+    if (spoken.length === 0 || written === undefined) continue;
+    const next: string[] = [];
+    for (let at = 0; at < heard.length; ) {
+      if (spoken.every((word, offset) => heard[at + offset] === word)) {
+        next.push(...words(written));
+        at += spoken.length;
+      } else {
+        next.push(heard[at] ?? "");
+        at += 1;
+      }
+    }
+    heard = next;
+  }
+  return heard.join(" ");
+}
+
 export interface Verdict {
   readonly ok: boolean;
   readonly why: string;
@@ -237,8 +267,13 @@ export interface Verdict {
  * Does this take pass? `greets` is the names this scene must be heard saying:
  * the bookends' known names, and nobody for the scenes between.
  */
-export function sceneVerdict(scene: EpisodeScene, transcript: string, greets: readonly EpisodeName[]): Verdict {
-  const score = lineMatch(scene.line, transcript);
+export function sceneVerdict(
+  scene: EpisodeScene,
+  transcript: string,
+  greets: readonly EpisodeName[],
+  names: readonly EpisodeName[] = greets,
+): Verdict {
+  const score = lineMatch(asHeard(scene.line, names), transcript);
   if (score < MIN_LINE_MATCH) return { ok: false, why: `said the wrong words (match ${score.toFixed(2)})` };
   const missing = namesMissing(transcript, greets);
   if (missing.length > 0) return { ok: false, why: `did not clearly say ${missing.join(", ")}` };
@@ -255,9 +290,10 @@ export function finalProblems(
   seconds: number,
   lufs: number,
   greets: readonly EpisodeName[],
+  names: readonly EpisodeName[] = greets,
 ): string[] {
   const problems: string[] = [];
-  const score = lineMatch(scenes.map((scene) => scene.line).join(" "), transcript);
+  const score = lineMatch(asHeard(scenes.map((scene) => scene.line).join(" "), names), transcript);
   if (score < MIN_EPISODE_MATCH) {
     problems.push(`the finished mix does not say the script (match ${score.toFixed(2)}, needs ${String(MIN_EPISODE_MATCH)})`);
   }

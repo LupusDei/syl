@@ -166,6 +166,15 @@ describe("sceneVerdict", () => {
     expect(verdict).toEqual({ ok: false, why: "did not clearly say Thee-oh" });
   });
 
+  it("should not mark a short bookend down for spelling a name the way it is SAID", () => {
+    // The script spells names phonetically so the model says them right, and
+    // whisper writes them conventionally. On a short line those two spellings
+    // alone sank the match below the threshold and re-rolled a perfect take.
+    const short = scene("Mee-ra! Thee-oh! Let's go!");
+    expect(lineMatch(short.line, "Myra! Theo! Let's go!")).toBeLessThan(0.72);
+    expect(sceneVerdict(short, "Myra! Theo! Let's go!", NAMES, NAMES).ok).toBe(true);
+  });
+
   it("should accept every heard spelling, not only the first", () => {
     expect(namesMissing("See you soon, Meera. See you soon, Tio.", NAMES)).toEqual([]);
   });
