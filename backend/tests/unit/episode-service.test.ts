@@ -329,7 +329,7 @@ describe("the formula she reads first", () => {
     const guide = episodes.guide();
     expect(guide).toContain("At most 34 words");
     expect(guide).toContain("factCheck");
-    expect(guide).toContain("Mee-ra, Thee-oh");
+    expect(guide).toContain("Mee-ra, Thee-oh. Greet only the ones this episode is for.");
     expect(guide).not.toContain("cannot run");
   });
 

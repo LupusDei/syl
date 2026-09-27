@@ -36,7 +36,11 @@ export function guide(names: readonly string[], unavailable: string | null): str
   const spelled =
     names.length === 0
       ? "No children's names are set up; greet them by name anyway, and the names will not be checked."
-      : `The children's names, spelled the way they are said: ${names.join(", ")}.`;
+      : // The children she MIGHT be making one for, not a cast list. Her first
+        // read of this said three names and she asked who the third child was,
+        // taking the list as "greet all of these".
+        `The children you make these for, spelled the way their names are said: ${names.join(", ")}. ` +
+        "Greet only the ones this episode is for.";
   const state = unavailable === null ? "" : `\n\nRight now it cannot run: ${unavailable}`;
   return `${FORMULA}\n\n${spelled}${state}`;
 }
