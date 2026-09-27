@@ -104,7 +104,9 @@ import { createFaceRuntime, type FaceRuntime } from "./face/face-runtime.js";
 import { createRunwayFaceTransport } from "./face/rpc-transport.js";
 import { createFaceRouter } from "./routes/face.js";
 import { createRenderRouter } from "./routes/renders.js";
-import type { StartEpisodeInput, StartEpisodeResult } from "./episodes/episode-service.js";
+import { EpisodeService, type StartEpisodeInput, type StartEpisodeResult } from "./episodes/episode-service.js";
+import { dataUriOf, loadEpisodeAssets } from "./episodes/assets.js";
+import { mediaRunner } from "./episodes/media.js";
 import { createSendingRouter } from "./routes/sendings.js";
 import { createSyncRouter } from "./routes/sync.js";
 import { createTellingRouter } from "./routes/tellings.js";
@@ -1982,11 +1984,14 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // `/renders/description` calls current are answered by the same reader of the
   // same log.
   const description = new SelfDescription({ studio, clock });
+  // ONE client for her renders and her episodes: one secret, one place a
+  // credit leaves from.
+  const runway = runwaySecret === "" ? null : new RunwayClient({ secret: runwaySecret });
   const renders = new RenderService({
     studio,
     wardrobe,
     description,
-    backend: runwaySecret === "" ? null : new RunwayClient({ secret: runwaySecret }),
+    backend: runway,
     clock,
     // HER WAKE-UP, ARRANGED AT THE MOMENT THE RENDER STARTS. The Commander's
     // ruling, 2026-08-11: nothing reaches him when a render is asked for, and
@@ -2008,6 +2013,26 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
   // `rendering` forever and she tells him something is coming that never was —
   // constraint 4 wearing a different hat.
   renders.resume();
+
+  // Her episodes (`syl-8tts`): many scenes in her own voice, heard and
+  // assembled into one render. What they are made WITH lives in her home,
+  // `episodes/`, read on every start, so a file put in place needs no restart.
+  // The binaries are resolved on PATH, as every other ffmpeg this service runs
+  // is (`ops/launchd.ts` puts /usr/local/bin on it).
+  const episodes = new EpisodeService({
+    renders,
+    studio,
+    backend: runway,
+    assets: () => loadEpisodeAssets(studio.root),
+    media: { ffmpeg: "ffmpeg", ffprobe: "ffprobe", whisper: "whisper-cli", run: mediaRunner },
+    dataUri: (path) => dataUriOf(path),
+    onError: (error, name) => {
+      log?.log("error", "episode.failed", { name, error: error instanceof Error ? error.message : String(error) });
+    },
+  });
+  // An episode the last process was making is SETTLED, never resumed: its takes
+  // were being followed by a process that no longer exists.
+  episodes.resume();
 
   // Composing a sending needs the renders (to find the clip), the attachments
   // (to store the compressed copy) and the outbox (to carry her sentence), so
@@ -2081,6 +2106,7 @@ export function bootstrap(config: SylConfig, options: BootstrapOptions = {}): Bo
       attachments,
       renders,
       renderVerdicts,
+      episodes,
       face,
       health,
       characteristics,

@@ -92,3 +92,22 @@ function isNames(value: unknown): value is EpisodeName[] {
     )
   );
 }
+
+/**
+ * A file as a data URI, typed by its extension: the form Runway takes a
+ * reference picture or a voice sample in. Both are well under Runway's 5 MB
+ * data-URI cap (a frame is about 1 MB, ten seconds of voice about 0.4 MB).
+ */
+export function dataUriOf(path: string, read: (path: string) => Buffer = readFileSync): string {
+  const lower = path.toLowerCase();
+  const type = lower.endsWith(".png")
+    ? "image/png"
+    : lower.endsWith(".jpg") || lower.endsWith(".jpeg")
+      ? "image/jpeg"
+      : lower.endsWith(".mp3")
+        ? "audio/mpeg"
+        : lower.endsWith(".wav")
+          ? "audio/wav"
+          : "application/octet-stream";
+  return `data:${type};base64,${read(path).toString("base64")}`;
+}

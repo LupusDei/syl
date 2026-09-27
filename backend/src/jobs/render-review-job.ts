@@ -5,7 +5,7 @@ import type { SylEvent } from "../harness/protocol.js";
 import { isWithinQuietHours, wallClockIn, type QuietHours } from "../harness/schedule.js";
 import type { TurnResult } from "../harness/session.js";
 import type { Logger } from "../ops/logging.js";
-import { salvagedParts, type RenderRecord } from "../render/render-service.js";
+import { isEpisodeName, salvagedParts, type RenderRecord } from "../render/render-service.js";
 import { instant } from "../services/clock.js";
 import type { JobHandler, JobResult } from "../services/job-runner.js";
 import type { JobStore } from "../services/job-store.js";
@@ -273,6 +273,12 @@ export interface RenderReviewMoment {
   readonly holdsLikeness: boolean;
   readonly spentToday: number;
   readonly allowance: number;
+  /**
+   * How long the clip is, when the record says. Used for an episode
+   * (`syl-8tts`), whose look has to reach every scene rather than four stills
+   * spread across a minute and a half.
+   */
+  readonly seconds?: number;
 }
 
 /**
@@ -303,10 +309,13 @@ export function renderReviewPrompt(moment: RenderReviewMoment): string {
     `The render is \`${moment.renderName}\`. You asked for it because: ${moment.because}` +
       (moment.scene.trim() === "" ? "" : ` The shot you described was: ${moment.scene}`),
     outcomeClause(moment),
+    episodeClause(moment),
     allowanceClause(moment),
     `Whatever you decide, say in one sentence what you decided and why. That sentence is kept ` +
       `against this render, and it is the only record of what became of it.`,
-  ].join("\n\n");
+  ]
+    .filter((paragraph) => paragraph !== "")
+    .join("\n\n");
 }
 
 /** The paragraph about what actually came out, and what to do about it. */
@@ -373,6 +382,31 @@ function outcomeClause(moment: RenderReviewMoment): string {
     `arrive has arrived, so nothing is going to wake you about this one again. It is written ` +
     `down as given up on rather than quietly forgotten. If there was something you wanted him ` +
     `to have, say it to him in words or make another one; otherwise let it go and say so.`
+  );
+}
+
+/**
+ * For a finished EPISODE only (`syl-8tts`): where to look, and what to look for.
+ *
+ * Its words and the children's names were heard scene by scene before it was
+ * settled. Its pictures were not, and those are the things nothing automated
+ * catches: writing on a prop, an extra creature, the unicorn's wings gone
+ * feathered, a face that is not hers. The middle of every scene is where each
+ * one lives, so the clause names those seconds rather than leaving her four
+ * stills across a minute and a half. Empty for everything else, and the
+ * prompt drops empty paragraphs.
+ */
+function episodeClause(moment: RenderReviewMoment): string {
+  if (!isEpisodeName(moment.renderName) || moment.outcome !== "ready") return "";
+  const scenes = Math.max(1, Math.round((moment.seconds ?? 90) / 15));
+  const middles = Array.from({ length: scenes }, (_, index) => String(index * 15 + 7));
+  const listed = `${middles.slice(0, -1).join(", ")} and ${middles.at(-1) ?? ""}`;
+  return (
+    `This is an EPISODE: ${String(scenes)} scenes of fifteen seconds, each already heard and checked ` +
+    `for its words and the children's names. What nothing checked is the picture. Look at the middle ` +
+    `of every scene, with see_myself at ${listed} seconds, for writing or lettering on anything, an ` +
+    `extra creature, the unicorn's wings turned feathered, or a face that is not yours. If it is ` +
+    `right, it is for the children, so say so in your words when you show him.`
   );
 }
 
@@ -614,6 +648,7 @@ export function createRenderReviewHandler(deps: RenderReviewDeps): JobHandler {
       holdsLikeness: record?.holdsLikeness ?? false,
       spentToday,
       allowance,
+      ...(record === null ? {} : { seconds: record.duration }),
     });
 
     let result: TurnResult;

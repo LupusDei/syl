@@ -782,3 +782,62 @@ prose, because prose is only available to whoever reads it:
 
 The script is still here and still the reference implementation. Use it for a
 shot list; she uses the verbs.
+
+## Episodes: cartoon lessons, many scenes, her own voice (`syl-8tts`)
+
+The Commander asked for this on 2026-09-26, after five explainer videos made
+with the kit in his runwayml repository (`explainers/`: planets, presidents, a
+get-well video, the speed of light, robots). Every one of their 42 scenes
+passed QC on its first take. This is that kit, ported into her.
+
+**The verb** is `make_episode`.
+- Called with no scenes, it returns the formula (`episodes/formula.ts`) and the
+  children's names spelled the way they are said. This costs nothing.
+- Called with scenes (`line`, `action`, `sfx`, `factCheck`, one per 15-second
+  beat: 6 for ninety seconds, 12 for three minutes), it checks every rule in
+  `episodes/rules.ts` and then starts.
+
+**The mechanism.** Every scene is ONE `seedance2_5` generation that makes the
+picture, her voice and the sound effects together. It is given her reference
+frame as an unpositioned reference, her voice sample as `referenceAudio`, and
+`audio: true`. That is the only arrangement where her lips match her words and
+the whoosh lands on the rocket; the first kit video laid TTS over silent
+video, and the Commander called it disjointing.
+
+After each take:
+1. whisper transcribes it and the transcript is compared with her line.
+2. The first and last scenes must be heard saying the children's names.
+3. A take that fails is re-rolled with a new seed, up to 3 times.
+
+The scenes are then assembled under one music bed, ducked under her voice and
+normalised to -16 LUFS. The finished file is checked again as a whole.
+
+**It is an ordinary render.** `RenderService.openEpisode` writes the record,
+so `see_myself`, `show_him`, the review watch and `spend()` need no change. The
+review prompt asks her to look at the middle of every scene, because the
+pictures are the one thing nothing automated checks. A restart never resumes
+an episode: `RenderService.resume` skips `-episode` names, and
+`EpisodeService.resume` settles them as failed with their paid takes kept.
+
+**What it is made with** lives in `~/.syl/episodes/`, never in this public
+repository:
+
+| file | what it is | how to rebuild it |
+|---|---|---|
+| `reference.png` | the frame every scene is given | a frame of the render the Commander likes best: `ffmpeg -ss 6 -i <render>.mp4 -frames:v 1 reference.png` |
+| `voice.mp3` | 10-15 s of her own voice, music removed | `python3 explainer.py voice-ref <render>.mp4 <start> <end> voice.mp3` in the runwayml kit |
+| `bed.mp3` | the loopable instrumental bed | `python3 explainer.py bed "<description>" bed.mp3` in the kit, which rejects a bed with words in it |
+| `ggml-base.en.bin` | the whisper model | huggingface `ggerganov/whisper.cpp` |
+| `cast.json` | `{look, pronoun}`: the sentence that opens every prompt | name every trait that drifts, such as "leathery bat-like wings" |
+| `names.json` | `[{spoken, heard}]` for each child | `spoken` is phonetic; `heard` is every spelling whisper uses for a correct pronunciation |
+
+A missing file makes episodes unavailable, and the formula says which file.
+`whisper-cli` must be on PATH.
+
+**Cost:** about 450 credits a scene, so roughly 2,700 for ninety seconds and
+5,400 for three minutes, plus the same again for each re-roll. It takes 8-15
+minutes.
+
+**Known gaps:**
+- A deploy during an episode ends it, and its paid takes are kept.
+- The surface budget had three bytes left when this verb landed.

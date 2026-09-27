@@ -680,6 +680,56 @@ describe("the ceiling", () => {
 });
 
 describe("renderReviewPrompt", () => {
+  /**
+   * `syl-8tts`. An episode's words and names were checked scene by scene before
+   * it was settled. Its PICTURES were not, because nothing automated can see
+   * lettering, an extra creature or feathered wings, so the look has to cover
+   * every scene. The four stills of an ordinary look would leave most scenes
+   * of a minute and a half unseen.
+   */
+  it("should ask her to look at the middle of every scene of an episode", () => {
+    const prompt = renderReviewPrompt({
+      now: AFTERNOON,
+      tz: TZ,
+      quiet: QUIET,
+      inQuietHours: false,
+      renderName: "syl-20260926t233000z-episode",
+      because: "…",
+      outcome: "ready",
+      reason: null,
+      salvaged: 0,
+      scene: "…",
+      holdsLikeness: true,
+      spentToday: 0,
+      allowance: 4,
+      seconds: 90,
+    });
+
+    expect(prompt).toContain("7, 22, 37, 52, 67 and 82");
+    expect(prompt).toMatch(/writing|lettering/iu);
+  });
+
+  it("should not send an ordinary render through the episode look", () => {
+    const prompt = renderReviewPrompt({
+      now: AFTERNOON,
+      tz: TZ,
+      quiet: QUIET,
+      inQuietHours: false,
+      renderName: RENDER,
+      because: "…",
+      outcome: "ready",
+      reason: null,
+      salvaged: 0,
+      scene: "…",
+      holdsLikeness: true,
+      spentToday: 0,
+      allowance: 4,
+      seconds: 90,
+    });
+
+    expect(prompt).not.toContain("every scene");
+  });
+
   it("should say he is asleep when he is, without pretending nothing can be done", () => {
     const prompt = renderReviewPrompt({
       now: SMALL_HOURS,
